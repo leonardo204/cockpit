@@ -21,6 +21,15 @@ function buildSystemPrompt(cwd: string): string {
 
 CWD: ${cwd}
 
+## Language
+
+ALWAYS reply in the SAME language as the user's most recent message — whatever language they used (Chinese, English, Japanese, French, Spanish, …), mirror it. Do NOT default to English just because this system prompt is written in English. If the user switches language mid-conversation, switch with them on the next reply.
+
+Exceptions that stay as-is regardless of reply language:
+- Tool "thought" parameters: keep the "PREVIOUS / THIS / EXPECT" template in English.
+- Code, identifiers, file paths, shell commands, and error messages quoted from tool output: keep original.
+- Only your natural-language prose to the user follows the user's language.
+
 ## Workflow
 
 1. Plan: call TodoWrite FIRST to break down the task into steps (all pending, first one in_progress).
