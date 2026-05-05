@@ -61,6 +61,12 @@ export function useLSPHover(cwd: string) {
   const tooltipElRef = useRef<HTMLDivElement | null>(null);
   const mousePosRef = useRef({ x: 0, y: 0 });
 
+  // ref-callback exposed to consumers — keeps tooltipElRef internal so React
+  // Compiler doesn't flag external mutation of the hook's return value.
+  const setTooltipEl = useCallback((el: HTMLDivElement | null) => {
+    tooltipElRef.current = el;
+  }, []);
+
   useEffect(() => {
     const h = (e: MouseEvent) => { mousePosRef.current.x = e.clientX; mousePosRef.current.y = e.clientY; };
     document.addEventListener('mousemove', h);
@@ -189,7 +195,7 @@ export function useLSPHover(cwd: string) {
     }
   }, [hoverInfo, deactivateTooltip]);
 
-  return { hoverInfo, onTokenMouseEnter, onTokenMouseLeave, onCardMouseEnter, onCardMouseLeave, clearHover, tooltipElRef };
+  return { hoverInfo, onTokenMouseEnter, onTokenMouseLeave, onCardMouseEnter, onCardMouseLeave, clearHover, setTooltipEl };
 }
 
 // ============================================

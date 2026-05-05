@@ -1978,7 +1978,7 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
       {/* LSP HoverTooltip - portaled inside menuContainer, using absolute positioning */}
       {lspHover.hoverInfo && menuContainer && createPortal(
         <HoverTooltip
-          ref={(el: HTMLDivElement | null) => { lspHover.tooltipElRef.current = el; }}
+          ref={lspHover.setTooltipEl}
           displayString={lspHover.hoverInfo.displayString}
           documentation={lspHover.hoverInfo.documentation}
           x={lspHover.hoverInfo.x}

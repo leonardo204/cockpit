@@ -391,6 +391,27 @@ export function MySQLBubble({
 
   useEffect(() => { loadTables(); }, [loadTables]);
 
+  // ---- Load table data ----
+  const loadTableData = useCallback(async (table: string, page: number, f?: Record<string, ColumnFilter>, s?: SortConfig | null) => {
+    setDataLoading(true);
+    const activeFilters = f ?? filters;
+    const activeSort = s !== undefined ? s : sort;
+    try {
+      const from = `${quoteIdent(activeSchema)}.${quoteIdent(table)}`;
+      const { where, params } = buildWhereClause(activeFilters);
+      const orderBy = activeSort ? ` ORDER BY ${quoteIdent(activeSort.column)} ${activeSort.dir}` : '';
+      const sql = `SELECT * FROM ${from}${where}${orderBy} LIMIT ${PAGE_SIZE} OFFSET ${page * PAGE_SIZE}`;
+      const data = await apiPost('/api/mysql/query', { id, connectionString, sql, params });
+      setDataResult(data);
+
+      // Get total count with same filters
+      const countSql = `SELECT count(*) AS cnt FROM ${from}${where}`;
+      const countData = await apiPost('/api/mysql/query', { id, connectionString, sql: countSql, params });
+      setTotalRows(countData.rows?.[0]?.cnt ?? 0);
+    } catch { /* ignore */ }
+    setDataLoading(false);
+  }, [id, connectionString, activeSchema, filters, sort]);
+
   // ---- Select table ----
   const selectTable = useCallback(async (tableName: string) => {
     setSelectedTable(tableName);
@@ -413,28 +434,7 @@ export function MySQLBubble({
 
     // Load data
     loadTableData(tableName, 0, {}, null);
-  }, [id, connectionString, activeSchema]);
-
-  // ---- Load table data ----
-  const loadTableData = useCallback(async (table: string, page: number, f?: Record<string, ColumnFilter>, s?: SortConfig | null) => {
-    setDataLoading(true);
-    const activeFilters = f ?? filters;
-    const activeSort = s !== undefined ? s : sort;
-    try {
-      const from = `${quoteIdent(activeSchema)}.${quoteIdent(table)}`;
-      const { where, params } = buildWhereClause(activeFilters);
-      const orderBy = activeSort ? ` ORDER BY ${quoteIdent(activeSort.column)} ${activeSort.dir}` : '';
-      const sql = `SELECT * FROM ${from}${where}${orderBy} LIMIT ${PAGE_SIZE} OFFSET ${page * PAGE_SIZE}`;
-      const data = await apiPost('/api/mysql/query', { id, connectionString, sql, params });
-      setDataResult(data);
-
-      // Get total count with same filters
-      const countSql = `SELECT count(*) AS cnt FROM ${from}${where}`;
-      const countData = await apiPost('/api/mysql/query', { id, connectionString, sql: countSql, params });
-      setTotalRows(countData.rows?.[0]?.cnt ?? 0);
-    } catch { /* ignore */ }
-    setDataLoading(false);
-  }, [id, connectionString, activeSchema, filters, sort]);
+  }, [id, connectionString, activeSchema, loadTableData]);
 
   // ---- Execute SQL ----
   const executeSql = useCallback(async () => {

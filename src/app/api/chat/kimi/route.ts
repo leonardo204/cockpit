@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { createInterface } from 'readline';
-import { readdirSync, statSync } from 'fs';
+import { readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { NextRequest } from 'next/server';

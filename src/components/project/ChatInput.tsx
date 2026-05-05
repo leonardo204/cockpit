@@ -50,7 +50,7 @@ interface ChatInputProps {
   }) => void;
 }
 
-export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine, onShowGitStatus, onShowComments, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine: _engine, onShowGitStatus, onShowComments, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
   const [images, setImages] = useState<ImageInfo[]>([]);

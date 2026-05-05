@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Plus, Trash2, Terminal } from 'lucide-react';
 
@@ -16,12 +16,7 @@ export function AliasManager({ onClose, onSave }: AliasManagerProps) {
   const [newCommand, setNewCommand] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load global aliases
-  useEffect(() => {
-    loadAliases();
-  }, []);
-
-  const loadAliases = async () => {
+  const loadAliases = useCallback(async () => {
     setIsLoading(true);
     try {
       const response = await fetch('/api/terminal/aliases');
@@ -34,7 +29,12 @@ export function AliasManager({ onClose, onSave }: AliasManagerProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  // Load global aliases
+  useEffect(() => {
+    loadAliases();
+  }, [loadAliases]);
 
   const handleAdd = () => {
     if (!newAlias.trim() || !newCommand.trim()) return;

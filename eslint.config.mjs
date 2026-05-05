@@ -15,6 +15,7 @@ const eslintConfig = defineConfig([
     ".next-prod/**",
     "out/**",
     "build/**",
+    "dist/**",
     "next-env.d.ts",
     // Plain JS — not part of Next.js/TS source
     "chrome-extension/**",

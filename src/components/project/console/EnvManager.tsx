@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Plus, Trash2 } from 'lucide-react';
 
@@ -18,12 +18,7 @@ export function EnvManager({ cwd, tabId, onClose, onSave }: EnvManagerProps) {
   const [newValue, setNewValue] = useState('');
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load environment variables
-  useEffect(() => {
-    loadEnv();
-  }, [cwd, tabId]);
-
-  const loadEnv = async () => {
+  const loadEnv = useCallback(async () => {
     setIsLoading(true);
     try {
       const params = new URLSearchParams({ cwd });
@@ -39,7 +34,12 @@ export function EnvManager({ cwd, tabId, onClose, onSave }: EnvManagerProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [cwd, tabId]);
+
+  // Load environment variables
+  useEffect(() => {
+    loadEnv();
+  }, [loadEnv]);
 
   const handleAdd = () => {
     if (!newKey.trim()) return;

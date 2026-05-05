@@ -269,6 +269,7 @@ export function JupyterBubble({
   // Cell operations
   // ============================================
 
+  const runCellRef = useRef<((cellIndex: number) => void) | null>(null);
   const runCell = useCallback((cellIndex: number) => {
     const cell = cellsRef.current[cellIndex];
     if (!cell || cell.cell_type !== 'code') return;
@@ -280,7 +281,7 @@ export function JupyterBubble({
       const checkReady = setInterval(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           clearInterval(checkReady);
-          runCell(cellIndex);
+          runCellRef.current?.(cellIndex);
         }
       }, 200);
       setTimeout(() => clearInterval(checkReady), 15000); // timeout
@@ -312,6 +313,7 @@ export function JupyterBubble({
       }
     }, 300000);
   }, [connectKernel]);
+  runCellRef.current = runCell;
 
   // Track cell execution completion via status messages
   useEffect(() => {

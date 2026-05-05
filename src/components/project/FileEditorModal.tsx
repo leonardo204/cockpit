@@ -44,6 +44,24 @@ export const FileEditorInline = forwardRef<FileEditorHandle, FileEditorInlinePro
   }>({ show: false });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mtimeRef = useRef<number | undefined>(initialMtime);
+  /** Get the actual line height (measured and cached on first call) */
+  const measuredLineHeight = useRef<number>(0);
+
+  const getLineHeight = useCallback((): number => {
+    if (measuredLineHeight.current > 0) return measuredLineHeight.current;
+    const ta = textareaRef.current;
+    if (!ta) return 20;
+    const style = window.getComputedStyle(ta);
+    measuredLineHeight.current = parseFloat(style.lineHeight) || 20;
+    return measuredLineHeight.current;
+  }, []);
+
+  /** Get the current first visible line number (1-based) */
+  const getCurrentLine = useCallback((): number => {
+    const ta = textareaRef.current;
+    if (!ta) return initialLine || 1;
+    return Math.floor(ta.scrollTop / getLineHeight()) + 1;
+  }, [initialLine, getLineHeight]);
 
   // Reset state when content changes (file switch)
   useEffect(() => {
@@ -74,26 +92,8 @@ export const FileEditorInline = forwardRef<FileEditorHandle, FileEditorInlinePro
       }
       ta.setSelectionRange(charPos, charPos);
     }
-   
-  }, []);
 
-  /** Get the actual line height (measured and cached on first call) */
-  const measuredLineHeight = useRef<number>(0);
-  const getLineHeight = useCallback((): number => {
-    if (measuredLineHeight.current > 0) return measuredLineHeight.current;
-    const ta = textareaRef.current;
-    if (!ta) return 20;
-    const style = window.getComputedStyle(ta);
-    measuredLineHeight.current = parseFloat(style.lineHeight) || 20;
-    return measuredLineHeight.current;
   }, []);
-
-  /** Get the current first visible line number (1-based) */
-  const getCurrentLine = useCallback((): number => {
-    const ta = textareaRef.current;
-    if (!ta) return initialLine || 1;
-    return Math.floor(ta.scrollTop / getLineHeight()) + 1;
-  }, [initialLine, getLineHeight]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newContent = e.target.value;

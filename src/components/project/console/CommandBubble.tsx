@@ -82,13 +82,13 @@ function PipeSearchView({
   query,
   mode,
   currentIdx,
-  matchRefs,
+  matchListRef,
 }: {
   output: string;
   query: string;
   mode: 'search' | 'filter';
   currentIdx: number;
-  matchRefs: React.MutableRefObject<(HTMLElement | null)[]>;
+  matchListRef: React.MutableRefObject<(HTMLElement | null)[]>;
 }) {
   const ansiUp = useRef<AnsiUp | null>(null);
   if (!ansiUp.current) {
@@ -99,7 +99,7 @@ function PipeSearchView({
   const lines = output.split('\n');
   const q = query.toLowerCase();
   let matchCount = 0;
-  matchRefs.current = [];
+  matchListRef.current = [];
 
   return (
     <pre className="text-sm font-mono whitespace-pre-wrap break-words select-text">
@@ -136,7 +136,7 @@ function PipeSearchView({
           parts.push(
             <mark
               key={`m${pos}`}
-              ref={(el) => { matchRefs.current[thisMatchIdx] = el; }}
+              ref={(el) => { matchListRef.current[thisMatchIdx] = el; }}
               className={isCurrent ? 'bg-brand/40 text-foreground' : 'bg-yellow-300/40 text-foreground'}
             >
               {plain.slice(pos, pos + q.length)}
@@ -620,7 +620,7 @@ export const CommandBubble = memo(function CommandBubble({
                   query={searchQuery}
                   mode={pipeSearchMode}
                   currentIdx={pipeMatchIdx}
-                  matchRefs={pipeMatchRefs}
+                  matchListRef={pipeMatchRefs}
                 />
               ) : (
                 <pre ref={preRef} className="text-sm font-mono whitespace-pre-wrap break-words select-text" />
