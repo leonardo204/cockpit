@@ -169,6 +169,8 @@ type TaskFiredCallback = (task: ScheduledTask) => void;
 class ScheduledTaskManager {
   private tasks: ScheduledTask[] = [];
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Tasks currently inside fireTask — prevents reentrant double-fire (manual trigger + cron, HMR-leaked timer, etc.) */
+  private firing = new Set<string>();
   private port: number = 0;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
@@ -386,21 +388,35 @@ class ScheduledTaskManager {
 
   /** Internal implementation for manual trigger; skips paused / activeRange checks. */
   private async fireTaskManual(id: string): Promise<void> {
+    // Share the same in-flight Set as fireTask: if the task is mid-flight from a
+    // cron tick, the manual trigger would otherwise launch a second concurrent
+    // SDK query against the same session.
+    if (this.firing.has(id)) {
+      console.warn(`[ScheduledTask] Skipping manual trigger of ${id}: still in flight`);
+      return;
+    }
+
     const task = this.tasks.find(t => t.id === id);
     if (!task) return;
 
     console.log(`[ScheduledTask] Manual trigger ${id}: "${task.message}"`);
-    const success = await sendChatMessage(task);
 
-    task.lastFiredAt = Date.now();
-    task.lastResult = success ? 'success' : 'error';
-    task.unread = true;
+    this.firing.add(id);
+    try {
+      const success = await sendChatMessage(task);
 
-    // Manual trigger does not change completed / nextFireTime; preserves the existing schedule
-    await this.saveToDisk();
+      task.lastFiredAt = Date.now();
+      task.lastResult = success ? 'success' : 'error';
+      task.unread = true;
 
-    if (this.onTaskFired) {
-      this.onTaskFired(task);
+      // Manual trigger does not change completed / nextFireTime; preserves the existing schedule
+      await this.saveToDisk();
+
+      if (this.onTaskFired) {
+        this.onTaskFired(task);
+      }
+    } finally {
+      this.firing.delete(id);
     }
   }
 
@@ -480,6 +496,11 @@ class ScheduledTaskManager {
       }
     }
 
+    // Defensive: if a timer already exists for this task, clear it first.
+    // Map.set would otherwise overwrite the reference and leak the prior timer
+    // into Node's timer heap, where it would still fire and double-trigger fireTask.
+    this.clearTimer(task.id);
+
     const delay = task.nextFireTime - now;
     const timer = setTimeout(() => {
       this.fireTask(task.id);
@@ -516,6 +537,15 @@ class ScheduledTaskManager {
   }
 
   private async fireTask(id: string): Promise<void> {
+    // Reentrancy guard: sendChatMessage can take minutes; without this, a manual
+    // trigger overlapping with cron, an HMR-leaked timer, or any other re-entry
+    // would launch a second SDK query against the same session and likely trip
+    // Anthropic's burst rate limit.
+    if (this.firing.has(id)) {
+      console.warn(`[ScheduledTask] Skipping reentrant fire of ${id}: still in flight`);
+      return;
+    }
+
     const task = this.tasks.find(t => t.id === id);
     if (!task || task.paused) return;
 
@@ -532,29 +562,34 @@ class ScheduledTaskManager {
 
     console.log(`[ScheduledTask] Firing task ${id}: "${task.message}"`);
 
-    // Execute the send
-    const success = await sendChatMessage(task);
+    this.firing.add(id);
+    try {
+      // Execute the send
+      const success = await sendChatMessage(task);
 
-    // Update state
-    task.lastFiredAt = Date.now();
-    task.lastResult = success ? 'success' : 'error';
-    task.unread = true;
+      // Update state
+      task.lastFiredAt = Date.now();
+      task.lastResult = success ? 'success' : 'error';
+      task.unread = true;
 
-    if (task.type === 'once') {
-      task.completed = true;
-    } else if (task.type === 'interval' && task.intervalMinutes) {
-      task.nextFireTime = Date.now() + task.intervalMinutes * 60000;
-      this.scheduleTask(task);
-    } else if (task.type === 'cron' && task.cron) {
-      task.nextFireTime = getNextCronTime(task.cron);
-      this.scheduleTask(task);
-    }
+      if (task.type === 'once') {
+        task.completed = true;
+      } else if (task.type === 'interval' && task.intervalMinutes) {
+        task.nextFireTime = Date.now() + task.intervalMinutes * 60000;
+        this.scheduleTask(task);
+      } else if (task.type === 'cron' && task.cron) {
+        task.nextFireTime = getNextCronTime(task.cron);
+        this.scheduleTask(task);
+      }
 
-    await this.saveToDisk();
+      await this.saveToDisk();
 
-    // Notify the frontend
-    if (this.onTaskFired) {
-      this.onTaskFired(task);
+      // Notify the frontend
+      if (this.onTaskFired) {
+        this.onTaskFired(task);
+      }
+    } finally {
+      this.firing.delete(id);
     }
   }
 
@@ -570,5 +605,14 @@ class ScheduledTaskManager {
   }
 }
 
-// Global singleton
-export const scheduledTaskManager = new ScheduledTaskManager();
+// Global singleton — pinned to globalThis so that the Next.js custom-server
+// topology cannot duplicate it. server.mjs imports this file via the Node ESM
+// loader (e.g. `./src/lib/scheduledTasks.ts` through tsx, or `./dist/...mjs` in
+// prod), while API routes import it as `@/lib/scheduledTasks` through the
+// webpack/turbopack bundle inside `.next/server`. Those two loaders do not
+// share a module cache, so a plain `export const x = new X()` would run twice
+// in one process — each instance would set its own setTimeout per task and the
+// scheduled prompt would be double-dispatched, tripping Anthropic's burst rate
+// limit. Following the same pattern as PgPoolManager / RedisManager / etc.
+const g = globalThis as unknown as { __scheduledTaskManager?: ScheduledTaskManager };
+export const scheduledTaskManager = g.__scheduledTaskManager ?? (g.__scheduledTaskManager = new ScheduledTaskManager());

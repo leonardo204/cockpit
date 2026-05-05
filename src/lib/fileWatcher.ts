@@ -299,6 +299,15 @@ class ReviewWatcher {
   }
 }
 
-// Global singletons
-export const fileWatcher = new FileWatcherManager();
-export const reviewWatcher = new ReviewWatcher();
+// Global singletons — pinned to globalThis to survive both Next.js dev HMR
+// reloads and the Next.js custom-server dual module load (server.mjs's Node
+// ESM import vs the webpack bundler import inside `.next/server`). Without
+// this, two managers would each spawn their own fs.watch handles per
+// subscribed cwd, doubling inotify/kqueue load and broadcasting each file
+// change twice. Pattern matches PgPoolManager / RedisManager / etc.
+const g_watch = globalThis as unknown as {
+  __cockpitFileWatcher?: FileWatcherManager;
+  __cockpitReviewWatcher?: ReviewWatcher;
+};
+export const fileWatcher = g_watch.__cockpitFileWatcher ?? (g_watch.__cockpitFileWatcher = new FileWatcherManager());
+export const reviewWatcher = g_watch.__cockpitReviewWatcher ?? (g_watch.__cockpitReviewWatcher = new ReviewWatcher());

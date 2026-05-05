@@ -261,7 +261,6 @@ export function findCodexSessionPath(threadId: string): string | null {
   if (!existsSync(codexSessionsDir)) return null;
 
   // Walk year/month/day directories looking for a file ending with the thread_id
-  const suffix = `-${threadId}.jsonl`;
   try {
     const result = execSync(
       `find ${JSON.stringify(codexSessionsDir)} -name "*${threadId}.jsonl" -type f 2>/dev/null`,
@@ -338,7 +337,14 @@ export async function writeJsonFile<T>(filePath: string, data: T): Promise<void>
 // File Lock (serialize concurrent read-modify-write)
 // ============================================
 
-const fileLocks = new Map<string, Promise<void>>();
+// Process-wide lock map — pinned to globalThis. paths.ts is imported from BOTH
+// the server.mjs module realm (via wsServer / scheduledTasks, loaded by Node
+// ESM) AND the Next.js bundler realm (via `@/lib/paths`, loaded by webpack).
+// Without globalThis dedup, each realm would have its own `fileLocks` Map and
+// withFileLock would silently fail to serialize cross-realm writes to the same
+// JSON file (e.g. state.json being touched by /api/chat AND wsServer at once).
+const g_fileLocks = globalThis as unknown as { __cockpitFileLocks?: Map<string, Promise<void>> };
+const fileLocks = g_fileLocks.__cockpitFileLocks ?? (g_fileLocks.__cockpitFileLocks = new Map<string, Promise<void>>());
 
 /**
  * Serialize async operations on the same file path.

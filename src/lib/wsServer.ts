@@ -31,8 +31,22 @@ interface GlobalState {
 
 const HEARTBEAT_INTERVAL = 30000;
 
-// Track all global-state WS clients for broadcasting scheduled task notifications
-const globalStateClients = new Set<WebSocket>();
+// WSS + client set are pinned to globalThis so a second module realm (Next.js
+// custom-server topology, dev-mode HMR, dist/wsServer.mjs vs the bundled copy
+// inside .next/server) cannot create a parallel WebSocketServer or a parallel
+// client Set. Two WSS instances would each register their own 'connection'
+// handler on the same upgrade, causing every WS message to be dispatched
+// twice; two client Sets would mean broadcastToGlobalState reaches only half
+// the connected UIs. Today wsServer is loaded only by server.mjs, but this
+// preventive guard removes a sharp edge if any future API route imports from
+// here.
+const g_ws = globalThis as unknown as {
+  __cockpitWss?: WebSocketServer;
+  __cockpitGlobalStateClients?: Set<WebSocket>;
+};
+
+const globalStateClients: Set<WebSocket> = g_ws.__cockpitGlobalStateClients
+  ?? (g_ws.__cockpitGlobalStateClients = new Set<WebSocket>());
 
 /**
  * Broadcast a message to all global-state clients
@@ -46,25 +60,32 @@ export function broadcastToGlobalState(msg: Record<string, unknown>): void {
   }
 }
 
-const wss = new WebSocketServer({ noServer: true });
+const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
+  const server = new WebSocketServer({ noServer: true });
+  g_ws.__cockpitWss = server;
 
-wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-  const { pathname, query } = parse(req.url || '', true);
+  // Listener registered exactly once — re-registering on a second module load
+  // would dispatch each connection twice (same WSS instance, two listeners).
+  server.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+    const { pathname, query } = parse(req.url || '', true);
 
-  if (pathname === '/ws/watch') {
-    handleFileWatch(ws, query.cwd as string);
-  } else if (pathname === '/ws/global-state') {
-    handleGlobalState(ws);
-  } else if (pathname === '/ws/terminal') {
-    handleTerminal(ws, query.projectCwd as string);
-  } else if (pathname === '/ws/browser') {
-    handleBrowser(ws, query.fullId as string);
-  } else if (pathname === '/ws/terminal-follow') {
-    handleTerminalFollow(ws, query.id as string);
-  } else if (pathname === '/ws/jupyter') {
-    handleJupyter(ws, query.bubbleId as string, query.cwd as string);
-  }
-});
+    if (pathname === '/ws/watch') {
+      handleFileWatch(ws, query.cwd as string);
+    } else if (pathname === '/ws/global-state') {
+      handleGlobalState(ws);
+    } else if (pathname === '/ws/terminal') {
+      handleTerminal(ws, query.projectCwd as string);
+    } else if (pathname === '/ws/browser') {
+      handleBrowser(ws, query.fullId as string);
+    } else if (pathname === '/ws/terminal-follow') {
+      handleTerminalFollow(ws, query.id as string);
+    } else if (pathname === '/ws/jupyter') {
+      handleJupyter(ws, query.bubbleId as string, query.cwd as string);
+    }
+  });
+
+  return server;
+})();
 
 /**
  * Handle HTTP upgrade requests, only accept /ws/ paths

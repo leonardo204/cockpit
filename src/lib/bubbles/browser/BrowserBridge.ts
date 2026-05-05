@@ -18,11 +18,23 @@ interface BrowserEntry {
   lastSeen: number;
 }
 
+// Registries pinned to globalThis. wsServer is currently the only caller (so
+// today there is just one module realm), but the moment any Next.js API route
+// imports from this file via `@/lib/bubbles/browser/BrowserBridge`, the webpack
+// bundler will instantiate a second copy and shortId routing would split
+// across two Maps — registerBrowser writes to one, sendCommandToBrowser reads
+// from the other, and commands silently miss. Defending pre-emptively.
+const g_browser = globalThis as unknown as {
+  __cockpitBrowserRegistry?: Map<string, BrowserEntry>;
+  __cockpitBrowserFullIdToShort?: Map<string, string>;
+  __cockpitBrowserPending?: Map<string, PendingRequest>;
+};
+
 /** shortId → BrowserEntry */
-const registry = new Map<string, BrowserEntry>();
+const registry = g_browser.__cockpitBrowserRegistry ?? (g_browser.__cockpitBrowserRegistry = new Map<string, BrowserEntry>());
 
 /** fullId → shortId (reverse index) */
-const fullIdToShort = new Map<string, string>();
+const fullIdToShort = g_browser.__cockpitBrowserFullIdToShort ?? (g_browser.__cockpitBrowserFullIdToShort = new Map<string, string>());
 
 export function registerBrowser(fullId: string, ws: WebSocket): string {
   const shortId = toShortId(fullId);
@@ -76,7 +88,8 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
 }
 
-const pendingRequests = new Map<string, PendingRequest>();
+// Same globalThis pinning rationale as the registry above.
+const pendingRequests = g_browser.__cockpitBrowserPending ?? (g_browser.__cockpitBrowserPending = new Map<string, PendingRequest>());
 
 /**
  * Create a pending request and wait for the browser to respond.
