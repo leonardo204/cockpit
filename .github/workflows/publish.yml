@@ -28,7 +28,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.COCKPIT_NPM_TOKEN }}
 
-      - name: Create GitHub Release
+      # Create the GitHub Release with an EMPTY body. The
+      # `cockpit-release` skill's Step 6 fills it in with hand-authored
+      # notes via `gh release edit --notes-file`. We deliberately do
+      # NOT use `--generate-notes` — its output appends a
+      # `**Full Changelog**: .../compare/...` tail that violates the
+      # project's hand-written-only release-notes convention. Empty
+      # body forces the human-in-the-loop step instead of leaving
+      # "good enough" auto-text on cocking.cc/changelog.
+      - name: Create GitHub Release (empty body — filled by cockpit-release skill)
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create ${{ github.ref_name }} --generate-notes
+        run: gh release create ${{ github.ref_name }} --notes ""

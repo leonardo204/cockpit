@@ -17,9 +17,9 @@ You are the release captain for Cockpit (`@surething/cockpit`). Your job is to r
 - **npm package**: `@surething/cockpit` (public, scoped, provenance-enabled)
 - **Website**: `cocking.cc`, deployed via Cloudflare Pages from `website/`
 - **Workflows**:
-  - `Publish to npm` — triggered by `push tag v*`, runs `npm publish` and creates a GitHub Release with auto-generated (= near-empty) notes.
+  - `Publish to npm` — triggered by `push tag v*`, runs `npm publish` and creates a GitHub Release with an **empty body** (intentionally — see `.github/workflows/publish.yml`). Step 6 of this skill is the one that fills the body.
   - `Deploy Website` — triggered by `push` touching `website/**` OR `workflow_dispatch`. Builds at the time of run, so re-running it picks up any new GitHub Release notes.
-- **Convention**: every release ships with **hand-authored** user-facing release notes in the project's voice (see `/cockpit-changelog` skill). The auto-generated "Full Changelog: …compare/…" line is **not** part of the convention — strip it.
+- **Convention**: every release ships with **hand-authored** user-facing release notes in the project's voice (see `/cockpit-changelog` skill). Auto-generated `--generate-notes` content (in particular the `**Full Changelog**: …compare/…` tail) is **not** part of the convention — that's why the workflow no longer uses `--generate-notes`.
 
 ## Pre-flight (before touching anything)
 
@@ -47,9 +47,66 @@ npm version <patch|minor|major>      # creates commit "1.0.x" and annotated tag 
 
 Show the resulting `git log -1 --oneline` and the new tag. **Reversible** with `git tag -d <tag> && git reset --hard HEAD~1` — say so explicitly to the human.
 
+### Step 2 — Smoke test the local tarball BEFORE push 🆕
+
+This step exists because three out of three `1.0.198 → 199 → 200 → 201` releases shipped DOA: install path, browser bundle, server bundle. CI green ≠ users can run it. Do NOT skip — you will spend 30 minutes shipping hot-fixes if you do.
+
+#### 2a. Install smoke — does `npm install` succeed at all?
+
+```bash
+# Build the artifact CI will publish
+npm run build && npm run build:server
+
+# Pack into a tarball locally
+npm pack    # produces surething-cockpit-1.0.x.tgz
+
+# Install into a clean, isolated directory — POSTINSTALL must succeed
+TARBALL=$(ls -t surething-cockpit-*.tgz | head -1)
+SMOKE_DIR=$(mktemp -d)
+(cd "$SMOKE_DIR" && npm install -g --prefix . "$OLDPWD/$TARBALL") || {
+  echo "❌ Install failed — DO NOT push"
+  exit 1
+}
+"$SMOKE_DIR/bin/cock" --version    # must report the new version
+rm "$TARBALL"
+```
+
+If `npm install` errors with `ERR_MODULE_NOT_FOUND` / postinstall failures / missing files, you have a `package.json` `files` array bug or a postinstall import path bug. **Reset and fix**:
+
+```bash
+git tag -d v1.0.x
+git reset --hard HEAD~1
+# fix the bug, recommit, npm version again
+```
+
+#### 2b. Prod-runtime smoke — does the prod build actually run?
+
+CI compiles fine but runtime errors only show when the app boots in prod mode. The webpack browser/server split has bitten us multiple times (see v1.0.200 / 201 commit messages — `createRequire is not a function` was a runtime, not build, error).
+
+```bash
+# Boot in prod mode locally
+COCKPIT_ENV=prod cock &
+COCK_PID=$!
+sleep 6
+
+# Probe a few endpoints — any 5xx is a hard fail
+curl -fsS "http://localhost:3457/api/version"                                          >/dev/null || FAIL=1
+curl -fsS "http://localhost:3457/api/projectGraph/file-functions?cwd=$PWD&path=src/lib/codeMap/types.ts" >/dev/null || FAIL=1
+
+kill $COCK_PID 2>/dev/null
+wait $COCK_PID 2>/dev/null
+
+if [ "$FAIL" = "1" ]; then
+  echo "❌ Prod runtime smoke failed — DO NOT push"
+  exit 1
+fi
+```
+
+If your release introduces a new feature, **manually exercise it** in the running prod cockpit too. The chip view (`/api/projectGraph/file-functions`) is only one path; new features mean new probe targets.
+
 🛑 **Confirm with human before pushing.**
 
-### Step 2 — Push commit + tag (triggers npm publish, IRREVERSIBLE)
+### Step 3 — Push commit + tag (triggers npm publish, IRREVERSIBLE)
 
 ```bash
 git push --follow-tags
@@ -57,7 +114,7 @@ git push --follow-tags
 
 Pushing the `v*` tag triggers `Publish to npm`. After this point, npm publish is on its way and a published version cannot be retracted (npm's 72h unpublish window exists but should be avoided).
 
-### Step 3 — Watch `Publish to npm` workflow
+### Step 4 — Watch `Publish to npm` workflow
 
 Find the run id and watch it:
 
@@ -66,9 +123,11 @@ gh run list --repo Surething-io/cockpit --workflow "Publish to npm" --limit 1 --
 gh run watch <id> --repo Surething-io/cockpit --exit-status
 ```
 
-If it fails: stop, report the failing step, do not retry blindly. Possible recovery is `npm publish` manually (see RELEASING.md "Manual Publishing"), but only after diagnosing.
+If it fails:
+- **Transient infra**: `@vscode/ripgrep` 403 (GitHub releases rate limit), `npm ci` ECONNRESET, GH API 504 — `gh run rerun <id>` is fine.
+- **Real failure** in npm publish or build: stop, report, do not retry blindly. Possible recovery is `npm publish` manually (see `.github/RELEASING.md` "Manual Publishing"), but only after diagnosing.
 
-### Step 4 — Verify npm published
+### Step 5 — Verify npm published
 
 ```bash
 npm view @surething/cockpit version dist-tags
@@ -77,7 +136,9 @@ npm view @surething/cockpit bin
 
 Expected: `version` matches new tag, `dist-tags.latest` matches, `bin` includes both `cockpit` and `cock`.
 
-### Step 5 — Author user-facing release notes
+### Step 6 — Replace the auto-generated release body with hand-authored notes
+
+The publish workflow creates the GitHub Release with **empty body** (the workflow used to use `--generate-notes`, which leaked `**Full Changelog**: ...compare/...` tails — see commit history). The body MUST be filled in by you.
 
 Invoke the `/cockpit-changelog` skill (or if running standalone, draft notes using the same conventions: see `skills/cockpit-changelog/SKILL.md`).
 
@@ -87,9 +148,19 @@ Save the markdown to a temp file, then:
 gh release edit v1.0.x --repo Surething-io/cockpit --notes-file /tmp/release-notes.md
 ```
 
+**Hard verify the body is what you intended** (and that no rogue `compare/` link leaked back in):
+
+```bash
+gh release view v1.0.x --repo Surething-io/cockpit --json body --jq .body | tail -c 200
+gh release view v1.0.x --repo Surething-io/cockpit --json body --jq .body | grep -q '/compare/' && {
+  echo "❌ Full Changelog tail leaked — re-run gh release edit"
+  exit 1
+}
+```
+
 🛑 **Show the human the rendered notes (`gh release view v1.0.x --repo Surething-io/cockpit`) before moving on.** Hand-authored notes are the public face of the release; one round of human review is worth it.
 
-### Step 6 — Trigger website redeploy (so /changelog page picks up the new notes)
+### Step 7 — Trigger website redeploy (so /changelog page picks up the new notes)
 
 The npm publish workflow does **not** trigger a website rebuild. The website's `/changelog` page reads `data/changelog.json`, generated at build time by `scripts/fetch-changelog.mjs` from GitHub Releases. New release → new notes → must rebuild.
 
@@ -100,7 +171,7 @@ id=$(gh run list --repo Surething-io/cockpit --workflow "Deploy Website" --limit
 gh run watch "$id" --repo Surething-io/cockpit --exit-status
 ```
 
-### Step 7 — Verify everything is live
+### Step 8 — Verify everything is live
 
 ```bash
 # 1. npm
@@ -109,11 +180,11 @@ npm view @surething/cockpit version
 # 2. GitHub Release
 gh release view v1.0.x --repo Surething-io/cockpit --json name,publishedAt,url
 
-# 3. Website changelog has the new entry at the top, with the right body
+# 3. Website changelog has the new entry at the top
 curl -s --http1.1 "https://cocking.cc/en/changelog/" | grep -oE 'v1\.0\.[0-9]+' | head -3
 curl -s --http1.1 "https://cocking.cc/zh/changelog/" | grep -oE 'v1\.0\.[0-9]+' | head -3
 
-# 4. Sanity-check no "Full Changelog: …compare…" tail leaked into the release body
+# 4. Sanity: no "Full Changelog: …compare…" tail in the release body
 gh release view v1.0.x --repo Surething-io/cockpit --json body --jq .body | tail -c 200
 ```
 
@@ -122,16 +193,21 @@ Expected: new tag at top of changelog (en + zh), no `compare/v1.0.x-1...v1.0.x` 
 ## Refusals
 
 - **Never** push tags during the pre-flight without confirmation.
+- **Never** skip Step 2 (smoke tests). Three out of three releases between v1.0.198 and v1.0.201 shipped DOA because earlier versions of this skill let CI green stand in for "users can install + run it"; the resulting hot-fix chain ate an evening. Smoke before push, every time.
 - **Never** include a `**Full Changelog**: https://github.com/.../compare/...` tail in the release body — historical convention is hand-written prose, no auto-tail.
 - **Never** `npm publish` manually unless the CI workflow has demonstrably failed and the human has explicitly asked.
-- **Never** `git tag -d` or `git reset` after Step 2 without explicit human instruction — the tag is now visible to npm and Cloudflare and others.
-- **Never** skip the `/cockpit-changelog` step and ship with the auto-generated `Full Changelog: …` notes. That's the failure mode this skill exists to prevent.
+- **Never** `git tag -d` or `git reset` after Step 3 (push) without explicit human instruction — the tag is now visible to npm and Cloudflare and others.
+- **Never** skip Step 6 (hand-authored notes). The publish workflow creates the release with an empty body specifically so this step is unavoidable; if you find yourself looking at an empty release page on cocking.cc/changelog, you forgot.
 
 ## Failure recovery cheats (only on instruction)
 
+- **Step 2 install/runtime smoke failed**: `git tag -d v1.0.x && git reset --hard HEAD~1`, fix the bug, `npm version` again. Catching this here saves shipping a hot-fix release.
 - **Wrong release notes published**: `gh release edit v1.0.x --notes-file …` rewrites them. Then re-trigger Deploy Website.
 - **Website didn't pick up new notes**: re-run `gh workflow run "Deploy Website"`. Build is idempotent.
-- **npm publish failed mid-CI**: investigate `gh run view <id> --log-failed`. Common causes: `COCKPIT_NPM_TOKEN` rotated, `npm run build` flake, `package-lock.json` drift.
+- **npm publish failed mid-CI**:
+  - Transient (`@vscode/ripgrep` 403, `npm ci` ECONNRESET, GH API 504): `gh run rerun <id>` is fine.
+  - Real: `gh run view <id> --log-failed`. Common causes: `COCKPIT_NPM_TOKEN` rotated, `npm run build` flake, `package-lock.json` drift.
+- **GH Release `Create GitHub Release` step inside the publish workflow 504'd**: workflow finishes "failed" but npm IS published. Step 6's `gh release create v1.0.x --notes-file ...` (instead of `gh release edit`) covers this — the release didn't exist yet so create-with-notes is the right call.
 
 ## Reference
 
