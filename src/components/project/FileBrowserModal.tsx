@@ -7,7 +7,7 @@ import { CommitDetailPanel } from './CommitDetailPanel';
 import { DiffView } from './DiffView';
 import { toast } from '../shared/Toast';
 import { FileTree, type GitStatusMap, type GitStatusCode } from './FileTree';
-import { GitFileTree, buildGitFileTree, collectGitTreeDirPaths, collectFilesUnderNode } from './GitFileTree';
+import { GitFileTree, buildGitFileTree, collectFilesUnderNode } from './GitFileTree';
 import { MenuContainerProvider } from './FileContextMenu';
 import { CodeViewer } from './CodeViewer';
 import { isMarkdownFile, formatAsHumanReadable } from './toolCallUtils';
@@ -19,7 +19,9 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import { usePageVisible } from '@/hooks/usePageVisible';
 
 import type { TabType, GitFileStatus, GitStatusResponse, FileBrowserModalProps, SearchResult } from './fileBrowser/types';
-import { getTargetDirPath, isImageFile, formatDateTime, NOOP, COMMITS_PER_PAGE } from './fileBrowser/utils';
+import { BlockViewer } from './fileBrowser/BlockViewer';
+import { StatusDiffPane } from './fileBrowser/StatusDiffPane';
+import { getTargetDirPath, formatDateTime, NOOP, COMMITS_PER_PAGE } from './fileBrowser/utils';
 
 import { BranchSelector } from './fileBrowser/BranchSelector';
 import { FileImagePreview } from './fileBrowser/FileImagePreview';
@@ -43,6 +45,15 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
   const { t } = useTranslation();
   const { activeView } = useSwipeContext();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  // Editor mode in the right panel of tree / search / recent tabs:
+  //   'code' = the usual CodeViewer for the selected file
+  //   'map'  = full-panel architecture diagram, with the selected file's
+  //            module highlighted. Clicking a different file in the tree
+  //            updates the highlight rather than switching back to code.
+  const [editorMode, setEditorMode] = useState<'code' | 'map'>('code');
+  // diffViewerMode (file | block) is owned by `<StatusDiffPane>` —
+  // it's only meaningful in the status tab's diff pane and the JSX
+  // that reads it lives there.
   const menuContainerRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
   const [menuContainer, setMenuContainer] = useState<HTMLElement | null>(null);
@@ -78,6 +89,35 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
   useLSPWarmup(cwd, fileTree.selectedPath);
   const contentSearch = useContentSearch({ cwd, onSearchComplete: () => setShowSearchPanel(true) });
   const gitStatus = useGitStatus({ cwd, addToRecentFiles: fileTree.addToRecentFiles });
+
+  // Set of project-relative paths with uncommitted changes — drives the
+  // architecture map's AI-session activity overlay (yellow indicators on
+  // modules / files / file detail headers).
+  const changedFilePathSet = useMemo(() => {
+    const out = new Set<string>();
+    if (gitStatus.status) {
+      for (const f of gitStatus.status.staged) out.add(f.path);
+      for (const f of gitStatus.status.unstaged) out.add(f.path);
+    }
+    return out;
+  }, [gitStatus.status]);
+
+  /**
+   * Per-path git status lookup — feeds the BlockDiffViewer header
+   * badge so it can reflect whatever file the user is currently
+   * viewing, including pin-jumps to other files. We pick "unstaged"
+   * over "staged" when a file appears in BOTH (rare but possible:
+   * staged a hunk, then made more changes), because the unstaged
+   * portion is the more actionable signal during review.
+   */
+  const fileGitStatusMap = useMemo(() => {
+    const out = new Map<string, 'staged' | 'unstaged'>();
+    if (gitStatus.status) {
+      for (const f of gitStatus.status.staged) out.set(f.path, 'staged');
+      for (const f of gitStatus.status.unstaged) out.set(f.path, 'unstaged');
+    }
+    return out;
+  }, [gitStatus.status]);
   const gitHistory = useGitHistory({ cwd, addToRecentFiles: fileTree.addToRecentFiles });
 
   // ========== Vi Mode Callbacks ==========
@@ -616,11 +656,9 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                 const unstaged = buildGitFileTree(statusData.unstaged);
                 gitStatus.setStagedTree(staged);
                 gitStatus.setUnstagedTree(unstaged);
-                const newPaths = new Set<string>([
-                  ...collectGitTreeDirPaths(staged),
-                  ...collectGitTreeDirPaths(unstaged),
-                ]);
-                gitStatus.setStatusExpandedPaths(prev => new Set([...prev, ...newPaths]));
+                // Do NOT mutate fold state here — useGitStatus derives expandedPaths from
+                // (allTreeDirs − userCollapsedPaths), so a refetch can never re-expand a
+                // folder the user just collapsed.
               });
             })
         );
@@ -1109,7 +1147,10 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                 )}
               </div>
 
-              {/* Status Tab */}
+              {/* Status Tab — direct files list (the legacy "Changes"
+                  sub-mode that surfaced symbol-level diffs was retired
+                  along with ChangesView; symbol-level diffing now lives
+                  inside DiffView itself as a Block toggle). */}
               <div className={`flex-1 flex flex-col min-h-0 ${activeTab === 'status' ? '' : 'hidden'}`}>
                 {gitStatus.statusLoading ? (
                   <div className="flex-1 flex items-center justify-center">
@@ -1403,6 +1444,62 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                     contentSearch.performContentSearch(query);
                   }}
                 />
+              ) : editorMode === 'map' ? (
+                // Code Map takes over the right panel. The left file tree
+                // stays visible — clicking a file there auto-expands the
+                // path in the map and pans to the file node.
+                //
+                // headerExtraLeft injects the file-context controls
+                // (copy abs path + locate-in-tree) that the code-mode
+                // toolbar provides — so switching from Code → Block
+                // doesn't strip the user of basic file ops. Reads
+                // focalFile from BlockViewer's state so it tracks
+                // pin-navigation, NOT the original `selectedPath`.
+                <BlockViewer
+                  cwd={cwd}
+                  highlightedFilePath={fileTree.selectedPath}
+                  changedFiles={changedFilePathSet}
+                  onSwitchToCode={() => setEditorMode('code')}
+                  enableComments
+                  onContentSearch={(query) => {
+                    setActiveTab('search');
+                    contentSearch.setContentSearchQuery(query);
+                    contentSearch.performContentSearch(query);
+                  }}
+                  headerExtraLeft={({ focalFile }) =>
+                    focalFile && (
+                      <>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(`${cwd}/${focalFile}`);
+                            toast(t('common.copiedPath'));
+                          }}
+                          className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
+                          title={t('common.copyAbsPath')}
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            locateInTree(focalFile);
+                          }}
+                          className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
+                          title={t('fileBrowser.locateInTree')}
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="10" strokeWidth={2} />
+                            <circle cx="12" cy="12" r="3" strokeWidth={2} />
+                            <path strokeLinecap="round" strokeWidth={2} d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+                          </svg>
+                        </button>
+                      </>
+                    )
+                  }
+                />
               ) : fileTree.selectedPath ? (
                 <>
                   <div className="px-4 py-2 bg-secondary border-b border-border flex-shrink-0 flex items-center justify-between">
@@ -1522,6 +1619,22 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                               ) : (
                                 'Blame'
                               )}
+                            </button>
+                          )}
+                          {/* Block view — peers with Edit / Blame as a third
+                              reading mode. Click to flip the right panel
+                              into BlockViewer's decomposed view; the
+                              BlockViewer header itself has the reverse
+                              "Code" button to come back. We don't render
+                              an "active" state here because this button is
+                              physically gone when block mode is on. */}
+                          {fileTree.fileContent?.type === 'text' && (
+                            <button
+                              onClick={() => setEditorMode('map')}
+                              className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
+                              title={t('blockViewer.viewerToggle.toBlock')}
+                            >
+                              {t('common.block')}
                             </button>
                           )}
                           {fileTree.fileContent?.type === 'text' && (
@@ -1658,129 +1771,32 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
               )
             )}
 
-            {/* Status - Right Panel */}
+            {/* Status - Right Panel — diff pane lives in its own
+                component so `diffViewerMode` state is encapsulated
+                and FileBrowserModal isn't responsible for the 250+
+                lines of toolbar / DiffView / BlockDiffViewer / modal
+                JSX. */}
             {activeTab === 'status' && (
               gitStatus.statusSelectedFile && gitStatus.statusDiff ? (
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  <div className="px-4 py-2 bg-secondary border-b border-border flex items-center gap-2">
-                    <span className="text-xs font-mono text-muted-foreground">
-                      {gitStatus.statusSelectedFile.file.path}
-                    </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigator.clipboard.writeText(`${cwd}/${gitStatus.statusSelectedFile!.file.path}`);
-                        toast(t('common.copiedPath'));
-                      }}
-                      className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
-                      title={t('common.copyAbsPath')}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                    </button>
-                    {/* Locate in directory tree */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        locateInTree(gitStatus.statusSelectedFile!.file.path);
-                      }}
-                      className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0"
-                      title={t('fileBrowser.locateInTree')}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <circle cx="12" cy="12" r="10" strokeWidth={2} />
-                        <circle cx="12" cy="12" r="3" strokeWidth={2} />
-                        <path strokeLinecap="round" strokeWidth={2} d="M12 2v4m0 12v4M2 12h4m12 0h4" />
-                      </svg>
-                    </button>
-                    <span className={`text-xs px-1.5 py-0.5 rounded ${
-                      gitStatus.statusSelectedFile.type === 'staged'
-                        ? 'bg-green-9/15 text-green-11 dark:bg-green-9/25'
-                        : 'bg-amber-9/15 text-amber-11 dark:bg-amber-9/25'
-                    }`}>
-                      {gitStatus.statusSelectedFile.type === 'staged' ? t('fileBrowser.staged') : t('fileBrowser.unstaged')}
-                    </span>
-                    <div className="flex-1" />
-                  </div>
-                  <div className="flex-1 overflow-auto">
-                    {isImageFile(gitStatus.statusSelectedFile.file.path) ? (
-                      <FileImagePreview
-                        cwd={cwd}
-                        path={gitStatus.statusSelectedFile.file.path}
-                        className="p-4 flex items-center justify-center"
-                        imgClassName="max-w-full max-h-[60vh] object-contain"
-                        alt={gitStatus.statusSelectedFile.file.path}
-                      />
-                    ) : (
-                      <DiffView
-                        oldContent={gitStatus.statusDiff.oldContent}
-                        newContent={gitStatus.statusDiff.newContent}
-                        filePath={gitStatus.statusDiff.filePath}
-                        isNew={gitStatus.statusDiff.isNew}
-                        isDeleted={gitStatus.statusDiff.isDeleted}
-                        cwd={cwd}
-                        enableComments={true}
-                        onPreview={
-                          !gitStatus.statusDiff.isDeleted && isMarkdownFile(gitStatus.statusSelectedFile!.file.path)
-                            ? () => gitStatus.setShowStatusDiffPreview(true)
-                            : !gitStatus.statusDiff.isDeleted && gitStatus.statusSelectedFile!.file.path.endsWith('.json')
-                              ? () => setJsonPreview({ content: gitStatus.statusDiff!.newContent, filePath: gitStatus.statusDiff!.filePath })
-                              : undefined
-                        }
-                        previewLabel={gitStatus.statusSelectedFile!.file.path.endsWith('.json') ? t('common.readable') : t('common.preview')}
-                        onContentSearch={(query) => {
-                          setActiveTab('search');
-                          contentSearch.setContentSearchQuery(query);
-                          contentSearch.performContentSearch(query);
-                        }}
-                      />
-                    )}
-                  </div>
-                  {/* Git changes Markdown preview modal (supports selection comments + send to AI) */}
-                  {gitStatus.showStatusDiffPreview && gitStatus.statusDiff && (
-                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => gitStatus.setShowStatusDiffPreview(false)}>
-                      <div
-                        className="bg-card rounded-lg shadow-xl w-full max-w-[90%] h-full flex flex-col"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <InteractiveMarkdownPreview
-                          content={gitStatus.statusDiff.newContent}
-                          filePath={gitStatus.statusDiff.filePath}
-                          cwd={cwd}
-                          onClose={() => gitStatus.setShowStatusDiffPreview(false)}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {/* JSON readable preview modal */}
-                  {jsonPreview && (
-                    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setJsonPreview(null)}>
-                      <div
-                        className="bg-card rounded-lg shadow-xl w-full max-w-[90%] h-[90%] flex flex-col"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
-                          <span className="text-sm text-muted-foreground font-mono truncate">{jsonPreview.filePath}</span>
-                          <button
-                            onClick={() => setJsonPreview(null)}
-                            className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </div>
-                        <JsonSearchBar search={jsonPreviewSearch} />
-                        <div className="flex-1 overflow-auto px-6 py-4 bg-[#0d1117]">
-                          <pre ref={jsonPreviewPreRef} className="whitespace-pre-wrap break-words font-mono" style={{ fontSize: '0.8125rem', lineHeight: '1.5' }}>
-                            {formatAsHumanReadable(jsonPreview.content)}
-                          </pre>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <StatusDiffPane
+                  cwd={cwd}
+                  selected={gitStatus.statusSelectedFile}
+                  diff={gitStatus.statusDiff}
+                  showMarkdownPreview={gitStatus.showStatusDiffPreview}
+                  setShowMarkdownPreview={gitStatus.setShowStatusDiffPreview}
+                  changedFiles={changedFilePathSet}
+                  fileGitStatusMap={fileGitStatusMap}
+                  onContentSearch={(query) => {
+                    setActiveTab('search');
+                    contentSearch.setContentSearchQuery(query);
+                    contentSearch.performContentSearch(query);
+                  }}
+                  locateInTree={locateInTree}
+                  jsonPreview={jsonPreview}
+                  setJsonPreview={setJsonPreview}
+                  jsonPreviewSearch={jsonPreviewSearch}
+                  jsonPreviewPreRef={jsonPreviewPreRef}
+                />
               ) : (
                 <div className="flex-1 flex items-center justify-center text-slate-9">
                   <span>{t('fileBrowser.selectFileToViewDiff')}</span>

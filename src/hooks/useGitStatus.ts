@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { buildGitFileTree, collectGitTreeDirPaths, type GitFileNode } from '../components/project/GitFileTree';
 import { toast, confirm } from '../components/shared/Toast';
 import type { GitFileStatus, GitStatusResponse, GitDiffResponse } from '../components/project/fileBrowser/types';
@@ -16,9 +16,22 @@ export function useGitStatus({ cwd, addToRecentFiles }: UseGitStatusOptions) {
   const [statusSelectedFile, setStatusSelectedFile] = useState<{ file: GitFileStatus; type: 'staged' | 'unstaged' } | null>(null);
   const [statusDiff, setStatusDiff] = useState<GitDiffResponse | null>(null);
   const [statusDiffLoading, setStatusDiffLoading] = useState(false);
-  const [statusExpandedPaths, setStatusExpandedPaths] = useState<Set<string>>(new Set());
+  // Track only user-collapsed directories (blacklist). Everything not in this set is expanded.
+  // This way, refetching git status (via watcher / visibility / external events) cannot revive
+  // a folder the user just collapsed — the user's intent is preserved across data refreshes.
+  const [statusCollapsedPaths, setStatusCollapsedPaths] = useState<Set<string>>(new Set());
   const [stagedTree, setStagedTree] = useState<GitFileNode<unknown>[]>([]);
   const [unstagedTree, setUnstagedTree] = useState<GitFileNode<unknown>[]>([]);
+
+  // Derive the expanded-set the tree component expects: all directory paths minus collapsed ones.
+  const statusExpandedPaths = useMemo(() => {
+    const expanded = new Set<string>([
+      ...collectGitTreeDirPaths(stagedTree),
+      ...collectGitTreeDirPaths(unstagedTree),
+    ]);
+    for (const p of statusCollapsedPaths) expanded.delete(p);
+    return expanded;
+  }, [stagedTree, unstagedTree, statusCollapsedPaths]);
   const [showStatusDiffPreview, setShowStatusDiffPreview] = useState(false);
   const [diffRefreshKey, setDiffRefreshKey] = useState(0);
 
@@ -39,12 +52,7 @@ export function useGitStatus({ cwd, addToRecentFiles }: UseGitStatusOptions) {
       const unstaged = buildGitFileTree(data.unstaged);
       setStagedTree(staged);
       setUnstagedTree(unstaged);
-
-      const allPaths = new Set<string>([
-        ...collectGitTreeDirPaths(staged),
-        ...collectGitTreeDirPaths(unstaged),
-      ]);
-      setStatusExpandedPaths(allPaths);
+      // Note: do NOT touch statusCollapsedPaths here — refetching must not undo user folding.
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -53,12 +61,15 @@ export function useGitStatus({ cwd, addToRecentFiles }: UseGitStatusOptions) {
   }, [cwd]);
 
   const handleStatusToggle = useCallback((path: string) => {
-    setStatusExpandedPaths(prev => {
+    // Membership in collapsedPaths is inverted from the visible state:
+    //   path ∈ collapsedPaths  ⇔  folder is currently collapsed
+    // Toggling moves a path in/out of the blacklist.
+    setStatusCollapsedPaths(prev => {
       const next = new Set(prev);
       if (next.has(path)) {
-        next.delete(path);
+        next.delete(path); // user re-expands
       } else {
-        next.add(path);
+        next.add(path); // user collapses
       }
       return next;
     });
@@ -319,7 +330,6 @@ export function useGitStatus({ cwd, addToRecentFiles }: UseGitStatusOptions) {
     statusDiff,
     statusDiffLoading,
     statusExpandedPaths,
-    setStatusExpandedPaths,
     stagedTree,
     setStagedTree,
     unstagedTree,
