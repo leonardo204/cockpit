@@ -47,7 +47,7 @@ const nextConfig = {
   // For webpack (used by `next build --webpack`), use the standard fallback
   // mechanism. `false` = "this module is unavailable, drop the import."
   // Mirror the Turbopack list so the two bundlers behave the same.
-  webpack(config, { isServer }) {
+  webpack(config, { isServer, webpack }) {
     if (!isServer) {
       const stubs = ['fs', 'fs/promises', 'path', 'module', 'os', 'crypto', 'stream', 'child_process', 'worker_threads', 'url', 'tty', 'util'];
       const fallback = { ...(config.resolve?.fallback ?? {}) };
@@ -56,6 +56,37 @@ const nextConfig = {
         fallback[`node:${m}`] = false;
       }
       config.resolve = { ...config.resolve, fallback };
+
+      // `web-tree-sitter`'s ESM bundle has a Node-detection branch:
+      //
+      //   var ENVIRONMENT_IS_NODE = typeof process == "object" &&
+      //     process.versions?.node && process.type != "renderer";
+      //   if (ENVIRONMENT_IS_NODE) {
+      //     const { createRequire } = await import("module");
+      //     var require = createRequire(import.meta.url);
+      //   }
+      //
+      // Next.js's webpack browser bundle injects a `process` polyfill that
+      // exposes `process.versions.node`, so ENVIRONMENT_IS_NODE evaluates
+      // truthy at RUNTIME in the browser — entering the branch, dynamic-
+      // importing our `module` stub (which exports `{}`), and crashing on
+      // `createRequire(...)` with "createRequire is not a function".
+      //
+      // Defining `process.versions` to an empty object makes
+      // `process.versions.node` AND `process.versions?.node` both
+      // evaluate to undefined → ENVIRONMENT_IS_NODE = falsy → if-
+      // branch dead-coded out of the browser bundle. (DefinePlugin's
+      // handling of `?.` is finicky; overriding the parent expression
+      // avoids the question entirely.) `process.type = "renderer"` is
+      // a belt-and-suspenders second short-circuit on the same check.
+      // Server bundle is untouched (gated on !isServer).
+      config.plugins = config.plugins ?? [];
+      config.plugins.push(
+        new webpack.DefinePlugin({
+          'process.versions': '({})',
+          'process.type': '"renderer"',
+        }),
+      );
     }
     return config;
   },
