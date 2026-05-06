@@ -59,6 +59,16 @@ html, body {
   --orange-10: 21 90% 45%;
   --orange-11: 16 80% 35%;
 
+  /* ---- Radix Violet 色阶 (符号: function/method 图标) ---- */
+  --violet-9: 252 56% 57%;
+  --violet-10: 251 48% 53%;
+  --violet-11: 250 43% 48%;
+
+  /* ---- Radix Blue 色阶 (符号: interface 图标) ---- */
+  --blue-9: 206 100% 50%;
+  --blue-10: 207 96% 43%;
+  --blue-11: 208 88% 43%;
+
   /* ---- 语义颜色 (shadcn 风格) ---- */
   --background: 0 0% 98%;
   --foreground: var(--slate-12);
@@ -135,6 +145,17 @@ html, body {
   --orange-9: 24 94% 50%;
   --orange-10: 27 96% 58%;
   --orange-11: 30 100% 68%;
+
+  /* Radix Violet Dark — function/method symbol icons. Brighter at -11
+     so the glyph reads at small sizes (12-14px) on dark surfaces. */
+  --violet-9: 252 56% 57%;
+  --violet-10: 251 63% 63%;
+  --violet-11: 252 87% 76%;
+
+  /* Radix Blue Dark — interface symbol icons. */
+  --blue-9: 206 100% 50%;
+  --blue-10: 209 100% 60%;
+  --blue-11: 210 100% 72%;
 
   /* 语义颜色 Dark */
   --background: var(--slate-1);
@@ -236,6 +257,12 @@ html, body {
   --color-orange-9: hsl(var(--orange-9));
   --color-orange-10: hsl(var(--orange-10));
   --color-orange-11: hsl(var(--orange-11));
+  --color-violet-9: hsl(var(--violet-9));
+  --color-violet-10: hsl(var(--violet-10));
+  --color-violet-11: hsl(var(--violet-11));
+  --color-blue-9: hsl(var(--blue-9));
+  --color-blue-10: hsl(var(--blue-10));
+  --color-blue-11: hsl(var(--blue-11));
 
   /* 圆角 */
   --radius-sm: calc(var(--radius) - 4px);
@@ -339,6 +366,36 @@ body {
 @keyframes confirmScaleIn {
   from { transform: scale(0.95); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
+}
+
+/* ---- BlockViewer: pin-click flash on a function block's title bar ----
+ * Triggered when the user navigates to a block via an input/output pin
+ * or the function-history drawer. Three-cycle amber pulse over ~1.5s
+ * draws the eye to the destination so the jump doesn't feel abrupt.
+ */
+@keyframes block-flash {
+  0%, 100% { background-color: hsl(var(--secondary) / 0.4); }
+  20%, 60% { background-color: hsl(var(--amber-9) / 0.45); }
+}
+.block-flash {
+  animation: block-flash 1.5s ease-in-out;
+}
+
+/* ---- BlockViewer: per-line flash for diff-overview ruler clicks ----
+ * Triggered when the user clicks a tick on the chip-diff overview
+ * ruler — we scroll the specific changed line into view and pulse it
+ * amber for 1.5s. Trade-off: during the animation the line's natural
+ * `bg-green-9/15` (added-line tint) is replaced by the keyframe's
+ * background-color; once the animation ends and the class is
+ * removed, the green class re-applies. Acceptable visual blip given
+ * the precise navigation it enables.
+ */
+@keyframes line-flash {
+  0%, 100% { background-color: hsl(var(--amber-9) / 0); }
+  30%, 70% { background-color: hsl(var(--amber-9) / 0.5); }
+}
+.line-flash {
+  animation: line-flash 1.5s ease-in-out;
 }
 
 /* ---- Shiki 代码高亮样式 ---- */

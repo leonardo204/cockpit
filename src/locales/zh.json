@@ -6,6 +6,8 @@
     "close": "关闭",
     "copy": "复制",
     "edit": "编辑",
+    "file": "文件",
+    "block": "代码块",
     "confirm": "确认",
     "loading": "加载中...",
     "search": "搜索",
@@ -231,6 +233,43 @@
     "weekdayPrefix": "周",
     "weekdayRange": "周{{a}}到周{{b}}"
   },
+  "blockViewer": {
+    "empty": {
+      "body": "在左侧文件树选择一个文件，查看它的函数调用关系。",
+      "hint": "或按 ⌘K 搜索。"
+    },
+    "fileMode": {
+      "loading": "加载中…",
+      "notFound": "该文件未索引（不支持的语言或超出文件上限）。"
+    },
+    "search": {
+      "tooltip": "搜索 (⌘K)",
+      "hint": "开始输入以搜索",
+      "noResults": "未找到匹配",
+      "files": "文件",
+      "symbols": "符号"
+    },
+    "viewerToggle": {
+      "toBlock": "显示代码块视图",
+      "toCode": "返回代码视图"
+    },
+    "refresh": "重新构建项目图",
+    "retry": "重试"
+  },
+  "blockDiffViewer": {
+    "loading": "正在分析代码块…",
+    "unsupported": "该文件类型不支持代码块 diff",
+    "unsupportedHint": "切回常规 diff 视图查看。",
+    "error": "代码块 diff 失败：{{message}}",
+    "noBlockChanges": "无代码块级变更（仅格式或空白）。",
+    "noBefore": "（新增）",
+    "noAfter": "（已删除）",
+    "kind": {
+      "added": "新增",
+      "deleted": "删除",
+      "modified": "修改"
+    }
+  },
   "fileBrowser": {
     "directoryTree": "目录树",
     "searchTab": "搜索",
@@ -256,6 +295,9 @@
     "fileName": "文件名...",
     "noRecentFiles": "暂无最近浏览的文件",
     "stagingArea": "暂存区 ({{count}})",
+    "changesSummary_one": "{{count}} 个变更",
+    "changesSummary_other": "{{count}} 个变更",
+    "noChanges": "工作区无变更",
     "refreshChanges": "刷新变更列表",
     "unstageAll": "全部取消",
     "noStagedFiles": "无暂存的文件",

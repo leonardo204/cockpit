@@ -33,6 +33,10 @@ export interface GitFileStatus {
   path: string;
   status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
   oldPath?: string;
+  /** Lines added — populated by status route via `git diff --numstat`. 0 for untracked / binary / unmatched. */
+  additions?: number;
+  /** Lines deleted — populated by status route via `git diff --numstat`. 0 for untracked / binary / unmatched. */
+  deletions?: number;
 }
 
 export interface GitStatusResponse {
@@ -85,6 +89,17 @@ export interface FileDiff {
 
 // Tab type
 export type TabType = 'tree' | 'search' | 'recent' | 'status' | 'history';
+
+/**
+ * Sub-mode within the 'status' tab.
+ * - 'files': original staged/unstaged tree (git mental model)
+ * - 'changes': flat list of all changed files for review (comprehension mental model)
+ *
+ * The legacy `StatusSubMode` (with a second `'changes'` mode for symbol-
+ * level diff) was retired together with `ChangesView` — symbol diff now
+ * surfaces inside DiffView via a Block toggle, not as a separate file
+ * list. The status tab is therefore single-mode again.
+ */
 
 // Search result types
 export interface SearchMatch {

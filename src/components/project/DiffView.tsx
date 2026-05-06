@@ -38,6 +38,15 @@ interface DiffViewProps {
   previewLabel?: string;
   // Content search callback (selected text → project-wide search)
   onContentSearch?: (query: string) => void;
+  /**
+   * Programmatic scroll target. When provided (and `tick` changes), the
+   * virtualizer scrolls so the matching row is near the top of the viewport.
+   * - `side: 'after'` matches `rightLines[i].lineNum === line` (new file line).
+   * - `side: 'before'` matches `leftLines[i].lineNum === line` (old file line).
+   * The `tick` field MUST change on each new request — otherwise repeat clicks
+   * on the same line wouldn't re-trigger the scroll.
+   */
+  targetLine?: { line: number; side: 'before' | 'after'; tick: number } | null;
 }
 
 // ============================================
@@ -91,7 +100,7 @@ const ToolbarRenderer = memo(ToolbarRendererInner);
 // Main DiffView Component (Split View)
 // ============================================
 
-export function DiffView({ oldContent, newContent, filePath, isNew = false, isDeleted = false, cwd, enableComments = false, onPreview, previewLabel, onContentSearch }: DiffViewProps) {
+export function DiffView({ oldContent, newContent, filePath, isNew = false, isDeleted = false, cwd, enableComments = false, onPreview, previewLabel, onContentSearch, targetLine }: DiffViewProps) {
   const { t } = useTranslation();
   const resolvedPreviewLabel = previewLabel ?? t('common.preview');
   const diffLines = useMemo(() => computeLineDiff(oldContent, newContent), [oldContent, newContent]);
@@ -460,6 +469,26 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
 
   const totalSize = virtualizer.getTotalSize();
   const virtualItems = virtualizer.getVirtualItems();
+
+  // Programmatic scroll: when the `targetLine` object reference changes, find
+  // the virtualizer index whose left/right lineNum matches and scroll there.
+  // The parent supplies a fresh object (with new `tick`) on every request, so
+  // ref-equality changes are sufficient to retrigger this effect — including
+  // when the user clicks the same symbol twice.
+  useEffect(() => {
+    if (!targetLine) return;
+    const arr = targetLine.side === 'after' ? rightLines : leftLines;
+    const idx = arr.findIndex((l) => l.lineNum === targetLine.line);
+    if (idx === -1) return;
+    // Defer one frame so layout is settled when DiffView just mounted with a
+    // new file (e.g. user clicked a symbol in a different file).
+    const raf = requestAnimationFrame(() => {
+      virtualizer.scrollToIndex(idx, { align: 'start' });
+    });
+    return () => cancelAnimationFrame(raf);
+    // virtualizer is a fresh instance every render; including it would loop.
+
+  }, [targetLine, leftLines, rightLines]);
 
   return (
     <div className="font-mono flex flex-col h-full text-sm">

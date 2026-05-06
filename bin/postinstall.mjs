@@ -5,9 +5,20 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
+import { copyTreeSitterWasms } from '../scripts/copy-tree-sitter-wasms.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
+
+// Tree-sitter WASMs → public/tree-sitter/. Wrapped in try/catch so a
+// missing source dir / permission issue doesn't break the rest of
+// postinstall (the helper itself is already graceful, but importing
+// it can still fail if scripts/ went missing somehow).
+try {
+  copyTreeSitterWasms(projectRoot);
+} catch (err) {
+  console.warn('[postinstall] tree-sitter WASM copy failed:', err?.message ?? err);
+}
 
 if (process.platform !== 'win32') {
   // node-pty: spawn-helper 需要可执行权限

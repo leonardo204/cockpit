@@ -68,6 +68,50 @@ export function resolveSafePath(cwd: string, userPath: string): string | null {
   return full;
 }
 
+/**
+ * Lightweight guard for routes that take an arbitrary `cwd` query param.
+ *
+ * Cockpit's threat model trusts the local user, but the dev server
+ * still listens on localhost — a malicious page in the user's browser
+ * could issue cross-origin fetches with crafted `cwd` values. We
+ * don't try to whitelist roots (cockpit users open arbitrary
+ * projects), but we do reject obvious garbage:
+ *
+ *   - non-string / empty
+ *   - relative paths (must be absolute, normalised)
+ *   - non-existent paths
+ *   - paths that aren't directories
+ *
+ * Returns `{ ok: true, abs }` on success (the resolved absolute path)
+ * or `{ ok: false, reason }` with a short reason string the caller
+ * surfaces in a 400 response.
+ *
+ * Cost: one fs.stat — typically <1 ms on warm cache. Routes do this
+ * once per request; for buildCodeIndex requests the next step
+ * (parsing the project) dominates by orders of magnitude.
+ */
+export async function validateCwd(
+  cwd: string | null | undefined,
+): Promise<{ ok: true; abs: string } | { ok: false; reason: string }> {
+  if (typeof cwd !== 'string' || cwd.length === 0) {
+    return { ok: false, reason: 'Missing cwd parameter' };
+  }
+  if (!path.isAbsolute(cwd)) {
+    return { ok: false, reason: 'cwd must be an absolute path' };
+  }
+  const abs = path.resolve(cwd);
+  let s;
+  try {
+    s = await stat(abs);
+  } catch {
+    return { ok: false, reason: 'cwd does not exist' };
+  }
+  if (!s.isDirectory()) {
+    return { ok: false, reason: 'cwd is not a directory' };
+  }
+  return { ok: true, abs };
+}
+
 // -------- ETag --------
 
 /**

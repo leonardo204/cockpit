@@ -6,6 +6,8 @@
     "close": "Close",
     "copy": "Copy",
     "edit": "Edit",
+    "file": "File",
+    "block": "Block",
     "confirm": "Confirm",
     "loading": "Loading...",
     "search": "Search",
@@ -231,6 +233,43 @@
     "weekdayPrefix": "",
     "weekdayRange": "{{a}} to {{b}}"
   },
+  "blockViewer": {
+    "empty": {
+      "body": "Select a file in the left tree to see its function call graph.",
+      "hint": "or press ⌘K to search."
+    },
+    "fileMode": {
+      "loading": "Loading…",
+      "notFound": "This file is not indexed (unsupported language or beyond the file cap)."
+    },
+    "search": {
+      "tooltip": "Search (⌘K)",
+      "hint": "Start typing to search",
+      "noResults": "No matches",
+      "files": "Files",
+      "symbols": "Symbols"
+    },
+    "viewerToggle": {
+      "toBlock": "Show block view",
+      "toCode": "Back to code view"
+    },
+    "refresh": "Rebuild project graph",
+    "retry": "Retry"
+  },
+  "blockDiffViewer": {
+    "loading": "Analyzing blocks…",
+    "unsupported": "Block diff is not available for this file type.",
+    "unsupportedHint": "Switch back to the regular diff view to read it.",
+    "error": "Block diff failed: {{message}}",
+    "noBlockChanges": "No block-level changes (formatting / whitespace only).",
+    "noBefore": "(new)",
+    "noAfter": "(removed)",
+    "kind": {
+      "added": "added",
+      "deleted": "deleted",
+      "modified": "modified"
+    }
+  },
   "fileBrowser": {
     "directoryTree": "Tree",
     "searchTab": "Search",
@@ -256,6 +295,9 @@
     "fileName": "File name...",
     "noRecentFiles": "No recent files",
     "stagingArea": "Staged ({{count}})",
+    "changesSummary_one": "{{count}} change",
+    "changesSummary_other": "{{count}} changes",
+    "noChanges": "No changes in working tree",
     "refreshChanges": "Refresh changes",
     "unstageAll": "Unstage all",
     "noStagedFiles": "No staged files",
