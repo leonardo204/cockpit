@@ -102,7 +102,7 @@ export default async function HomePage({
       'Slash modes: /qa, /fx, /review, /commit',
       'Custom skills via SKILL.md',
       'Scheduled tasks (one-time, interval, cron)',
-      'Code Map — chip view with caller/callee pins (TS/JS/Python/Go/Rust)',
+      'Code Map — onboard new codebases by walking the call graph (TS/JS/Python/Go/Rust)',
     ],
   };
 
