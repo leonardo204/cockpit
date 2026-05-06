@@ -17,8 +17,9 @@ export const metadata: Metadata = {
  *
  * Local dev (`npm run dev`):
  *   Next.js dev server doesn't run Pages Functions, so this page IS served.
- *   The client-side redirect points to the legacy Vercel-hosted demo so the
- *   "Try Online" button stays functional during local development.
+ *   `TryFallbackRedirect` explains the situation — it no longer
+ *   client-side-redirects to the legacy Vercel deployment because that
+ *   deployment was retired (see `e2b/README.md`).
  *
  * To test the production flow locally, run:
  *   npm run build && npm run preview
@@ -28,14 +29,6 @@ export default function TryPage() {
   return (
     <div className="min-h-screen flex items-center justify-center px-6 text-center">
       <TryFallbackRedirect />
-      <noscript>
-        <a
-          href="https://e2b-nu.vercel.app/api/try"
-          className="text-brand underline"
-        >
-          Continue to demo →
-        </a>
-      </noscript>
     </div>
   );
 }

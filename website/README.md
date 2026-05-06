@@ -157,7 +157,7 @@ is served directly as a static asset, so Function invocations stay near zero.
 | Path | Function | Purpose |
 |---|---|---|
 | `/` | `functions/index.ts` | i18n redirect (`Accept-Language` + `lang_pref` cookie → 302 to `/en/` or `/zh/`) |
-| `/try` | `functions/try.ts` | E2B demo handler — confirmation page + sandbox creation. Ported from `e2b/api/try.js` so the demo lives entirely under `cocking.cc`, no Vercel hop. |
+| `/try` | `functions/try.ts` | E2B demo handler — confirmation page + sandbox creation. The entire demo flow lives under `cocking.cc`. (The legacy Vercel handler at `e2b/api/try.js` was retired; `e2b/` now only builds the sandbox template.) |
 
 ## i18n strategy
 

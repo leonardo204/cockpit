@@ -1,8 +1,11 @@
 /**
  * Cloudflare Pages Function — `/try` (Try Online demo entrypoint).
  *
- * Ported from e2b/api/try.js (Vercel) so the entire demo flow lives under
- * cocking.cc and visitors never see vercel.app in their address bar.
+ * Canonical handler for the demo flow under cocking.cc/try. (A Vercel-
+ * hosted handler at `e2b/api/try.js` used to share this responsibility;
+ * it was retired so the entire flow lives on Cloudflare Pages and
+ * visitors never see vercel.app in their address bar. The `e2b/`
+ * directory now only builds the sandbox template — see e2b/README.md.)
  *
  * Two-step flow:
  *   1. GET /try                            → confirmation page (also blocks link-preview bots)
