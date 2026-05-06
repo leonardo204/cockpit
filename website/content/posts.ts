@@ -32,6 +32,218 @@ export interface Post {
 
 export const posts: Post[] = [
   {
+    slug: 'read-code-as-a-map',
+    date: '2026-05-07',
+    keywords: [
+      'Code Map',
+      'code visualization',
+      'call graph',
+      'onboarding new codebase',
+      'reading code',
+      'code review AI',
+      'AI generated code review',
+      'function caller callee',
+      'tree-sitter code analysis',
+      'code navigation',
+      'Cockpit',
+      'Claude Code',
+    ],
+    content: {
+      en: {
+        title: 'Read code as a map, not a tree',
+        description:
+          "The file tree shows you where bytes are stored. It does not show you how the code actually moves. Cockpit's new Code Map turns any source file into a canvas of function chips — callers on the left, callees on the right, click a pin to jump. Five clicks across an unfamiliar repo and you've walked the auth flow. Here is what that looks like in five real scenarios.",
+        readingTime: '7 min read',
+        body: `You clone a new repo. \`npm install\`. \`npm run dev\`. It works.
+
+Now you have to actually **read** it.
+
+The file tree opens. 47 folders. 312 files. Some named \`utils\`, some named \`lib\`, one called \`core\` and another called \`kernel\` (you suspect they overlap). Where do you start? Probably \`index.ts\`. After 20 minutes you've drifted three folders deep, you have 11 tabs open, and you still don't know which function is the entry point for the bug you came to fix.
+
+The file tree is showing you **where files are stored**, not **how the code actually moves**.
+
+## A different unit
+
+Cockpit's new Code Map switches the unit. Instead of "files in folders", you see **functions, with their connections.**
+
+Every function becomes a card on the canvas:
+
+- The **body** — the actual code, syntax-highlighted — sits in the middle.
+- On the **left**: every function that calls *this* one. (Callers.)
+- On the **right**: every function that *this* one calls. (Callees.)
+- Each entry on either side is clickable. Click and the canvas pans to that function.
+
+That's the whole interface. The file tree is still there if you want it. But the moment you click into a file, you don't see "lines 1–840 of \`payment.ts\`." You see four chips: \`chargeCard\`, \`refund\`, \`webhookHandler\`, \`recordLedgerEntry\` — each with their own incoming and outgoing arrows.
+
+## Day one in a new repo
+
+This is the moment Code Map was built for. You join a project at 9am. By 10am you're supposed to "have a look at the auth flow." With the file tree, that's a 90-minute scavenger hunt. With Code Map:
+
+1. Open the file you suspect is the entry point — \`routes/auth.ts\`.
+2. The five route handlers each appear as their own chip.
+3. Pick the one you care about: \`loginHandler\`. Its chip lights up.
+4. The right column shows it calls \`validateCredentials\`, \`issueToken\`, \`recordLogin\`. Click \`validateCredentials\`.
+5. The canvas pans. Now \`validateCredentials\` is the centre chip. Its callees are \`hashPassword\` and \`lookupUser\`. Its callers — left column — show you it's also called from \`resetPassword\`, which you didn't know existed.
+
+In five clicks you've walked the auth tree. You haven't \`grep\`-ed for "login". You haven't gotten lost in \`utils/index.ts\`. The map you needed was always there in the code — you just needed someone to draw it.
+
+## Following a call you don't trust
+
+This is the thing every senior engineer secretly does and no junior is ever taught: when you're not sure why a function is being called, you walk **up** the call chain until you understand the entry point.
+
+The traditional way is **grep + intuition**. \`grep -r 'createOrder'\` returns 23 hits. 19 are in tests. 2 are in comments. 2 are real call sites. You open both, scroll around, try to figure out which "happens first."
+
+In Code Map, \`createOrder\`'s left column *is* the answer. Sorted, deduped, no test files unless you want them. Click each one to see the actual line. The whole "where does this get called" question is a 10-second visual inspection instead of a five-tab dig.
+
+## Reviewing AI-generated PRs
+
+You asked Claude to "fix the rate-limiter bug." It produced 8 file changes across 3 directories. The diff looks reasonable. You hit Approve.
+
+You shouldn't.
+
+Switch the same files into Code Map. Now the diff isn't a list of \`+/-\` lines — it's a chip view where the **changed functions are highlighted**, with their callers and callees still drawn around them. You can immediately see:
+
+- The agent edited \`rateLimit\`. Its callers are \`apiHandler\` and \`webhookHandler\`. Did the change break the webhook path? Click the webhook caller, read the chip, done. 30 seconds.
+- It also touched \`getClientIp\`, which has *eleven* callers — half of them in the auth subsystem. The agent didn't mention this. You probably want to read those eleven before approving.
+
+For PRs you wrote yourself, this is overkill. For PRs an agent wrote at 3am while you were asleep, this is the difference between "I trust it" and "I should trust it."
+
+## Tracing a bug across files
+
+A user reports: "Sometimes when I refresh, the cart loses one item." You have a guess: something racy in \`syncCart\`. Open \`syncCart\` in Code Map.
+
+Five callees. One is \`fetchCart\`. Two are flavours of \`mergeCart\`. One looks fishy: \`dedupeItems\`. Click. Its body shows a \`Set\` keyed on \`id\` — but the bug report mentions duplicate ids with **different sizes**. Found it.
+
+Three clicks. No \`grep\`. No "open ten files in tabs and scroll." The map made the buggy node visible because the chips next to it were the right context.
+
+## On the train, no LSP, no problem
+
+Code Map runs on your laptop, parsed by tree-sitter. No language server, no project index, no background daemon. Open a folder, get a chip view. Close your laptop, fly to Berlin, open it on the plane — same chip view, no indexing wait.
+
+This matters more than it sounds. LSP-based tools (VSCode's "find references", JetBrains' "show callers") all need a fully booted project: \`tsconfig\` resolved, \`pip install\` done, \`go.mod\` complete. Code Map skips that. It reads your files the way a careful human reader would. If they parse, you get a chip view. That's it.
+
+It works on **TypeScript / JavaScript, Python, Go, Rust** today. As a user, that's all you need to know.
+
+## When *not* to use it
+
+To be fair: Code Map isn't trying to be your editor. If you're writing new code, you're in the regular Explorer with a cursor and the LSP popping up types. Code Map is for the moment **before** you write — when you need to read first.
+
+A useful split:
+
+- **File tree + editor** — when you know what you're changing and where.
+- **Code Map** — when the question is "what calls what, and where do I start?"
+
+You'll toggle between them all day. Both views look at the same files. They just answer different questions.
+
+## Try it
+
+Open Cockpit, go to Explorer, open any source file, hit the **Code Map** toggle. The chip view replaces the editor pane — same file, different lens. Click a callee pin to fly to the next function. Toggle back when you're done.
+
+That repo you've been meaning to read since January? It's a five-minute walkthrough now.
+
+---
+
+\`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [Try Online](/try)`,
+      },
+      zh: {
+        title: '把代码读成地图，而不是树',
+        description:
+          '文件树告诉你字节存在哪里，但不告诉你代码如何流动。Cockpit 新的 Code Map 视图把任意源文件渲染为函数 chip 画布——左侧列出谁调用了这个函数，右侧列出它调用了谁，点击 pin 即可跳转。陌生代码库五次点击就能走完一遍鉴权流程。下面是 5 个真实使用场景。',
+        readingTime: '阅读约 7 分钟',
+        body: `你 clone 了一个新仓库。\`npm install\`、\`npm run dev\`，跑起来了。
+
+接下来要真正**读懂**它。
+
+文件树展开：47 个文件夹、312 个文件。其中几个叫 \`utils\`、几个叫 \`lib\`、一个叫 \`core\` 还有一个叫 \`kernel\`（你怀疑它们重叠）。从哪开始？大概 \`index.ts\` 吧。20 分钟之后你已经飘进了第三层子目录，开了 11 个 tab，仍然不知道你要修的那个 bug 入口在哪个函数里。
+
+文件树告诉你的是**字节存在哪里**，而不是**代码怎么流动**。
+
+## 换一个单位
+
+Cockpit 新的 Code Map 把"单位"换掉了。你看到的不再是"文件夹里的文件"，而是**函数 + 它们之间的连线**。
+
+每个函数变成画布上的一张卡片：
+
+- **中间是函数体** —— 真实代码、语法高亮。
+- **左侧**：所有调用这个函数的地方（caller）。
+- **右侧**：这个函数调用的所有目标（callee）。
+- 两侧每一项都可点击。点一下，画布平移到那个函数。
+
+整个界面就这么简单。文件树还在，想要随时切回去。但只要你点进一个文件，你看到的就不再是 "\`payment.ts\` 第 1–840 行"，而是四张 chip：\`chargeCard\`、\`refund\`、\`webhookHandler\`、\`recordLedgerEntry\` —— 每张都画着自己的进出箭头。
+
+## 场景一：新仓库的第一天
+
+这是 Code Map 最初被造出来要解决的场景。早上 9 点入职，10 点你被要求"看一下我们的鉴权流程"。靠文件树，这是一场 90 分钟的"找地鼠"。靠 Code Map：
+
+1. 打开你猜是入口的文件 —— \`routes/auth.ts\`。
+2. 文件里五个路由处理函数各自变成一张 chip。
+3. 选你关心的那个：\`loginHandler\`。这张 chip 高亮。
+4. 右侧列出：它调用了 \`validateCredentials\`、\`issueToken\`、\`recordLogin\`。点击 \`validateCredentials\`。
+5. 画布平移。现在 \`validateCredentials\` 在中间。它的 callee 是 \`hashPassword\` 和 \`lookupUser\`；它的 caller —— 左侧 —— 告诉你它还被 \`resetPassword\` 调用，而你之前根本不知道有这个函数。
+
+五次点击就把鉴权树走完了。没 \`grep\` 过 "login"，没在 \`utils/index.ts\` 里迷路。**这张地图本来就藏在代码里 —— 只是需要有人把它画出来。**
+
+## 场景二：追一个你不放心的调用
+
+这是每个资深工程师都会偷偷做、却没人教新人的事：当你对一个函数为什么被调用感到不安，你会**沿着调用链往上走**，直到看清入口。
+
+传统做法是 **grep + 直觉**。\`grep -r 'createOrder'\` 命中 23 次：19 个在测试里，2 个在注释里，2 个是真正的调用点。你打开两个，上下翻找，琢磨哪个"先发生"。
+
+在 Code Map 里，\`createOrder\` 左侧那一列**就是答案**。已排序、已去重，默认不混测试文件（除非你要看）。点每一项就跳到具体那行。"这个函数到底是从哪里被调用的"这个问题，从五个 tab 的挖掘变成 10 秒钟的视觉检查。
+
+## 场景三：评审 AI 写的 PR
+
+你让 Claude "修一下限流器的 bug"。它给你交出 8 个文件、3 个目录的改动。Diff 看上去合理。你正打算 Approve。
+
+**先别。**
+
+把同样这些文件切到 Code Map。Diff 不再是一长串 \`+/-\` 行，而是一张 chip 视图，**改动过的函数被高亮**，周围还画着它们的 caller 和 callee。你立刻能看到：
+
+- Agent 改了 \`rateLimit\`。它的 caller 是 \`apiHandler\` 和 \`webhookHandler\`。这次改动会不会把 webhook 那条路径搞坏？点进去，读 chip，30 秒搞定。
+- 它还改了 \`getClientIp\`，这个函数有**11 个 caller**，其中一半在鉴权子系统里。Agent 没在 PR 里提这件事。你大概率得先把这 11 处都看一遍再 approve。
+
+你自己写的 PR 这么做有点小题大做。但凌晨 3 点 Agent 趁你睡觉时写的 PR，这就是"我相信它"和"我应该相信它"之间的差别。
+
+## 场景四：跨文件追 bug
+
+用户报告："偶尔刷新一下，购物车会丢一件商品。"你的猜测是 \`syncCart\` 里有竞态。在 Code Map 里打开 \`syncCart\`。
+
+五个 callee：一个 \`fetchCart\`、两个 \`mergeCart\` 的变体、一个看上去可疑的 \`dedupeItems\`。点击 \`dedupeItems\`，函数体里有一个以 \`id\` 为 key 的 \`Set\` —— 但 bug 报告里说有些商品 id 相同、**尺寸不同**。**抓到了。**
+
+三次点击。没 \`grep\`、没有"开十个 tab 上下翻滚"。地图把"出 bug 的那一节"放在你眼前，是因为它周围的 chip 给了你正确的上下文。
+
+## 场景五：飞机上、没有 LSP，照样能读
+
+Code Map 完全跑在你笔电上，由 tree-sitter 解析。没有 language server、没有项目索引、没有后台守护进程。打开一个目录，立刻有 chip 视图。合上电脑、飞去柏林，飞机上打开同一个目录 —— 还是那张 chip 视图，零索引等待。
+
+这件事比听上去重要。基于 LSP 的工具（VSCode 的 "find references"、JetBrains 的 "show callers"）都需要项目完全启动：\`tsconfig\` 解析完、\`pip install\` 装完、\`go.mod\` 完整。Code Map 跳过这些前置。它像一个仔细的人类读者那样读你的代码：能解析就能出 chip 视图，仅此而已。
+
+目前支持 **TypeScript / JavaScript、Python、Go、Rust**。作为用户，你只需要知道这一句。
+
+## 什么时候*不*用它
+
+老实说：Code Map 没打算取代你的编辑器。如果你正在**写**新代码，你应该在 Explorer 的常规视图里，带着光标和 LSP 类型提示。Code Map 是为了你**写之前**的那一刻 —— 你需要先读懂。
+
+一个有用的分工：
+
+- **文件树 + 编辑器**：你已经知道要改什么、改在哪。
+- **Code Map**：问题是"什么调用了什么，我该从哪里下手？"
+
+你会一整天在两者之间来回切。它们看的是同一份文件，回答的是不同的问题。
+
+## 上手
+
+打开 Cockpit → Explorer → 打开任意源文件 → 点 **Code Map** 切换。Chip 视图替换原来的编辑器面板 —— 同一个文件，换一个镜头。点击 callee pin 飞到下一个函数。读完了切回来。
+
+那个你从一月就想读、一直没动的仓库？现在是 5 分钟的 walkthrough。
+
+---
+
+\`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [Try Online](/try)`,
+      },
+    },
+  },
+  {
     slug: 'deepseek-in-cockpit',
     date: '2026-04-30',
     keywords: [
