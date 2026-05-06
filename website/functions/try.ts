@@ -5,8 +5,16 @@
  * cocking.cc and visitors never see vercel.app in their address bar.
  *
  * Two-step flow:
- *   1. GET /try            → confirmation page (also blocks link-preview bots)
- *   2. GET /try?confirm=1  → create E2B sandbox via API → 302 to sandbox URL
+ *   1. GET /try                            → confirmation page (also blocks link-preview bots)
+ *   2. GET /try?confirm=1
+ *        with Accept: application/json     → JSON { url } / 429 / 5xx (used by the in-page button)
+ *        plain navigation                  → 302 to sandbox URL (no-JS fallback / direct share)
+ *
+ * The in-page "Start Demo" button uses fetch with `Accept: application/json`
+ * so a cooldown / sandbox-create error stays on this page as a TOAST instead
+ * of full-page-navigating to a raw JSON error response. Without that, slow
+ * E2B responses arriving after the user has navigated away would lose the
+ * sandbox URL, and 429 cooldowns would render `{"error":"..."}` literally.
  *
  * Cooldown: 5 minutes per visitor (cookie-based) to prevent abuse.
  * Required env binding (set in Cloudflare Pages dashboard → Settings → Variables):
@@ -25,16 +33,74 @@ const CONFIRM_HTML = `<!DOCTYPE html>
   .card { text-align: center; max-width: 420px; padding: 0 24px; }
   h1 { font-size: 26px; margin: 0 0 12px; letter-spacing: -0.01em; }
   p { color: #999; margin: 0 0 28px; line-height: 1.5; }
-  a { display: inline-block; padding: 12px 32px; background: #4ab9b3; color: #0a0a0a; text-decoration: none; border-radius: 8px; font-size: 15px; font-weight: 600; transition: background 0.15s; }
-  a:hover { background: #5fcdc7; }
+  button { display: inline-block; padding: 12px 32px; background: #4ab9b3; color: #0a0a0a; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; font-family: inherit; cursor: pointer; transition: background 0.15s; }
+  button:hover:not(:disabled) { background: #5fcdc7; }
+  button:disabled { background: #1f2937; color: #6b7280; cursor: not-allowed; }
   .footnote { margin-top: 24px; font-size: 12px; color: #555; }
+  /* Toast — fixed-position, slides up from the bottom, auto-dismisses
+     after a few seconds. Stays put so the page layout doesn't shift. */
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translate(-50%, 100px);
+    background: #1f2937; color: #fff; padding: 12px 20px; border-radius: 8px;
+    font-size: 14px; max-width: 90vw; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.error { background: #7f1d1d; }
 </style></head>
 <body><div class="card">
   <h1>Cockpit Demo</h1>
   <p>5-minute sandbox with Explorer &amp; Terminal.<br>(no AI chat in this demo)</p>
-  <a href="?confirm=1">Start Demo →</a>
+  <button id="start" type="button">Start Demo →</button>
+  <noscript>
+    <p style="margin-top: 16px; font-size: 13px;">
+      <a href="?confirm=1" style="color: #4ab9b3;">Continue without JavaScript →</a>
+    </p>
+  </noscript>
   <div class="footnote">Sandbox launches on e2b.dev</div>
-</div></body></html>`;
+</div>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+  const btn = document.getElementById('start');
+  const toast = document.getElementById('toast');
+  let toastTimer;
+  function showToast(message, isError) {
+    toast.textContent = message;
+    toast.classList.toggle('error', !!isError);
+    toast.classList.add('show');
+    clearTimeout(toastTimer);
+    // Cooldown text like "Please wait 280s..." is long enough that
+    // the default 3s feels too short. 6s gives the user time to read.
+    toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 6000);
+  }
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+    try {
+      const r = await fetch('?confirm=1', {
+        // Tell the server we want JSON so it doesn't 302 us off-page.
+        headers: { Accept: 'application/json' },
+      });
+      let data = {};
+      try { data = await r.json(); } catch (_) {}
+      if (r.ok && data.url) {
+        // Successful sandbox creation — navigate to it.
+        window.location.href = data.url;
+        return;
+      }
+      // Rate-limit (429), server error (500/502/503), or any non-OK
+      // with an error: stay on this page, show the toast, restore the
+      // button so the user can retry once the cooldown elapses.
+      showToast(data.error || 'Failed to start the demo. Please try again.', true);
+      btn.disabled = false;
+      btn.textContent = 'Start Demo →';
+    } catch (err) {
+      showToast('Network error: ' + (err && err.message ? err.message : String(err)), true);
+      btn.disabled = false;
+      btn.textContent = 'Start Demo →';
+    }
+  });
+</script></body></html>`;
 
 interface Env {
   E2B_API_KEY: string;
@@ -83,6 +149,13 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     });
   }
 
+  // The in-page "Start Demo" button sends `Accept: application/json` to
+  // tell us not to 302 the response — that way 429 cooldowns or 5xx
+  // errors stay on the confirm page (rendered as a toast) instead of
+  // navigating the browser to a raw JSON error body. No-JS / direct
+  // share / curl get the original 302 redirect on success.
+  const wantsJson = (request.headers.get('Accept') || '').includes('application/json');
+
   // Step 2: cooldown check
   const lastTry = readCooldownCookie(request.headers.get('Cookie'));
   const now = Date.now();
@@ -120,11 +193,23 @@ export const onRequest: PagesFunction<Env> = async (context) => {
     const domain = sandbox.domain || 'e2b.dev';
     const sandboxUrl = `https://3457-${sandbox.sandboxID}.${domain}/?cwd=${encodeURIComponent('/home/user/demo-project')}`;
 
+    // Success: cookie is written either way; only the body shape differs.
+    const cookieHeader = `cockpit_demo=${now}; Path=/; Max-Age=300; SameSite=Lax; Secure`;
+    if (wantsJson) {
+      return new Response(JSON.stringify({ url: sandboxUrl }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Set-Cookie': cookieHeader,
+          'Cache-Control': 'private, no-store',
+        },
+      });
+    }
     return new Response(null, {
       status: 302,
       headers: {
         'Location': sandboxUrl,
-        'Set-Cookie': `cockpit_demo=${now}; Path=/; Max-Age=300; SameSite=Lax; Secure`,
+        'Set-Cookie': cookieHeader,
         'Cache-Control': 'private, no-store',
       },
     });
