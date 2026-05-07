@@ -1,22 +1,25 @@
 'use client';
 
 /**
- * FunctionHistoryDrawer — narrow right-side panel that tracks the
- * functions the user has hopped through via input/output pins.
+ * FunctionHistoryDrawer — narrow right-side column of the Code Map
+ * that tracks the functions the user has hopped through via input/
+ * output pins. Sister of `FileTOCSection` on the LEFT side: TOC = "what's
+ * in this file", History = "where I've been across files".
  *
- * Why this and not the old code-body drawer: the BlockViewer already
- * shows every function's source inline, so a separate drawer
- * displaying the same code was redundant. What's actually useful in a
- * cross-file architecture review is a *trail of where I've been* —
- * keeps the navigation flow ("call sites I'm tracing") visible without
- * making the user remember it. Keep it small and text-only; the heavy
- * code rendering happens on the canvas.
+ * Why a trail and not a code preview: the BlockViewer already shows
+ * every function's source inline, so a separate drawer displaying the
+ * same code was redundant. What's actually useful in a cross-file
+ * architecture review is a *trail of where I've been* — keeps the
+ * navigation flow ("call sites I'm tracing") visible without making
+ * the user remember it. Keep it small and text-only; the heavy code
+ * rendering happens on the canvas.
  *
  * Capacity: 15 (FIFO with promote-on-revisit). Capacity logic lives
  * in the BlockViewer state owner — this component is purely
  * presentational.
  */
 
+import { useTranslation } from 'react-i18next';
 import { History, X } from 'lucide-react';
 
 import type { SymbolKind } from '@/lib/codeMap/types';
@@ -53,6 +56,7 @@ export function FunctionHistoryDrawer({
   onSelect,
   onClear,
 }: FunctionHistoryDrawerProps) {
+  const { t } = useTranslation();
   return (
     <div
       className="w-56 flex-shrink-0 bg-card border-l border-border flex flex-col"
@@ -62,14 +66,16 @@ export function FunctionHistoryDrawer({
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono min-w-0">
           <History className="w-3 h-3 flex-shrink-0" />
           <span className="truncate">
-            {entries.length === 0 ? 'history' : `history · ${entries.length}/15`}
+            {entries.length === 0
+              ? t('blockViewer.history.title')
+              : `${t('blockViewer.history.title')} · ${entries.length}/15`}
           </span>
         </div>
         {entries.length > 0 && (
           <button
             onClick={onClear}
             className="flex-shrink-0 text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-secondary"
-            title="Clear history"
+            title={t('blockViewer.history.clear')}
           >
             <X className="w-3 h-3" />
           </button>
@@ -78,7 +84,7 @@ export function FunctionHistoryDrawer({
       <div className="flex-1 overflow-y-auto">
         {entries.length === 0 ? (
           <div className="px-3 py-4 text-[10px] text-muted-foreground/60 italic leading-relaxed">
-            Click an input or output pin to begin tracing.
+            {t('blockViewer.history.empty')}
           </div>
         ) : (
           entries.map((entry, i) => (

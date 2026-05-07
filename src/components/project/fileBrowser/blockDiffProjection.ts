@@ -10,13 +10,33 @@
  *   - This module owns the parser / line-diff / qname-classification
  *     plumbing.
  *
- * Block-pairing strategy: we parse both sides with tree-sitter, classify
- * each top-level symbol as added / deleted / modified by `qualifiedName +
- * contentHash`, and skip "fillers" (`__code_<lo>_<hi>__`) and the
- * empty-file fallback `__file__` because their qnames aren't stable
- * across snapshots. Deleted blocks are tracked but excluded from the
- * impact projection — chip view only renders after-state, so a deleted
- * block has no row to anchor pins/code to.
+ * Block-pairing strategy — TWO paths feed `changedQnames`:
+ *
+ *   1. STABLE-QNAME path (qname + contentHash matching). Real symbols
+ *      (`function` / `class` / `method` / …) and stable synthetics
+ *      (`__imports__`, `__preamble__`) have qnames that survive
+ *      between snapshots, so we pair before/after by qname and
+ *      classify each pair as added / deleted / modified by content
+ *      hash. Deleted blocks are tracked but NOT added to
+ *      `changedQnames` — chip view renders after-state, so a deleted
+ *      block has no row to render.
+ *
+ *   2. LINE-OVERLAP path (for line-range synthetics). `__code_<lo>_<hi>__`
+ *      and `__heading_<n>__` encode line numbers in their qname, so
+ *      they can't be paired across snapshots (every edit shifts
+ *      surrounding line ranges → naive qname diff would emit a noisy
+ *      "delete + add" stream for every chunk). Instead we extract
+ *      AFTER-snapshot synthetics and check whether each block's
+ *      `[startLine, endLine]` range overlaps any line in `addedLines`.
+ *      AFTER (not before) because BlockViewer renders AFTER content;
+ *      a BEFORE qname has no DOM row to filter onto.
+ *
+ *   3. The empty-file fallback `__file__` is handled by NEITHER path
+ *      — it only ever appears in the no-grammar branch, which short-
+ *      circuits early and returns `{ addedLines }` with `changedQnames:
+ *      undefined`, signalling the caller to skip the qname filter
+ *      altogether (otherwise the lone `__file__` chip would be
+ *      filtered out).
  */
 
 import { computeLineDiff } from '@/components/project/diffAlgorithm';
@@ -39,15 +59,36 @@ interface BlockDiffRow {
 }
 
 /**
- * Drop blocks whose `qualifiedName` is unstable across snapshots (file
- * fillers and the empty-file fallback) — we can't reliably pair them
- * between before / after, so they'd show as a noisy stream of "deleted
- * + added" pairs.
+ * Synthetics whose `qualifiedName` embeds line numbers
+ * (`__code_<lo>_<hi>__`, `__heading_<n>__`). Line numbers shift between
+ * snapshots, so qname-pairing produces a noisy "delete + add" stream
+ * even for unchanged content. Routed through the LINE-OVERLAP path
+ * instead — see `qnamesOverlappingAddedLines` below.
  */
-function isDiffable(s: ExtractedSymbol): boolean {
-  return !s.qualifiedName.startsWith('__code_') && s.qualifiedName !== '__file__';
+function isLineRangeSynthetic(s: ExtractedSymbol): boolean {
+  return (
+    s.qualifiedName.startsWith('__code_') ||
+    s.qualifiedName.startsWith('__heading_')
+  );
 }
 
+/**
+ * Blocks paired via the STABLE-QNAME path: real symbols + synthetics
+ * whose qname is constant across snapshots (`__imports__`,
+ * `__preamble__`). Excludes line-range synthetics (handled by the
+ * line-overlap path) and `__file__` (handled by the no-grammar
+ * fallback — never reaches this filter).
+ */
+function isStableForDiff(s: ExtractedSymbol): boolean {
+  return !isLineRangeSynthetic(s) && s.qualifiedName !== '__file__';
+}
+
+/**
+ * Returns ALL extracted symbols including line-range synthetics. The
+ * caller splits the result: stable ones go into `diffBlocks`, line-
+ * range ones into `qnamesOverlappingAddedLines`. Centralising the
+ * parse keeps it to one tree-sitter pass per side.
+ */
 async function extractBlocks(
   source: string,
   filePath: string,
@@ -59,10 +100,42 @@ async function extractBlocks(
   const tree = parser.parse(source);
   if (!tree) return null;
   try {
-    return extractSymbolsFromTree(tree.rootNode).filter(isDiffable);
+    return extractSymbolsFromTree(tree.rootNode);
   } finally {
     tree.delete();
   }
+}
+
+/**
+ * For every line-range synthetic (`__code_*__` / `__heading_*__`) in
+ * the AFTER snapshot whose `[startLine, endLine]` range contains at
+ * least one line from `addedLines`, return its `qualifiedName`. These
+ * qnames are exactly what BlockViewer uses to render the chips, so
+ * pushing them into `changedQnames` makes them surface in chip-diff.
+ *
+ * AFTER (not before): chip-diff renders the AFTER content — a BEFORE
+ * qname (with old line numbers) has no DOM row to filter onto.
+ *
+ * O(synthetics × addedLines) in the worst case but both sets are
+ * tiny in practice (a file has < 20 `__code_*__` chunks; addedLines
+ * is bounded by the diff size). No early-exit / sort needed.
+ */
+function qnamesOverlappingAddedLines(
+  afterSymbols: readonly ExtractedSymbol[],
+  addedLines: ReadonlySet<number>,
+): string[] {
+  if (addedLines.size === 0) return [];
+  const out: string[] = [];
+  for (const s of afterSymbols) {
+    if (!isLineRangeSynthetic(s)) continue;
+    for (const ln of addedLines) {
+      if (ln >= s.startLine && ln <= s.endLine) {
+        out.push(s.qualifiedName);
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /** Pair before / after blocks by qualifiedName and classify each pair. */
@@ -186,12 +259,28 @@ export async function buildImpactProjection(
     extractBlocks(isNew ? '' : oldContent, filePath),
     extractBlocks(isDeleted ? '' : newContent, filePath),
   ]);
+  const oldAll = oldBlocks ?? [];
+  const newAll = newBlocks ?? [];
 
-  const rows = diffBlocks(oldBlocks ?? [], newBlocks ?? []);
+  // Path 1 — STABLE-QNAME pairing for real symbols + stable synthetics.
+  const rows = diffBlocks(
+    oldAll.filter(isStableForDiff),
+    newAll.filter(isStableForDiff),
+  );
   const changedQnames = new Set<string>();
   for (const r of rows) {
     if (r.changeKind === 'deleted') continue;
     changedQnames.add(r.qname);
   }
+
+  // Path 2 — LINE-OVERLAP for line-range synthetics. Surfaces edits
+  // that land entirely in `__code_*__` chunks (top-level expressions,
+  // module-level setup) or `__heading_*__` sections (markdown chunked
+  // diff, when wired) — without these, such edits made the chip-diff
+  // panel render empty even though `addedLines` knew about the change.
+  for (const qname of qnamesOverlappingAddedLines(newAll, addedLines)) {
+    changedQnames.add(qname);
+  }
+
   return { changedQnames, addedLines };
 }

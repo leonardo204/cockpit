@@ -58,6 +58,7 @@ import type {
 } from './types';
 import type { ImportBinding } from '../extractCalls';
 import type { ExtractedSymbol, SymbolKind } from '../types';
+import { isFunctionLike } from '../types';
 // Importing the handlers barrel triggers per-language `registerHandler`
 // side effects, so `getHandler(grammar)` below is guaranteed to find a
 // handler for any grammar that `grammarForExtension` returns. (P1a:
@@ -303,18 +304,10 @@ function findEnclosingFlat(symbols: IndexedSymbol[], line: number): IndexedSymbo
   return best;
 }
 
-/** Function-like symbol kinds — what the Code Map renders as call-graph
- *  nodes. We deliberately exclude `interface | type | enum | const` since
- *  those don't have runtime behaviour worth visualising in a call graph. */
-const FUNCTION_LIKE_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
-  'function',
-  'class',
-  'method',
-]);
-
-function isFunctionLike(s: { kind: SymbolKind }): boolean {
-  return FUNCTION_LIKE_KINDS.has(s.kind);
-}
+// `FUNCTION_LIKE_KINDS` and `isFunctionLike` moved to `../types.ts` so
+// `'use client'` components (e.g. `FileTOCSection`) can share the
+// single source of truth without webpack pulling this file's
+// `node:fs/promises` import into the browser bundle.
 
 export async function buildCodeIndex(cwd: string): Promise<CodeIndex> {
   const startedAt = Date.now();

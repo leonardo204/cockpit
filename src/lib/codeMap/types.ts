@@ -18,6 +18,35 @@ export type SymbolKind =
   | 'const'      // exported top-level const (non-function)
   | 'unknown';
 
+/**
+ * The kinds the Code Map treats as call-graph nodes — i.e. symbols
+ * that can have callers / callees and that the chip pin layout
+ * actually wires up. Deliberately excludes `interface | type | enum |
+ * const` (compile-time only, no runtime behaviour) and `unknown`
+ * (synthetic chunks like `__imports__` / `__code_*__` that the chip
+ * canvas needs but the call graph doesn't).
+ *
+ * Single source of truth — read by:
+ *   - `isFunctionLike` in `projectGraph/codeIndex.ts` (cross-file
+ *     edge resolution: skip non-function-like targets)
+ *   - `FileTOCSection` (TOC filter so the file index lists only
+ *     traceable units, matching what the call-graph itself thinks)
+ *
+ * Keep this in `types.ts` rather than `codeIndex.ts` so the constant
+ * stays importable from `'use client'` components — `codeIndex.ts`
+ * pulls in `node:fs/promises`, which webpack would otherwise bundle
+ * into the browser.
+ */
+export const FUNCTION_LIKE_KINDS: ReadonlySet<SymbolKind> = new Set<SymbolKind>([
+  'function',
+  'class',
+  'method',
+]);
+
+export function isFunctionLike(s: { kind: SymbolKind }): boolean {
+  return FUNCTION_LIKE_KINDS.has(s.kind);
+}
+
 /** A symbol extracted from one snapshot of a file. */
 export interface ExtractedSymbol {
   /** Unique within a file: parent path joined by `>`, e.g. `MyClass>render`. Used as match key for diffing. */

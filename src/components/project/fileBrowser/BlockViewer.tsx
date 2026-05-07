@@ -60,6 +60,7 @@ import {
   pushHistoryEntry,
   type HistoryEntry,
 } from './FunctionHistoryDrawer';
+import { FileTOCSection } from './FileTOCSection';
 import { useBlockSelection } from './useBlockSelection';
 import { BlockCommentBubbles } from './BlockCommentBubbles';
 import { BlockDiffMinimap } from './BlockDiffMinimap';
@@ -1076,9 +1077,27 @@ export function BlockViewer({
     });
   }, []);
 
+  // Cmd+K palette select. File hits just switch focal; symbol hits
+  // ALSO queue a flash → the existing flash effect waits until
+  // `state.data.filePath === flashTarget.filePath` before scrolling,
+  // so cross-file jumps "just work": setFocalOverride kicks off the
+  // useFileFunctions fetch, blocks render, gate opens, scroll fires.
+  // Without this, symbol hits used to drop the user at line 1 of the
+  // target file with the actual symbol potentially hundreds of lines
+  // away — same UX as a search engine taking you to a domain instead
+  // of the matching page.
   const handleSearchSelect = useCallback((hit: SearchHit) => {
     setSearchOpen(false);
     setFocalOverride(hit.target.filePath);
+    if (hit.target.kind === 'symbol') {
+      flashNonceRef.current += 1;
+      setFlashTarget({
+        filePath: hit.target.filePath,
+        qname: hit.target.qualifiedName,
+        line: hit.target.line,
+        nonce: flashNonceRef.current,
+      });
+    }
   }, []);
 
   // Block overview ruler click: line-level flash. Used in both plain
@@ -1205,6 +1224,40 @@ export function BlockViewer({
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [scrollContainer]);
+
+  // "You are here" qname for the TOC sidebar: the function whose
+  // source-line range straddles the viewport center. Falls back to
+  // the function whose startLine is the largest still ≤ viewport.start
+  // (covers the case where the viewport center is between two
+  // functions, e.g. inside a top-level `import` block). `null` means
+  // no chip is in view — TOC renders without a current-row highlight.
+  //
+  // Reads `state.data.functions` directly (NOT the diff-filtered
+  // `workingFunctions`, which is computed below the early-returns and
+  // can't be used in a hook). When diff mode trims the chip canvas,
+  // `currentFocalQname` may resolve to a filtered-out function — the
+  // TOC just won't render a highlight for it (no harm).
+  //
+  // viewportRange is already tracked at O(blocks)/scroll for the diff
+  // minimap; this is a free read.
+  const currentFocalQname = useMemo(() => {
+    if (state.state !== 'ready' || !viewportRange) return null;
+    const fns = state.data.functions;
+    if (fns.length === 0) return null;
+    const center = (viewportRange.start + viewportRange.end) / 2;
+    for (const fn of fns) {
+      if (fn.startLine <= center && center <= fn.endLine) {
+        return fn.qualifiedName;
+      }
+    }
+    let best: (typeof fns)[number] | null = null;
+    for (const fn of fns) {
+      if (fn.startLine <= viewportRange.start) {
+        if (!best || fn.startLine > best.startLine) best = fn;
+      }
+    }
+    return best?.qualifiedName ?? null;
+  }, [state, viewportRange]);
 
   // ====================================================================
   // Review comments — selection toolbar + per-line bubbles + popovers.
@@ -1734,9 +1787,11 @@ export function BlockViewer({
           Callback ref keeps the value as state so useBlockSelection's
           effect re-runs the moment the element mounts.
 
-          Layout is a flex ROW: scroll container on the left, optional
-          BlockDiffMinimap in the middle (chip-diff mode only),
-          FunctionHistoryDrawer on the right. This puts the scroll
+          Layout is a flex ROW: FileTOCSection on the LEFT (file
+          structure / "you are here"), scroll container in the MIDDLE
+          claiming flex-1, optional BlockDiffMinimap to its right
+          (chip-diff mode only), FunctionHistoryDrawer on the RIGHT
+          (cross-file navigation trail). This puts the scroll
           container's right edge at the minimap/drawer's left edge,
           so the native browser scrollbar (styled by globals.css to
           match `slate-7` 8px) renders FULLY VISIBLE — same as
@@ -1745,13 +1800,21 @@ export function BlockViewer({
           the scrollbar, which is why we needed a custom overview
           ruler in the first place. */}
       <div ref={setReviewAnchor} className="flex-1 relative min-h-0 flex">
-        {/* Scroll container — `flex-1` claims the space the minimap
-            and drawer leave. `min-w-0` so flex children with long
-            content (here: row pins + horizontally scrolling code
-            bodies) shrink correctly instead of pushing the row out.
-            Ref'd via callback so BlockDiffMinimap's viewport-tracking
-            effect re-binds the moment the element mounts; useRef
-            would silently skip the loading→ready transition. */}
+        {/* TOC: file structure index on the left. Always rendered
+            (even when empty) so the chip canvas's left edge is
+            visually stable as files swap. */}
+        <FileTOCSection
+          functions={workingFunctions}
+          currentQname={currentFocalQname}
+          onSelect={handleRulerJump}
+        />
+        {/* Scroll container — `flex-1` claims the space the TOC,
+            minimap, and drawer leave. `min-w-0` so flex children
+            with long content (here: row pins + horizontally scrolling
+            code bodies) shrink correctly instead of pushing the row
+            out. Ref'd via callback so BlockDiffMinimap's viewport-
+            tracking effect re-binds the moment the element mounts;
+            useRef would silently skip the loading→ready transition. */}
         <div
           ref={setScrollContainer}
           className="flex-1 min-w-0 overflow-auto"
@@ -1843,11 +1906,9 @@ export function BlockViewer({
             CodeViewer. */}
         {effectiveAddedLines &&
           effectiveAddedLines.size > 0 &&
-          fileSource &&
           workingFunctions.length > 0 && (
             <BlockDiffMinimap
               addedLines={effectiveAddedLines}
-              totalLines={Math.max(1, fileSource.split('\n').length)}
               blockRanges={workingFunctions.map((fn) => ({
                 qname: fn.qualifiedName,
                 startLine: fn.startLine,

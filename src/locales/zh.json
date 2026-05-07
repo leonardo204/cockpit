@@ -253,6 +253,15 @@
       "toBlock": "显示代码地图",
       "toCode": "返回代码视图"
     },
+    "toc": {
+      "title": "本文件",
+      "empty": "未检测到函数。"
+    },
+    "history": {
+      "title": "历史",
+      "empty": "点击左右两侧的 pin 开始追踪调用链。",
+      "clear": "清空历史"
+    },
     "refresh": "重新构建项目图",
     "retry": "重试"
   },

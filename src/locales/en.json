@@ -253,6 +253,15 @@
       "toBlock": "Show code map",
       "toCode": "Back to code view"
     },
+    "toc": {
+      "title": "this file",
+      "empty": "No functions detected."
+    },
+    "history": {
+      "title": "history",
+      "empty": "Click an input or output pin to begin tracing.",
+      "clear": "Clear history"
+    },
     "refresh": "Rebuild project graph",
     "retry": "Retry"
   },
