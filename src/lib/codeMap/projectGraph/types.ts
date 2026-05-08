@@ -162,6 +162,16 @@ export interface FileFunctionsResponse {
   filePath: string;
   language: string;
   fileCount: number;
+  /** Modification time of the focal file at the moment the projection
+   *  was computed (`fs.stat().mtimeMs`, ms since epoch). Lets the
+   *  client cross-check against `/api/files/text`'s mtime — if the
+   *  fileSource is newer than the data here, the client triggers a
+   *  refresh. Server itself uses this to gate per-file re-parse via
+   *  `refreshFocalFile`. May be 0 for synthetic responses (markdown
+   *  chunked / unsupported-language fallback) where there's no
+   *  IndexedFile entry to read mtime from — in those cases the
+   *  client's freshness check is a no-op. */
+  mtimeMs: number;
   /** All function-like symbols in the focal file, ordered by source line. */
   functions: FunctionNode[];
   /** Calls within the focal file. Both endpoints are qualifiedName

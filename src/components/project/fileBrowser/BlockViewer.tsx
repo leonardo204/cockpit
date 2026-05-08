@@ -927,7 +927,19 @@ export function BlockViewer({
 
   // Source text for the focal file — needed so each block can slice
   // and highlight its own lines. One fetch per focal-file change.
-  const [fileSource, setFileSource] = useState<string | null>(null);
+  // We also keep `mtimeMs` from the response so the freshness-check
+  // effect below can cross-check it against the indexed projection's
+  // mtime: `/api/files/text` always reads fresh from disk, while
+  // `/api/projectGraph/file-functions` is backed by an in-memory
+  // index that's only refreshed by `refreshFocalFile` per request
+  // OR by the manual "Rebuild project graph" button. When the two
+  // disagree (file was edited on disk but our cached projection is
+  // older), we trigger a refresh so the chip layout matches the
+  // text we're slicing it from.
+  const [fileSource, setFileSource] = useState<{
+    content: string;
+    mtimeMs: number;
+  } | null>(null);
   useEffect(() => {
     if (!focalFile) {
       setFileSource(null);
@@ -940,8 +952,13 @@ export function BlockViewer({
         const params = new URLSearchParams({ cwd, path: focalFile });
         const res = await fetch(`/api/files/text?${params}`);
         if (!res.ok) return;
-        const json = (await res.json()) as { content: string };
-        if (!cancelled) setFileSource(json.content);
+        const json = (await res.json()) as {
+          content: string;
+          mtimeMs: number;
+        };
+        if (!cancelled) {
+          setFileSource({ content: json.content, mtimeMs: json.mtimeMs });
+        }
       } catch (err) {
         console.error('[BlockViewer] failed to load file source for', focalFile, err);
       }
@@ -950,6 +967,39 @@ export function BlockViewer({
       cancelled = true;
     };
   }, [cwd, focalFile]);
+
+  // Freshness cross-check. When fileSource arrives with an mtime
+  // newer than `state.data.mtimeMs`, the projection was built from
+  // a stale snapshot — call `refresh()` to invalidate the client
+  // cache and refetch (which will trigger the server-side
+  // `refreshFocalFile` for free, since it stats on every request).
+  //
+  // Why not server-only: the client `ffCache` (in `useFileBlocks`)
+  // is keyed by `(cwd, file)` only. A second visit to the same
+  // focal hits cache → returns the OLD entry without ever calling
+  // the server. The cross-check forces a refetch when we have
+  // evidence the cache is stale. Common case (same mtime) is
+  // free: the comparison is one number.
+  //
+  // Skips: synthetic responses (markdown / unsupported / not-found
+  // fallback) where `mtimeMs` may be 0; we just don't cross-check
+  // (those paths don't have a re-parse story anyway).
+  const refreshedForMtime = useRef<number | null>(null);
+  useEffect(() => {
+    if (!fileSource) return;
+    if (state.state !== 'ready') return;
+    const dataMtime = state.data.mtimeMs;
+    if (!dataMtime) return; // synthetic / no-mtime response
+    if (fileSource.mtimeMs <= dataMtime) return;
+    // Avoid a refresh loop: if we already triggered a refresh for
+    // this exact fileSource mtime and the projection still hasn't
+    // caught up (e.g. server can't see the file for some reason),
+    // don't keep re-firing. The user's manual refresh button is
+    // the escape hatch.
+    if (refreshedForMtime.current === fileSource.mtimeMs) return;
+    refreshedForMtime.current = fileSource.mtimeMs;
+    refresh();
+  }, [fileSource, state, refresh]);
 
   // History FIFO of visited functions. Populated ONLY by pin
   // navigation (and the user re-clicking entries in the history
@@ -1624,7 +1674,7 @@ export function BlockViewer({
   // know the line count.
   let workingFunctions = data.functions;
   if (workingFunctions.length === 0 && fileSource) {
-    const lineCount = Math.max(1, fileSource.split('\n').length);
+    const lineCount = Math.max(1, fileSource.content.split('\n').length);
     workingFunctions = [
       {
         filePath: data.filePath,
@@ -1824,7 +1874,7 @@ export function BlockViewer({
               <FunctionRow
                 key={fn.qualifiedName}
                 symbol={fn}
-                fileSource={fileSource}
+                fileSource={fileSource?.content ?? null}
                 hasChange={focalFileChanged}
                 upstream={buildRowPinsIn(
                   upstreamCrossByQname.get(fn.qualifiedName),

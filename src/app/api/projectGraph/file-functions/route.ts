@@ -30,6 +30,7 @@ import {
   fileFunctionsFromIndex,
   getCodeIndex,
   invalidateIndex,
+  refreshFocalFile,
 } from '@/lib/codeMap/projectGraph/codeIndex';
 import type { FunctionNode } from '@/lib/codeMap/projectGraph/types';
 import { resolveSafePath, validateCwd } from '@/lib/files/shared';
@@ -52,8 +53,25 @@ export async function GET(request: NextRequest) {
 
   try {
     const index = await getCodeIndex(cwd, { forceRefresh });
+
+    // Single-file mtime check before projecting. Cheap (~µs stat;
+    // ~10-50 ms re-parse only when stale). Without this, the index
+    // stays at whatever buildCodeIndex captured at process start
+    // and chip ranges drift from on-disk content as the user (or
+    // the agent) edits files. `refreshFocalFile` returns true when
+    // it actually re-parsed; either way, the projection that
+    // follows reads from the in-place-mutated `index.files` entry.
+    await refreshFocalFile(cwd, filePath, index);
     const payload = fileFunctionsFromIndex(index, filePath);
-    if (payload) return NextResponse.json(payload);
+    if (payload) {
+      return NextResponse.json(payload, {
+        // Defensive: keep this endpoint out of any HTTP caches.
+        // Server already gates freshness via mtime; an intermediary
+        // (browser disk cache, dev server) holding a stale response
+        // would defeat that.
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+    }
 
     // Not in the index — could be an unsupported language (e.g. .json,
     // .md, .css), a binary, or simply beyond the project's file cap.
@@ -70,30 +88,40 @@ export async function GET(request: NextRequest) {
         if (/\.mdx?$/i.test(filePath)) {
           const text = await readFile(fullPath, 'utf-8').catch(() => null);
           if (text) {
-            return NextResponse.json({
-              filePath,
-              language: 'markdown',
-              fileCount: index.files.size,
-              functions: chunkMarkdown(filePath, text),
-              intraCalls: [],
-              externalCalls: [],
-              methodCalls: [],
-              upstreamCalls: [],
-              downstreamCalls: [],
-            });
+            return NextResponse.json(
+              {
+                filePath,
+                language: 'markdown',
+                fileCount: index.files.size,
+                mtimeMs: stats.mtimeMs,
+                functions: chunkMarkdown(filePath, text),
+                intraCalls: [],
+                externalCalls: [],
+                methodCalls: [],
+                upstreamCalls: [],
+                downstreamCalls: [],
+              },
+              { headers: { 'Cache-Control': 'no-cache' } },
+            );
           }
         }
         // Generic text fallback — single block; client renders the
         // whole file as one Shiki-highlighted code block.
-        return NextResponse.json({
-          filePath,
-          language: 'text',
-          fileCount: index.files.size,
-          functions: [],
-          intraCalls: [],
-          upstreamCalls: [],
-          downstreamCalls: [],
-        });
+        return NextResponse.json(
+          {
+            filePath,
+            language: 'text',
+            fileCount: index.files.size,
+            mtimeMs: stats.mtimeMs,
+            functions: [],
+            intraCalls: [],
+            externalCalls: [],
+            methodCalls: [],
+            upstreamCalls: [],
+            downstreamCalls: [],
+          },
+          { headers: { 'Cache-Control': 'no-cache' } },
+        );
       }
     }
     return NextResponse.json(

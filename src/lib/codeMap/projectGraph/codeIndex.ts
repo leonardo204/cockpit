@@ -92,6 +92,13 @@ export interface IndexedSymbol extends SymbolAddr {
 export interface IndexedFile {
   path: string;
   language: string;
+  /** `fs.stat().mtimeMs` at the moment this file was last parsed.
+   *  Read by `refreshFocalFile` to decide whether to re-parse: if the
+   *  on-disk mtime differs, the focal file's symbolsTree / flatSymbols
+   *  / intraCalls / outgoingCalls / etc. are rebuilt in place
+   *  (incomingCalls + importedBy left as the previous full-build
+   *  computed them — accepted stale, see `refreshFocalFile`). */
+  mtime: number;
   /** Hierarchical symbol tree (functions, classes, methods …). */
   symbolsTree: ExtractedSymbol[];
   /** Flattened symbols, used by `findEnclosing` and the call resolver. */
@@ -178,6 +185,22 @@ export interface CodeIndex {
   fileCountCap?: number;
   tsconfigs: TsconfigScope[];
   workspaces: Map<string, Workspace>;
+  /** Per-grammar handler context (alias maps, workspace layout, etc.)
+   *  stashed at build time so `refreshFocalFile` can re-resolve a
+   *  single file's imports/calls without rebuilding contexts. The
+   *  handler's `buildProjectContext` is the moderately expensive part
+   *  of resolution (loads tsconfigs, workspaces, src-layout); reusing
+   *  it keeps focal refresh in the ~10-50ms range instead of the
+   *  hundreds of ms a full handler init would cost. Opaque payload —
+   *  the orchestrator doesn't peek inside. */
+  projectContexts: Map<string, unknown>;
+  /** File set used during the LAST full build. `refreshFocalFile`
+   *  passes this through to `handler.resolveSpecifier` so import
+   *  resolution sees the same project shape the original build saw —
+   *  newly-added sibling files won't appear until a full refresh,
+   *  which is consistent with the "incomingCalls stays stale until
+   *  forceRefresh" contract documented on `refreshFocalFile`. */
+  fileSet: Set<string>;
   generatedAt: number;
   buildMs: number;
 }
@@ -213,6 +236,10 @@ async function mapWithConcurrency<T, U>(
 interface ParsedFile {
   path: string;
   language: string;
+  /** `fs.stat().mtimeMs` captured at parse time. Stored on the
+   *  IndexedFile so `refreshFocalFile` can compare against the on-
+   *  disk mtime cheaply (one stat) before deciding to re-parse. */
+  mtime: number;
   symbolsTree: ExtractedSymbol[];
   flatSymbols: IndexedSymbol[];
   /** All file-level bindings — regular imports AND re-exports. Re-
@@ -247,8 +274,16 @@ async function parseOneFile(absPath: string, relPath: string): Promise<ParsedFil
   const grammar = grammarForExtension(relPath);
   if (!grammar) return null;
   let source: string;
+  let mtime: number;
   try {
-    source = await fs.readFile(absPath, 'utf8');
+    // Read content + stat together — stat is cheap, and pairing them
+    // captures the mtime that corresponds to THIS read of the file
+    // (avoids a TOCTOU window where the file is rewritten between
+    // readFile and a separate stat).
+    [source, mtime] = await Promise.all([
+      fs.readFile(absPath, 'utf8'),
+      fs.stat(absPath).then((s) => s.mtimeMs),
+    ]);
   } catch {
     return null;
   }
@@ -278,6 +313,7 @@ async function parseOneFile(absPath: string, relPath: string): Promise<ParsedFil
     return {
       path: relPath,
       language: grammar,
+      mtime,
       symbolsTree,
       flatSymbols,
       importBindings,
@@ -396,6 +432,7 @@ export async function buildCodeIndex(cwd: string): Promise<CodeIndex> {
     indexedFiles.set(f.path, {
       path: f.path,
       language: f.language,
+      mtime: f.mtime,
       symbolsTree: f.symbolsTree,
       flatSymbols: f.flatSymbols,
       importedFiles,
@@ -590,6 +627,8 @@ export async function buildCodeIndex(cwd: string): Promise<CodeIndex> {
     fileCountCap: truncated ? MAX_FILES : undefined,
     tsconfigs,
     workspaces,
+    projectContexts,
+    fileSet,
     generatedAt: Date.now(),
     buildMs: Date.now() - startedAt,
   };
@@ -630,6 +669,261 @@ export function invalidateIndex(cwd?: string): void {
   }
   indexCache.delete(cwd);
   inflight.delete(cwd);
+}
+
+// ============================================================================
+// Single-file refresh — keeps focal projections fresh without paying the
+// 5-10 s full-rebuild cost on every save.
+// ============================================================================
+
+/**
+ * Re-parse + re-resolve ONE file in place when its on-disk mtime
+ * differs from what the index has cached. Mutates `index.files`
+ * directly; returns `true` if a refresh actually happened.
+ *
+ * What gets refreshed (for the focal file ONLY):
+ *   - mtime, symbolsTree, flatSymbols
+ *   - importBindings, resolvedImports, importedFiles
+ *   - intraCalls, outgoingCalls, externalCalls, methodCalls
+ *   - symbolsByName / symbolsByQname / bindingsByLocalName /
+ *     reexportsByLocalName lookup tables
+ *
+ * What stays as the last full build computed it (accepted stale):
+ *   - This file's `incomingCalls` (= other files' outgoing edges
+ *     pointing at us; refreshing them needs re-parsing every other
+ *     file)
+ *   - This file's `importedBy` (= reverse of other files'
+ *     `importedFiles`; same constraint)
+ *   - Other files' `importedBy` / `outgoingCalls` / `incomingCalls`
+ *     (we don't touch other files at all)
+ *
+ * Practical effect: the chip canvas + TOC + intra-file pins +
+ * RIGHT-side pins (callees in other files, anchored at THIS file's
+ * call site lines) are all fresh. The LEFT-side pins (callers from
+ * other files) may show stale qnames when the caller's code
+ * changed since the last full build — fixed by clicking
+ * "Rebuild project graph" in the BlockViewer header.
+ *
+ * Returns `false` (no-op) when:
+ *   - The file isn't in the index (unsupported language, beyond
+ *     file cap, deleted file). Caller falls through to whatever
+ *     it was going to do (typically the synthetic fallback path
+ *     in route.ts).
+ *   - The on-disk mtime matches the cached one (cache is fresh).
+ *   - The file's grammar isn't recognised (parseOneFile returns
+ *     null).
+ *
+ * Returns `true` after successfully replacing the focal entry.
+ */
+export async function refreshFocalFile(
+  cwd: string,
+  relPath: string,
+  index: CodeIndex,
+): Promise<boolean> {
+  const oldEntry = index.files.get(relPath);
+  if (!oldEntry) return false;
+
+  // Stat first — cheap (~ µs) and avoids the readFile + parse cost
+  // when the cache is already fresh. The mtime check here is the
+  // hot path; almost every chip-view request that lands here in a
+  // normal session will see a match and short-circuit.
+  let onDiskMtime: number;
+  try {
+    const st = await fs.stat(path.join(cwd, relPath));
+    onDiskMtime = st.mtimeMs;
+  } catch {
+    // File deleted / inaccessible — leave the cached entry alone;
+    // the route handler will surface the 404 itself when it tries
+    // to resolveSafePath / readFile downstream.
+    return false;
+  }
+  if (onDiskMtime === oldEntry.mtime) return false;
+
+  const parsed = await parseOneFile(path.join(cwd, relPath), relPath);
+  if (!parsed) return false;
+
+  const handler = getHandler(parsed.language as Parameters<typeof getHandler>[0]);
+  const ctx = index.projectContexts.get(parsed.language);
+
+  // Re-resolve THIS file's imports against the same fileSet the
+  // last full build saw. Newly-added sibling files won't be visible
+  // until forceRefresh, matching the "incomingCalls stays stale"
+  // contract above (both depend on cross-file freshness; we choose
+  // to reset both via the same trigger).
+  const resolvedImports = new Map<string, string>();
+  const importedFiles = new Set<string>();
+  for (const spec of parsed.importSpecifiers) {
+    if (resolvedImports.has(spec)) continue;
+    const resolved = handler.resolveSpecifier(spec, parsed.path, ctx, index.fileSet);
+    if (resolved && resolved !== parsed.path) {
+      resolvedImports.set(spec, resolved);
+      importedFiles.add(resolved);
+    }
+  }
+
+  const symbolsByName = new Map<string, IndexedSymbol[]>();
+  const symbolsByQname = new Map<string, IndexedSymbol>();
+  for (const s of parsed.flatSymbols) {
+    symbolsByQname.set(s.qualifiedName, s);
+    const list = symbolsByName.get(s.name);
+    if (list) list.push(s);
+    else symbolsByName.set(s.name, [s]);
+  }
+  const bindingsByLocalName = new Map<string, ImportBinding>();
+  const reexportsByLocalName = new Map<string, ImportBinding>();
+  for (const b of parsed.importBindings) {
+    if (b.isReexport) reexportsByLocalName.set(b.localName, b);
+    else bindingsByLocalName.set(b.localName, b);
+  }
+
+  const newEntry: IndexedFile = {
+    path: parsed.path,
+    language: parsed.language,
+    mtime: parsed.mtime,
+    symbolsTree: parsed.symbolsTree,
+    flatSymbols: parsed.flatSymbols,
+    importedFiles,
+    // Inverse of other files' `importedFiles`; we're not re-parsing
+    // other files, so the previous build's view is still our best
+    // shot. Stale tolerance documented above.
+    importedBy: oldEntry.importedBy,
+    importBindings: parsed.importBindings,
+    resolvedImports,
+    intraCalls: [],
+    outgoingCalls: [],
+    // Inverse of other files' `outgoingCalls`. Same trade-off as
+    // `importedBy` — we're choosing the cheap path. The chip view
+    // surfaces this as left-column caller pins; clicking
+    // "Rebuild project graph" forces a full rebuild that fixes them.
+    incomingCalls: oldEntry.incomingCalls,
+    externalCalls: [],
+    methodCalls: [],
+    symbolsByName,
+    symbolsByQname,
+    bindingsByLocalName,
+    reexportsByLocalName,
+  };
+
+  // Resolve THIS file's calls against the rest of the (possibly
+  // stale) index. Cross-file targets that no longer exist or were
+  // renamed will silently drop here (handler.resolveCall returns
+  // [] for unresolvable receivers); the chip view doesn't need
+  // them to render correctly because the row anchored at our line
+  // numbers is the side we own.
+  const intraByKey = new Map<
+    string,
+    { from: string; to: string; lines: number[] }
+  >();
+  const outByKey = new Map<
+    string,
+    { from: string; to: SymbolAddr; lines: number[] }
+  >();
+  const extByKey = new Map<
+    string,
+    { from: string; packageSpec: string; importedName: string; lines: number[] }
+  >();
+  const methodByKey = new Map<
+    string,
+    {
+      from: string;
+      receiverName: string;
+      methodName: string;
+      receiverFilePath: string;
+      lines: number[];
+    }
+  >();
+
+  // Mutate the index BEFORE call resolution: handler.resolveCall
+  // may walk barrel chains via `bindingsByLocalName` / `flatSymbols`
+  // on `indexedFiles.get(thisFile)`. If the lookup hits the OLD
+  // entry, resolution sees stale symbol shapes and may return
+  // garbage targets. Replacing first ensures self-references read
+  // the fresh data.
+  index.files.set(parsed.path, newEntry);
+
+  for (const call of parsed.rawCalls) {
+    const from = findEnclosingFlat(newEntry.flatSymbols, call.line);
+    if (!from) continue;
+
+    const resolutions = handler.resolveCall(call, from, newEntry, index.files, ctx);
+    for (const r of resolutions) {
+      if (r.kind === 'symbol') {
+        if (r.addr.filePath === newEntry.path) {
+          const key = `${from.qualifiedName}${r.addr.qualifiedName}`;
+          const existing = intraByKey.get(key);
+          if (existing) {
+            existing.lines.push(call.line);
+          } else {
+            const edge = {
+              from: from.qualifiedName,
+              to: r.addr.qualifiedName,
+              lines: [call.line],
+            };
+            intraByKey.set(key, edge);
+            newEntry.intraCalls.push(edge);
+          }
+        } else {
+          const key = `${from.qualifiedName}${r.addr.filePath}${r.addr.qualifiedName}`;
+          const existing = outByKey.get(key);
+          if (existing) {
+            existing.lines.push(call.line);
+          } else {
+            const edge = {
+              from: from.qualifiedName,
+              to: {
+                filePath: r.addr.filePath,
+                qualifiedName: r.addr.qualifiedName,
+              },
+              lines: [call.line],
+            };
+            outByKey.set(key, edge);
+            newEntry.outgoingCalls.push(edge);
+          }
+        }
+      } else if (r.kind === 'external') {
+        const key = `${from.qualifiedName}${r.packageSpec}${r.name}`;
+        const existing = extByKey.get(key);
+        if (existing) {
+          existing.lines.push(call.line);
+        } else {
+          const edge = {
+            from: from.qualifiedName,
+            packageSpec: r.packageSpec,
+            importedName: r.name,
+            lines: [call.line],
+          };
+          extByKey.set(key, edge);
+          newEntry.externalCalls.push(edge);
+        }
+      } else if (r.kind === 'method-unresolved') {
+        const recvBinding = newEntry.bindingsByLocalName.get(r.receiverName);
+        const recvFilePath = recvBinding
+          ? newEntry.resolvedImports.get(recvBinding.specifier) ?? ''
+          : '';
+        const key = `${from.qualifiedName}${r.receiverName}${r.methodName}`;
+        const existing = methodByKey.get(key);
+        if (existing) {
+          existing.lines.push(call.line);
+        } else {
+          const edge = {
+            from: from.qualifiedName,
+            receiverName: r.receiverName,
+            methodName: r.methodName,
+            receiverFilePath: recvFilePath,
+            lines: [call.line],
+          };
+          methodByKey.set(key, edge);
+          newEntry.methodCalls.push(edge);
+        }
+      }
+    }
+  }
+  for (const e of newEntry.intraCalls) e.lines.sort((a, b) => a - b);
+  for (const e of newEntry.outgoingCalls) e.lines.sort((a, b) => a - b);
+  for (const e of newEntry.externalCalls) e.lines.sort((a, b) => a - b);
+  for (const e of newEntry.methodCalls) e.lines.sort((a, b) => a - b);
+
+  return true;
 }
 
 // ============================================================================
@@ -902,6 +1196,7 @@ export function fileFunctionsFromIndex(
     filePath: file.path,
     language: file.language,
     fileCount: index.files.size,
+    mtimeMs: file.mtime,
     functions,
     intraCalls,
     externalCalls: external,
