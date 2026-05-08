@@ -1,118 +1,73 @@
 'use client';
 
-import { useState, useRef, useEffect, ReactNode } from 'react';
-import { Portal, usePanelPortalTarget } from './Portal';
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 
 interface TooltipProps {
   content: string;
   children: ReactNode;
-  delay?: number; // How long to hover before showing, default 300ms
+  /**
+   * @deprecated Tooltip delay is now globally fixed at 300ms.
+   * The prop is kept for backward compat with existing call sites
+   * and is silently ignored.
+   */
+  delay?: number;
+  /**
+   * Optional className. When provided, Tooltip renders a wrapping `<div>` to
+   * host the className — preserves layout for legacy call sites that relied
+   * on the wrapper being a flex/grid item (e.g. `<Tooltip className="flex-1">
+   * `). When omitted, the child is cloned in place with no extra DOM.
+   */
   className?: string;
 }
 
-export function Tooltip({ content, children, delay = 300, className = '' }: TooltipProps) {
-  const [isVisible, setIsVisible] = useState(false);
-  const [position, setPosition] = useState({ top: 0, left: 0 });
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const mouseRef = useRef({ x: 0, y: 0 });
-  const tooltipRef = useRef<HTMLDivElement>(null);
-  const panelTarget = usePanelPortalTarget();
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    mouseRef.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const showTooltip = () => {
-    timeoutRef.current = setTimeout(() => {
-      const { x, y } = mouseRef.current;
-      // Translate viewport mouse coords into portal-target-local coords so the
-      // tooltip anchors correctly inside a panel (where `position: fixed` is
-      // relative to the panel wrapper). With document.body fallback origin is
-      // (0,0) and positions remain viewport-relative.
-      const origin = panelTarget?.getBoundingClientRect();
-      const ox = origin?.left ?? 0;
-      const oy = origin?.top ?? 0;
-      setPosition({ top: y + 12 - oy, left: x - ox });
-      setIsVisible(true);
-    }, delay);
-  };
-
-  const hideTooltip = () => {
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-      timeoutRef.current = null;
-    }
-    setIsVisible(false);
-  };
-
-  // Adjust position after showing to prevent overflow off screen
-  useEffect(() => {
-    if (isVisible && tooltipRef.current) {
-      const rect = tooltipRef.current.getBoundingClientRect();
-      const origin = panelTarget?.getBoundingClientRect();
-      const ox = origin?.left ?? 0;
-      const oy = origin?.top ?? 0;
-      const ow = origin?.width ?? window.innerWidth;
-      const oh = origin?.height ?? window.innerHeight;
-      // tooltip rect is in viewport coords; convert to local for bound checks
-      const localRight = rect.right - ox;
-      const localLeft = rect.left - ox;
-      const localBottom = rect.bottom - oy;
-
-      let newLeft = position.left;
-      let newTop = position.top;
-
-      // Prevent overflowing right edge
-      if (localRight > ow - 8) {
-        newLeft = ow - rect.width - 8;
-      }
-      // Prevent overflowing left edge
-      if (localLeft < 8) {
-        newLeft = 8;
-      }
-      // Prevent overflowing bottom edge, show above cursor instead
-      if (localBottom > oh - 8) {
-        newTop = mouseRef.current.y - rect.height - 8 - oy;
-      }
-
-      if (newLeft !== position.left || newTop !== position.top) {
-        queueMicrotask(() => setPosition({ top: newTop, left: newLeft }));
-      }
-    }
-  }, [isVisible, position.left, position.top, panelTarget]);
-
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-    };
-  }, []);
-
-  return (
-    <>
-      <div
-        onMouseEnter={showTooltip}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={hideTooltip}
-        className={className}
-      >
+/**
+ * Tooltip — thin wrapper that forwards `data-tooltip` to its child.
+ *
+ * The actual popover is rendered by a single `<TooltipProvider />` mounted
+ * at the app root. This component just attaches the data attribute that the
+ * provider listens for.
+ *
+ * Three render paths:
+ *
+ *   - `className` provided → wrap in a `<div>` carrying className +
+ *     data-tooltip. Adds one DOM node, preserves layout semantics.
+ *   - `className` omitted, single element child → `cloneElement` adds
+ *     data-tooltip directly to the child. Zero extra DOM.
+ *   - `className` omitted, multi/text child → fallback `<div>` wrapper
+ *     using `display: contents` so it stays layout-transparent while
+ *     still hosting the data attribute.
+ *
+ * All paths converge on the same global popover.
+ */
+export function Tooltip({ content, children, className }: TooltipProps) {
+  // className path: keep a wrapping element so layout classes still apply.
+  if (className) {
+    return (
+      <div data-tooltip={content} className={className}>
         {children}
       </div>
-      {isVisible && (
-        <Portal>
-          <div
-            ref={tooltipRef}
-            className="fixed z-[9999] px-2 py-1 text-xs text-foreground bg-accent rounded shadow-lg max-w-md break-words pointer-events-none"
-            style={{
-              top: position.top,
-              left: position.left,
-            }}
-          >
-            {content}
-          </div>
-        </Portal>
-      )}
-    </>
+    );
+  }
+
+  // No className: try to clone onto a single element child to skip the
+  // extra wrapper. cloneElement merges props automatically, so we only
+  // pass the new attribute.
+  const arr = Children.toArray(children);
+  if (arr.length === 1 && isValidElement(arr[0])) {
+    const child = arr[0] as ReactElement<{ 'data-tooltip'?: string }>;
+    return cloneElement(child, { 'data-tooltip': content });
+  }
+
+  // Multi/text children: layout-transparent wrapper.
+  return (
+    <div data-tooltip={content} style={{ display: 'contents' }}>
+      {children}
+    </div>
   );
 }

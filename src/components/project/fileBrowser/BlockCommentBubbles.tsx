@@ -26,6 +26,7 @@
 
 import { MessageSquare } from 'lucide-react';
 import type { CodeComment } from '@/hooks/useComments';
+import { Tooltip } from '@/components/shared/Tooltip';
 
 interface BlockCommentBubblesProps {
   /** All comments for the focal file. The component filters by line
@@ -78,24 +79,27 @@ export function BlockCommentBubbles({
         const first = list[0];
         const more = list.length - 1;
         return (
-          <button
+          <Tooltip
             key={line}
-            onClick={(e) => onCommentClick(first, e)}
-            className="pointer-events-auto absolute right-1 w-4 h-4 rounded-full bg-amber-9/70 hover:bg-amber-11 text-white flex items-center justify-center shadow-sm transition-colors"
-            style={{ top: `${centeredTop}px` }}
-            title={
+            content={
               list.length === 1
                 ? first.content
                 : `${list.length} comments — click to view`
             }
           >
-            <MessageSquare className="w-2.5 h-2.5" />
-            {more > 0 && (
-              <span className="absolute -top-1 -right-1 bg-amber-11 text-white rounded-full text-[8px] leading-none w-3 h-3 flex items-center justify-center">
-                {more + 1}
-              </span>
-            )}
-          </button>
+            <button
+              onClick={(e) => onCommentClick(first, e)}
+              className="pointer-events-auto absolute right-1 w-4 h-4 rounded-full bg-amber-9/70 hover:bg-amber-11 text-white flex items-center justify-center shadow-sm transition-colors"
+              style={{ top: `${centeredTop}px` }}
+            >
+              <MessageSquare className="w-2.5 h-2.5" />
+              {more > 0 && (
+                <span className="absolute -top-1 -right-1 bg-amber-11 text-white rounded-full text-[8px] leading-none w-3 h-3 flex items-center justify-center">
+                  {more + 1}
+                </span>
+              )}
+            </button>
+          </Tooltip>
         );
       })}
     </div>

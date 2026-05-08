@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Portal, usePanelPortalTarget } from '../shared/Portal';
+import { Portal } from '../shared/Portal';
 import { CommitDetailPanel } from './CommitDetailPanel';
 import { DiffView } from './DiffView';
 import { toast } from '../shared/Toast';
@@ -59,8 +59,6 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
   const [menuContainer, setMenuContainer] = useState<HTMLElement | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ path: string; isDirectory: boolean; name: string } | null>(null);
   const [showQuickOpen, setShowQuickOpen] = useState(false);
-  const [hoverTooltip, setHoverTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
-  const panelTarget = usePanelPortalTarget();
   // CodeViewer currently visible line number (1-based), used to sync editor ↔ viewer position
   const visibleLineRef = useRef<number>(1);
   // Vi cursor position ref (0-based), continuously updated by CodeViewer
@@ -307,50 +305,6 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
   // ========== Set menu container after mount ==========
   useEffect(() => {
     setMenuContainer(menuContainerRef.current);
-  }, []);
-
-  // ========== Global data-tooltip event delegation ==========
-  useEffect(() => {
-    const container = menuContainerRef.current;
-    if (!container) return;
-    const findTooltip = (target: EventTarget | null): string | null => {
-      let el = target as HTMLElement | null;
-      while (el && el !== container) {
-        if (el.dataset.tooltip) return el.dataset.tooltip;
-        el = el.parentElement;
-      }
-      return null;
-    };
-    const onOver = (e: MouseEvent) => {
-      const text = findTooltip(e.target);
-      if (text) {
-        setHoverTooltip({ text, x: e.clientX, y: e.clientY });
-      } else {
-        setHoverTooltip(null);
-      }
-    };
-    const onMove = (e: MouseEvent) => {
-      setHoverTooltip(prev => {
-        if (!prev) return null;
-        const text = findTooltip(e.target);
-        if (!text) return null;
-        return { text, x: e.clientX, y: e.clientY };
-      });
-    };
-    const onOut = (e: MouseEvent) => {
-      const related = e.relatedTarget as HTMLElement | null;
-      if (!related || !container.contains(related) || !findTooltip(related)) {
-        setHoverTooltip(null);
-      }
-    };
-    container.addEventListener('mouseover', onOver);
-    container.addEventListener('mousemove', onMove);
-    container.addEventListener('mouseout', onOut);
-    return () => {
-      container.removeEventListener('mouseover', onOver);
-      container.removeEventListener('mousemove', onMove);
-      container.removeEventListener('mouseout', onOut);
-    };
   }, []);
 
   // ========== Update activeTab when initialTab changes ==========
@@ -1924,24 +1878,8 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
           </div>
         )}
       </div>
-      {/* Global tooltip - portaled (panel-aware via Portal) */}
-      {hoverTooltip && (() => {
-        // Translate viewport mouse coords into portal-target-local coords so
-        // the tooltip lands at the cursor regardless of swipe transform.
-        const origin = panelTarget?.getBoundingClientRect();
-        const ox = origin?.left ?? 0;
-        const oy = origin?.top ?? 0;
-        return (
-          <Portal>
-            <div
-              className="fixed z-[9999] px-2 py-1 bg-popover text-popover-foreground text-xs font-mono rounded shadow-lg border border-brand whitespace-nowrap pointer-events-none"
-              style={{ left: hoverTooltip.x + 12 - ox, top: hoverTooltip.y + 16 - oy }}
-            >
-              {hoverTooltip.text}
-            </div>
-          </Portal>
-        );
-      })()}
+      {/* Tooltips for `data-tooltip` attributes are rendered globally by
+          the app-root <TooltipProvider /> — no per-modal rendering needed. */}
       {/* Delete confirmation dialog */}
       {deleteConfirm && <Portal>
         <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50" onClick={() => setDeleteConfirm(null)}>

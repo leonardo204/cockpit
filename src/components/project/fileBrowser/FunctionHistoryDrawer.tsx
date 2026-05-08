@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { History, X } from 'lucide-react';
 
 import type { SymbolKind } from '@/lib/codeMap/types';
+import { Tooltip } from '@/components/shared/Tooltip';
 import { SymbolIcon } from './symbolIcon';
 
 export interface HistoryEntry {
@@ -72,13 +73,14 @@ export function FunctionHistoryDrawer({
           </span>
         </div>
         {entries.length > 0 && (
-          <button
-            onClick={onClear}
-            className="flex-shrink-0 text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-secondary"
-            title={t('blockViewer.history.clear')}
-          >
-            <X className="w-3 h-3" />
-          </button>
+          <Tooltip content={t('blockViewer.history.clear')}>
+            <button
+              onClick={onClear}
+              className="flex-shrink-0 text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-secondary"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </Tooltip>
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -88,29 +90,32 @@ export function FunctionHistoryDrawer({
           </div>
         ) : (
           entries.map((entry, i) => (
-            <button
+            <Tooltip
               key={`${entry.filePath}::${entry.qname}::${i}`}
-              onClick={() => onSelect(entry)}
-              className="w-full text-left px-2 py-1.5 border-b border-border/50 hover:bg-secondary/60 transition-colors group flex items-start gap-1.5"
-              title={`${entry.qname} · ${entry.filePath}`}
+              content={`${entry.qname} · ${entry.filePath}`}
             >
-              <SymbolIcon
-                kind={entry.kind ?? 'unknown'}
-                qname={entry.qname}
-                className="w-3 h-3 mt-0.5 flex-shrink-0"
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-mono font-medium truncate">
-                  {entry.name}
+              <button
+                onClick={() => onSelect(entry)}
+                className="w-full text-left px-2 py-1.5 border-b border-border/50 hover:bg-secondary/60 transition-colors group flex items-start gap-1.5"
+              >
+                <SymbolIcon
+                  kind={entry.kind ?? 'unknown'}
+                  qname={entry.qname}
+                  className="w-3 h-3 mt-0.5 flex-shrink-0"
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-mono font-medium truncate">
+                    {entry.name}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/70 truncate">
+                    {basename(entry.filePath)}
+                    {entry.kind && (
+                      <span className="ml-1 opacity-60">· {entry.kind}</span>
+                    )}
+                  </div>
                 </div>
-                <div className="text-[10px] text-muted-foreground/70 truncate">
-                  {basename(entry.filePath)}
-                  {entry.kind && (
-                    <span className="ml-1 opacity-60">· {entry.kind}</span>
-                  )}
-                </div>
-              </div>
-            </button>
+              </button>
+            </Tooltip>
           ))
         )}
       </div>

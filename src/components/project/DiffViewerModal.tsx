@@ -207,48 +207,9 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
 
   const [selected, setSelected] = useState<FileChange | null>(changes[0] || null);
   const [viewMode, setViewMode] = useState<'unified' | 'split'>('unified');
-  const [hoverTooltip, setHoverTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // ========== data-tooltip event delegation ==========
-  useEffect(() => {
-    const container = sidebarRef.current;
-    if (!container) return;
-    const findTooltip = (target: EventTarget | null): string | null => {
-      let el = target as HTMLElement | null;
-      while (el && el !== container) {
-        if (el.dataset.tooltip) return el.dataset.tooltip;
-        el = el.parentElement;
-      }
-      return null;
-    };
-    const onOver = (e: MouseEvent) => {
-      const text = findTooltip(e.target);
-      setHoverTooltip(text ? { text, x: e.clientX, y: e.clientY } : null);
-    };
-    const onMove = (e: MouseEvent) => {
-      setHoverTooltip(prev => {
-        if (!prev) return null;
-        const text = findTooltip(e.target);
-        if (!text) return null;
-        return { text, x: e.clientX, y: e.clientY };
-      });
-    };
-    const onOut = (e: MouseEvent) => {
-      const related = e.relatedTarget as HTMLElement | null;
-      if (!related || !container.contains(related) || !findTooltip(related)) {
-        setHoverTooltip(null);
-      }
-    };
-    container.addEventListener('mouseover', onOver);
-    container.addEventListener('mousemove', onMove);
-    container.addEventListener('mouseout', onOut);
-    return () => {
-      container.removeEventListener('mouseover', onOver);
-      container.removeEventListener('mousemove', onMove);
-      container.removeEventListener('mouseout', onOut);
-    };
-  }, []);
+  // Tooltips for `data-tooltip` are rendered globally by <TooltipProvider />.
 
   // ESC to close
   useEffect(() => {
@@ -357,15 +318,6 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
   return (
     <>
       <Portal>{modalContent}</Portal>
-      {hoverTooltip && <Portal>
-        <div
-          className="fixed z-[9999] px-2 py-1 bg-popover text-popover-foreground text-xs font-mono rounded shadow-lg border border-brand whitespace-nowrap pointer-events-none"
-          style={{ left: hoverTooltip.x + 12, top: hoverTooltip.y + 16 }}
-        >
-          {hoverTooltip.text}
-        </div>
-      </Portal>
-      }
     </>
   );
 }

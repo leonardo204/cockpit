@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { FunctionNode } from '@/lib/codeMap/projectGraph/types';
 import { isFunctionLike } from '@/lib/codeMap/types';
+import { Tooltip } from '@/components/shared/Tooltip';
 import { SymbolIcon } from './symbolIcon';
 
 interface FileTOCSectionProps {
@@ -90,29 +91,32 @@ export function FileTOCSection({
           realFunctions.map((fn) => {
             const isCurrent = currentQname === fn.qualifiedName;
             return (
-              <button
+              <Tooltip
                 key={fn.qualifiedName}
-                onClick={() => onSelect(fn.qualifiedName, fn.startLine)}
-                className={`w-full text-left px-2 py-1 transition-colors flex items-center gap-1.5 min-w-0 ${
-                  isCurrent
-                    ? 'bg-brand/15 hover:bg-brand/20'
-                    : 'hover:bg-secondary/60'
-                }`}
-                title={`${fn.qualifiedName} · L${fn.startLine}`}
+                content={`${fn.qualifiedName} · L${fn.startLine}`}
               >
-                <SymbolIcon
-                  kind={fn.kind}
-                  qname={fn.qualifiedName}
-                  className="w-3 h-3 flex-shrink-0"
-                />
-                <span
-                  className={`text-xs font-mono truncate ${
-                    isCurrent ? 'font-semibold text-brand' : ''
+                <button
+                  onClick={() => onSelect(fn.qualifiedName, fn.startLine)}
+                  className={`w-full text-left px-2 py-1 transition-colors flex items-center gap-1.5 min-w-0 ${
+                    isCurrent
+                      ? 'bg-brand/15 hover:bg-brand/20'
+                      : 'hover:bg-secondary/60'
                   }`}
                 >
-                  {fn.name}
-                </span>
-              </button>
+                  <SymbolIcon
+                    kind={fn.kind}
+                    qname={fn.qualifiedName}
+                    className="w-3 h-3 flex-shrink-0"
+                  />
+                  <span
+                    className={`text-xs font-mono truncate ${
+                      isCurrent ? 'font-semibold text-brand' : ''
+                    }`}
+                  >
+                    {fn.name}
+                  </span>
+                </button>
+              </Tooltip>
             );
           })
         )}
