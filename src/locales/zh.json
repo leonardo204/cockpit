@@ -903,8 +903,9 @@
     "compact": "精简",
     "full": "全文",
     "gap": {
-      "showContext": "已隐藏 {{count}} 行 —— 展开函数上下文",
-      "showAll": "已隐藏 {{count}} 行 —— 全部展开"
+      "hidden": "已隐藏 {{count}} 行",
+      "expandUp": "向上展开 {{count}} 行",
+      "expandDown": "向下展开 {{count}} 行"
     }
   },
   "commitDetail": {

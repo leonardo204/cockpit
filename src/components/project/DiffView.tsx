@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { ChevronUp, ChevronDown } from 'lucide-react';
 import { useComments, type CodeComment } from '@/hooks/useComments';
 import { fetchAllCommentsWithCode, clearAllComments, buildAIMessage, type CodeReference } from '@/hooks/useAllComments';
 import { useMenuContainer } from './FileContextMenu';
@@ -12,8 +13,10 @@ import { AddCommentInput, SendToAIInput } from './CodeInputCards';
 import { computeLineDiff } from './diffAlgorithm';
 import {
   buildCompactRows,
+  COMPACT_EXPAND_STEP,
+  type GapState,
   type RenderRow,
-  type SymbolRange,
+  type SymbolInfo,
   type VisualLine,
 } from './compactDiff';
 import { toast } from '../shared/Toast';
@@ -55,31 +58,49 @@ interface DiffViewProps {
   targetLine?: { line: number; side: 'before' | 'after'; tick: number } | null;
   /**
    * GitHub-style compact view: only changed lines + 3-line context
-   * are rendered; unchanged stretches collapse into clickable bars.
+   * are rendered; unchanged stretches collapse into clickable bars
+   * with bidirectional ↑ / ↓ arrows that reveal +20 lines per
+   * click (`COMPACT_EXPAND_STEP`).
    *
    * Default `false` so existing call sites (DiffViewerModal,
    * CommitDetailPanel, …) keep their full-file behaviour. Currently
    * only `StatusDiffPane` (file-mode of git changes) defaults this
    * on, with a Compact/Full toggle for the user.
+   *
+   * (An earlier prototype consumed AST symbols to AUTO-EXPAND a
+   * gap to its enclosing-function boundaries on first click; user
+   * feedback was that the line count was uncontrollable and big
+   * jumps disrupted reading. We deleted the auto-expansion path
+   * and aligned expansion with GitHub's bidirectional +N exactly.
+   * See `compactDiff.ts` header.)
    */
   compact?: boolean;
   /**
-   * AST symbol ranges in the AFTER file. Used by compact mode to
-   * decide what "expand to function context" means. When omitted
-   * (or empty), compact mode falls back to single-click-expands-all
-   * for every gap.
-   *
-   * Caller is expected to pull this from `useFileFunctions` (which
-   * is already mtime-aware via the server's `refreshFocalFile`),
-   * filter to `function | class | method` kinds, and pass through.
+   * Function-like symbols (post-edit / AFTER snapshot) used by
+   * compact mode to label each gap bar with the enclosing function
+   * of the next changed region — same convention as GitHub's
+   * "@@ -X +Y @@ funcName" hunk header. Read-only / informational;
+   * does NOT influence expansion behaviour. Omitted (or empty) for
+   * files without AST coverage (.json, .css, etc.) — bars then
+   * just show "N lines hidden".
    */
-  symbols?: readonly SymbolRange[];
+  symbols?: readonly SymbolInfo[];
 }
 
 // ============================================
 // Row height constant
 // ============================================
 const ROW_HEIGHT = 20;
+
+/** Render a function-like symbol as `name(p1, p2, …)` for the gap
+ *  bar's hunk-header label. Mirrors the chip-header style used in
+ *  Code Map, so users see the same shape in both views. Symbols
+ *  without `params` (non-callable kinds — class / interface / type
+ *  / etc) render as just `name`. */
+function formatSignature(s: SymbolInfo): string {
+  if (!s.params) return s.name;
+  return `${s.name}(${s.params.join(', ')})`;
+}
 
 // ============================================
 // ToolbarRenderer - independent state, avoids DiffView re-renders.
@@ -482,7 +503,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
   // for both modes avoids forking the JSX below.
   // ============================================
 
-  const [gapStates, setGapStates] = useState<Map<number, 0 | 1 | 2>>(
+  const [gapStates, setGapStates] = useState<Map<number, GapState>>(
     () => new Map(),
   );
 
@@ -495,18 +516,16 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
     setGapStates(new Map());
   }, [leftLines, rightLines]);
 
-  // Symbol ranges for AST-aware expand. Only meaningful in compact
-  // mode; passing the array through unconditionally is fine — when
-  // compact is off, `buildCompactRows` isn't invoked.
-  const symbolRanges = useMemo<readonly SymbolRange[]>(
-    () => symbols ?? [],
-    [symbols],
-  );
-
   // Cast away the `originalIdx` field that DiffView's internal row
   // builder added — `compactDiff` only needs `lineNum + type`.
   const visualLeft = leftLines as readonly VisualLine[];
   const visualRight = rightLines as readonly VisualLine[];
+
+  // Stable identity for the optional `symbols` array — `buildCompactRows`
+  // only re-runs when the data actually changes, not on every render
+  // where the parent re-creates an inline literal. Cheap fallback for
+  // the unset case keeps the dep stable too.
+  const symbolsKey = useMemo(() => symbols ?? [], [symbols]);
 
   const { rows: renderRows, gaps: compactGaps } = useMemo(() => {
     if (!compact) {
@@ -517,21 +536,134 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
       }));
       return { rows, gaps: [] };
     }
-    return buildCompactRows(visualLeft, visualRight, gapStates, symbolRanges);
-  }, [compact, leftLines, visualLeft, visualRight, gapStates, symbolRanges]);
+    return buildCompactRows(visualLeft, visualRight, gapStates, symbolsKey);
+  }, [compact, leftLines, visualLeft, visualRight, gapStates, symbolsKey]);
 
-  const handleGapClick = useCallback(
-    (gapId: number, nextState: 1 | 2) => {
+  // Pending scroll-anchor adjustment. When the user clicks a gap
+  // arrow, we capture the bar's viewport-Y BEFORE state changes;
+  // a layout effect (running before paint, after DOM commit) then
+  // measures the bar's NEW viewport-Y and adjusts scrollTop so the
+  // bar stays visually pinned. Net effect: the user clicks and
+  // sees new lines appear above/below the bar, but the bar itself
+  // (and everything in their viewport) doesn't jump.
+  //
+  // Stored in a ref so consecutive clicks before the layout effect
+  // runs collapse to the latest one — the second click's "before"
+  // measurement supersedes the first.
+  const pendingAnchorRef = useRef<{
+    gapId: number;
+    /** Bar's `getBoundingClientRect().top` BEFORE the state update.
+     *  Viewport-relative; the layout effect compares this with the
+     *  bar's NEW viewport-relative top to derive the scroll delta. */
+    oldViewportY: number;
+    /** Fallback anchor: visual idx of the first row AFTER the gap.
+     *  Used when the click closes the gap completely (bar element
+     *  disappears, can't query by gap id any more). The first-
+     *  after-gap diff row is stable across the close transition. */
+    fallbackVisualIdx: number;
+    /** Same fallback row's viewport-Y BEFORE the state update. */
+    fallbackOldViewportY: number | null;
+  } | null>(null);
+
+  /** Click handler for a gap arrow. `direction === 'up'` extends
+   *  the upper changed region's context downward into the gap;
+   *  `'down'` extends the lower changed region's context upward.
+   *  Each click reveals at most `COMPACT_EXPAND_STEP` rows, clamped
+   *  to whatever's still hidden. No-op clicks (gap already fully
+   *  closed) bail without setting state.
+   *
+   *  Capture the bar's viewport position FIRST so the layout effect
+   *  can pin it after re-render. */
+  const handleGapExpand = useCallback(
+    (gapId: number, direction: 'up' | 'down') => {
+      const container = scrollContainerRef.current;
+      const barEl = container?.querySelector(
+        `[data-gap-id="${gapId}"]`,
+      ) as HTMLElement | null;
+      const oldViewportY = barEl?.getBoundingClientRect().top ?? null;
+
+      // Compute fallback anchor (first row after the gap). Used
+      // when the click closes the gap entirely — bar disappears, we
+      // anchor on the next-row instead.
+      const gap = compactGaps.find((g) => g.id === gapId);
+      const fallbackVisualIdx = gap ? gap.endIdx + 1 : -1;
+      const fallbackEl =
+        fallbackVisualIdx >= 0
+          ? (container?.querySelector(
+              `[data-row-idx="${fallbackVisualIdx}"]`,
+            ) as HTMLElement | null)
+          : null;
+      const fallbackOldViewportY =
+        fallbackEl?.getBoundingClientRect().top ?? null;
+
+      let stateChanged = false;
       setGapStates((prev) => {
-        const cur = prev.get(gapId) ?? 0;
-        if (cur === nextState) return prev;
-        const next = new Map(prev);
-        next.set(gapId, nextState);
-        return next;
+        if (!gap) return prev;
+        const cur = prev.get(gapId) ?? { topRevealed: 0, bottomRevealed: 0 };
+        const size = gap.endIdx - gap.startIdx + 1;
+        const remaining = size - cur.topRevealed - cur.bottomRevealed;
+        if (remaining <= 0) return prev;
+        const step = Math.min(COMPACT_EXPAND_STEP, remaining);
+        const next: GapState =
+          direction === 'up'
+            ? { ...cur, topRevealed: cur.topRevealed + step }
+            : { ...cur, bottomRevealed: cur.bottomRevealed + step };
+        stateChanged = true;
+        return new Map(prev).set(gapId, next);
       });
+
+      if (stateChanged && oldViewportY !== null) {
+        pendingAnchorRef.current = {
+          gapId,
+          oldViewportY,
+          fallbackVisualIdx,
+          fallbackOldViewportY,
+        };
+      }
     },
-    [],
+    [compactGaps],
   );
+
+  // Apply the scroll-anchor adjustment AFTER React commits the new
+  // renderRows but BEFORE the browser paints. `useLayoutEffect`
+  // gives us that window — without it, the new rows would paint at
+  // their new positions and a follow-up scroll adjustment would
+  // visually flash.
+  useLayoutEffect(() => {
+    const pending = pendingAnchorRef.current;
+    if (!pending) return;
+    pendingAnchorRef.current = null;
+
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    // Try the bar itself first — most common case. The bar still
+    // exists at a different DOM position because the gap shrunk
+    // but didn't close.
+    const newBarEl = container.querySelector(
+      `[data-gap-id="${pending.gapId}"]`,
+    ) as HTMLElement | null;
+    if (newBarEl) {
+      const newViewportY = newBarEl.getBoundingClientRect().top;
+      const delta = newViewportY - pending.oldViewportY;
+      container.scrollTop += delta;
+      return;
+    }
+
+    // Bar gone (gap fully closed). Fall back to the first row AFTER
+    // the gap — it's a stable hunk row that exists across the
+    // transition. If even that's not measurable (gap was at the very
+    // end of the file), accept the visual jump.
+    if (pending.fallbackOldViewportY === null) return;
+    const fallbackEl = container.querySelector(
+      `[data-row-idx="${pending.fallbackVisualIdx}"]`,
+    ) as HTMLElement | null;
+    if (fallbackEl) {
+      const newViewportY = fallbackEl.getBoundingClientRect().top;
+      const delta = newViewportY - pending.fallbackOldViewportY;
+      container.scrollTop += delta;
+    }
+  }, [gapStates]);
 
   // Helper for the targetLine effect: when the user wants to scroll
   // to a line that's currently inside a collapsed gap, look up the
@@ -615,24 +747,23 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
       (r) => r.kind === 'diff' && r.idx === visualIdx,
     );
     if (renderIdx === -1) {
-      // Target is in a collapsed gap — find which one and expand.
-      // Comparing visualIdx against gap boundaries from the row list
-      // would require rebuilding `gaps`; cheaper to let the renderer
-      // re-compute by setting state and let the next effect tick
-      // redo the scroll.
-      // Strategy: nudge gap state. We don't know the gapId without
-      // the gaps registry, so the safest catch-all is to re-render
-      // `buildCompactRows` with `compact=false` semantics for this
-      // tick. Simpler: walk `gapStates` for any gap whose visual
-      // range covers visualIdx and bump it to 2. But that requires
-      // the gaps list. Re-export `gaps` from the memo to enable.
-      // (Implemented in a tiny helper below.)
+      // Target is inside a still-hidden gap. Auto-expand the
+      // containing gap so the target has a render row, then let
+      // the next effect tick (`renderRows` change re-fires this
+      // effect) do the actual scroll.
       const gapId = findGapIdForVisualIdx(visualIdx);
       if (gapId !== null) {
+        const gap = compactGaps.find((g) => g.id === gapId);
+        if (!gap) return;
+        const size = gap.endIdx - gap.startIdx + 1;
         setGapStates((prev) => {
-          if ((prev.get(gapId) ?? 0) === 2) return prev;
+          const cur = prev.get(gapId) ?? { topRevealed: 0, bottomRevealed: 0 };
+          if (cur.topRevealed + cur.bottomRevealed >= size) return prev;
+          // Fully reveal — split arbitrarily into top side; the
+          // resulting visible state is the same regardless of the
+          // split because top + bottom === size.
           const next = new Map(prev);
-          next.set(gapId, 2);
+          next.set(gapId, { topRevealed: size, bottomRevealed: 0 });
           return next;
         });
       }
@@ -693,17 +824,15 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                 {virtualItems.map((virtualItem) => {
                   const row = renderRows[virtualItem.index];
                   if (row.kind === 'gap') {
-                    // Bar half on the left panel — same height as
-                    // the right half so the two columns stay
-                    // aligned. Text only on the right side; left is
-                    // a passive backdrop with the same hover/click
-                    // affordance so clicking either column triggers
-                    // the same action.
+                    // Left half of the gap bar. Decorative — the
+                    // ↑ / ↓ controls + the label live on the right
+                    // half. Same bg/border/height as the right half
+                    // so the two columns visually read as ONE bar.
+                    // `data-gap-id` is on the right half; this side
+                    // is just a passive backdrop.
                     return (
-                      <button
+                      <div
                         key={virtualItem.key}
-                        type="button"
-                        onClick={() => handleGapClick(row.gapId, row.nextState)}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -712,16 +841,15 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           height: `${virtualItem.size}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
-                        className="flex items-center justify-center text-[11px] text-muted-foreground bg-secondary/40 hover:bg-secondary/70 border-y border-border/50 cursor-pointer transition-colors"
-                      >
-                        <span className="opacity-60">⋯</span>
-                      </button>
+                        className="bg-accent border-y border-border"
+                      />
                     );
                   }
                   const line = leftLines[row.idx];
                   return (
                     <div
                       key={virtualItem.key}
+                      data-row-idx={row.idx}
                       style={{
                         position: 'absolute',
                         top: 0,
@@ -754,20 +882,17 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                 {virtualItems.map((virtualItem) => {
                   const row = renderRows[virtualItem.index];
                   if (row.kind === 'gap') {
-                    // Right half of the bar — carries the label
-                    // (line count + action prompt). Click the
-                    // whole row → bump gap state via `nextState`.
-                    const label =
-                      row.level === 0
-                        ? row.nextState === 1
-                          ? t('diffViewer.gap.showContext', { count: row.hiddenCount })
-                          : t('diffViewer.gap.showAll', { count: row.hiddenCount })
-                        : t('diffViewer.gap.showAll', { count: row.hiddenCount });
+                    // Right half of the bar — carries:
+                    //   - ↑ / ↓ arrow buttons (each click reveals
+                    //     COMPACT_EXPAND_STEP rows on its side)
+                    //   - the residual hidden-line count
+                    // The whole bar carries `data-gap-id` so the
+                    // scroll-anchor effect can find it before /
+                    // after the state update.
                     return (
-                      <button
+                      <div
                         key={virtualItem.key}
-                        type="button"
-                        onClick={() => handleGapClick(row.gapId, row.nextState)}
+                        data-gap-id={row.gapId}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -776,10 +901,69 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           height: `${virtualItem.size}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
-                        className="flex items-center justify-center text-[11px] text-muted-foreground bg-secondary/40 hover:bg-secondary/70 hover:text-foreground border-y border-border/50 cursor-pointer transition-colors"
+                        className="flex items-center justify-center gap-3 text-[11px] text-muted-foreground bg-accent border-y border-border min-w-0"
                       >
-                        <span className="opacity-80">{label}</span>
-                      </button>
+                        <button
+                          type="button"
+                          disabled={!row.canExpandUp}
+                          onClick={() => handleGapExpand(row.gapId, 'up')}
+                          // Visible button affordance:
+                          //   default → muted icon at 80 % so it
+                          //     doesn't blend with surrounding text
+                          //   hover   → bg-secondary + brand teal
+                          //     icon (fill style — most prominent;
+                          //     a darker shade than `accent` since
+                          //     the bar bg is already `accent`)
+                          //   active  → brand-teal flash bg + brief
+                          //     scale-95 squish so the user gets
+                          //     tactile "pressed" feedback
+                          //   disabled → 30 % opacity, no hover/
+                          //     active reaction, no-drop cursor
+                          className="flex-shrink-0 flex items-center justify-center w-7 h-5 rounded text-foreground/80 hover:bg-secondary hover:text-brand active:bg-brand/15 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-foreground/80 disabled:active:scale-100 disabled:active:bg-transparent transition-all"
+                          title={t('diffViewer.gap.expandUp', {
+                            count: COMPACT_EXPAND_STEP,
+                          })}
+                          aria-label={t('diffViewer.gap.expandUp', {
+                            count: COMPACT_EXPAND_STEP,
+                          })}
+                        >
+                          <ChevronUp className="w-4 h-4" />
+                        </button>
+                        <span className="opacity-80 select-none flex-shrink-0">
+                          {t('diffViewer.gap.hidden', { count: row.hiddenCount })}
+                        </span>
+                        {/* Function-context suffix — answers
+                            "what's the next change inside?" without
+                            the user having to expand. Truncates with
+                            `min-w-0` + `truncate` because long TS
+                            generics + many params can blow past the
+                            bar width. */}
+                        {row.enclosingFn && (
+                          <>
+                            <span className="opacity-50 select-none flex-shrink-0">·</span>
+                            <span
+                              className="opacity-90 truncate min-w-0 font-medium"
+                              title={formatSignature(row.enclosingFn)}
+                            >
+                              {formatSignature(row.enclosingFn)}
+                            </span>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          disabled={!row.canExpandDown}
+                          onClick={() => handleGapExpand(row.gapId, 'down')}
+                          className="flex-shrink-0 flex items-center justify-center w-7 h-5 rounded text-foreground/80 hover:bg-secondary hover:text-brand active:bg-brand/15 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-foreground/80 disabled:active:scale-100 disabled:active:bg-transparent transition-all"
+                          title={t('diffViewer.gap.expandDown', {
+                            count: COMPACT_EXPAND_STEP,
+                          })}
+                          aria-label={t('diffViewer.gap.expandDown', {
+                            count: COMPACT_EXPAND_STEP,
+                          })}
+                        >
+                          <ChevronDown className="w-4 h-4" />
+                        </button>
+                      </div>
                     );
                   }
                   const line = rightLines[row.idx];
@@ -795,6 +979,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                     <div
                       key={virtualItem.key}
                       data-new-line={lineNum || undefined}
+                      data-row-idx={row.idx}
                       style={{
                         position: 'absolute',
                         top: 0,

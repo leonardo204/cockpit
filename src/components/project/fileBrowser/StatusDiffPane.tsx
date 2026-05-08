@@ -133,12 +133,12 @@ export function StatusDiffPane({
   /** File-mode density toggle:
    *   - 'compact' (default): GitHub-style — only changed lines + 3-
    *     line context render; unchanged stretches collapse into
-   *     clickable bars that expand to function head/tail (AST-aware,
-   *     uses `useFileFunctions` for symbol ranges) on first click,
-   *     to "show all" on second.
+   *     clickable bars with bidirectional ↑ / ↓ arrows that reveal
+   *     +20 lines per click. Scroll position is anchored on the
+   *     bar so the user's viewport doesn't jump.
    *   - 'full': renders every line of the file. Useful when the user
    *     wants to copy a long unchanged region or read the whole file
-   *     alongside the diff.
+   *     alongside the diff in one scroll.
    *
    *  Lives next to `diffViewerMode` because both are file-pane-local
    *  presentation choices that shouldn't bleed into other tabs. */
@@ -148,22 +148,31 @@ export function StatusDiffPane({
   const isImage = isImageFile(filePath);
   const isBlockMode = !isImage && diffViewerMode === 'map';
 
-  // Symbol ranges for AST-aware gap expansion in compact mode. Pulls
-  // from the same useFileFunctions hook BlockDiffViewer uses, so:
+  // Function-like symbols for the file-mode compact bar's hunk-
+  // header label ("47 lines hidden · loginHandler(req, res)"). Pulls
+  // from the same `useFileFunctions` hook BlockDiffViewer uses, so:
   //   - mtime-driven freshness comes for free (refreshFocalFile on
   //     the server gates re-parse)
-  //   - the request is cached client-side, so when the user toggles
-  //     between file/map modes there's no second network round-trip
+  //   - the request is cached client-side, so toggling between
+  //     file/map modes doesn't trigger a second network round-trip
   // Filter to function-like kinds only (function/class/method) —
-  // matches what call-graph nodes and the TOC use for "navigable
-  // symbols", which is the same notion that makes "expand to
-  // enclosing function" useful.
+  // matches the chip view's notion of "navigable units"; types /
+  // interfaces / enums don't get a hunk-header label.
+  //
+  // Only used in compact mode + file mode + supported language;
+  // the inner `useFileFunctions` short-circuits to `idle` for
+  // unsupported paths.
   const { state: fileFnsState } = useFileFunctions(cwd, filePath);
   const symbolRanges = useMemo(() => {
     if (fileFnsState.state !== 'ready') return undefined;
     return fileFnsState.data.functions
       .filter(isFunctionLike)
-      .map((fn) => ({ startLine: fn.startLine, endLine: fn.endLine }));
+      .map((fn) => ({
+        name: fn.name,
+        startLine: fn.startLine,
+        endLine: fn.endLine,
+        params: fn.params,
+      }));
   }, [fileFnsState]);
 
   return (

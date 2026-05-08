@@ -903,8 +903,9 @@
     "compact": "Compact",
     "full": "Full",
     "gap": {
-      "showContext": "{{count}} lines hidden — show function context",
-      "showAll": "{{count}} lines hidden — show all"
+      "hidden": "{{count}} lines hidden",
+      "expandUp": "Expand {{count}} lines up",
+      "expandDown": "Expand {{count}} lines down"
     }
   },
   "commitDetail": {
