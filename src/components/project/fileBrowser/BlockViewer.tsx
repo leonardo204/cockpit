@@ -98,8 +98,10 @@ interface CodeBlockProps {
    * NOT change (until startLine/endLine change, which would unmount
    * us anyway). The parent uses these signals to gate scroll-into-view
    * until the focal file's full layout has settled — otherwise blocks
-   * above the target keep growing during the smooth-scroll animation
-   * and the target gets pushed off the viewport.
+   * above the target keep growing AFTER our scroll lands, pushing
+   * the target back off the viewport. Same gate, regardless of whether
+   * the scroll is animated or instant: the question is "where is the
+   * target NOW?" and the answer needs the layout to be done shifting.
    */
   onHighlighted: (qname: string) => void;
   /** All comments for the focal file. The block self-filters by line
@@ -1464,9 +1466,12 @@ export function BlockViewer({
   // Flash effect: once the focal file has loaded, the requested block
   // is in the DOM, AND every rendered block has reported a stable
   // height, scroll the target into view and pulse its header for
-  // ~1.5s. The "all blocks settled" gate is what fixes the layout-
-  // shift race where smooth-scroll's animation endpoint was getting
-  // computed from half-rendered placeholders.
+  // ~1.5s. The "all blocks settled" gate fixes the layout-shift race
+  // where blocks above the target finish their Shiki highlight after
+  // our scroll lands and push the target back off-screen. Scroll
+  // itself is `behavior: 'instant'` (matches IDE convention — VSCode /
+  // JetBrains / Cursor / Zed all jump without animation); the visible
+  // "you arrived" feedback is the 1.5 s pulse, not the scroll.
   useEffect(() => {
     if (!flashTarget) return;
     // Each flash nonce gets at most one scroll. Without this, every
@@ -1526,7 +1531,12 @@ export function BlockViewer({
           `[data-line="${flashTarget.line}"]`,
         );
         if (lineEl instanceof HTMLElement) {
-          lineEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Instant scroll matches IDE convention (VSCode / JetBrains
+          // / Cursor / Zed all jump without animation on click-to-
+          // jump). The user-visible "you arrived" feedback is the
+          // 1.5 s `.line-flash` pulse below; the scroll itself is just
+          // positioning, not a transition the user needs to watch.
+          lineEl.scrollIntoView({ behavior: 'instant', block: 'center' });
           lineEl.classList.remove('line-flash');
           void lineEl.offsetWidth;
           lineEl.classList.add('line-flash');
@@ -1537,7 +1547,7 @@ export function BlockViewer({
         }
       }
 
-      root.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      root.scrollIntoView({ behavior: 'instant', block: 'start' });
       const header = root.querySelector('[data-block-header]');
       if (header instanceof HTMLElement) {
         // Restart the animation by stripping the class, forcing a
