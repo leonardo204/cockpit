@@ -108,39 +108,64 @@ export interface Gap {
   endIdx: number;
 }
 
-/** Output row types for the virtualizer. `diff` rows index into
- *  `leftLines` / `rightLines`; `gap` rows render the expandable
- *  bar with two arrow buttons. */
+/** Output row types for the virtualizer.
+ *
+ *  `diff` rows index into `leftLines` / `rightLines`.
+ *
+ *  Each gap with non-empty residual emits THREE rows in a row:
+ *
+ *    1. `gap-expand` (direction: 'up')   — clickable "… more +N …"
+ *    2. `gap-label`                      — "{count} lines hidden · funcName(...)"
+ *    3. `gap-expand` (direction: 'down') — clickable "… more +N …"
+ *
+ *  Why three rows instead of one bar with arrow buttons: testing
+ *  showed users couldn't decode `↑` / `↓` icons (no scale, no
+ *  direction-of-effect hint). Putting "more +N" text labels above
+ *  AND below the count label makes the action explicit and the
+ *  direction self-evident from spatial position. Always-visible
+ *  (no hover) so discoverability is automatic.
+ *
+ *  Trade-off: each gap now occupies ~3× the height it used to. For
+ *  the common case (5–30 gaps in a typical changed file) this adds
+ *  60–360 px of vertical space, which is acceptable given the UX
+ *  win on first-time users.
+ *
+ *  All three rows share `gapId` so the click handler / scroll-
+ *  anchor effect can connect them. `data-gap-id` lives on the
+ *  middle (label) row — most stable spatial reference as
+ *  expansion shrinks the gap toward the middle. */
 export type RenderRow =
   | { kind: 'diff'; idx: number }
   | {
-      kind: 'gap';
-      /** Stable id of the parent gap. Used by the click handler to
-       *  look up size for clamping, and by the scroll-anchor effect
-       *  to find the bar's DOM element via `data-gap-id`. */
+      kind: 'gap-expand';
+      /** Stable id of the parent gap. */
       gapId: number;
-      /** How many rows the bar still hides. Shown in the bar's
-       *  text ("47 lines hidden"). */
+      /** Which side of the residual range this button extends:
+       *    'up'   → reveals rows AT THE TOP of the gap (extends
+       *             the upper hunk's tail down into the gap)
+       *    'down' → reveals rows AT THE BOTTOM of the gap (extends
+       *             the lower hunk's head up into the gap)
+       *  Spatially the 'up' row sits just above the label and the
+       *  'down' row just below — visual position implies direction
+       *  so the user doesn't have to decode an icon. */
+      direction: 'up' | 'down';
+      /** Lines this click would reveal: `min(STEP, residualSize)`.
+       *  Shown in the row's text "more +{revealCount}". Drops
+       *  below STEP when the residual is smaller than the step,
+       *  so the label never lies — clicking with revealCount=5
+       *  closes the gap, doesn't pretend +20. */
+      revealCount: number;
+    }
+  | {
+      kind: 'gap-label';
+      gapId: number;
+      /** How many rows the residual still hides. Shown as
+       *  "{count} lines hidden". */
       hiddenCount: number;
-      /** True iff `topRevealed === 0` — drives the up-arrow's
-       *  enabled/disabled state. With nothing more to reveal at
-       *  the top (fully revealed from top to current bar position),
-       *  ↑ would be a no-op; we visually disable it. */
-      canExpandUp: boolean;
-      /** Symmetric — true iff `bottomRevealed === 0` … wait, no:
-       *  ↓ extends the BOTTOM context UP into the gap. The button
-       *  is meaningful as long as the bar still has hidden rows
-       *  on its bottom side; since the residual range IS the bar,
-       *  the button is always meaningful when the bar exists. The
-       *  `canExpand{Up,Down}` flags exist to handle clamping at
-       *  the boundary where one side has fully consumed the gap. */
-      canExpandDown: boolean;
       /** Function-like symbol enclosing the FIRST changed line BELOW
        *  the bar (i.e. the next changed region the user will see
        *  when scrolling down). Mirrors GitHub's "@@ -X +Y @@ funcName"
-       *  hunk-header convention — answers "what function is the
-       *  next change in?" without making the user expand or scroll
-       *  to find out.
+       *  hunk-header convention.
        *
        *  Undefined when:
        *    - The next changed region's line is in top-level code
@@ -262,16 +287,15 @@ export function buildCompactRows(
       (g) => g.startIdx <= subStart && subEnd <= g.endIdx,
     );
     if (!parent) continue; // defensive — shouldn't happen
-    const state =
-      gapStates.get(parent.id) ?? { topRevealed: 0, bottomRevealed: 0 };
-    const size = parent.endIdx - parent.startIdx + 1;
 
-    // Look up the function enclosing the FIRST changed line below
-    // this hidden run (i.e. the next thing the user will see). For
-    // a partially-expanded gap this is the row at `subEnd + 1`,
-    // which is by definition visible (otherwise we'd still be in
-    // the hidden run). For an end-of-file gap (`subEnd + 1 >= n`)
-    // there's nothing below — leave `enclosingFn` undefined.
+    const hiddenCount = subEnd - subStart + 1;
+    const revealCount = Math.min(COMPACT_EXPAND_STEP, hiddenCount);
+
+    // Enclosing function of the FIRST changed line below this
+    // hidden run (the next thing the user will see when scrolling
+    // down). For a partially-expanded gap this is `subEnd + 1`,
+    // which is by definition visible. For an end-of-file gap
+    // (`subEnd + 1 >= n`) there's nothing below — leave undefined.
     let enclosingFn: SymbolInfo | undefined;
     if (symbols.length > 0 && subEnd + 1 < n) {
       // Walk forward to skip pure-removed / padding rows whose
@@ -284,13 +308,27 @@ export function buildCompactRows(
       }
     }
 
+    // Three rows per non-empty gap. Order matters: top-expand
+    // first so the user reads spatial top-to-bottom as
+    // expand-up | label | expand-down. The middle (label) row
+    // carries `data-gap-id` for scroll anchoring.
     rows.push({
-      kind: 'gap',
+      kind: 'gap-expand',
       gapId: parent.id,
-      hiddenCount: subEnd - subStart + 1,
-      canExpandUp: state.topRevealed < size,
-      canExpandDown: state.bottomRevealed < size - state.topRevealed,
+      direction: 'up',
+      revealCount,
+    });
+    rows.push({
+      kind: 'gap-label',
+      gapId: parent.id,
+      hiddenCount,
       enclosingFn,
+    });
+    rows.push({
+      kind: 'gap-expand',
+      gapId: parent.id,
+      direction: 'down',
+      revealCount,
     });
   }
 

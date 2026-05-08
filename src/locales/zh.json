@@ -904,6 +904,7 @@
     "full": "全文",
     "gap": {
       "hidden": "已隐藏 {{count}} 行",
+      "more": "··· 更多 +{{count}} ···",
       "expandUp": "向上展开 {{count}} 行",
       "expandDown": "向下展开 {{count}} 行"
     }

@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown } from 'lucide-react';
 import { useComments, type CodeComment } from '@/hooks/useComments';
 import { fetchAllCommentsWithCode, clearAllComments, buildAIMessage, type CodeReference } from '@/hooks/useAllComments';
 import { useMenuContainer } from './FileContextMenu';
@@ -539,66 +538,38 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
     return buildCompactRows(visualLeft, visualRight, gapStates, symbolsKey);
   }, [compact, leftLines, visualLeft, visualRight, gapStates, symbolsKey]);
 
-  // Pending scroll-anchor adjustment. When the user clicks a gap
-  // arrow, we capture the bar's viewport-Y BEFORE state changes;
-  // a layout effect (running before paint, after DOM commit) then
-  // measures the bar's NEW viewport-Y and adjusts scrollTop so the
-  // bar stays visually pinned. Net effect: the user clicks and
-  // sees new lines appear above/below the bar, but the bar itself
-  // (and everything in their viewport) doesn't jump.
-  //
-  // Stored in a ref so consecutive clicks before the layout effect
-  // runs collapse to the latest one — the second click's "before"
-  // measurement supersedes the first.
-  const pendingAnchorRef = useRef<{
-    gapId: number;
-    /** Bar's `getBoundingClientRect().top` BEFORE the state update.
-     *  Viewport-relative; the layout effect compares this with the
-     *  bar's NEW viewport-relative top to derive the scroll delta. */
-    oldViewportY: number;
-    /** Fallback anchor: visual idx of the first row AFTER the gap.
-     *  Used when the click closes the gap completely (bar element
-     *  disappears, can't query by gap id any more). The first-
-     *  after-gap diff row is stable across the close transition. */
-    fallbackVisualIdx: number;
-    /** Same fallback row's viewport-Y BEFORE the state update. */
-    fallbackOldViewportY: number | null;
-  } | null>(null);
-
   /** Click handler for a gap arrow. `direction === 'up'` extends
    *  the upper changed region's context downward into the gap;
    *  `'down'` extends the lower changed region's context upward.
    *  Each click reveals at most `COMPACT_EXPAND_STEP` rows, clamped
-   *  to whatever's still hidden. No-op clicks (gap already fully
-   *  closed) bail without setting state.
+   *  to whatever's still hidden.
    *
-   *  Capture the bar's viewport position FIRST so the layout effect
-   *  can pin it after re-render. */
+   *  No scroll-anchor compensation — by design. With the virtualizer
+   *  using `measureElement` (attached on every rendered row's outer
+   *  div) the row-position math stays accurate as new rows materialise,
+   *  and the browser's natural scrollTop preservation does exactly
+   *  what we want:
+   *
+   *    - Click more-up → rows inserted before the bar. Anything ABOVE
+   *      the click stays put in the viewport; bar + lower hunk slide
+   *      down to make room. New rows appear above the bar — visible.
+   *    - Click more-down → rows inserted between bar and lower hunk.
+   *      Bar + upper hunk stay put. Lower hunk slides down. New rows
+   *      appear below the bar — visible.
+   *
+   *  Both cases keep the user's reading area where they expect and
+   *  put the new content in plain view. An earlier rev tried to pin
+   *  the bar / a hunk-edge row via getBoundingClientRect + scrollTop
+   *  +=delta; that fought the browser AND accumulated drift when
+   *  estimateSize disagreed with actual rendered heights. measureElement
+   *  is the right fix for the underlying drift; the explicit anchor
+   *  code was solving a problem that doesn't exist once measurement
+   *  is correct. */
   const handleGapExpand = useCallback(
     (gapId: number, direction: 'up' | 'down') => {
-      const container = scrollContainerRef.current;
-      const barEl = container?.querySelector(
-        `[data-gap-id="${gapId}"]`,
-      ) as HTMLElement | null;
-      const oldViewportY = barEl?.getBoundingClientRect().top ?? null;
-
-      // Compute fallback anchor (first row after the gap). Used
-      // when the click closes the gap entirely — bar disappears, we
-      // anchor on the next-row instead.
       const gap = compactGaps.find((g) => g.id === gapId);
-      const fallbackVisualIdx = gap ? gap.endIdx + 1 : -1;
-      const fallbackEl =
-        fallbackVisualIdx >= 0
-          ? (container?.querySelector(
-              `[data-row-idx="${fallbackVisualIdx}"]`,
-            ) as HTMLElement | null)
-          : null;
-      const fallbackOldViewportY =
-        fallbackEl?.getBoundingClientRect().top ?? null;
-
-      let stateChanged = false;
+      if (!gap) return;
       setGapStates((prev) => {
-        if (!gap) return prev;
         const cur = prev.get(gapId) ?? { topRevealed: 0, bottomRevealed: 0 };
         const size = gap.endIdx - gap.startIdx + 1;
         const remaining = size - cur.topRevealed - cur.bottomRevealed;
@@ -608,62 +579,11 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
           direction === 'up'
             ? { ...cur, topRevealed: cur.topRevealed + step }
             : { ...cur, bottomRevealed: cur.bottomRevealed + step };
-        stateChanged = true;
         return new Map(prev).set(gapId, next);
       });
-
-      if (stateChanged && oldViewportY !== null) {
-        pendingAnchorRef.current = {
-          gapId,
-          oldViewportY,
-          fallbackVisualIdx,
-          fallbackOldViewportY,
-        };
-      }
     },
     [compactGaps],
   );
-
-  // Apply the scroll-anchor adjustment AFTER React commits the new
-  // renderRows but BEFORE the browser paints. `useLayoutEffect`
-  // gives us that window — without it, the new rows would paint at
-  // their new positions and a follow-up scroll adjustment would
-  // visually flash.
-  useLayoutEffect(() => {
-    const pending = pendingAnchorRef.current;
-    if (!pending) return;
-    pendingAnchorRef.current = null;
-
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    // Try the bar itself first — most common case. The bar still
-    // exists at a different DOM position because the gap shrunk
-    // but didn't close.
-    const newBarEl = container.querySelector(
-      `[data-gap-id="${pending.gapId}"]`,
-    ) as HTMLElement | null;
-    if (newBarEl) {
-      const newViewportY = newBarEl.getBoundingClientRect().top;
-      const delta = newViewportY - pending.oldViewportY;
-      container.scrollTop += delta;
-      return;
-    }
-
-    // Bar gone (gap fully closed). Fall back to the first row AFTER
-    // the gap — it's a stable hunk row that exists across the
-    // transition. If even that's not measurable (gap was at the very
-    // end of the file), accept the visual jump.
-    if (pending.fallbackOldViewportY === null) return;
-    const fallbackEl = container.querySelector(
-      `[data-row-idx="${pending.fallbackVisualIdx}"]`,
-    ) as HTMLElement | null;
-    if (fallbackEl) {
-      const newViewportY = fallbackEl.getBoundingClientRect().top;
-      const delta = newViewportY - pending.fallbackOldViewportY;
-      container.scrollTop += delta;
-    }
-  }, [gapStates]);
 
   // Helper for the targetLine effect: when the user wants to scroll
   // to a line that's currently inside a collapsed gap, look up the
@@ -678,13 +598,15 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
     [compactGaps],
   );
 
-  // Row-height estimator for the variable-size virtualizer. Diff
-  // rows reuse the original 20 px constant so the visual rhythm of
-  // the unchanged code is preserved; gap bars get a bit more
-  // breathing room (28 px) so the click target is comfortable.
-  const GAP_ROW_HEIGHT = 28;
+  // Row-height estimator. The label row gets a touch more breathing
+  // room than diff / more rows because it carries longer content
+  // ("47 lines hidden · loginHandler(req, res, next)") plus a
+  // visual filled-bg framing — at 20 px the text felt cramped
+  // against the borders.
+  const GAP_LABEL_HEIGHT = 28;
   const estimateRowSize = useCallback(
-    (i: number) => (renderRows[i]?.kind === 'gap' ? GAP_ROW_HEIGHT : ROW_HEIGHT),
+    (i: number) =>
+      renderRows[i]?.kind === 'gap-label' ? GAP_LABEL_HEIGHT : ROW_HEIGHT,
     [renderRows],
   );
 
@@ -709,7 +631,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
   const minimapLines = useMemo(
     () =>
       renderRows.map((row) => {
-        if (row.kind === 'gap') return { type: 'unchanged' as const };
+        if (row.kind !== 'diff') return { type: 'unchanged' as const };
         const leftLine = leftLines[row.idx];
         const rightLine = rightLines[row.idx];
         if (leftLine.type === 'removed') return { type: 'removed' as const };
@@ -823,16 +745,21 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
               <div className="min-w-max h-full" style={{ position: 'relative' }}>
                 {virtualItems.map((virtualItem) => {
                   const row = renderRows[virtualItem.index];
-                  if (row.kind === 'gap') {
-                    // Left half of the gap bar. Decorative — the
-                    // ↑ / ↓ controls + the label live on the right
-                    // half. Same bg/border/height as the right half
-                    // so the two columns visually read as ONE bar.
-                    // `data-gap-id` is on the right half; this side
-                    // is just a passive backdrop.
+                  if (row.kind === 'gap-expand' || row.kind === 'gap-label') {
+                    // Left half of a gap row. Only the middle
+                    // (label) row carries `bg-accent` so it stands
+                    // out as a distinct UI element; the
+                    // expand-up / expand-down rows stay transparent
+                    // by default and only light up on hover (right
+                    // panel handles the hover bg). Borders frame
+                    // the label row alone — without them the bg
+                    // band would float without anchor.
+                    const isLabel = row.kind === 'gap-label';
                     return (
                       <div
                         key={virtualItem.key}
+                        ref={virtualizer.measureElement}
+                        data-index={virtualItem.index}
                         style={{
                           position: 'absolute',
                           top: 0,
@@ -841,7 +768,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           height: `${virtualItem.size}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
-                        className="bg-accent border-y border-border"
+                        className={isLabel ? 'bg-accent border-y border-border' : ''}
                       />
                     );
                   }
@@ -849,6 +776,8 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                   return (
                     <div
                       key={virtualItem.key}
+                      ref={virtualizer.measureElement}
+                      data-index={virtualItem.index}
                       data-row-idx={row.idx}
                       style={{
                         position: 'absolute',
@@ -881,17 +810,95 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
               <div className="min-w-max h-full" style={{ position: 'relative' }}>
                 {virtualItems.map((virtualItem) => {
                   const row = renderRows[virtualItem.index];
-                  if (row.kind === 'gap') {
-                    // Right half of the bar — carries:
-                    //   - ↑ / ↓ arrow buttons (each click reveals
-                    //     COMPACT_EXPAND_STEP rows on its side)
-                    //   - the residual hidden-line count
-                    // The whole bar carries `data-gap-id` so the
-                    // scroll-anchor effect can find it before /
-                    // after the state update.
+                  if (row.kind === 'gap-expand') {
+                    // "··· more +N ···" row — top-of-gap
+                    // (direction='up') or bottom-of-gap
+                    // (direction='down'). Default state is
+                    // TRANSPARENT (only the middle label row has
+                    // bg-accent), so the more rows blend into the
+                    // surrounding diff visually until you hover —
+                    // intentionally subtle in idle state, obvious
+                    // on intent.
+                    return (
+                      <button
+                        key={virtualItem.key}
+                        ref={virtualizer.measureElement}
+                        data-index={virtualItem.index}
+                        type="button"
+                        onClick={() => handleGapExpand(row.gapId, row.direction)}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: `${virtualItem.size}px`,
+                          transform: `translateY(${virtualItem.start}px)`,
+                        }}
+                        // Visible affordance:
+                        //   default → transparent + muted text
+                        //     (foreground/50) — quiet
+                        //   hover   → bg-accent + text-brand —
+                        //     same accent colour as the label row,
+                        //     so hovering "joins" the more row
+                        //     into the same visual block as the
+                        //     label
+                        //   active  → brand-teal flash bg
+                        //
+                        // Crucial: `transition-colors` ONLY (NOT
+                        // `transition-all`). The row's `transform:
+                        // translateY(start)` changes every time the
+                        // virtualizer recomputes positions; with
+                        // `transition-all` the browser would
+                        // smoothly animate translateY over 150 ms
+                        // and rows would slide past each other
+                        // during state changes — visually chaotic
+                        // and intermittently overlapping. Same
+                        // reason we dropped `active:scale-[0.98]`:
+                        // scale is also a transform, would interfere
+                        // with the same animation channel.
+                        //
+                        // `focus:outline-none focus-visible:ring-1
+                        // ring-inset ring-brand` replaces the
+                        // browser default focus ring (which spilled
+                        // 2-3 px onto adjacent diff rows after a
+                        // click) with an inset 1 px brand ring that
+                        // stays inside the row's box.
+                        className="flex items-center justify-center text-[11px] text-foreground/50 hover:bg-accent hover:text-brand active:bg-brand/15 transition-colors duration-100 cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-brand/60"
+                        title={t(
+                          row.direction === 'up'
+                            ? 'diffViewer.gap.expandUp'
+                            : 'diffViewer.gap.expandDown',
+                          { count: row.revealCount },
+                        )}
+                        aria-label={t(
+                          row.direction === 'up'
+                            ? 'diffViewer.gap.expandUp'
+                            : 'diffViewer.gap.expandDown',
+                          { count: row.revealCount },
+                        )}
+                      >
+                        <span className="select-none">
+                          {t('diffViewer.gap.more', {
+                            count: row.revealCount,
+                          })}
+                        </span>
+                      </button>
+                    );
+                  }
+                  if (row.kind === 'gap-label') {
+                    // Middle of the gap. Filled bg-accent +
+                    // border-y so the label stands out as a
+                    // distinct UI element between the (transparent)
+                    // more rows. Carries `data-gap-id` — anchor
+                    // element the scroll-pin effect tracks. Not
+                    // clickable (whole-bar expand-all is the global
+                    // Compact / Full toggle's job). Long function
+                    // signatures truncate via min-w-0 + truncate.
                     return (
                       <div
                         key={virtualItem.key}
+                        ref={virtualizer.measureElement}
+                        data-index={virtualItem.index}
                         data-gap-id={row.gapId}
                         style={{
                           position: 'absolute',
@@ -901,68 +908,22 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           height: `${virtualItem.size}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
-                        className="flex items-center justify-center gap-3 text-[11px] text-muted-foreground bg-accent border-y border-border min-w-0"
+                        className="flex items-center justify-center gap-2 px-3 text-[11px] text-foreground/80 bg-accent border-y border-border min-w-0 select-none"
                       >
-                        <button
-                          type="button"
-                          disabled={!row.canExpandUp}
-                          onClick={() => handleGapExpand(row.gapId, 'up')}
-                          // Visible button affordance:
-                          //   default → muted icon at 80 % so it
-                          //     doesn't blend with surrounding text
-                          //   hover   → bg-secondary + brand teal
-                          //     icon (fill style — most prominent;
-                          //     a darker shade than `accent` since
-                          //     the bar bg is already `accent`)
-                          //   active  → brand-teal flash bg + brief
-                          //     scale-95 squish so the user gets
-                          //     tactile "pressed" feedback
-                          //   disabled → 30 % opacity, no hover/
-                          //     active reaction, no-drop cursor
-                          className="flex-shrink-0 flex items-center justify-center w-7 h-5 rounded text-foreground/80 hover:bg-secondary hover:text-brand active:bg-brand/15 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-foreground/80 disabled:active:scale-100 disabled:active:bg-transparent transition-all"
-                          title={t('diffViewer.gap.expandUp', {
-                            count: COMPACT_EXPAND_STEP,
-                          })}
-                          aria-label={t('diffViewer.gap.expandUp', {
-                            count: COMPACT_EXPAND_STEP,
-                          })}
-                        >
-                          <ChevronUp className="w-4 h-4" />
-                        </button>
-                        <span className="opacity-80 select-none flex-shrink-0">
+                        <span className="flex-shrink-0">
                           {t('diffViewer.gap.hidden', { count: row.hiddenCount })}
                         </span>
-                        {/* Function-context suffix — answers
-                            "what's the next change inside?" without
-                            the user having to expand. Truncates with
-                            `min-w-0` + `truncate` because long TS
-                            generics + many params can blow past the
-                            bar width. */}
                         {row.enclosingFn && (
                           <>
-                            <span className="opacity-50 select-none flex-shrink-0">·</span>
+                            <span className="opacity-50 flex-shrink-0">·</span>
                             <span
-                              className="opacity-90 truncate min-w-0 font-medium"
+                              className="truncate min-w-0 font-medium"
                               title={formatSignature(row.enclosingFn)}
                             >
                               {formatSignature(row.enclosingFn)}
                             </span>
                           </>
                         )}
-                        <button
-                          type="button"
-                          disabled={!row.canExpandDown}
-                          onClick={() => handleGapExpand(row.gapId, 'down')}
-                          className="flex-shrink-0 flex items-center justify-center w-7 h-5 rounded text-foreground/80 hover:bg-secondary hover:text-brand active:bg-brand/15 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-foreground/80 disabled:active:scale-100 disabled:active:bg-transparent transition-all"
-                          title={t('diffViewer.gap.expandDown', {
-                            count: COMPACT_EXPAND_STEP,
-                          })}
-                          aria-label={t('diffViewer.gap.expandDown', {
-                            count: COMPACT_EXPAND_STEP,
-                          })}
-                        >
-                          <ChevronDown className="w-4 h-4" />
-                        </button>
                       </div>
                     );
                   }
@@ -978,6 +939,8 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                   return (
                     <div
                       key={virtualItem.key}
+                      ref={virtualizer.measureElement}
+                      data-index={virtualItem.index}
                       data-new-line={lineNum || undefined}
                       data-row-idx={row.idx}
                       style={{
