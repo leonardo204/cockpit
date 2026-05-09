@@ -5,6 +5,7 @@ import type { Locale } from '@/lib/i18n';
 const GITHUB_URL = 'https://github.com/Surething-io/cockpit';
 const NPM_URL = 'https://www.npmjs.com/package/@surething/cockpit';
 const TRY_ONLINE_URL = '/try';
+const X_URL = 'https://x.com/yang1365609';
 
 export function Footer({ locale }: { locale: Locale }) {
   const t = getMessages(locale);
@@ -94,6 +95,16 @@ export function Footer({ locale }: { locale: Locale }) {
                 className="hover:text-brand transition-colors"
               >
                 Issues
+              </a>
+            </li>
+            <li>
+              <a
+                href={X_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="hover:text-brand transition-colors"
+              >
+                X / @yang1365609
               </a>
             </li>
           </ul>

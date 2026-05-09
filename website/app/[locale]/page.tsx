@@ -72,7 +72,12 @@ export default async function HomePage({
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
     license: 'https://opensource.org/licenses/MIT',
     isAccessibleForFree: true,
-    author: { '@type': 'Person', name: 'Robert', url: 'https://github.com/Surething-io' },
+    author: {
+      '@type': 'Person',
+      name: 'Robert',
+      url: 'https://github.com/Surething-io',
+      sameAs: ['https://x.com/yang1365609'],
+    },
     publisher: {
       '@type': 'Organization',
       name: 'Surething',
@@ -82,6 +87,7 @@ export default async function HomePage({
     sameAs: [
       'https://github.com/Surething-io/cockpit',
       'https://www.npmjs.com/package/@surething/cockpit',
+      'https://x.com/yang1365609',
     ],
     keywords: [
       'Claude Code GUI',
