@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { stat } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { join } from 'path';
+import { rgPath as RG_PATH } from '@vscode/ripgrep';
 
 const execFileAsync = promisify(execFile);
 
-const RG_PATH = join(process.cwd(), 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg');
+// `rgPath` is resolved by `@vscode/ripgrep` (1.18+) at import time, locating
+// the binary inside the platform-specific optional dep (e.g.
+// `@vscode/ripgrep-darwin-arm64/bin/rg`). Do NOT hand-build the path off
+// `process.cwd()` — main package no longer ships `bin/rg` since 1.18.
 
 const RG_OPTIONS = { maxBuffer: 10 * 1024 * 1024, timeout: 10000 };
 

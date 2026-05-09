@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { join } from 'path';
+import { rgPath as RG_PATH } from '@vscode/ripgrep';
 
 const execFileAsync = promisify(execFile);
 
-// Next.js webpack statically replaces __dirname / require.resolve / import.meta.url
-// process.cwd() is a runtime value, not replaced by webpack; Next.js process cwd is the project root
-const RG_PATH = join(process.cwd(), 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg');
+// `rgPath` is resolved by `@vscode/ripgrep` (1.18+) at import time, locating
+// the binary inside the platform-specific optional dep (e.g.
+// `@vscode/ripgrep-darwin-arm64/bin/rg`). Do NOT hand-build the path off
+// `process.cwd()` — main package no longer ships `bin/rg` since 1.18.
+// (See `serverExternalPackages` in next.config.mjs: `@vscode/ripgrep` must
+// stay externalized so its `createRequire(import.meta.url)` resolution works.)
 
 export interface SearchMatch {
   lineNumber: number;

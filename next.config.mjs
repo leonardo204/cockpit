@@ -47,10 +47,16 @@ const nextConfig = {
   //   createRequire 会是 undefined → "createRequire is not a function"。
   //   作为 external 后，Node 用真正的 ESM 解析器加载，import("module")
   //   命中 node:module 内置，行为正常。
+  // @vscode/ripgrep: 1.18+ 把二进制拆到平台子包 (e.g. `@vscode/ripgrep-darwin-arm64`)，
+  //   主包 lib/index.js 用 `createRequire(import.meta.url).resolve(...)` 在
+  //   "自身所在的 node_modules" 里查找子包。一旦被 webpack 打进 chunk，
+  //   `import.meta.url` 变成 chunk URL，base 错位 → 找不到平台子包。
+  //   externalize 后由 Node 直接 ESM 加载，import.meta.url 是真实文件路径。
   serverExternalPackages: [
     '@anthropic-ai/claude-agent-sdk',
     'node-pty',
     'web-tree-sitter',
+    '@vscode/ripgrep',
   ],
   // For webpack (used by `next build --webpack`), use the standard fallback
   // mechanism. `false` = "this module is unavailable, drop the import."

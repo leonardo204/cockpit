@@ -7,6 +7,7 @@ import { tmpdir } from 'os';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import fg from 'fast-glob';
+import { rgPath as RG_PATH } from '@vscode/ripgrep';
 import type { AgentContext } from './types';
 
 // Async child-process helpers. We must NOT use execSync/execFileSync here:
@@ -153,8 +154,6 @@ const thoughtField = z.string().describe('PREVIOUS result assessment → THIS ac
 const THOUGHT_HINT = ' The "thought" param MUST follow this format: "PREVIOUS: [last result] → THIS: [action + why] → EXPECT: [expected result]".';
 
 export function createTools(context: AgentContext) {
-  const RG_PATH = join(process.cwd(), 'node_modules', '@vscode', 'ripgrep', 'bin', 'rg');
-
   return {
     Read: tool({
       description:
