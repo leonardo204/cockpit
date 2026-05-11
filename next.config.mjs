@@ -17,9 +17,14 @@ const nextConfig = {
   transpilePackages: [
     '@cockpit/shared-ui',
     '@cockpit/shared-utils',
+    '@cockpit/shared-i18n',
     '@cockpit/feature-agent',
-    '@cockpit/feature-explorer',
+    '@cockpit/feature-comments',
     '@cockpit/feature-console',
+    '@cockpit/feature-explorer',
+    '@cockpit/feature-review',
+    '@cockpit/feature-skills',
+    '@cockpit/feature-workspace',
   ],
   turbopack: {
     // Stub Node built-ins for the BROWSER bundle only. `web-tree-sitter` ships
