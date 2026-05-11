@@ -89,7 +89,7 @@ export async function POST(request: Request) {
       });
     }
 
-    // Build the full session file path — try Claude first, then Claude2, then Deepseek (also JSONL via SDK), then Codex, then Kimi, then Ollama
+    // Build the full session file path — try Claude first, then Claude2, then DeepSeek (also JSONL via SDK), then Codex, then Kimi, then Ollama
     let sessionPath = getClaudeSessionPath(cwd, sessionId);
     let engine: 'claude' | 'claude2' | 'codex' | 'kimi' | 'ollama' | 'deepseek' = 'claude';
 

@@ -348,7 +348,7 @@ export function useChatStream(
         if (response.status === 400 && engine === 'deepseek') {
           // Surface the readable error (likely "API key is not configured")
           const errBody = await response.json().catch(() => null);
-          throw new Error(errBody?.error || 'Deepseek request failed');
+          throw new Error(errBody?.error || 'DeepSeek request failed');
         }
 
         if (!response.ok) {

@@ -323,7 +323,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
           </div>
         )}
 
-        {/* Deepseek API key + model picker */}
+        {/* DeepSeek API key + model picker */}
         {engine === 'deepseek' && onDeepseekModelChange && (
           <div className="flex items-center px-3 py-1.5 border-b border-border bg-card/50">
             <DeepseekConfigPicker currentModel={deepseekModel} onModelChange={onDeepseekModelChange} />

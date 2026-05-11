@@ -6,8 +6,11 @@ const STACK = [
   'TypeScript',
   'TailwindCSS',
   'xterm.js',
+  'node-pty',
   'Shiki',
+  'tree-sitter (WASM)',
   'Claude Agent SDK',
+  'Vercel AI SDK',
 ];
 
 export function BuiltOn({ t }: { t: Messages }) {

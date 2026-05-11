@@ -6,6 +6,7 @@ import { Hero } from '@/components/sections/Hero';
 import { ValueProp } from '@/components/sections/ValueProp';
 import { PanelSection } from '@/components/sections/PanelSection';
 import { Bubbles } from '@/components/sections/Bubbles';
+import { Engines } from '@/components/sections/Engines';
 import { CodeMap } from '@/components/sections/CodeMap';
 import { Modes } from '@/components/sections/Modes';
 import { Extras } from '@/components/sections/Extras';
@@ -13,6 +14,8 @@ import { BuiltOn } from '@/components/sections/BuiltOn';
 import { FinalCTA } from '@/components/sections/FinalCTA';
 
 const SITE_URL = 'https://cocking.cc';
+// Injected at build time via `COCKPIT_VERSION=$(node -p ...) next build` (see website/package.json).
+const COCKPIT_VERSION = process.env.COCKPIT_VERSION || '0.0.0';
 
 export async function generateMetadata({
   params,
@@ -68,7 +71,7 @@ export default async function HomePage({
     description: t.hero.description,
     url: `${SITE_URL}/${locale}/`,
     inLanguage: locale === 'zh' ? 'zh-CN' : 'en',
-    softwareVersion: '1.0.195',
+    softwareVersion: COCKPIT_VERSION,
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
     license: 'https://opensource.org/licenses/MIT',
     isAccessibleForFree: true,
@@ -93,6 +96,13 @@ export default async function HomePage({
       'Claude Code GUI',
       'Claude Code desktop',
       'Claude Agent SDK',
+      'OpenAI Codex GUI',
+      'DeepSeek GUI',
+      'Kimi GUI',
+      'Ollama GUI',
+      'multi-engine AI coding',
+      'BYOK AI coding agent',
+      'local-first AI coding',
       'AI coding agent',
       'parallel AI sessions',
       'multi-project AI',
@@ -100,7 +110,8 @@ export default async function HomePage({
       'Aider alternative',
     ].join(', '),
     featureList: [
-      'Multi-project parallel Claude Code sessions',
+      'Multi-engine chat: Claude (default) / OpenAI Codex / Kimi / DeepSeek / Ollama — each tab a separate session',
+      'Multi-project parallel agent sessions',
       'Built-in xterm.js terminal',
       'Chrome browser automation',
       'PostgreSQL / MySQL / Redis bubbles',
@@ -158,6 +169,7 @@ export default async function HomePage({
         align="left"
       />
       <Bubbles t={t} />
+      <Engines t={t} />
       <CodeMap t={t} />
       <Modes t={t} />
       <PanelSection

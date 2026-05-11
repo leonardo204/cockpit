@@ -57,12 +57,12 @@ export async function POST(request: Request) {
       });
     }
 
-    // Load Deepseek API key + model from ~/.cockpit/settings.json
+    // Load DeepSeek API key + model from ~/.cockpit/settings.json
     const settings = await readJsonFile<CockpitSettings>(SETTINGS_FILE, {});
     const apiKey = settings.engines?.deepseek?.apiKey?.trim();
     if (!apiKey) {
       return new Response(JSON.stringify({
-        error: 'Deepseek API key is not configured. Open the Deepseek picker in the chat header to set one.',
+        error: 'DeepSeek API key is not configured. Open the DeepSeek picker in the chat header to set one.',
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
@@ -259,7 +259,7 @@ export async function POST(request: Request) {
             const retryAbortController = new AbortController();
             queryAbortController.signal.addEventListener('abort', () => retryAbortController.abort(), { once: true });
 
-            console.log(`[Deepseek] Stream ended without result message, resuming (attempt ${attempt + 1}/${MAX_COMPACTION_RETRIES})`);
+            console.log(`[DeepSeek] Stream ended without result message, resuming (attempt ${attempt + 1}/${MAX_COMPACTION_RETRIES})`);
             currentResponse = query({
               prompt: 'continue',
               options: {
@@ -284,11 +284,11 @@ export async function POST(request: Request) {
           }
 
           if (queryAbortController.signal.aborted) {
-            console.log('Deepseek query aborted by user');
+            console.log('DeepSeek query aborted by user');
             safeClose();
             return;
           }
-          console.error('Deepseek stream error:', error);
+          console.error('DeepSeek stream error:', error);
           safeEnqueue(`data: ${JSON.stringify({ type: 'error', error: String(error) })}\n\n`);
           safeClose();
         }
@@ -312,7 +312,7 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    console.error('Deepseek API error:', error);
+    console.error('DeepSeek API error:', error);
     return new Response(JSON.stringify({ error: 'Internal server error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' },

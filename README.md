@@ -7,7 +7,7 @@
 <h1 align="center">Cockpit — A Claude Code GUI for parallel AI coding</h1>
 
 <p align="center">
-  <strong>One seat. One AI. Everything under control.</strong><br/>
+  <strong>One seat. Any AI. Everything under control.</strong><br/>
   <sub><code>/ˈkɒkpɪt/</code> — like an aircraft cockpit</sub>
 </p>
 
@@ -26,7 +26,7 @@
 
 ---
 
-> **Cockpit is an open-source Claude Code GUI.** Run multiple Claude Code Agent SDK sessions in parallel across projects, with a built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local, zero config.
+> **Cockpit is the open-source Claude Code GUI** — and a single canvas for whatever agent you bring next. Run multi-project Claude sessions out of the box; pop open a tab for **OpenAI Codex, DeepSeek, Kimi, or local Ollama** whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.
 
 https://github.com/user-attachments/assets/18f1a5dc-64f3-4ff6-b9fc-9cd08181fbb8
 
@@ -42,6 +42,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 
 | Pain with raw Claude Code | What Cockpit adds |
 |---|---|
+| Stuck on one model | **5 engines side by side** in tabs: Claude (default), OpenAI Codex, DeepSeek, Kimi, local Ollama — each its own session |
 | One session at a time, terminal chaos at 3+ projects | **Multi-project tabs**, parallel agent sessions, red-dot inbox, desktop notifications |
 | Image attachments are awkward | Drop / paste images straight into chat |
 | "What was I debugging yesterday?" | Cmd+K cross-project session browser, pinning, forking |
@@ -50,13 +51,23 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 | Reviewing AI output is friction | **LAN-shared review pages**, line-level comments, send any comment back as AI context |
 | Same "do X but don't change code" prompt every day | **Slash modes** `/qa /fx /review /commit` + custom `~/.claude/commands/*.md` |
 | No automation hooks | One-time / interval / cron-based **scheduled tasks** |
-| "Cloud relay" trust concerns | **Fully local**. No telemetry. No API key beyond what `claude` already has. |
+| "Cloud relay" trust concerns | **Fully local**. No telemetry. Keys (Codex / DeepSeek / Kimi) stay in `~/.cockpit/settings.json` on your laptop. |
 
 ## Features
 
+### Engines — Claude by default, bring any agent you want
+
+- **Claude** *(default)* — full official Agent SDK; zero setup if `claude` CLI is already configured
+- **OpenAI Codex** — reuses your `~/.codex` config; same chat, same shell + bubbles
+- **DeepSeek** — Anthropic-compatible endpoint via the Claude SDK; paste a key, pick `v4-pro` or `v4-flash`
+- **Kimi** *(Moonshot)* — tool calls render in chat just like Claude's
+- **Ollama** — auto-starts the daemon; pick any pulled model from the chat header; fully offline
+- Each engine lives in its own **tab with its own session history**; switch from the new-tab dropdown
+- Keys stored locally in `~/.cockpit/settings.json`; **no cloud relay**
+
 ### Agent — AI chat that scales
 
-- Powered by the **official Claude Agent SDK** — zero extra API key setup
+- Default engine powered by the **official Claude Agent SDK** — zero extra setup
 - **Multi-project concurrent sessions** with desktop notifications and red-dot badges
 - Session **pinning, forking**, cross-project session browser (Cmd+K)
 - `!command` prefix to run shell from chat — output piped back as context
@@ -113,8 +124,9 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 - **Two-person team:** Senior reviews via LAN-shared review page, no GitHub PR round-trip needed for in-progress work.
 - **Reviewing AI-generated PRs:** Switch the changed files into Code Map — changed functions are highlighted with their callers / callees still drawn around them, so blast-radius is one click away.
 - **Full-stack chore mode:** `/fx` in one tab on a backend bug, `/review` in another on the frontend diff, `/commit` to wrap up — three slash modes, three different agent postures.
+- **Cheap second opinion:** Same prompt in two tabs — Claude in one, **DeepSeek v4-pro** in the other — compare answers before you trust either.
 - **AI-driven QA:** Browser Bubble + scheduled task = "every night at 2 AM, run this UI smoke flow and post a summary".
-- **Privacy-sensitive code:** runs on your laptop, talks only to the Claude API your `claude` CLI is already configured with. No telemetry, no relay.
+- **Privacy-sensitive code:** runs on your laptop. Pair with an **Ollama** tab for fully air-gapped sessions. No telemetry, no relay.
 
 ## Try online
 
@@ -125,9 +137,18 @@ No install, no AI chat (read-only sandbox, 5 min):
 ## Prerequisites
 
 - **Node.js ≥ 20** — [nodejs.org](https://nodejs.org/)
-- **Claude Code** — [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code)
+- **Claude Code** — [docs.anthropic.com/en/docs/claude-code](https://docs.anthropic.com/en/docs/claude-code) (default engine)
 - **Git** — for git features (blame, diff, worktree, etc.)
 - **Chrome** *(optional)* — for Browser Bubble; install the bundled extension from `~/.cockpit/chrome-extension`
+
+### Optional, per non-Claude engine
+
+- **OpenAI Codex** — log in once with `codex login` to populate `~/.codex`
+- **DeepSeek** — get an API key at [api-docs.deepseek.com](https://api-docs.deepseek.com/); paste it into the engine picker
+- **Kimi (Moonshot)** — get an API key at [platform.moonshot.cn](https://platform.moonshot.cn/); paste it into the engine picker
+- **Ollama** — install [ollama.com](https://ollama.com/) and `ollama pull <model>`; Cockpit auto-starts the daemon
+
+> All API keys are stored locally in `~/.cockpit/settings.json`. No cloud relay.
 
 ## Install
 
@@ -163,13 +184,13 @@ cockpit terminal <id> output       # get terminal output
 
 | | Raw Claude Code CLI | IDE plugin (Cursor, Continue) | Aider TUI | **Cockpit** |
 |---|---|---|---|---|
+| Multi-engine in app | Claude only | varies | yes, config-driven | **5 in-app: Claude, Codex, DeepSeek, Kimi, Ollama** |
 | Multi-project parallel | tmux required | multi-window | one at a time | **first-class** |
 | Cross-project search | grep | per-window | local | **Cmd+K** |
 | Browser / DB control | ❌ | usually ❌ | ❌ | **✅ Bubbles** |
 | Code review surface | git tools | PR provider | git | **LAN-shared** |
 | Slash modes | manual | per-plugin | yes | **`/qa /fx /review /commit` + custom** |
 | Local-only / no cloud relay | ✅ | varies | ✅ | **✅** |
-| Day-1 SDK features | ✅ | wait | varies | **✅ official SDK** |
 | Open source | ✅ | mostly ❌ | ✅ | **✅ MIT** |
 
 Read the long version: [Claude Code GUI: CLI vs Cockpit vs IDE plugins](https://cocking.cc/en/blog/claude-code-gui-comparison/)
@@ -193,7 +214,7 @@ npm run lint        # ESLint
 
 ## Tech stack
 
-Next.js 16 · React 19 · TypeScript · TailwindCSS · xterm.js · Shiki · i18next · Claude Agent SDK
+Next.js 16 · React 19 · TypeScript · TailwindCSS · xterm.js · node-pty · Shiki · tree-sitter (WASM) · i18next · Claude Agent SDK · Vercel AI SDK
 
 ## Contributing
 

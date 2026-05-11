@@ -275,7 +275,7 @@ export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekCo
         ref={btnRef}
         onClick={toggle}
         className="flex items-center gap-1 px-2 py-0.5 text-[11px] rounded bg-sky-500/15 hover:bg-sky-500/25 transition-colors"
-        title="Configure Deepseek"
+        title="Configure DeepSeek"
       >
         <span className="w-1.5 h-1.5 rounded-full bg-sky-500 flex-shrink-0" />
         <span className={`truncate max-w-[160px] ${labelTone}`}>{displayLabel}</span>

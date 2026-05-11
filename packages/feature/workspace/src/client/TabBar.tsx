@@ -133,7 +133,7 @@ function NewTabButton({ onNewTab, onNewClaude2Tab, onNewCodexTab, onNewKimiTab, 
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-foreground hover:bg-brand/10 transition-colors whitespace-nowrap"
           >
             <span className="w-2 h-2 rounded-full bg-sky-500 flex-shrink-0" />
-            Deepseek
+            DeepSeek
           </button>
           <button
             onClick={() => pick('kimi')}

@@ -9,26 +9,27 @@ export const messages = {
       github: 'GitHub',
     },
     hero: {
-      headline: 'A Claude Code GUI built for parallel AI projects',
-      subheadline: 'One seat. One AI. Everything under control.',
+      headline: 'A Claude Code GUI · Bring any agent you want',
+      subheadline: 'One seat. Any AI. Everything under control.',
       pronounce: '/ˈkɒkpɪt/ — like an aircraft cockpit',
       description:
-        'Cockpit is an open-source Claude Code GUI. Run multiple Claude Code Agent SDK sessions in parallel across projects, with a built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local, zero config.',
+        'Cockpit is the open-source Claude Code GUI — and a single canvas for whatever agent you bring next. Multi-project Claude sessions out of the box; pop open a tab for Codex, DeepSeek, Kimi, or local Ollama whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.',
       installLabel: 'Install',
       tryOnline: 'Try Online',
       githubStar: 'Star on GitHub',
       videoNotice: 'Watch the 60-second tour',
+      badge: 'Claude · Codex · DeepSeek · Kimi · Ollama',
     },
     valueProp: {
       headline: 'Why Cockpit beats raw Claude Code',
       points: [
         {
           title: 'Multi-project parallel sessions',
-          desc: 'Run 5+ Claude Code sessions across projects at once. Get notified when each finishes — no terminal juggling.',
+          desc: 'Run 5+ agent sessions across projects at once. Get notified when each finishes — no terminal juggling.',
         },
         {
-          title: 'Zero config, fully local',
-          desc: 'If `claude` works in your shell, Cockpit works. No extra API key, no cloud relay, no telemetry.',
+          title: 'Local-first, BYOK for the rest',
+          desc: '`claude` CLI works out of the box. For Codex, DeepSeek, Kimi or Ollama, paste a key (or none for Ollama). No cloud relay, no telemetry — keys stay in `~/.cockpit/settings.json`.',
         },
         {
           title: 'Beyond chat: terminal, browser, DBs',
@@ -40,9 +41,9 @@ export const messages = {
       agent: {
         tag: 'Panel 1',
         name: 'Agent',
-        title: 'Claude Code chat that scales with you',
+        title: 'AI chat that scales with you',
         bullets: [
-          'Powered by the official Claude Agent SDK — zero API key setup',
+          'Claude out of the box via the official Agent SDK; Codex / DeepSeek / Kimi / Ollama via per-tab BYOK',
           'Multi-project concurrent sessions with desktop notifications',
           'Session pinning, forking, cross-project session browser',
           '!command prefix runs shell from chat, output piped back as context',
@@ -96,6 +97,40 @@ export const messages = {
         { name: 'MySQL', desc: 'Browse databases & tables, run queries.' },
         { name: 'Redis', desc: 'Browse keys, inspect values, execute commands.' },
       ],
+    },
+    engines: {
+      tag: '⚙ Engines',
+      headline: 'Claude by default — bring any agent you want',
+      desc: 'Each engine runs in its own tab, with its own session history. Pick from the new-tab dropdown.',
+      items: [
+        {
+          name: 'Claude',
+          badge: 'default',
+          tagline: 'The default',
+          desc: 'Full Claude Agent SDK — tools, plans, slash modes. Zero setup if your `claude` CLI is already configured.',
+        },
+        {
+          name: 'OpenAI Codex',
+          tagline: 'Bring your account',
+          desc: 'Reuses your `~/.codex` config. Same chat, same shell, same bubbles — just a different tab.',
+        },
+        {
+          name: 'DeepSeek',
+          tagline: 'Long sessions on a budget',
+          desc: 'Anthropic-compatible endpoint via the Claude SDK. Paste a key, pick `v4-pro` or `v4-flash`.',
+        },
+        {
+          name: 'Kimi',
+          tagline: 'Tool calls, visible',
+          desc: "Function calls render in chat just like Claude's — see what was called and what came back.",
+        },
+        {
+          name: 'Ollama',
+          tagline: 'Fully offline',
+          desc: 'Auto-starts the daemon, pick any pulled model from the chat header. No key, no internet required.',
+        },
+      ],
+      footnote: 'Keys (Codex / DeepSeek / Kimi) are stored locally in `~/.cockpit/settings.json`. No cloud relay.',
     },
     codeMap: {
       tag: 'Explorer · Code Map',
@@ -151,7 +186,7 @@ export const messages = {
     },
     builtOn: {
       headline: 'Built on the official Claude Agent SDK',
-      desc: 'Cockpit uses Anthropic\u2019s official Claude Agent SDK under the hood. If your `claude` CLI is configured, Cockpit works — no extra API keys, no cloud relay.',
+      desc: 'Cockpit\u2019s core uses Anthropic\u2019s official Claude Agent SDK. If your `claude` CLI is configured, Cockpit works — no extra setup. Other engines (Codex, DeepSeek, Kimi, Ollama) ride on the Vercel AI SDK and the same agent loop, with keys stored locally in `~/.cockpit/settings.json`.',
     },
     finalCta: {
       headline: 'Ready to fly?',
@@ -198,11 +233,12 @@ export const messages = {
       github: 'GitHub',
     },
     hero: {
-      headline: '为并行 AI 编程而生的 Claude Code GUI',
-      subheadline: 'One seat. One AI. Everything under control.',
+      headline: 'Claude Code GUI —— 也接得住你想要的任何 Agent',
+      subheadline: 'One seat. Any AI. Everything under control.',
       pronounce: '/ˈkɒkpɪt/ —— 像飞机驾驶舱',
       description:
-        'Cockpit 是开源的 Claude Code GUI：基于官方 Claude Agent SDK，多项目并发会话、内置终端、浏览器自动化、PostgreSQL / MySQL / Redis 数据库气泡、代码评审与斜杠模式 —— 全部本地化，零配置。',
+        'Cockpit 是开源的 Claude Code GUI —— 也是你想接入的任何 Agent 的统一画布。多项目 Claude 会话开箱即用；想用 Codex、DeepSeek、Kimi 或本地 Ollama？直接新开一个 tab。内置终端、Chrome 自动化、PostgreSQL / MySQL / Redis 气泡、代码评审与斜杠模式 —— 全部本地。',
+      badge: 'Claude · Codex · DeepSeek · Kimi · Ollama',
       installLabel: '安装',
       tryOnline: '在线体验',
       githubStar: 'GitHub 点亮 Star',
@@ -213,11 +249,11 @@ export const messages = {
       points: [
         {
           title: '多项目并发会话',
-          desc: '同时跑 5+ 个 Claude Code 会话，跨项目互不打扰。完成自动通知，不再切终端。',
+          desc: '同时跑 5+ 个 Agent 会话，跨项目互不打扰。完成自动通知，不再切终端。',
         },
         {
-          title: '零配置、纯本地',
-          desc: '终端能跑 `claude` 就能跑 Cockpit。无需额外 API Key，无云端中转，无遥测。',
+          title: '本地优先，其他引擎 BYOK',
+          desc: '`claude` CLI 已配好即开箱即用。Codex / DeepSeek / Kimi / Ollama 各自粘 Key（Ollama 无需）。无云端中转、无遥测，Key 只存在本机 `~/.cockpit/settings.json`。',
         },
         {
           title: '不止聊天：终端、浏览器、数据库',
@@ -229,9 +265,9 @@ export const messages = {
       agent: {
         tag: '面板 1',
         name: 'Agent',
-        title: '可扩展的 Claude Code 对话',
+        title: '可扩展的 AI 对话',
         bullets: [
-          '基于官方 Claude Agent SDK，零 API Key 配置',
+          '默认走官方 Claude Agent SDK；Codex / DeepSeek / Kimi / Ollama 各 tab 独立 BYOK',
           '多项目并发会话，桌面通知提醒',
           '会话固定、分叉、跨项目浏览',
           '!command 前缀直接执行 shell，输出回流为对话上下文',
@@ -285,6 +321,40 @@ export const messages = {
         { name: 'MySQL', desc: '浏览数据库与表、执行查询。' },
         { name: 'Redis', desc: '浏览键值、查看数据、执行命令。' },
       ],
+    },
+    engines: {
+      tag: '⚙ 引擎',
+      headline: '默认 Claude —— 也接得住你想要的任何 Agent',
+      desc: '每个引擎跑在独立 tab，会话历史互不串。新建 tab 时下拉切换。',
+      items: [
+        {
+          name: 'Claude',
+          badge: '默认',
+          tagline: '默认引擎',
+          desc: '完整的 Claude Agent SDK —— 工具、计划、斜杠模式。`claude` CLI 已配好则零额外设置。',
+        },
+        {
+          name: 'OpenAI Codex',
+          tagline: '复用你的账号',
+          desc: '直接读 `~/.codex` 配置。聊天、Shell、气泡都不变 —— 只是换了个 tab。',
+        },
+        {
+          name: 'DeepSeek',
+          tagline: '便宜的长会话',
+          desc: '走 Anthropic 兼容端点，复用 Claude SDK。粘 Key，选 `v4-pro` 或 `v4-flash`。',
+        },
+        {
+          name: 'Kimi',
+          tagline: '工具调用可见',
+          desc: '函数调用和 Claude 一样在聊天里渲染 —— 看清调用了什么、返回了什么。',
+        },
+        {
+          name: 'Ollama',
+          tagline: '完全离线',
+          desc: '自动拉起守护进程，从聊天头部下拉任意已 pull 的模型。无需 Key、无需联网。',
+        },
+      ],
+      footnote: 'Codex / DeepSeek / Kimi 的 API Key 仅保存在本机 `~/.cockpit/settings.json`，无云端中转。',
     },
     codeMap: {
       tag: 'Explorer · 代码地图',
@@ -340,7 +410,7 @@ export const messages = {
     },
     builtOn: {
       headline: '基于官方 Claude Agent SDK',
-      desc: 'Cockpit 底层使用 Anthropic 官方 Claude Agent SDK。本机 `claude` CLI 已配置即可使用，无需额外 API Key，无云端中转。',
+      desc: 'Cockpit 的核心使用 Anthropic 官方 Claude Agent SDK。本机 `claude` CLI 已配置即可使用，无需额外配置。Codex / DeepSeek / Kimi / Ollama 复用同一套 Agent loop（通过 Vercel AI SDK 适配），API Key 仅保存在本机 `~/.cockpit/settings.json`。',
     },
     finalCta: {
       headline: '起飞吧',

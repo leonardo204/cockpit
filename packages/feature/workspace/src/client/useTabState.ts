@@ -265,12 +265,12 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     );
   }, []);
 
-  // Create new Deepseek tab (defaults to v4-flash; picker in chat header lets user switch later)
+  // Create new DeepSeek tab (defaults to v4-flash; picker in chat header lets user switch later)
   const handleNewDeepseekTab = useCallback(() => {
-    addTab(initialCwd, undefined, 'New Deepseek Chat', 'deepseek', undefined, 'deepseek-v4-flash');
+    addTab(initialCwd, undefined, 'New DeepSeek Chat', 'deepseek', undefined, 'deepseek-v4-flash');
   }, [initialCwd, addTab]);
 
-  // Update Deepseek model for a tab
+  // Update DeepSeek model for a tab
   const updateTabDeepseekModel = useCallback((tabId: string, model: DeepseekModel) => {
     setTabs((prev) =>
       prev.map((tab) =>
