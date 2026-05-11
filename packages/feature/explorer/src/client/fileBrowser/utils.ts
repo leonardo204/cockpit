@@ -75,6 +75,48 @@ export function buildTreeFromPaths(filePaths: string[]): FileNode[] {
   return root;
 }
 
+/**
+ * Recursively merge a freshly-fetched tree (from `/api/files/init`) with the
+ * client-held tree, preserving children that the server didn't repopulate.
+ *
+ * Why: `/api/files/init` only returns `children` for directories listed in the
+ * persisted `expandedPaths` file. Anything the client expanded in-memory
+ * (notably search-mode expansion via `searchTreeExpandedPaths`, which is
+ * intentionally never persisted) comes back with `children: undefined`. A
+ * naive `setFiles(data.files)` would drop those subtrees, the row count would
+ * collapse for one frame, and the safety-net `useEffect` would then refetch
+ * each missing dir — N concurrent requests + N spinners + N re-renders, all
+ * happening every ~3s while files keep changing. The merge below keeps the
+ * existing children attached whenever the server omitted them, so the visible
+ * tree never collapses.
+ *
+ * Semantics:
+ * - File nodes: always take the new node (server is source of truth).
+ * - Dir present in both, server returned `children: undefined`: keep client's
+ *   children (server didn't refresh this subtree).
+ * - Dir present in both, both have children: recurse into the merge so any
+ *   deeper search-expanded subdir under a persisted-expanded one is preserved
+ *   too.
+ * - Dir present in both, only server has children: take server's.
+ * - Node only in new tree (newly created on disk): include as-is.
+ * - Node only in old tree (deleted on disk): drop (server omitted it).
+ */
+export function mergeFileTree(newNodes: FileNode[], oldNodes: FileNode[]): FileNode[] {
+  if (oldNodes.length === 0) return newNodes;
+  const oldMap = new Map(oldNodes.map(n => [n.path, n]));
+  return newNodes.map(newNode => {
+    const old = oldMap.get(newNode.path);
+    if (!old || !newNode.isDirectory) return newNode;
+    if (newNode.children === undefined && old.children !== undefined) {
+      return { ...newNode, children: old.children };
+    }
+    if (newNode.children !== undefined && old.children !== undefined) {
+      return { ...newNode, children: mergeFileTree(newNode.children, old.children) };
+    }
+    return newNode;
+  });
+}
+
 export function collectAllDirPaths(nodes: FileNode[]): string[] {
   const paths: string[] = [];
   const traverse = (nodeList: FileNode[]) => {

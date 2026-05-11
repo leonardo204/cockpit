@@ -11,7 +11,7 @@ import { GitFileTree, buildGitFileTree, collectFilesUnderNode } from './GitFileT
 import { MenuContainerProvider } from '@cockpit/shared-ui';
 import { CodeViewer } from '@cockpit/feature-explorer';
 import { isMarkdownFile, formatAsHumanReadable } from './toolCallUtils';
-import { buildTreeFromPaths, collectAllDirPaths } from './fileBrowser/utils';
+import { buildTreeFromPaths, collectAllDirPaths, mergeFileTree } from './fileBrowser/utils';
 import { InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
 import { type FileEditorHandle } from './FileEditorModal';
 import { QuickFileOpen } from './QuickFileOpen';
@@ -585,7 +585,17 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
         promises.push(
           fetch(`/api/files/init?cwd=${encodeURIComponent(cwd)}`)
             .then(res => res.json())
-            .then(data => { if (!data.error) fileTree.setFiles(data.files || []); })
+            .then(data => {
+              if (data.error) return;
+              // Merge instead of replace: `/api/files/init` only fills children
+              // for dirs in the persisted expandedPaths file, so a wholesale
+              // replace would drop children for any dir the client expanded
+              // in-memory (in particular search-mode `searchTreeExpandedPaths`,
+              // which is never persisted). That visible "collapse" is what
+              // causes the directory-tree flicker while files keep changing.
+              // See `mergeFileTree` jsdoc for the per-node semantics.
+              fileTree.setFiles(prev => mergeFileTree(data.files || [], prev));
+            })
         );
         promises.push(
           fetch(`/api/files/index?cwd=${encodeURIComponent(cwd)}`)
