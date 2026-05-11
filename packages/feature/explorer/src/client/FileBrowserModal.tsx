@@ -1145,9 +1145,9 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                       <GitFileTree
                         files={gitStatus.stagedTree}
                         selectedPath={gitStatus.statusSelectedFile?.type === 'staged' ? gitStatus.statusSelectedFile.file.path : null}
-                        expandedPaths={gitStatus.statusExpandedPaths}
+                        expandedPaths={gitStatus.stagedExpandedPaths}
                         onSelect={(node) => node.file && gitStatus.handleStatusFileSelect(node.file as GitFileStatus, 'staged')}
-                        onToggle={gitStatus.handleStatusToggle}
+                        onToggle={gitStatus.handleStagedToggle}
                         cwd={cwd}
                         emptyMessage={t('fileBrowser.noStagedFiles')}
                         className="py-1"
@@ -1214,9 +1214,9 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                       <GitFileTree
                         files={gitStatus.unstagedTree}
                         selectedPath={gitStatus.statusSelectedFile?.type === 'unstaged' ? gitStatus.statusSelectedFile.file.path : null}
-                        expandedPaths={gitStatus.statusExpandedPaths}
+                        expandedPaths={gitStatus.unstagedExpandedPaths}
                         onSelect={(node) => node.file && gitStatus.handleStatusFileSelect(node.file as GitFileStatus, 'unstaged')}
-                        onToggle={gitStatus.handleStatusToggle}
+                        onToggle={gitStatus.handleUnstagedToggle}
                         cwd={cwd}
                         emptyMessage={t('fileBrowser.noUnstagedChanges')}
                         className="py-1"
