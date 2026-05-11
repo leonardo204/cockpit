@@ -54,8 +54,15 @@ This step exists because three out of three `1.0.198 → 199 → 200 → 201` re
 #### 2a. Install smoke — does `npm install` succeed at all?
 
 ```bash
-# Build the artifact CI will publish
-npm run build && npm run build:server
+# Build the artifact CI will publish. TURBOPACK= overrides any shell-leaked
+# TURBOPACK env (e.g. from a running dev cockpit), which would conflict with
+# `next build --webpack` in package.json.
+TURBOPACK= npm run build && npm run build:server
+
+# `npm pack` does NOT trigger `prepublishOnly`, so the webpack cache that
+# `prepublishOnly` cleans is still present and would bloat the tarball from
+# 7 MB to ~90 MB. Clean it manually.
+rm -rf .next-prod/cache
 
 # Pack into a tarball locally
 npm pack    # produces surething-cockpit-1.0.x.tgz
@@ -68,10 +75,10 @@ SMOKE_DIR=$(mktemp -d)
   exit 1
 }
 "$SMOKE_DIR/bin/cock" --version    # must report the new version
-rm "$TARBALL"
+# Keep $SMOKE_DIR around for step 2b; clean up at the end.
 ```
 
-If `npm install` errors with `ERR_MODULE_NOT_FOUND` / postinstall failures / missing files, you have a `package.json` `files` array bug or a postinstall import path bug. **Reset and fix**:
+If `npm install` errors with `ERR_MODULE_NOT_FOUND` / postinstall failures / missing files / 404 on workspace `@cockpit/*` packages, the published `package.json` `dependencies` list is broken (e.g. listing private workspace packages npm can't fetch). **Reset and fix**:
 
 ```bash
 git tag -d v1.0.x
@@ -83,26 +90,46 @@ git reset --hard HEAD~1
 
 CI compiles fine but runtime errors only show when the app boots in prod mode. The webpack browser/server split has bitten us multiple times (see v1.0.200 / 201 commit messages — `createRequire is not a function` was a runtime, not build, error).
 
-```bash
-# Boot in prod mode locally
-COCKPIT_ENV=prod cock &
-COCK_PID=$!
-sleep 6
+Use **port 3458** for smoke — it avoids conflicts with both:
+- the local dev cockpit (port 3456) you usually have running
+- any prod cockpit (port 3457) you may also have installed via `npm link`
 
-# Probe a few endpoints — any 5xx is a hard fail
-curl -fsS "http://localhost:3457/api/version"                                          >/dev/null || FAIL=1
-curl -fsS "http://localhost:3457/api/projectGraph/file-functions?cwd=$PWD&path=src/lib/codeMap/types.ts" >/dev/null || FAIL=1
+The cock binary picks up `PORT=3458` from env and binds there. `env -i` strips inherited env (notably any `COCKPIT_PORT` leaked from a running dev cockpit) so the smoke can't accidentally probe the wrong instance.
+
+```bash
+# Boot the JUST-PACKED tarball, not the globally-linked cock.
+# Re-install into a temp dir if you don't already have one from step 2a.
+SMOKE_PORT=3458
+env -i PATH="$PATH" HOME="$HOME" PORT=$SMOKE_PORT COCKPIT_ENV=prod COCKPIT_NO_OPEN=1 \
+  "$SMOKE_DIR/bin/cock" > /tmp/cock-smoke.log 2>&1 &
+COCK_PID=$!
+sleep 12      # cold-start of next-server + WS + share server takes ~8-12s
+
+FAIL=0
+
+# Probe a few endpoints — any non-2xx is a hard fail
+curl -fsS "http://localhost:$SMOKE_PORT/api/version"                                                          >/dev/null || FAIL=1
+curl -fsS "http://localhost:$SMOKE_PORT/api/commands?cwd=$PWD"                                                >/dev/null || FAIL=1
+curl -fsS "http://localhost:$SMOKE_PORT/api/projectGraph/file-functions?cwd=$PWD&path=packages/feature/explorer/src/server/codeMap/types.ts" >/dev/null || FAIL=1
 
 kill $COCK_PID 2>/dev/null
 wait $COCK_PID 2>/dev/null
 
 if [ "$FAIL" = "1" ]; then
   echo "❌ Prod runtime smoke failed — DO NOT push"
+  echo "--- log ---"; tail -25 /tmp/cock-smoke.log
   exit 1
 fi
 ```
 
-If your release introduces a new feature, **manually exercise it** in the running prod cockpit too. The chip view (`/api/projectGraph/file-functions`) is only one path; new features mean new probe targets.
+The three probes exercise three different code paths:
+- `/api/version` — minimal handler, confirms boot + Next.js routing works
+- `/api/commands` — exercises `@cockpit/feature-agent` (slash-command discovery)
+- `/api/projectGraph/file-functions` — exercises `@cockpit/feature-explorer` (code-map, tree-sitter, the heaviest workspace package)
+
+If any returns a non-2xx, the published tarball is broken — typically because a workspace package's source isn't being inlined into `dist/` or `.next-prod/` and the runtime hits an unresolved `@cockpit/*` import.
+
+If your release introduces a new feature, **manually exercise it** in the running prod cockpit too. The probes above only cover the existing known paths.
 
 🛑 **Confirm with human before pushing.**
 
