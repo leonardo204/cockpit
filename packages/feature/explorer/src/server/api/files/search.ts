@@ -147,8 +147,17 @@ async function searchWithRg(
     if (err && typeof err === 'object' && 'code' in err) {
       // exit 1 = no matches found
       if (err.code === 1) return { stdout: '' };
-      // exit 2 = errors (e.g. broken symlink) but may still have partial results
-      if (err.code === 2 && 'stdout' in err && typeof err.stdout === 'string' && err.stdout) {
+      // exit 2 = walk-level errors (e.g. broken symlink with --follow,
+      // unreadable dir, … ) but the scan was NOT aborted — rg returns 2
+      // whenever ANY error occurred during the walk, regardless of whether
+      // it also returned all the matches it found elsewhere. Return whatever
+      // stdout we have, **including empty string**: an empty stdout just
+      // means "no matches in scannable files" alongside a soft FS error,
+      // not "search failed". Bubbling up as a 500 just because the cwd
+      // happens to contain a dangling symlink (e.g. a stale
+      // `.claude/skills/<name>` link from a moved Claude Code skill) is
+      // a worse UX than a quiet "no results".
+      if (err.code === 2 && 'stdout' in err && typeof err.stdout === 'string') {
         return { stdout: err.stdout };
       }
     }
