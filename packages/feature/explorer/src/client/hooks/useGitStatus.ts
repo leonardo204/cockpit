@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, type Dispatch, type SetStateAction } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { buildGitFileTree, collectGitTreeDirPaths, type GitFileNode } from '../GitFileTree';
 import { toast, confirm } from '@cockpit/shared-ui';
 import type { GitFileStatus, GitStatusResponse, GitDiffResponse } from '../fileBrowser/types';
@@ -69,20 +69,25 @@ export function useGitStatus({ cwd, addToRecentFiles }: UseGitStatusOptions) {
   //   path ∈ collapsedPaths  ⇔  folder is currently collapsed
   // Toggling moves a path in/out of the blacklist. Staged and unstaged each
   // have their own setter so the two trees fold independently.
-  const makeToggle = (setter: Dispatch<SetStateAction<Set<string>>>) =>
-    (path: string) => {
-      setter(prev => {
-        const next = new Set(prev);
-        if (next.has(path)) {
-          next.delete(path); // user re-expands
-        } else {
-          next.add(path); // user collapses
-        }
-        return next;
-      });
-    };
-  const handleStagedToggle = useCallback(makeToggle(setStagedCollapsedPaths), []);
-  const handleUnstagedToggle = useCallback(makeToggle(setUnstagedCollapsedPaths), []);
+  // Bodies are inlined (rather than factored through a `makeToggle` helper)
+  // because the react-hooks/use-memo lint rule requires the first argument
+  // to useCallback to be an inline function expression.
+  const handleStagedToggle = useCallback((path: string) => {
+    setStagedCollapsedPaths(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path); // user re-expands
+      else next.add(path);                   // user collapses
+      return next;
+    });
+  }, []);
+  const handleUnstagedToggle = useCallback((path: string) => {
+    setUnstagedCollapsedPaths(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
 
   const handleStatusFileSelect = useCallback((file: GitFileStatus, type: 'staged' | 'unstaged') => {
     setStatusSelectedFile({ file, type });
