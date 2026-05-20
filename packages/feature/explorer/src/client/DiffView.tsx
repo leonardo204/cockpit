@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -514,26 +514,35 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
   // referred to the same logical region — which it doesn't (gap ids
   // are positional, recomputed every build).
   //
-  // Also reset the virtualizer's per-index measurement cache.
-  // `@tanstack/react-virtual` keys measurementsCache by index, and
-  // useVirtualizer here has no `getItemKey`, so file A's row-height
-  // measurements at indices 0..N persist into file B at the same
-  // indices. Combined with the height-feedback loop (row outer div
-  // has `height: ${virtualItem.size}px` inline AND `ref={measureElement}`
-  // implementing `getBoundingClientRect().height` — each reciprocally
-  // confirms the other), if a measurement is ever recorded as ~0
-  // (e.g. during a layout-jitter frame between useLineHighlight's
-  // plain-text → token-HTML setState pair) it pins itself there
-  // forever: a stretch of rows collapses to a single row's vertical
-  // space (overlapping text), and the only thing that nudges it
-  // back is another DOM-content size change that retriggers
-  // ResizeObserver — which is why "refresh tree-sitter cache"
-  // (== re-running useLineHighlight) appeared to fix the symptom.
-  // `virtualizer.measure()` clears the cache so the next paint
-  // re-measures from a clean slate.
+  // Also reset the virtualizer's per-index measurement cache as a
+  // defence-in-depth alongside `getItemKey` (see the comment on the
+  // `useVirtualizer` call above). With content-keyed measurements
+  // the cache no longer reuses stale entries across file/content
+  // changes, but `virtualizer.measure()` still scrubs anything left
+  // over from a partially-completed render cycle.
+  //
+  // Historical context (commit 0ec53c1): the original DiffView keyed
+  // measurements by index and the row outer div had a height-feedback
+  // loop (`height: ${virtualItem.size}px` inline AND
+  // `ref={measureElement}` reading `getBoundingClientRect().height`
+  // back into the cache). A single ~0 height recorded during a
+  // layout-jitter frame (e.g. while `useLineHighlight` swapped
+  // plain-text → token HTML) pinned itself there: a stretch of rows
+  // would collapse to one row's vertical space — overlapping text.
+  // The earlier fix added this `measure()` call; the *current* fix
+  // also eliminates the misaligned render frame at the source (see
+  // `useLineHighlight.ts`) and keys the cache by row identity.
+  //
+  // `useLayoutEffect` (not `useEffect`): we want this cache reset to
+  // run BEFORE the browser paints the post-commit DOM and BEFORE
+  // ResizeObserver fires for the new layout. With `useEffect` the
+  // misaligned-content frame could have its row measurements
+  // captured into the cache before this cleanup got a chance to
+  // run — exactly the timing window that produced the original bug.
+  //
   // virtualizer is a fresh instance every render but wraps stable
   // internal state (refs); intentionally not in deps (would loop).
-  useEffect(() => {
+  useLayoutEffect(() => {
     setGapStates(new Map());
     virtualizer.measure();
 
@@ -634,11 +643,50 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
     [renderRows],
   );
 
+  // Content-derived row keys for `useVirtualizer`'s `measurementsCache`.
+  //
+  // Without an explicit `getItemKey`, `@tanstack/react-virtual` keys
+  // measurements by ARRAY INDEX. When `renderRows` is rebuilt (file
+  // switch, content edit, compact gap expand/collapse, …) old
+  // measurements at the same index numbers get reused as if they
+  // describe the new rows — which is how 0ec53c1's "row collapses
+  // to ~0 height, text overlaps" bug pinned itself in place.
+  //
+  // Keying by row identity:
+  //   - `gap-label`  / `gap-expand`  → tied to the stable `gapId`
+  //     (gap ids are positional but consistent across the lifetime
+  //     of a given `diffLines` build).
+  //   - `diff` rows → composite of left+right line number + type;
+  //     this is stable as long as the same logical line stays at
+  //     the same `row.idx`, and naturally diverges when content
+  //     shifts (e.g. inserting 3 lines pushes everything below
+  //     and the new lineNum/type combos make the cache misses
+  //     happen exactly where they should).
+  //
+  // Combined with the existing `virtualizer.measure()` reset, this
+  // closes the "stale cache pinned to wrong row" failure path
+  // STRUCTURALLY rather than racing the cleanup against ResizeObserver
+  // timing. Falls back to the index when a row hasn't materialised
+  // yet (transient renders during prop updates).
+  const getItemKey = useCallback(
+    (i: number): number | string => {
+      const row = renderRows[i];
+      if (!row) return i;
+      if (row.kind === 'gap-label') return `gl:${row.gapId}`;
+      if (row.kind === 'gap-expand') return `ge:${row.gapId}:${row.direction}`;
+      const L = leftLines[row.idx];
+      const R = rightLines[row.idx];
+      return `d:${L?.lineNum ?? 'x'}:${L?.type ?? 'x'}:${R?.lineNum ?? 'x'}:${R?.type ?? 'x'}`;
+    },
+    [renderRows, leftLines, rightLines],
+  );
+
   // Virtual scrolling
   const virtualizer = useVirtualizer({
     count: renderRows.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: estimateRowSize,
+    getItemKey,
     overscan: 20,
   });
 
@@ -1080,10 +1128,24 @@ export function DiffUnifiedView({ oldContent, newContent, filePath }: Omit<DiffV
   const allLines = useMemo(() => diffLines.map(line => line.content), [diffLines]);
   const highlightedLines = useLineHighlight(allLines, filePath);
 
+  // Content-derived row keys — see the comment on the split-view
+  // virtualizer above for the full rationale. Unified mode is
+  // simpler: every row is a `DiffLine`, so type + old/new line
+  // numbers uniquely identify a logical row.
+  const getItemKey = useCallback(
+    (i: number): number | string => {
+      const dl = diffLines[i];
+      if (!dl) return i;
+      return `${dl.type}:${dl.oldLineNum ?? 'x'}:${dl.newLineNum ?? 'x'}`;
+    },
+    [diffLines],
+  );
+
   const virtualizer = useVirtualizer({
     count: diffLines.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: () => ROW_HEIGHT,
+    getItemKey,
     overscan: 20,
   });
 
