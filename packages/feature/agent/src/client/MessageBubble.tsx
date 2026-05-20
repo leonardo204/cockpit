@@ -90,14 +90,17 @@ interface MessageBubbleProps {
   onFork?: (messageId: string) => void;
 }
 
-// Threshold for collapsing tool calls
-const TOOL_CALLS_COLLAPSE_THRESHOLD = 1;
+// Threshold for collapsing tool calls — any tool call (≥1) renders inside a collapsible header,
+// so special operation entries (AskUserQuestion / FileDiff) on the header are always reachable.
+const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
 
 // Use memo optimization — only re-render when message or cwd changes
 export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
-  const [toolCallsExpanded, setToolCallsExpanded] = useState(false);
+  // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
+  // Multi-tool case: default collapsed (preserves existing behavior).
+  const [toolCallsExpanded, setToolCallsExpanded] = useState(() => (message.toolCalls?.length || 0) === 1);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
   const isUser = message.role === 'user';
