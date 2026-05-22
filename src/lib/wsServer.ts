@@ -17,6 +17,12 @@ import { runTerminalFollowHandler } from './effect/terminalFollowHandler';
 import { runBrowserHandler } from './effect/browserHandler';
 import { runJupyterHandler } from './effect/jupyterHandler';
 import { runTerminalHandler } from './effect/terminalHandler';
+import { wireCodeIndexToFileWatcher } from './codeIndexSync';
+
+// Wire fileWatcher → codeIndex lazy sync. wsServer is on the guaranteed
+// server-boot path, so calling this at module top-level runs it exactly once
+// per process. `wireCodeIndexToFileWatcher` is itself idempotent.
+wireCodeIndexToFileWatcher();
 
 // ─────────────────────────────────────────────────────────
 // WSS + client set are pinned to globalThis so a second module realm (Next.js

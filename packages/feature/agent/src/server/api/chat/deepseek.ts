@@ -66,7 +66,7 @@ export const POST = handler((request) =>
     // Resolve built-in slash commands (/qa, /fx, etc.) based on language
     const prompt =
       typeof rawPrompt === 'string'
-        ? resolveCommandPrompt(rawPrompt, language)
+        ? resolveCommandPrompt(rawPrompt, language, request)
         : rawPrompt;
 
     // Allow sending images only (no text)

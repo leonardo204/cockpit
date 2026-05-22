@@ -1,3 +1,3 @@
 import { wireCodeIndexToFileWatcher } from '@/lib/codeIndexSync';
 wireCodeIndexToFileWatcher();
-export * from '@cockpit/feature-explorer/server/api/projectGraph/file-functions';
+export * from '@cockpit/feature-explorer/server/api/projectGraph/callers';
