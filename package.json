@@ -8,7 +8,7 @@
     "type": "git",
     "url": "git+https://github.com/Surething-io/cockpit.git"
   },
-  "homepage": "https://cocking.cc",
+  "homepage": "https://opencockpit.dev",
   "bugs": {
     "url": "https://github.com/Surething-io/cockpit/issues"
   },
@@ -42,7 +42,7 @@
     "parallel-ai",
     "multi-project-ai",
     "cockpit",
-    "cocking",
+    "opencockpit",
     "cursor-alternative",
     "aider-alternative",
     "continue-alternative",

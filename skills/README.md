@@ -45,7 +45,7 @@ and the next slash invocation picks up the change. No re-import.
 
 Two reasons:
 
-1. **They reference repo facts.** `/cockpit-release` knows `cocking.cc`,
+1. **They reference repo facts.** `/cockpit-release` knows `opencockpit.dev`,
    the `Surething-io/cockpit` GitHub repo, `@surething/cockpit` on npm,
    and the exact workflow names. That context is repo-specific, not
    user-specific. If a contributor clones the repo and registers these
@@ -83,7 +83,7 @@ documentation, not runtime code.
 
 ## Further reading
 
-- [Skills feature blog post](https://cocking.cc/en/blog/chat-to-skill/) —
+- [Skills feature blog post](https://opencockpit.dev/en/blog/chat-to-skill/) —
   the rationale for "skills register pointers, never own your folder".
 - Anthropic's spec for the SKILL.md format:
   [docs.anthropic.com](https://docs.anthropic.com/) (search for "skills").

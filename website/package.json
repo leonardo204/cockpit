@@ -2,7 +2,7 @@
   "name": "cockpit-website",
   "version": "0.1.0",
   "private": true,
-  "description": "Marketing site for Cockpit (cocking.cc)",
+  "description": "Marketing site for OpenCockpit (opencockpit.dev)",
   "scripts": {
     "dev": "env -u TURBOPACK next dev --webpack -p 3458",
     "build": "node scripts/fetch-changelog.mjs && node scripts/generate-og.mjs && NODE_ENV=production COCKPIT_VERSION=$(node -p \"require('../package.json').version\") env -u TURBOPACK next build --webpack",

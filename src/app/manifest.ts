@@ -7,9 +7,9 @@ export default function manifest(): MetadataRoute.Manifest {
   const iconPath = isDev ? '/icons/dev' : '/icons'
 
   return {
-    name: isDev ? 'Cockpit (Dev)' : 'Cockpit',
+    name: isDev ? 'OpenCockpit (Dev)' : 'OpenCockpit',
     short_name: isDev ? 'Cockpit Dev' : 'Cockpit',
-    description: 'Cockpit is a local-first AI development hub with chat agents, a file explorer, terminals, and browser bubbles in one swipeable workspace. One seat. One AI.',
+    description: 'OpenCockpit is a local-first AI development hub with chat agents, a file explorer, terminals, and browser bubbles in one swipeable workspace. One seat. One AI.',
     start_url: '/',
     display: 'standalone',
     background_color: '#f9f9fb',

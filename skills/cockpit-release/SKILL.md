@@ -15,7 +15,7 @@ You are the release captain for Cockpit (`@surething/cockpit`). Your job is to r
 
 - **Repo**: `Surething-io/cockpit` (origin/main is the release branch)
 - **npm package**: `@surething/cockpit` (public, scoped, provenance-enabled)
-- **Website**: `cocking.cc`, deployed via Cloudflare Pages from `website/`
+- **Website**: `opencockpit.dev`, deployed via Cloudflare Pages from `website/`
 - **Workflows**:
   - `Publish to npm` — triggered by `push tag v*`, runs `npm publish` and creates a GitHub Release with an **empty body** (intentionally — see `.github/workflows/publish.yml`). Step 6 of this skill is the one that fills the body.
   - `Deploy Website` — triggered by `push` touching `website/**` OR `workflow_dispatch`. Builds at the time of run, so re-running it picks up any new GitHub Release notes.
@@ -234,8 +234,8 @@ npm view @surething/cockpit version
 gh release view v1.0.x --repo Surething-io/cockpit --json name,publishedAt,url
 
 # 3. Website changelog has the new entry at the top
-curl -s --http1.1 "https://cocking.cc/en/changelog/" | grep -oE 'v1\.0\.[0-9]+' | head -3
-curl -s --http1.1 "https://cocking.cc/zh/changelog/" | grep -oE 'v1\.0\.[0-9]+' | head -3
+curl -s --http1.1 "https://opencockpit.dev/en/changelog/" | grep -oE 'v1\.0\.[0-9]+' | head -3
+curl -s --http1.1 "https://opencockpit.dev/zh/changelog/" | grep -oE 'v1\.0\.[0-9]+' | head -3
 
 # 4. Sanity: no "Full Changelog: …compare…" tail in the release body
 gh release view v1.0.x --repo Surething-io/cockpit --json body --jq .body | tail -c 200
@@ -250,7 +250,7 @@ Expected: new tag at top of changelog (en + zh), no `compare/v1.0.x-1...v1.0.x` 
 - **Never** include a `**Full Changelog**: https://github.com/.../compare/...` tail in the release body — historical convention is hand-written prose, no auto-tail.
 - **Never** `npm publish` manually unless the CI workflow has demonstrably failed and the human has explicitly asked.
 - **Never** `git tag -d` or `git reset` after Step 3 (push) without explicit human instruction — the tag is now visible to npm and Cloudflare and others.
-- **Never** skip Step 6 (hand-authored notes). The publish workflow creates the release with an empty body specifically so this step is unavoidable; if you find yourself looking at an empty release page on cocking.cc/changelog, you forgot.
+- **Never** skip Step 6 (hand-authored notes). The publish workflow creates the release with an empty body specifically so this step is unavoidable; if you find yourself looking at an empty release page on opencockpit.dev/changelog, you forgot.
 
 ## Failure recovery cheats (only on instruction)
 

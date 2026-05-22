@@ -53,7 +53,7 @@ These are the canonical examples. Match their tone, structure, emoji choices, an
 | `## ✨ New: <topic>` | New feature or capability the user can try |
 | `## 🐛 Fix: <area>` | User-visible bug fix |
 | `## 📚 Docs: <topic>` | README / GUIDE / Documentation changes the user might notice |
-| `## 🌐 Site: <topic>` | cocking.cc improvements |
+| `## 🌐 Site: <topic>` | opencockpit.dev improvements |
 | `## 📦 Misc: <topic>` | Package metadata, npm description, keywords, anything user-facing but not a feature |
 | `## ⚙️ Internal` | (use sparingly) Only if you must mention an internal change because something else depends on it |
 

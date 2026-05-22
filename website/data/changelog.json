@@ -12,7 +12,7 @@
     "name": "v1.0.194",
     "publishedAt": "2026-04-29T06:35:37Z",
     "url": "https://github.com/Surething-io/cockpit/releases/tag/v1.0.194",
-    "body": "## 🌐 Website: Slash Modes, Skills, real screenshots\n\ncocking.cc got three upgrades:\n- **Slash Modes** section showcasing the built-in \\`/qa\\`, \\`/fx\\`, \\`/review\\`, \\`/commit\\` workflows\n- **Skills** surfaced in the Extras section\n- Placeholder cards replaced with **real product screenshots**\n\n## 🐛 \\`/fx\\` now appears in autocomplete\n\nTyping \\`/\\` shows \\`/fx\\` alongside the other built-in commands (was missing before).",
+    "body": "## 🌐 Website: Slash Modes, Skills, real screenshots\n\nopencockpit.dev got three upgrades:\n- **Slash Modes** section showcasing the built-in \\`/qa\\`, \\`/fx\\`, \\`/review\\`, \\`/commit\\` workflows\n- **Skills** surfaced in the Extras section\n- Placeholder cards replaced with **real product screenshots**\n\n## 🐛 \\`/fx\\` now appears in autocomplete\n\nTyping \\`/\\` shows \\`/fx\\` alongside the other built-in commands (was missing before).",
     "prerelease": false
   },
   {
@@ -20,7 +20,7 @@
     "name": "v1.0.193",
     "publishedAt": "2026-04-29T06:35:25Z",
     "url": "https://github.com/Surething-io/cockpit/releases/tag/v1.0.193",
-    "body": "## 🌐 cocking.cc is live\n\nFirst cut of the public marketing site at **https://cocking.cc** — landing page introducing cockpit's three-panel layout, browser automation, and slash workflows.\n\n## 🐛 Panels: overlays follow swipes\n\nModals and popovers inside the three-panel UI (Agent / Explorer / Console) now correctly stick to the panel you're on when you swipe. No more orphan menus drifting into the wrong panel.",
+    "body": "## 🌐 opencockpit.dev is live\n\nFirst cut of the public marketing site at **https://opencockpit.dev** — landing page introducing cockpit's three-panel layout, browser automation, and slash workflows.\n\n## 🐛 Panels: overlays follow swipes\n\nModals and popovers inside the three-panel UI (Agent / Explorer / Console) now correctly stick to the panel you're on when you swipe. No more orphan menus drifting into the wrong panel.",
     "prerelease": false
   },
   {

@@ -15,7 +15,7 @@ export function Footer({ locale }: { locale: Locale }) {
     <footer className="mt-24 border-t border-border bg-card/50">
       <div className="mx-auto max-w-6xl px-6 py-10 grid grid-cols-2 md:grid-cols-4 gap-8 text-sm">
         <div className="col-span-2 md:col-span-1">
-          <div className="font-semibold">Cockpit</div>
+          <div className="font-semibold">OpenCockpit</div>
           <p className="mt-2 text-muted-foreground text-xs leading-relaxed">
             {t.footer.tagline}
           </p>
@@ -113,10 +113,10 @@ export function Footer({ locale }: { locale: Locale }) {
 
       <div className="border-t border-border">
         <div className="mx-auto max-w-6xl px-6 py-4 text-xs text-muted-foreground flex items-center justify-between">
-          <span>© {new Date().getFullYear()} Cockpit · {t.footer.license}</span>
+          <span>© {new Date().getFullYear()} OpenCockpit · {t.footer.license}</span>
           <span>
-            <a href="https://cocking.cc" className="hover:text-brand transition-colors">
-              cocking.cc
+            <a href="https://opencockpit.dev" className="hover:text-brand transition-colors">
+              opencockpit.dev
             </a>
           </span>
         </div>

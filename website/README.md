@@ -1,6 +1,6 @@
 # Cockpit Website
 
-Marketing site for Cockpit — deployed at [cocking.cc](https://cocking.cc).
+Marketing site for Cockpit — deployed at [opencockpit.dev](https://opencockpit.dev).
 
 ## Stack
 
@@ -60,7 +60,7 @@ Pushes that touch only `src/`, `bin/`, `e2b/`, etc. do not trigger this workflow
 
 | Event | Result |
 |---|---|
-| `push` to `main` (touching `website/**`) | Production deploy → `cocking.cc` |
+| `push` to `main` (touching `website/**`) | Production deploy → `opencockpit.dev` |
 | `pull_request` (touching `website/**`) | Preview deploy → unique URL, posted to PR |
 | Manual `workflow_dispatch` | Production deploy of current branch |
 
@@ -101,7 +101,7 @@ The script is idempotent — safe to re-run. It:
 
 1. Creates the `cockpit-website` Pages project (skipped if it already exists).
 2. Uploads `E2B_API_KEY` as a runtime secret for `functions/try.ts`.
-3. Attaches `cocking.cc` as a custom domain.
+3. Attaches `opencockpit.dev` as a custom domain.
 4. Pushes `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` to your GitHub repo secrets.
 
 After it finishes, push any commit that touches `website/**` and the workflow takes over.
@@ -114,7 +114,7 @@ If you'd rather click through the dashboard:
 |---|---|---|
 | Create project | Cloudflare → Workers & Pages → Create → Pages → Direct Upload | Name: `cockpit-website` |
 | Runtime secret | Pages → `cockpit-website` → Settings → Variables and Secrets | Add `E2B_API_KEY` |
-| Custom domain | Pages → `cockpit-website` → Custom domains | Add `cocking.cc` |
+| Custom domain | Pages → `cockpit-website` → Custom domains | Add `opencockpit.dev` |
 | GitHub secrets | GitHub repo → Settings → Secrets → Actions | Add `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
 
 ### Verifying
@@ -123,7 +123,7 @@ After the first push to `main`:
 
 1. GitHub Actions tab → "Deploy Website" should be green.
 2. The job summary shows the live deployment URL.
-3. Visit `https://cocking.cc` → should hit the i18n redirect Function and land on `/en/` or `/zh/` based on browser language.
+3. Visit `https://opencockpit.dev` → should hit the i18n redirect Function and land on `/en/` or `/zh/` based on browser language.
 
 ### Rolling back
 
@@ -157,7 +157,7 @@ is served directly as a static asset, so Function invocations stay near zero.
 | Path | Function | Purpose |
 |---|---|---|
 | `/` | `functions/index.ts` | i18n redirect (`Accept-Language` + `lang_pref` cookie → 302 to `/en/` or `/zh/`) |
-| `/try` | `functions/try.ts` | E2B demo handler — confirmation page + sandbox creation. The entire demo flow lives under `cocking.cc`. (The legacy Vercel handler at `e2b/api/try.js` was retired; `e2b/` now only builds the sandbox template.) |
+| `/try` | `functions/try.ts` | E2B demo handler — confirmation page + sandbox creation. The entire demo flow lives under `opencockpit.dev`. (The legacy Vercel handler at `e2b/api/try.js` was retired; `e2b/` now only builds the sandbox template.) |
 
 ## i18n strategy
 
