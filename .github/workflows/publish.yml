@@ -35,7 +35,7 @@ jobs:
       # `**Full Changelog**: .../compare/...` tail that violates the
       # project's hand-written-only release-notes convention. Empty
       # body forces the human-in-the-loop step instead of leaving
-      # "good enough" auto-text on cocking.cc/changelog.
+      # "good enough" auto-text on opencockpit.dev/changelog.
       - name: Create GitHub Release (empty body — filled by cockpit-release skill)
         env:
           GH_TOKEN: ${{ github.token }}

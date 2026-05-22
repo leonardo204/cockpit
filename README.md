@@ -1,13 +1,13 @@
 <p align="center">
-  <a href="https://cocking.cc">
-    <img src="public/icons/icon-128x128.png" width="80" alt="Cockpit logo" />
+  <a href="https://opencockpit.dev">
+    <img src="public/icons/icon-128x128.png" width="80" alt="OpenCockpit logo" />
   </a>
 </p>
 
-<h1 align="center">Cockpit — A Claude Code GUI for parallel AI coding</h1>
+<h1 align="center">OpenCockpit — The open Claude Code GUI for any agent</h1>
 
 <p align="center">
-  <strong>One seat. Any AI. Everything under control.</strong><br/>
+  <strong>One seat. One AI. Everything under control.</strong><br/>
   <sub><code>/ˈkɒkpɪt/</code> — like an aircraft cockpit</sub>
 </p>
 
@@ -16,17 +16,17 @@
   <a href="https://www.npmjs.com/package/@surething/cockpit"><img src="https://img.shields.io/npm/dm/@surething/cockpit?color=12a594&label=downloads&style=flat-square" alt="npm downloads"/></a>
   <a href="https://github.com/Surething-io/cockpit/stargazers"><img src="https://img.shields.io/github/stars/Surething-io/cockpit?color=12a594&style=flat-square" alt="GitHub stars"/></a>
   <a href="https://github.com/Surething-io/cockpit/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-12a594?style=flat-square" alt="MIT license"/></a>
-  <a href="https://cocking.cc"><img src="https://img.shields.io/badge/website-cocking.cc-12a594?style=flat-square" alt="website"/></a>
+  <a href="https://opencockpit.dev"><img src="https://img.shields.io/badge/website-opencockpit.dev-12a594?style=flat-square" alt="website"/></a>
   <a href="https://github.com/anthropics/anthropic-sdk-typescript"><img src="https://img.shields.io/badge/built_on-Claude%20Agent%20SDK-12a594?style=flat-square" alt="Built on Claude Agent SDK"/></a>
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="README.zh.md">中文</a> · <a href="https://cocking.cc">Website</a> · <a href="https://cocking.cc/en/blog/">Blog</a>
+  <a href="README.md">English</a> · <a href="README.zh.md">中文</a> · <a href="https://opencockpit.dev">Website</a> · <a href="https://opencockpit.dev/en/blog/">Blog</a>
 </p>
 
 ---
 
-> **Cockpit is the open-source Claude Code GUI** — and a single canvas for whatever agent you bring next. Run multi-project Claude sessions out of the box; pop open a tab for **OpenAI Codex, DeepSeek, Kimi, or local Ollama** whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.
+> **OpenCockpit is the open-source Claude Code GUI** — and a single canvas for whatever agent you bring next. Run multi-project Claude sessions out of the box; pop open a tab for **OpenAI Codex, DeepSeek, Kimi, or local Ollama** whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.
 
 https://github.com/user-attachments/assets/18f1a5dc-64f3-4ff6-b9fc-9cd08181fbb8
 
@@ -134,7 +134,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 
 No install, no AI chat (read-only sandbox, 5 min):
 
-[![Try Online](https://img.shields.io/badge/Try%20Online-cocking.cc%2Ftry-12a594?style=for-the-badge)](https://cocking.cc/try)
+[![Try Online](https://img.shields.io/badge/Try%20Online-opencockpit.dev%2Ftry-12a594?style=for-the-badge)](https://opencockpit.dev/try)
 
 ## Prerequisites
 
@@ -182,30 +182,14 @@ cockpit terminal <id> exec "ls"    # execute command
 cockpit terminal <id> output       # get terminal output
 ```
 
-## Comparison
-
-| | Raw Claude Code CLI | IDE plugin (Cursor, Continue) | Aider TUI | **Cockpit** |
-|---|---|---|---|---|
-| Multi-engine in app | Claude only | varies | yes, config-driven | **5 in-app: Claude, Codex, DeepSeek, Kimi, Ollama** |
-| Multi-project parallel | tmux required | multi-window | one at a time | **first-class** |
-| Cross-project search | grep | per-window | local | **Cmd+K** |
-| Browser / DB control | ❌ | usually ❌ | ❌ | **✅ Bubbles** |
-| Code review surface | git tools | PR provider | git | **LAN-shared** |
-| Slash modes | manual | per-plugin | yes | **`/qa /fx /review /commit /cg` + custom** |
-| Project-graph API for agent | ❌ | LSP (per-IDE) | ❌ | **✅ CodeGraph — 6 endpoints, AI-first, coordinates only** |
-| Local-only / no cloud relay | ✅ | varies | ✅ | **✅** |
-| Open source | ✅ | mostly ❌ | ✅ | **✅ MIT** |
-
-Read the long version: [Claude Code GUI: CLI vs Cockpit vs IDE plugins](https://cocking.cc/en/blog/claude-code-gui-comparison/)
-
 ## Read more
 
-- 📖 [What is a Code Graph (and why your AI needs one)](https://cocking.cc/en/blog/code-graph-for-ai-agents/)
-- 📖 [Read code as a map, not a tree](https://cocking.cc/en/blog/read-code-as-a-map/)
-- 📖 [How to run 5 Claude Code sessions in parallel](https://cocking.cc/en/blog/parallel-claude-code-sessions/)
-- 📖 [Slash modes in Claude Code: /qa /fx /review /commit](https://cocking.cc/en/blog/slash-modes-claude-code/)
-- 📖 [Full blog](https://cocking.cc/en/blog/)
-- 📋 [Changelog](https://cocking.cc/en/changelog/)
+- 📖 [What is a Code Graph (and why your AI needs one)](https://opencockpit.dev/en/blog/code-graph-for-ai-agents/)
+- 📖 [Read code as a map, not a tree](https://opencockpit.dev/en/blog/read-code-as-a-map/)
+- 📖 [How to run 5 Claude Code sessions in parallel](https://opencockpit.dev/en/blog/parallel-claude-code-sessions/)
+- 📖 [Slash modes in Claude Code: /qa /fx /review /commit](https://opencockpit.dev/en/blog/slash-modes-claude-code/)
+- 📖 [Full blog](https://opencockpit.dev/en/blog/)
+- 📋 [Changelog](https://opencockpit.dev/en/changelog/)
 
 ## Development
 

@@ -1,19 +1,19 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
-const SITE_URL = 'https://cocking.cc';
-const DEFAULT_TITLE = 'Cockpit — Claude Code GUI for Parallel AI Coding';
+const SITE_URL = 'https://opencockpit.dev';
+const DEFAULT_TITLE = 'OpenCockpit — The Open Claude Code GUI for Any Agent';
 const DEFAULT_DESCRIPTION =
-  'Cockpit is an open-source Claude Code GUI: run parallel AI coding sessions across projects, with a built-in terminal, browser automation, PostgreSQL/MySQL/Redis bubbles, code review, and slash modes. Zero config, fully local, MIT licensed.';
+  'OpenCockpit is an open-source Claude Code GUI: run parallel AI coding sessions across projects, with a built-in terminal, browser automation, PostgreSQL/MySQL/Redis bubbles, code review, and slash modes. Zero config, fully local, MIT licensed.';
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
     default: DEFAULT_TITLE,
-    template: '%s · Cockpit',
+    template: '%s · OpenCockpit',
   },
   description: DEFAULT_DESCRIPTION,
-  applicationName: 'Cockpit',
+  applicationName: 'OpenCockpit',
   authors: [{ name: 'Surething', url: 'https://github.com/Surething-io' }],
   generator: 'Next.js',
   keywords: [
@@ -30,8 +30,8 @@ export const metadata: Metadata = {
     'agent SDK',
     'AI pair programming',
     'AI code review',
+    'opencockpit',
     'cockpit',
-    'cocking',
     'Cursor alternative',
     'Continue alternative',
     'Aider alternative',
@@ -64,13 +64,13 @@ export const metadata: Metadata = {
     title: DEFAULT_TITLE,
     description: DEFAULT_DESCRIPTION,
     url: SITE_URL,
-    siteName: 'Cockpit',
+    siteName: 'OpenCockpit',
     images: [
       {
         url: '/og.png',
         width: 1200,
         height: 630,
-        alt: 'Cockpit — Claude Code GUI for parallel AI coding',
+        alt: 'OpenCockpit — Claude Code GUI for parallel AI coding',
       },
     ],
     locale: 'en_US',

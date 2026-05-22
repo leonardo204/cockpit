@@ -14,7 +14,7 @@ import { Extras } from '@/components/sections/Extras';
 import { BuiltOn } from '@/components/sections/BuiltOn';
 import { FinalCTA } from '@/components/sections/FinalCTA';
 
-const SITE_URL = 'https://cocking.cc';
+const SITE_URL = 'https://opencockpit.dev';
 // Injected at build time via `COCKPIT_VERSION=$(node -p ...) next build` (see website/package.json).
 const COCKPIT_VERSION = process.env.COCKPIT_VERSION || '0.0.0';
 
@@ -41,7 +41,7 @@ export async function generateMetadata({
       title: t.hero.headline,
       description: t.hero.description,
       url: `${SITE_URL}/${locale}/`,
-      siteName: 'Cockpit',
+      siteName: 'OpenCockpit',
       type: 'website',
       locale: locale === 'zh' ? 'zh_CN' : 'en_US',
       images: [
@@ -64,8 +64,8 @@ export default async function HomePage({
   const softwareLd = {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
-    name: 'Cockpit',
-    alternateName: ['Cockpit AI', 'cocking.cc'],
+    name: 'OpenCockpit',
+    alternateName: ['Cockpit', 'OpenCockpit AI', 'opencockpit.dev'],
     applicationCategory: 'DeveloperApplication',
     applicationSubCategory: 'AI Coding Agent GUI',
     operatingSystem: 'macOS, Linux, Windows',
@@ -128,7 +128,7 @@ export default async function HomePage({
   const websiteLd = {
     '@context': 'https://schema.org',
     '@type': 'WebSite',
-    name: 'Cockpit',
+    name: 'OpenCockpit',
     url: SITE_URL,
     inLanguage: ['en', 'zh-CN'],
     publisher: { '@type': 'Organization', name: 'Surething' },

@@ -21,10 +21,10 @@ export async function generateMetadata({
   return {
     title: t.docs.title,
     alternates: {
-      canonical: `https://cocking.cc/${locale}/docs/`,
+      canonical: `https://opencockpit.dev/${locale}/docs/`,
       languages: {
-        en: 'https://cocking.cc/en/docs/',
-        zh: 'https://cocking.cc/zh/docs/',
+        en: 'https://opencockpit.dev/en/docs/',
+        zh: 'https://opencockpit.dev/zh/docs/',
       },
     },
   };

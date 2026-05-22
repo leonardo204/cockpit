@@ -1,7 +1,7 @@
 # e2b/
 
 Builds the **`cockpit-demo`** sandbox template that powers the "Try Online"
-demo at <https://cocking.cc/try>.
+demo at <https://opencockpit.dev/try>.
 
 The handler that actually serves `/try` lives in
 `website/functions/try.ts` (Cloudflare Pages Function). This directory
@@ -34,6 +34,6 @@ the Pages Function calls `POST /sandboxes`.
 
 `api/try.js` and `vercel.json` were a Vercel-hosted version of the demo
 handler that was retired in favour of the Cloudflare Pages Function so
-the entire user flow lives under `cocking.cc`. Don't bring them back —
+the entire user flow lives under `opencockpit.dev`. Don't bring them back —
 the canonical handler is `website/functions/try.ts`. If you find yourself
 editing `e2b/api/*` again, you're editing the wrong file.

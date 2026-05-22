@@ -2,7 +2,7 @@ import type { MetadataRoute } from 'next';
 import { locales } from '@/lib/i18n';
 import { posts } from '@/content/posts';
 
-const SITE_URL = 'https://cocking.cc';
+const SITE_URL = 'https://opencockpit.dev';
 
 // Required for `output: 'export'` (Cloudflare Pages static export).
 export const dynamic = 'force-static';

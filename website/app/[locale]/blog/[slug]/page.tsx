@@ -7,7 +7,7 @@ import { isLocale, locales, type Locale } from '@/lib/i18n';
 import { getMessages } from '@/content/messages';
 import { getPostBySlug, posts } from '@/content/posts';
 
-const SITE_URL = 'https://cocking.cc';
+const SITE_URL = 'https://opencockpit.dev';
 
 export function generateStaticParams() {
   const params: { locale: string; slug: string }[] = [];
@@ -107,7 +107,7 @@ export default async function BlogPostPage({
     author: { '@type': 'Person', name: 'Robert', url: 'https://github.com/Surething-io' },
     publisher: {
       '@type': 'Organization',
-      name: 'Cockpit',
+      name: 'OpenCockpit',
       logo: { '@type': 'ImageObject', url: `${SITE_URL}/icons/icon-128x128.png` },
     },
     mainEntityOfPage: { '@type': 'WebPage', '@id': url },

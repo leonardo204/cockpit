@@ -17,14 +17,14 @@ export function Nav({ locale }: { locale: Locale }) {
         <Link href={`${base}/`} className="flex items-center gap-2 group">
           <Image
             src="/icons/icon-128x128.png"
-            alt="Cockpit"
+            alt="OpenCockpit"
             width={28}
             height={28}
             className="rounded-md"
             priority
           />
           <span className="text-sm font-semibold tracking-tight group-hover:text-brand transition-colors">
-            Cockpit
+            OpenCockpit
           </span>
         </Link>
 

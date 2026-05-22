@@ -8,7 +8,7 @@
 # What it does (idempotent — safe to re-run):
 #   1. Creates the Cloudflare Pages project (`cockpit-website`)
 #   2. Sets the E2B_API_KEY runtime secret used by functions/try.ts
-#   3. Attaches custom domain cocking.cc
+#   3. Attaches custom domain opencockpit.dev
 #   4. Pushes CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID to GitHub repo secrets
 #
 # Prerequisites (the only manual steps left):
@@ -24,7 +24,7 @@ set -euo pipefail
 
 PROJECT_NAME="cockpit-website"
 PRODUCTION_BRANCH="main"
-DOMAIN="cocking.cc"
+DOMAIN="opencockpit.dev"
 
 # ─── auto-load website/.env if present ────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -129,7 +129,7 @@ elif echo "$domain_response" | grep -q "already exists"; then
   ok "Domain already attached."
 else
   warn "Domain attach response: $domain_response"
-  warn "You may need to: 1) bind cocking.cc to Cloudflare DNS, or 2) attach manually via dashboard."
+  warn "You may need to: 1) bind opencockpit.dev to Cloudflare DNS, or 2) attach manually via dashboard."
 fi
 
 # ─── 3b. Ensure DNS CNAME exists (apex → <project>.pages.dev) ─────────

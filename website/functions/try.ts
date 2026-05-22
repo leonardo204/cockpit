@@ -1,7 +1,7 @@
 /**
  * Cloudflare Pages Function — `/try` (Try Online demo entrypoint).
  *
- * Canonical handler for the demo flow under cocking.cc/try. (A Vercel-
+ * Canonical handler for the demo flow under opencockpit.dev/try. (A Vercel-
  * hosted handler at `e2b/api/try.js` used to share this responsibility;
  * it was retired so the entire flow lives on Cloudflare Pages and
  * visitors never see vercel.app in their address bar. The `e2b/`

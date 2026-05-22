@@ -22,8 +22,8 @@ export function TryFallbackRedirect() {
       </p>
       <p>
         Open{' '}
-        <a href="https://cocking.cc/try" className="text-brand underline">
-          cocking.cc/try
+        <a href="https://opencockpit.dev/try" className="text-brand underline">
+          opencockpit.dev/try
         </a>{' '}
         to launch a sandbox, or run{' '}
         <code className="text-xs font-mono bg-secondary/40 px-1.5 py-0.5 rounded">

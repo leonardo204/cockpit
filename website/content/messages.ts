@@ -9,11 +9,11 @@ export const messages = {
       github: 'GitHub',
     },
     hero: {
-      headline: 'A Claude Code GUI · Bring any agent you want',
-      subheadline: 'One seat. Any AI. Everything under control.',
+      headline: 'The open Claude Code GUI · Bring any agent',
+      subheadline: 'One seat. One AI. Everything under control.',
       pronounce: '/ˈkɒkpɪt/ — like an aircraft cockpit',
       description:
-        'Cockpit is the open-source Claude Code GUI — and a single canvas for whatever agent you bring next. Multi-project Claude sessions out of the box; pop open a tab for Codex, DeepSeek, Kimi, or local Ollama whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.',
+        'OpenCockpit is the open-source Claude Code GUI — and a single canvas for whatever agent you bring next. Multi-project Claude sessions out of the box; pop open a tab for Codex, DeepSeek, Kimi, or local Ollama whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.',
       installLabel: 'Install',
       tryOnline: 'Try Online',
       githubStar: 'Star on GitHub',
@@ -251,11 +251,11 @@ export const messages = {
       github: 'GitHub',
     },
     hero: {
-      headline: 'Claude Code GUI —— 也接得住你想要的任何 Agent',
-      subheadline: 'One seat. Any AI. Everything under control.',
+      headline: '开源 Claude Code GUI · 接入任意 Agent',
+      subheadline: 'One seat. One AI. Everything under control.',
       pronounce: '/ˈkɒkpɪt/ —— 像飞机驾驶舱',
       description:
-        'Cockpit 是开源的 Claude Code GUI —— 也是你想接入的任何 Agent 的统一画布。多项目 Claude 会话开箱即用；想用 Codex、DeepSeek、Kimi 或本地 Ollama？直接新开一个 tab。内置终端、Chrome 自动化、PostgreSQL / MySQL / Redis 气泡、代码评审与斜杠模式 —— 全部本地。',
+        'OpenCockpit 是开源的 Claude Code GUI —— 也是你想接入的任何 Agent 的统一画布。多项目 Claude 会话开箱即用；想用 Codex、DeepSeek、Kimi 或本地 Ollama？直接新开一个 tab。内置终端、Chrome 自动化、PostgreSQL / MySQL / Redis 气泡、代码评审与斜杠模式 —— 全部本地。',
       badge: 'Claude · Codex · DeepSeek · Kimi · Ollama',
       installLabel: '安装',
       tryOnline: '在线体验',

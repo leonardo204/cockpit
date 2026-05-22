@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Cockpit Bridge",
+  "name": "OpenCockpit Bridge",
   "version": "1.0.1",
-  "description": "Cockpit 浏览器气泡的链接拦截与导航通信桥",
+  "description": "OpenCockpit 浏览器气泡的链接拦截与导航通信桥",
   "permissions": ["storage", "declarativeNetRequest", "cookies", "webRequest", "webNavigation", "tabs", "scripting"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [

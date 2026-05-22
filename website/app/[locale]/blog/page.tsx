@@ -21,16 +21,16 @@ export async function generateMetadata({
     title: t.blog.title,
     description: t.blog.desc,
     alternates: {
-      canonical: `https://cocking.cc/${locale}/blog/`,
+      canonical: `https://opencockpit.dev/${locale}/blog/`,
       languages: {
-        en: 'https://cocking.cc/en/blog/',
-        zh: 'https://cocking.cc/zh/blog/',
+        en: 'https://opencockpit.dev/en/blog/',
+        zh: 'https://opencockpit.dev/zh/blog/',
       },
     },
     openGraph: {
-      title: `${t.blog.title} · Cockpit`,
+      title: `${t.blog.title} · OpenCockpit`,
       description: t.blog.desc,
-      url: `https://cocking.cc/${locale}/blog/`,
+      url: `https://opencockpit.dev/${locale}/blog/`,
       type: 'website',
     },
   };

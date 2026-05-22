@@ -134,7 +134,7 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
     </text>
   </g>
   <text x="${W - 80}" y="585" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" fill="#5a6b78">
-    cocking.cc
+    opencockpit.dev
   </text>
   <text x="${W - 80}" y="610" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#3f4d57">
     MIT · open source

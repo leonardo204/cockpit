@@ -33,10 +33,10 @@ export async function generateMetadata({
     title: t.changelog.title,
     description: t.changelog.desc,
     alternates: {
-      canonical: `https://cocking.cc/${locale}/changelog/`,
+      canonical: `https://opencockpit.dev/${locale}/changelog/`,
       languages: {
-        en: 'https://cocking.cc/en/changelog/',
-        zh: 'https://cocking.cc/zh/changelog/',
+        en: 'https://opencockpit.dev/en/changelog/',
+        zh: 'https://opencockpit.dev/zh/changelog/',
       },
     },
   };
