@@ -87,7 +87,7 @@ export const POST = handler((request) =>
 
     const prompt =
       typeof rawPrompt === 'string'
-        ? resolveCommandPrompt(rawPrompt, language)
+        ? resolveCommandPrompt(rawPrompt, language, request)
         : rawPrompt;
     if (!prompt || typeof prompt !== 'string') {
       return yield* Effect.fail(

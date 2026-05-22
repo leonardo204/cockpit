@@ -641,20 +641,142 @@ export async function buildCodeIndex(cwd: string): Promise<CodeIndex> {
 const indexCache = new Map<string, CodeIndex>();
 const inflight = new Map<string, Promise<CodeIndex>>();
 
+// ────────────────────────────────────────────────────────────────────────────
+// Watcher integration — lazy incremental sync on access.
+//
+// Design: the watcher pushes "this cwd has a changed file" events to us via
+// `markIndexDirty`. We DON'T re-parse eagerly — we just remember the cwd is
+// dirty, and the next `getCodeIndex` call drains the dirty flag by stat'ing
+// every indexed file and re-parsing those whose mtime moved. That's what
+// `refreshFocalFile` already does, but applied across the whole index in one
+// pass instead of one focal file at a time.
+//
+// Subscription registration is inverted-of-control because codeIndex lives in
+// @cockpit/feature-explorer (a package) and fileWatcher lives in /src/lib
+// (the app). Boot code in /src/lib/codeIndexSync.ts calls
+// `registerWatcherSubscriber` once at startup, wiring `fileWatcher.subscribe`
+// → `markIndexDirty`. If nothing registers (tests, headless tooling), we
+// silently skip subscribing and queries still work — they just won't auto-
+// refresh on disk changes.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Cwds that need a sync pass before their next `getCodeIndex` return. */
+const dirtyCwds = new Set<string>();
+/** Cwds we've already wired up a watcher subscription for, so we don't
+ *  double-subscribe across many getCodeIndex calls. */
+const subscribedCwds = new Set<string>();
+
+/** Subscriber factory: given a cwd and an `onDirty` callback, install a
+ *  file-change subscription. Set once at boot by `src/lib/codeIndexSync.ts`. */
+export type WatcherSubscriber = (cwd: string, onDirty: () => void) => void;
+let watcherSubscriber: WatcherSubscriber | null = null;
+
+/** Called once at server boot from `src/lib/codeIndexSync.ts`. Subsequent
+ *  calls overwrite — last registration wins. */
+export function registerWatcherSubscriber(fn: WatcherSubscriber | null): void {
+  watcherSubscriber = fn;
+  // Re-subscribe any cwds we'd already subscribed to under a previous
+  // registration. Rare in practice (single boot wiring), but matters for HMR
+  // where the module reloads and the old subscription is gone.
+  if (fn) {
+    for (const cwd of subscribedCwds) {
+      fn(cwd, () => dirtyCwds.add(cwd));
+    }
+  }
+}
+
+/** Used by tests / boot code that wants to mark a cwd dirty by hand
+ *  (e.g. on agent turn-end, post-bulk-edit). Idempotent. */
+export function markIndexDirty(cwd: string): void {
+  dirtyCwds.add(cwd);
+}
+
+/** Ensure we have a watcher subscription for this cwd. No-op when no
+ *  subscriber is registered (headless / test contexts). */
+function ensureSubscribed(cwd: string): void {
+  if (subscribedCwds.has(cwd)) return;
+  subscribedCwds.add(cwd);
+  if (watcherSubscriber) {
+    watcherSubscriber(cwd, () => dirtyCwds.add(cwd));
+  }
+}
+
+/** Drain the dirty flag: stat every indexed file, re-parse the ones whose
+ *  on-disk mtime no longer matches the cached one. Uses the existing
+ *  `refreshFocalFile` for per-file work — that function already does the
+ *  stat + early-return-on-match dance, so iterating it here is correct.
+ *
+ *  Cost: O(filesInIndex) stat calls. For a typical project (~hundreds of
+ *  files), that's well under 50 ms. Re-parses are O(changed files) on top.
+ *  This runs in the foreground of `getCodeIndex`, so the first query after a
+ *  big edit pays the cost; subsequent queries are cache hits until the next
+ *  watcher event.
+ *
+ *  Note on cross-file edge staleness: refreshFocalFile only updates each file's
+ *  own outgoing/intra edges. Other files' `incomingCalls` that point AT
+ *  refreshed files stay as the last full build computed them. This matches
+ *  what cockpit's UI already accepts (see refreshFocalFile docstring) and
+ *  what CodeGraph does too. Users who need 100% accuracy hit the "Rebuild
+ *  project graph" button which fires `forceRefresh: true`. */
+async function syncDirtyIndex(cwd: string, index: CodeIndex): Promise<void> {
+  // Snapshot keys — refreshFocalFile mutates index.files in place, but the
+  // file set itself shouldn't change here (added/deleted files aren't picked
+  // up by this lightweight path; that needs a full rebuild).
+  const paths = Array.from(index.files.keys());
+  // Bound concurrency the same way buildCodeIndex does, so a 1000-file
+  // project doesn't burst stat-and-read calls.
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < paths.length) {
+      const i = cursor++;
+      try {
+        await refreshFocalFile(cwd, paths[i], index);
+      } catch {
+        // Ignore per-file errors; the next access will retry. Don't let a
+        // single unreadable file abort the whole sync.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, paths.length) }, worker));
+}
+
 export interface GetIndexOptions {
   /** Force a fresh build, dropping any cached index for this cwd. */
   forceRefresh?: boolean;
 }
 
 export async function getCodeIndex(cwd: string, opts: GetIndexOptions = {}): Promise<CodeIndex> {
-  if (opts.forceRefresh) indexCache.delete(cwd);
+  // Register a watcher subscription on first access. Cheap (Set lookup +
+  // optional callback) once-per-cwd-for-process-lifetime.
+  ensureSubscribed(cwd);
+
+  if (opts.forceRefresh) {
+    indexCache.delete(cwd);
+    dirtyCwds.delete(cwd); // forceRefresh subsumes any pending lazy sync
+  }
   const cached = indexCache.get(cwd);
-  if (cached) return cached;
+  if (cached) {
+    // Lazy flush: drain dirty before returning. Sync runs in the foreground so
+    // the caller sees fresh data. We delete the flag BEFORE the sync to make
+    // overlapping reads see consistent state (no thundering herd of syncs).
+    if (dirtyCwds.has(cwd)) {
+      dirtyCwds.delete(cwd);
+      try {
+        await syncDirtyIndex(cwd, cached);
+      } catch {
+        // Even if sync fails wholesale, return the cached (possibly stale)
+        // index — the next watcher event will re-mark dirty and retry.
+      }
+    }
+    return cached;
+  }
   const pending = inflight.get(cwd);
   if (pending) return pending;
   const p = buildCodeIndex(cwd).then((index) => {
     indexCache.set(cwd, index);
     inflight.delete(cwd);
+    // Fresh build subsumes any dirty flag that arrived during the build.
+    dirtyCwds.delete(cwd);
     return index;
   });
   inflight.set(cwd, p);
@@ -665,10 +787,12 @@ export function invalidateIndex(cwd?: string): void {
   if (!cwd) {
     indexCache.clear();
     inflight.clear();
+    dirtyCwds.clear();
     return;
   }
   indexCache.delete(cwd);
   inflight.delete(cwd);
+  dirtyCwds.delete(cwd);
 }
 
 // ============================================================================
@@ -1208,6 +1332,21 @@ export function fileFunctionsFromIndex(
 
 
 /** Drawer payload — one file's symbol tree. */
+/** Recursively drop synthetic `kind: 'unknown'` nodes (filler blocks +
+ *  imports header) from a symbol tree. These exist only for the chip-view
+ *  UI's "every line lives in some block" promise; for API consumers (AI,
+ *  Cmd+K palette, scripts) they're noise. The chip view uses
+ *  `fileFunctionsFromIndex` which already filters via `isFunctionLike`, so
+ *  trimming here doesn't affect the canvas. */
+function stripSyntheticBlocks(syms: ExtractedSymbol[]): ExtractedSymbol[] {
+  const out: ExtractedSymbol[] = [];
+  for (const s of syms) {
+    if (s.kind === 'unknown') continue;
+    out.push({ ...s, children: stripSyntheticBlocks(s.children) });
+  }
+  return out;
+}
+
 export function fileDetailFromIndex(
   index: CodeIndex,
   filePath: string,
@@ -1217,7 +1356,7 @@ export function fileDetailFromIndex(
   return {
     filePath: file.path,
     language: file.language,
-    symbols: file.symbolsTree,
+    symbols: stripSyntheticBlocks(file.symbolsTree),
   };
 }
 
@@ -1263,6 +1402,10 @@ export function searchIndex(index: CodeIndex, query: string, limit: number): Sea
         bail = true;
         return true;
       }
+      // Skip synthetic chip-view blocks (filler `__code_x_y__` + `__imports__`).
+      // Searching for 'code' / 'imports' would otherwise return dozens of these
+      // useless hits per file — noise for both Cmd+K and AI consumers.
+      if (s.kind === 'unknown') return false;
       if (s.name.toLowerCase().includes(q)) {
         symbols.push({
           type: 'symbol',
@@ -1284,4 +1427,333 @@ export function searchIndex(index: CodeIndex, query: string, limit: number): Sea
   }
 
   return { files, symbols };
+}
+
+// ============================================================================
+// /cg projections — language-model facing endpoints (callers / callees / impact)
+//
+// These power the `/cg` slash command. They return COORDINATES ONLY (file +
+// line range + qname + kind + params), never source text. The caller (AI in
+// chat) uses Read with offset=startLine, limit=endLine-startLine to fetch
+// source precisely. That separation of concerns is what keeps the chat
+// session's context budget bounded — see slashCommands.ts:cg for the prompt
+// that enforces this discipline on the AI side.
+// ============================================================================
+
+/** Caller entry — a symbol that calls the target, plus the call site lines. */
+export interface CodeGraphCaller {
+  /** The calling symbol (a function / method / class). */
+  caller: FunctionNode;
+  /** 1-based line numbers in the caller's file where the call occurs. */
+  callLines: number[];
+}
+
+/** Callee entry — a symbol that the source calls, plus the call site lines. */
+export interface CodeGraphCallee {
+  /** The called symbol. */
+  callee: FunctionNode;
+  /** 1-based line numbers in the SOURCE's file where the call occurs. */
+  callLines: number[];
+}
+
+export interface CodeGraphCallersResponse {
+  qname: string;
+  /** The target symbol's coordinates. Null when qname doesn't resolve.
+   *  When qname matches multiple files, this is the first match and
+   *  `ambiguousIn` lists the rest — caller can disambiguate with `filePath`. */
+  target: FunctionNode | null;
+  callers: CodeGraphCaller[];
+  /** When qname matches symbols in multiple files, all matching file paths.
+   *  Absent when there's only one match. */
+  ambiguousIn?: string[];
+}
+
+export interface CodeGraphCalleesResponse {
+  qname: string;
+  source: FunctionNode | null;
+  callees: CodeGraphCallee[];
+  ambiguousIn?: string[];
+}
+
+/** One node in the impact tree. The graph is a transitive closure over the
+ *  callers relation (who calls X, then who calls them, …). depth=0 is the
+ *  target itself; deeper levels are callers-of-callers. */
+export interface CodeGraphImpactNode {
+  symbol: FunctionNode;
+  /** Distance from the target. 0 = target itself; 1 = direct caller; etc. */
+  depth: number;
+}
+
+export interface CodeGraphImpactResponse {
+  qname: string;
+  target: FunctionNode | null;
+  /** Depth-limited BFS frontier. Empty when target doesn't resolve. */
+  nodes: CodeGraphImpactNode[];
+  /** True when the BFS hit the depth limit and there were more callers
+   *  beyond. Caller can re-request with higher `depth` for full coverage. */
+  truncated: boolean;
+  ambiguousIn?: string[];
+}
+
+/** Locate all symbols that match `qname`, optionally restricted to `filePath`.
+ *  qname is the source-stable id from extractSymbols (`Parent>Child` shape). */
+function findTargetFiles(
+  index: CodeIndex,
+  qname: string,
+  filePath?: string,
+): IndexedFile[] {
+  if (filePath) {
+    const f = index.files.get(filePath);
+    return f && f.symbolsByQname.has(qname) ? [f] : [];
+  }
+  const out: IndexedFile[] = [];
+  for (const f of index.files.values()) {
+    if (f.symbolsByQname.has(qname)) out.push(f);
+  }
+  return out;
+}
+
+/** Who calls this symbol — both intra-file (within the same file) and
+ *  cross-file (via incomingCalls inverted from other files' outgoing). */
+export function callersFromIndex(
+  index: CodeIndex,
+  qname: string,
+  filePath?: string,
+): CodeGraphCallersResponse {
+  const targetFiles = findTargetFiles(index, qname, filePath);
+  if (targetFiles.length === 0) {
+    return { qname, target: null, callers: [] };
+  }
+
+  const callers: CodeGraphCaller[] = [];
+  // Dedup key: (callerFile, callerQname) — same caller from multiple target
+  // files (rare but possible when qname is ambiguous) collapses to one entry
+  // with merged callLines.
+  const byKey = new Map<string, CodeGraphCaller>();
+
+  for (const tf of targetFiles) {
+    // Intra-file: tf.intraCalls where to === qname
+    for (const c of tf.intraCalls) {
+      if (c.to !== qname) continue;
+      const callerSym = tf.symbolsByQname.get(c.from);
+      if (!callerSym) continue;
+      const key = `${tf.path}|${c.from}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        for (const ln of c.lines) existing.callLines.push(ln);
+      } else {
+        const entry: CodeGraphCaller = {
+          caller: toFunctionNode(callerSym),
+          callLines: c.lines.slice(),
+        };
+        byKey.set(key, entry);
+        callers.push(entry);
+      }
+    }
+    // Cross-file: tf.incomingCalls (inverted from other files' outgoing)
+    for (const c of tf.incomingCalls) {
+      if (c.to !== qname) continue;
+      const callerFile = index.files.get(c.from.filePath);
+      const callerSym = callerFile?.symbolsByQname.get(c.from.qualifiedName);
+      if (!callerSym) continue;
+      const key = `${c.from.filePath}|${c.from.qualifiedName}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        for (const ln of c.lines) existing.callLines.push(ln);
+      } else {
+        const entry: CodeGraphCaller = {
+          caller: toFunctionNode(callerSym),
+          callLines: c.lines.slice(),
+        };
+        byKey.set(key, entry);
+        callers.push(entry);
+      }
+    }
+  }
+  // Sort each entry's lines and the overall list for determinism.
+  for (const e of callers) {
+    e.callLines.sort((a, b) => a - b);
+    e.callLines = dedupAsc(e.callLines);
+  }
+  callers.sort(
+    (a, b) =>
+      a.caller.filePath.localeCompare(b.caller.filePath) ||
+      a.caller.qualifiedName.localeCompare(b.caller.qualifiedName),
+  );
+
+  const target = toFunctionNode(targetFiles[0].symbolsByQname.get(qname)!);
+  const ambiguousIn =
+    targetFiles.length > 1 ? targetFiles.map((f) => f.path) : undefined;
+  return { qname, target, callers, ambiguousIn };
+}
+
+/** What this symbol calls — both intra-file and cross-file outgoing. */
+export function calleesFromIndex(
+  index: CodeIndex,
+  qname: string,
+  filePath?: string,
+): CodeGraphCalleesResponse {
+  const sourceFiles = findTargetFiles(index, qname, filePath);
+  if (sourceFiles.length === 0) {
+    return { qname, source: null, callees: [] };
+  }
+
+  const callees: CodeGraphCallee[] = [];
+  const byKey = new Map<string, CodeGraphCallee>();
+
+  for (const sf of sourceFiles) {
+    // Intra-file: sf.intraCalls where from === qname
+    for (const c of sf.intraCalls) {
+      if (c.from !== qname) continue;
+      const calleeSym = sf.symbolsByQname.get(c.to);
+      if (!calleeSym) continue;
+      const key = `${sf.path}|${c.to}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        for (const ln of c.lines) existing.callLines.push(ln);
+      } else {
+        const entry: CodeGraphCallee = {
+          callee: toFunctionNode(calleeSym),
+          callLines: c.lines.slice(),
+        };
+        byKey.set(key, entry);
+        callees.push(entry);
+      }
+    }
+    // Cross-file: sf.outgoingCalls where from === qname
+    for (const c of sf.outgoingCalls) {
+      if (c.from !== qname) continue;
+      const calleeFile = index.files.get(c.to.filePath);
+      const calleeSym = calleeFile?.symbolsByQname.get(c.to.qualifiedName);
+      if (!calleeSym) continue;
+      const key = `${c.to.filePath}|${c.to.qualifiedName}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        for (const ln of c.lines) existing.callLines.push(ln);
+      } else {
+        const entry: CodeGraphCallee = {
+          callee: toFunctionNode(calleeSym),
+          callLines: c.lines.slice(),
+        };
+        byKey.set(key, entry);
+        callees.push(entry);
+      }
+    }
+  }
+  for (const e of callees) {
+    e.callLines.sort((a, b) => a - b);
+    e.callLines = dedupAsc(e.callLines);
+  }
+  callees.sort(
+    (a, b) =>
+      a.callee.filePath.localeCompare(b.callee.filePath) ||
+      a.callee.qualifiedName.localeCompare(b.callee.qualifiedName),
+  );
+
+  const source = toFunctionNode(sourceFiles[0].symbolsByQname.get(qname)!);
+  const ambiguousIn =
+    sourceFiles.length > 1 ? sourceFiles.map((f) => f.path) : undefined;
+  return { qname, source, callees, ambiguousIn };
+}
+
+/** Impact radius — BFS over the callers relation. Returns all symbols that
+ *  transitively call the target, up to `depth` hops. Used for "if I change X,
+ *  what should I re-test?" style queries. Soft node cap prevents runaway
+ *  blow-ups on heavily-called utility symbols. */
+const IMPACT_NODE_CAP = 500;
+
+export function impactFromIndex(
+  index: CodeIndex,
+  qname: string,
+  depth: number,
+  filePath?: string,
+): CodeGraphImpactResponse {
+  const targetFiles = findTargetFiles(index, qname, filePath);
+  if (targetFiles.length === 0) {
+    return { qname, target: null, nodes: [], truncated: false };
+  }
+
+  const safeDepth = Math.min(Math.max(depth, 1), 5);
+  const target = toFunctionNode(targetFiles[0].symbolsByQname.get(qname)!);
+  const ambiguousIn =
+    targetFiles.length > 1 ? targetFiles.map((f) => f.path) : undefined;
+
+  // BFS frontier. Key = `${filePath}|${qname}` so same-named symbols in
+  // different files stay distinct. Depth=0 entries are the seeds (target +
+  // any ambiguous siblings) — we keep them in the result so the caller can
+  // see what was matched, but they don't count against IMPACT_NODE_CAP.
+  type Seed = { filePath: string; qname: string };
+  const seeds: Seed[] = targetFiles.map((f) => ({
+    filePath: f.path,
+    qname,
+  }));
+  const visited = new Set<string>(seeds.map((s) => `${s.filePath}|${s.qname}`));
+  const nodes: CodeGraphImpactNode[] = seeds.map((s) => {
+    const sym = index.files.get(s.filePath)!.symbolsByQname.get(s.qname)!;
+    return { symbol: toFunctionNode(sym), depth: 0 };
+  });
+
+  let frontier: Seed[] = seeds.slice();
+  let truncated = false;
+
+  for (let d = 1; d <= safeDepth; d++) {
+    const next: Seed[] = [];
+    for (const cur of frontier) {
+      const curFile = index.files.get(cur.filePath);
+      if (!curFile) continue;
+
+      // Each caller of `cur.qname` becomes a candidate next-level node.
+      // We reuse the single-symbol logic from callersFromIndex but flatten —
+      // calling callersFromIndex per node would re-scan all targetFiles for
+      // each, wasting work.
+      for (const c of curFile.intraCalls) {
+        if (c.to !== cur.qname) continue;
+        const callerSym = curFile.symbolsByQname.get(c.from);
+        if (!callerSym) continue;
+        const key = `${curFile.path}|${c.from}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        nodes.push({ symbol: toFunctionNode(callerSym), depth: d });
+        next.push({ filePath: curFile.path, qname: c.from });
+        if (nodes.length >= IMPACT_NODE_CAP) {
+          truncated = true;
+          break;
+        }
+      }
+      if (truncated) break;
+      for (const c of curFile.incomingCalls) {
+        if (c.to !== cur.qname) continue;
+        const callerFile = index.files.get(c.from.filePath);
+        const callerSym = callerFile?.symbolsByQname.get(
+          c.from.qualifiedName,
+        );
+        if (!callerSym) continue;
+        const key = `${c.from.filePath}|${c.from.qualifiedName}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        nodes.push({ symbol: toFunctionNode(callerSym), depth: d });
+        next.push({
+          filePath: c.from.filePath,
+          qname: c.from.qualifiedName,
+        });
+        if (nodes.length >= IMPACT_NODE_CAP) {
+          truncated = true;
+          break;
+        }
+      }
+      if (truncated) break;
+    }
+    if (truncated || next.length === 0) break;
+    frontier = next;
+  }
+
+  // Stable order: depth ascending, then path/qname for determinism.
+  nodes.sort(
+    (a, b) =>
+      a.depth - b.depth ||
+      a.symbol.filePath.localeCompare(b.symbol.filePath) ||
+      a.symbol.qualifiedName.localeCompare(b.symbol.qualifiedName),
+  );
+
+  return { qname, target, nodes, truncated, ambiguousIn };
 }
