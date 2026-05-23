@@ -66,17 +66,16 @@ export const saveAgentSettings = (
 ): Effect.Effect<unknown, AppError> => httpPutJson("/api/settings", body)
 
 // ─────────────────────────────────────────────────────────
-// /api/commands — slash commands list (project + global)
+// /api/commands — builtin slash commands list.
+// (Previously also merged project/global `.claude/commands/*.md` entries;
+//  that convention is retired so the endpoint is now builtin-only and takes
+//  no parameters.)
 // ─────────────────────────────────────────────────────────
 
-export const loadSlashCommands = <T = unknown>(
-  cwd?: string
-): Effect.Effect<ReadonlyArray<T>, AppError> => {
-  const url = cwd
-    ? `/api/commands?cwd=${encodeURIComponent(cwd)}`
-    : "/api/commands"
-  return httpJson<ReadonlyArray<T>>(url)
-}
+export const loadSlashCommands = <T = unknown>(): Effect.Effect<
+  ReadonlyArray<T>,
+  AppError
+> => httpJson<ReadonlyArray<T>>("/api/commands")
 
 // ─────────────────────────────────────────────────────────
 // /api/skills

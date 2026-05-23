@@ -1,29 +1,34 @@
-import { CG_PROMPT_EN, CG_PROMPT_ZH } from './cgPrompt';
+// One file per command — body lives in `<cmd>Prompt.ts`, this file stays a
+// thin index. Adding a new builtin: create `<cmd>Prompt.ts` exporting
+// `<CMD>_PROMPT_ZH` and `<CMD>_PROMPT_EN`, then wire it here AND register a
+// matching entry in `packages/feature/agent/src/server/api/commands.ts` so the
+// autocomplete dropdown also lists it.
+//
+// `labelZh` / `labelEn` are OPTIONAL per command. Set them only when the
+// command wants to override the default neutral "问题：" / "Question: "
+// prefix attached to the user's trailing text — see `/cg` which uses
+// "探索问题：" / "Exploration: " to prime a stronger model mindset.
+import { CG_LABEL_EN, CG_LABEL_ZH, CG_PROMPT_EN, CG_PROMPT_ZH } from './cgPrompt';
+import { EX_PROMPT_EN, EX_PROMPT_ZH } from './exPrompt';
+import { FX_PROMPT_EN, FX_PROMPT_ZH } from './fxPrompt';
+import { GO_PROMPT_EN, GO_PROMPT_ZH } from './goPrompt';
+import { QA_PROMPT_EN, QA_PROMPT_ZH } from './qaPrompt';
 
-export const COMMAND_CONTENT: Record<string, Record<string, string>> = {
-  qa: {
-    zh: `进入需求澄清讨论模式
-尝试理解用户的需求并给出你对需求的理解，有不明确的点需要向我确认，避免理解不一致而导致无效的代码修改
-遵循 KISS 原则
-输出理解，不改代码`,
-    en: `Enter requirement clarification mode.
-Understand the user's needs and state your understanding.
-Ask for clarification on ambiguous points to avoid unnecessary code changes.
-Follow the KISS principle.
-Output your understanding only; do not modify code.`,
-  },
-  fx: {
-    zh: `进入bug证据链分析模式，只分析不修改代码，给出详细推理过程`,
-    en: `Enter bug evidence chain analysis mode.
-Analyze only; do not modify code.
-Provide a detailed reasoning process.`,
-  },
-  // /cg is heavy (~2500 chars) and tightly coupled to the codegraph endpoints
-  // — kept in its own file (cgPrompt.ts) so this registry stays a thin index.
-  cg: {
-    zh: CG_PROMPT_ZH,
-    en: CG_PROMPT_EN,
-  },
+interface CommandEntry {
+  zh: string;
+  en: string;
+  /** Optional override for the "問題：" / "Question: " prefix prepended to the
+   *  user's trailing text. When omitted, dispatch falls back to the default. */
+  labelZh?: string;
+  labelEn?: string;
+}
+
+export const COMMAND_CONTENT: Record<string, CommandEntry> = {
+  qa: { zh: QA_PROMPT_ZH, en: QA_PROMPT_EN },
+  fx: { zh: FX_PROMPT_ZH, en: FX_PROMPT_EN },
+  ex: { zh: EX_PROMPT_ZH, en: EX_PROMPT_EN },
+  go: { zh: GO_PROMPT_ZH, en: GO_PROMPT_EN },
+  cg: { zh: CG_PROMPT_ZH, en: CG_PROMPT_EN, labelZh: CG_LABEL_ZH, labelEn: CG_LABEL_EN },
 };
 
 /**
@@ -78,7 +83,8 @@ export function resolveCommandPrompt(
 
   const cmd = match[1];
   const lang = language.startsWith('zh') ? 'zh' : 'en';
-  const tmpl = COMMAND_CONTENT[cmd]?.[lang];
+  const entry = COMMAND_CONTENT[cmd];
+  const tmpl = entry?.[lang];
   if (!tmpl) return prompt;
 
   const baseUrl = deriveBaseUrl(req);
@@ -90,14 +96,15 @@ export function resolveCommandPrompt(
   // graph EXPLORATION; tagging the input "探索问题" / "Exploration:" up-front
   // anchors the model on graph-tool usage instead of defaulting to grep/glob.
   // Other commands keep the neutral "问题：" / "Question:" label.
-  const label = labelFor(cmd, lang, rest);
+  const label = labelFor(entry, lang);
   return rest ? `${content}\n\n${label}${rest}` : content;
 }
 
-/** Pick the right "label:" prefix for a command's trailing user text. Defaults
- *  to a neutral question label; specific commands (currently only `/cg`)
- *  override to prime a stronger mindset. */
-function labelFor(cmd: string, lang: 'zh' | 'en', _rest: string): string {
-  if (cmd === 'cg') return lang === 'zh' ? '探索问题：' : 'Exploration: ';
+/** Pick the "label:" prefix for a command's trailing user text. Uses the
+ *  entry's per-command override when set, otherwise falls back to a neutral
+ *  question label. */
+function labelFor(entry: CommandEntry, lang: 'zh' | 'en'): string {
+  const custom = lang === 'zh' ? entry.labelZh : entry.labelEn;
+  if (custom) return custom;
   return lang === 'zh' ? '问题：' : 'Question: ';
 }

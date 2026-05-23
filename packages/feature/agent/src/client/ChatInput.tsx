@@ -18,7 +18,9 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 interface CommandInfo {
   name: string;
   description: string;
-  source: 'builtin' | 'global' | 'project' | 'skill';
+  // `'global' | 'project'` (`.claude/commands/*.md`) used to be valid sources;
+  // that mechanism was retired with Claude Code's commands convention.
+  source: 'builtin' | 'skill';
   // Only present when source === 'skill'
   skillPath?: string;
   argumentHint?: string;
@@ -85,16 +87,17 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     adjustTextareaHeight();
   }, [input, adjustTextareaHeight]);
 
-  // Load command list
+  // Load command list (builtin only; project/global `.claude/commands/*.md`
+  // sourcing was retired with Claude Code's commands convention)
   useEffect(() => {
-    BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>(cwd)).then((exit) => {
+    BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>()).then((exit) => {
       if (exit._tag === 'Success') {
         setCommands(exit.value as CommandInfo[]);
       } else {
         console.error('Failed to load commands:', exit.cause);
       }
     });
-  }, [cwd]);
+  }, []);
 
   // Load skills (separate endpoint, globally-configured, ~/.cockpit/skills.json)
   const loadSkills = useCallback(async () => {
@@ -286,10 +289,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     switch (source) {
       case 'builtin':
         return t('common.builtin');
-      case 'global':
-        return t('common.global');
-      case 'project':
-        return t('common.project');
       case 'skill':
         return 'Skill';
     }
@@ -299,10 +298,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     switch (source) {
       case 'builtin':
         return 'bg-brand/15 text-brand dark:bg-brand/25 dark:text-teal-11';
-      case 'global':
-        return 'bg-green-9/15 text-green-11 dark:bg-green-9/25 dark:text-green-11';
-      case 'project':
-        return 'bg-amber-9/15 text-amber-11 dark:bg-amber-9/25 dark:text-amber-11';
       case 'skill':
         return 'bg-purple-9/15 text-purple-11 dark:bg-purple-9/25 dark:text-purple-11';
     }
@@ -347,7 +342,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
                       {cmd.name}
                     </span>
                     <span className="flex-1 text-sm text-muted-foreground truncate">
-                      {cmd.description}
+                      {cmd.source === 'builtin'
+                        ? t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })
+                        : cmd.description}
                     </span>
                     <span
                       className={`text-xs px-1.5 py-0.5 rounded ${getSourceColor(cmd.source)}`}
