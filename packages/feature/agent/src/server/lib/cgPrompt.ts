@@ -11,11 +11,15 @@
  * resolveCommandPrompt in slashCommands.ts (substituted with the live request
  * origin, so deployed reverse-proxy URLs work).
  *
- * Trailing user text is labeled "探索问题：" / "Exploration:" — not the
- * neutral "问题：" / "Question:" used by qa/fx — to prime the model into
- * graph-tool mindset rather than defaulting to grep/glob/Read. See
- * `labelFor` in slashCommands.ts.
+ * Trailing user text is labeled "探索问题：" / "Exploration:" via the
+ * CG_LABEL_* exports below — not the neutral "问题：" / "Question:" used by
+ * qa/fx/ex/go — to prime the model into graph-tool mindset rather than
+ * defaulting to grep/glob/Read. `labelFor` in slashCommands.ts picks these
+ * up automatically when this command is registered.
  */
+
+export const CG_LABEL_ZH = '探索问题：';
+export const CG_LABEL_EN = 'Exploration: ';
 
 export const CG_PROMPT_ZH = `进入项目图谱探索模式（CodeGraph）
 
