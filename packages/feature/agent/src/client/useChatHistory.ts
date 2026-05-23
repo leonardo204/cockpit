@@ -60,6 +60,12 @@ interface UseChatHistoryReturn {
     limit?: number,
     beforeTurnIndex?: number
   ) => Promise<void>;
+  // The sessionId of the JSONL file whose contents are currently
+  // displayed in `messages`. Differs from the live `sessionId` (which
+  // drifts every time the SDK emits a `system.init`) — operations that
+  // reference rendered message ids (e.g. fork) MUST use this one so the
+  // server reads the same file the client is looking at.
+  loadedSessionId: string | null;
 }
 
 // ============================================
@@ -77,6 +83,9 @@ export function useChatHistory(
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [currentTurnIndex, setCurrentTurnIndex] = useState<number | undefined>(undefined);
   const [totalTurns, setTotalTurns] = useState(0);
+  // sessionId of the file whose contents currently populate `messages`.
+  // Updated whenever a load successfully returns messages.
+  const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
 
   // Use ref to ensure callbacks use the latest reference
   const onTitleChangeRef = useRef(onTitleChange);
@@ -182,6 +191,10 @@ export function useChatHistory(
           } else {
             setMessages(data.messages);
           }
+          // Track which file the rendered messages came from. Use the sid
+          // we actually requested (data.sessionId echoes the request and
+          // may be missing in some shapes).
+          setLoadedSessionId(sid);
         }
         if (data.sessionId) {
           onSessionId(data.sessionId);
@@ -241,6 +254,9 @@ export function useChatHistory(
           // Update current turn index
           const loadedTurns = data.messages.filter((m: ChatMessage) => m.role === 'user').length;
           setCurrentTurnIndex(beforeIndex - loadedTurns);
+          // Older turns were pulled from the same file the rest of the
+          // view already represents — keep loadedSessionId in sync.
+          setLoadedSessionId(sessionId);
         }
         if (data.hasMore !== undefined) {
           setHasMoreHistory(data.hasMore);
@@ -271,6 +287,7 @@ export function useChatHistory(
     const exit = await BrowserRuntime.runPromiseExit(historyEff);
     if (exit._tag === 'Success' && exit.value?.messages && exit.value.messages.length > 0) {
       setMessages(exit.value.messages);
+      setLoadedSessionId(sid);
     } else if (exit._tag === 'Failure') {
       console.error('Failed to load history:', exit.cause);
     }
@@ -292,5 +309,6 @@ export function useChatHistory(
     loadMoreHistory,
     loadHistory,
     loadHistoryByCwdAndSessionId,
+    loadedSessionId,
   };
 }
