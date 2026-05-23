@@ -529,6 +529,32 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
   // ("47 lines hidden · loginHandler(req, res, next)") plus a
   // visual filled-bg framing — at 20 px the text felt cramped
   // against the borders.
+  //
+  // Doubles as a floor for the row's INLINE `height` style (see the
+  // five row renderers below: `Math.max(virtualItem.size, estimateRowSize(i))`).
+  // Why the clamp: even with `getItemKey` + `useLayoutEffect` reset
+  // (commit 60cd19d), the measurementsCache feedback loop can still
+  // close — `virtualItem.size` reads as ~0 → inline height becomes 0
+  // → ResizeObserver re-measures the 0-height box → 0 gets re-cached
+  // → row stays pinned at 0 → every row below it has its `start`
+  // short by 20-28 px → visual overlap at the bottom of the view
+  // ("已隐藏 N 行" rows stacking on top of each other).
+  //
+  // Two known live triggers as of this writing: (a) left + right
+  // panels both attach `ref={virtualizer.measureElement}` for the
+  // same index, racing writes for `gap-label` rows whose left side
+  // is an empty <div> (path ① in the fx report); (b) panel
+  // visibility flips via SwipeableViewContainer's translateX while
+  // a stale ResizeObserver entry fires during the hidden frame
+  // (path ② — `useLayoutEffect` doesn't refire on visibility-only
+  // changes).
+  //
+  // Clamping inline height ≥ estimate breaks the loop's "0 → 0"
+  // step at the cheapest possible point: the cache may still hold
+  // a bad value briefly, but the DOM box is forced ≥ estimate, so
+  // the next RO event writes back the real height and the cache
+  // self-heals on the next frame. Reverse direction (cache > real)
+  // is unaffected — Math.max preserves any larger measurement.
   const GAP_LABEL_HEIGHT = 28;
   const estimateRowSize = useCallback(
     (i: number) =>
@@ -730,7 +756,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           top: 0,
                           left: 0,
                           width: '100%',
-                          height: `${virtualItem.size}px`,
+                          height: `${Math.max(virtualItem.size, estimateRowSize(virtualItem.index))}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
                         className={isLabel ? 'bg-accent border-y border-border' : ''}
@@ -750,7 +776,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                         left: 0,
                         minWidth: '100%',
                         width: 'max-content',
-                        height: `${virtualItem.size}px`,
+                        height: `${Math.max(virtualItem.size, estimateRowSize(virtualItem.index))}px`,
                         transform: `translateY(${virtualItem.start}px)`,
                       }}
                       className={`flex ${line.type === 'removed' ? 'bg-red-9/15 dark:bg-red-9/25' : ''}`}
@@ -796,7 +822,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           top: 0,
                           left: 0,
                           width: '100%',
-                          height: `${virtualItem.size}px`,
+                          height: `${Math.max(virtualItem.size, estimateRowSize(virtualItem.index))}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
                         // Visible affordance:
@@ -870,7 +896,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                           top: 0,
                           left: 0,
                           width: '100%',
-                          height: `${virtualItem.size}px`,
+                          height: `${Math.max(virtualItem.size, estimateRowSize(virtualItem.index))}px`,
                           transform: `translateY(${virtualItem.start}px)`,
                         }}
                         className="flex items-center justify-center gap-2 px-3 text-[11px] text-foreground/80 bg-accent border-y border-border min-w-0 select-none"
@@ -914,7 +940,7 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                         left: 0,
                         minWidth: '100%',
                         width: 'max-content',
-                        height: `${virtualItem.size}px`,
+                        height: `${Math.max(virtualItem.size, estimateRowSize(virtualItem.index))}px`,
                         transform: `translateY(${virtualItem.start}px)`,
                       }}
                       className={`flex ${
