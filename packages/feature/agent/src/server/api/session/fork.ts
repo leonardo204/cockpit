@@ -108,19 +108,41 @@ export const POST = dynamicHandler<
           }
         }
 
-        const newPath = getClaudeSessionPath(cwd, newSessionId);
-        await writeFile(newPath, newLines.join('\n') + '\n', 'utf-8');
-        return { newSessionId, messageCount: newLines.length };
+        // Guard against silent full-file copy: if caller provided a target
+        // uuid but we never matched it, the truncation logic effectively
+        // degraded to "copy entire file" — surface that as a soft signal so
+        // the handler can return an error instead of writing a misleading
+        // forked session.
+        return {
+          newSessionId,
+          newLines,
+          targetMissed: !!fromMessageUuid && state === 'collecting',
+        };
       },
       catch: (cause) =>
-        new FSError({ path: originalPath, op: 'write', cause }),
+        new FSError({ path: originalPath, op: 'read', cause }),
+    });
+
+    if (result.targetMissed) {
+      return yield* Effect.fail(
+        new NotFoundError({
+          resource: 'message',
+          id: fromMessageUuid ?? '(unknown)',
+        })
+      );
+    }
+
+    const newPath = getClaudeSessionPath(cwd, result.newSessionId);
+    yield* Effect.tryPromise({
+      try: () => writeFile(newPath, result.newLines.join('\n') + '\n', 'utf-8'),
+      catch: (cause) => new FSError({ path: newPath, op: 'write', cause }),
     });
 
     return ok({
       success: true,
       originalSessionId,
       newSessionId: result.newSessionId,
-      messageCount: result.messageCount,
+      messageCount: result.newLines.length,
     });
   })
 );

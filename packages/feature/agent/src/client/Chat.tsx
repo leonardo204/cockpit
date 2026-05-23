@@ -141,6 +141,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     hasMoreHistory,
     loadMoreHistory,
     loadHistoryByCwdAndSessionId,
+    loadedSessionId,
   } = useChatHistory(messages, setMessages, sessionId, {
     cwd: initialCwd,
     initialSessionId,
@@ -238,12 +239,22 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isHovered, isLoading, handleStop]);
 
-  // Fork session from a specified message point
+  // Fork session from a specified message point.
+  //
+  // IMPORTANT: route the fork through `loadedSessionId` (the sessionId of
+  // the JSONL file the user is currently looking at), NOT through
+  // `sessionId` (which the SDK overwrites on every `system.init` event).
+  // The bubble id passed in is a uuid taken from the loaded file; using a
+  // drifted sessionId would point the server at a different file where
+  // that uuid may not exist, causing fork.ts to silently degrade to a
+  // full-file copy. Fall back to `sessionId` only when no file has been
+  // loaded yet (fresh tab with no history).
   const handleFork = useCallback(async (messageId: string) => {
-    if (!initialCwd || !sessionId) return;
+    const forkSid = loadedSessionId ?? sessionId;
+    if (!initialCwd || !forkSid) return;
 
     const exit = await BrowserRuntime.runPromiseExit(
-      forkSession<{ newSessionId?: string }>(sessionId, {
+      forkSession<{ newSessionId?: string }>(forkSid, {
         cwd: initialCwd,
         fromMessageUuid: messageId,
       })
@@ -261,7 +272,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     } else if (exit._tag === 'Failure') {
       console.error('Fork failed:', exit.cause);
     }
-  }, [initialCwd, sessionId, onOpenSession]);
+  }, [initialCwd, loadedSessionId, sessionId, onOpenSession]);
 
   // Stabilize ChatInput callback props, combined with React.memo to avoid unnecessary re-renders
   const handleShowComments = useCallback(() => {
