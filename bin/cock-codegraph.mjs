@@ -589,7 +589,7 @@ Prerequisites:
 Examples:
   cock codegraph search getCodeIndex
   cock codegraph related getCodeIndex --top 5
-  cock codegraph risk handleSlackMention --depth 2
+  cock codegraph risk searchIndex --depth 2
   git diff --name-only | cock codegraph affected --stdin                       # → newline test paths
   git diff --name-only | cock codegraph affected --stdin --as-cmd jest         # → jest "a" "b" …
   git diff --name-only | cock codegraph affected --stdin --as-cmd "vitest run" # → vitest run "a" "b" …
@@ -660,7 +660,7 @@ Exit: 0=callers found, 1=no callers, 2=usage/qname missing, 3=server
 Examples:
   cock codegraph callers getCodeIndex
   cock codegraph callers GET --file packages/feature/explorer/src/server/api/projectGraph/risk.ts
-  cock codegraph callers handleSlackMention --json`,
+  cock codegraph callers searchIndex --json`,
 
   callees: `Usage: cock codegraph callees <qname> [--file PATH] [--json]
 
@@ -676,7 +676,7 @@ Exit: 0=callees found, 1=none, 2=usage, 3=server
 
 Examples:
   cock codegraph callees runDialogue
-  cock codegraph callees generateReply --file apps/api/.../event-handler.ts`,
+  cock codegraph callees buildCodeIndex --file packages/feature/explorer/src/server/codeMap/projectGraph/codeIndex.ts`,
 
   impact: `Usage: cock codegraph impact <qname> [--file PATH] [--depth N=2] [--json]
 
@@ -700,7 +700,7 @@ Exit: 0=impacted nodes, 1=target only / no impact, 2=usage, 3=server
 Examples:
   cock codegraph impact getCodeIndex
   cock codegraph impact validateCwd --depth 3
-  cock codegraph impact handleSlackMention --json | jq '.nodes | length'`,
+  cock codegraph impact searchIndex --json | jq '.nodes | length'`,
 
   file: `Usage: cock codegraph file <path> [--json]
 
@@ -717,7 +717,7 @@ Exit: 0=symbols found, 1=empty file / not indexed, 2=usage, 3=server
 
 Examples:
   cock codegraph file packages/feature/explorer/src/server/codeMap/types.ts
-  cock codegraph file apps/api/src/features/agent-integrations/event-handler.ts --json`,
+  cock codegraph file packages/feature/explorer/src/server/codeMap/projectGraph/codeIndex.ts --json`,
 
   coedit: `Usage: cock codegraph coedit <path> [--commits N=100] [--json]
 
@@ -739,7 +739,7 @@ Output (plain, TAB-separated):
 Exit: 0=signal found, 1=no cooccurrence (totalCommits may be 0), 2=usage, 3=server
 
 Examples:
-  cock codegraph coedit apps/api/.../event-handler.ts
+  cock codegraph coedit packages/feature/explorer/src/server/codeMap/projectGraph/codeIndex.ts
   cock codegraph coedit packages/feature/agent/src/server/lib/cgPrompt.ts --commits 500`,
 
   context: `Usage: cock codegraph context [--query Q] [--cursor C] [--open F1,F2,...]
@@ -837,7 +837,7 @@ Stderr:
 Exit: 0=high-risk nodes returned, 1=qname not found, 2=usage, 3=server
 
 Examples:
-  cock codegraph risk handleSlackMention
+  cock codegraph risk searchIndex
   cock codegraph risk getCodeIndex --depth 3 --top 10
   cock codegraph risk validateCwd --json | jq '.suggestedTests[].filePath'`,
 

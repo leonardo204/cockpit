@@ -52,6 +52,7 @@ import type {
   FileFunctionsResponse,
   FunctionNode,
   IntraCallEdge,
+  LiteralHit,
   MethodCallEdge,
   SearchHit,
   SearchResponse,
@@ -74,6 +75,32 @@ import { getHandler } from '../handlers';
 export interface SymbolAddr {
   filePath: string;
   qualifiedName: string;
+}
+
+/** An identifier-shaped string literal harvested from the source.
+ *
+ *  Why this exists: AST extraction only sees IDENTIFIERS (function /
+ *  class / variable names). Tool names, event names, route paths,
+ *  config keys and similar are commonly STRING LITERALS in source:
+ *
+ *    return { name: "user_profile", description: "...", ... }
+ *
+ *  Such strings are semantically equivalent to symbols for "where is
+ *  X used / defined" queries — but `searchIndex` over `flatSymbols`
+ *  alone misses them. `IndexedFile.literals` carries this second pool
+ *  so `searchIndex({ includeLiterals: true })` can serve hits from it.
+ *
+ *  Filtered at extraction time to identifier-shaped strings (regex
+ *  `^[A-Za-z][A-Za-z0-9_.-]{2,63}$`) so we don't index SQL fragments,
+ *  JSX text, or human-readable error messages. */
+export interface IndexedLiteral {
+  /** Literal text (quotes already stripped). */
+  value: string;
+  /** 1-based line where the literal occurs in the file. */
+  line: number;
+  /** qname of the smallest enclosing function/class/method, if any.
+   *  Undefined for top-level / module-scope literals. */
+  enclosingQname?: string;
 }
 
 /** Flat record per symbol — used for the global byName lookup during call
@@ -103,6 +130,11 @@ export interface IndexedFile {
   symbolsTree: ExtractedSymbol[];
   /** Flattened symbols, used by `findEnclosing` and the call resolver. */
   flatSymbols: IndexedSymbol[];
+  /** Identifier-shaped string literals harvested from the source.
+   *  Searched only when `searchIndex(..., { includeLiterals: true })`.
+   *  See `IndexedLiteral` for the filtering contract. Empty array when
+   *  no qualifying literals were found in the file. */
+  literals: IndexedLiteral[];
   /** Resolved file → file edges (set of project-relative target paths). */
   importedFiles: Set<string>;
   /** Inverse of `importedFiles`. Filled in pass 2 of build. */
@@ -248,6 +280,9 @@ interface ParsedFile {
   importBindings: ImportBinding[];
   importSpecifiers: string[];
   rawCalls: Array<{ calleeName: string; line: number; receiverName?: string }>;
+  /** Identifier-shaped string literals (post-filter). See
+   *  `extractStringLiterals` for the regex / size contract. */
+  literals: IndexedLiteral[];
 }
 
 function flattenSymbols(filePath: string, syms: ExtractedSymbol[]): IndexedSymbol[] {
@@ -267,6 +302,77 @@ function flattenSymbols(filePath: string, syms: ExtractedSymbol[]): IndexedSymbo
     }
   }
   walk(syms);
+  return out;
+}
+
+// ============================================================================
+// String-literal harvest (for searchIndex { includeLiterals: true })
+// ============================================================================
+
+/** Matches a string literal whose body looks like an identifier / dotted
+ *  key / kebab-or-snake-case name. Quote opens with `'`, `"`, or `` ` ``;
+ *  body is 3–64 chars of `[A-Za-z0-9_.-]` starting with a letter; quote
+ *  closes with the SAME character (no escapes / no interpolation tokens,
+ *  since those wouldn't be identifier-shaped anyway).
+ *
+ *  Tuned to catch: tool names (`user_profile`), event names
+ *  (`task.created`), config keys (`FEATURE_X_ENABLED`), route paths
+ *  (`api.v1.users`), cron specs (`hello-world-cron`).
+ *  Tuned to skip: SQL fragments (whitespace), JSX text (whitespace /
+ *  punctuation), URLs (`/`), prose (whitespace / punctuation), tiny
+ *  noise (1–2 chars), oversize prompts (> 64 chars). */
+const IDENT_STRING_RE =
+  /(['"`])([A-Za-z][A-Za-z0-9_.-]{2,63})\1/g;
+
+/** Per-file cap. A 1 MB file already capped above; this guards the
+ *  pathological case of a generated `enum` of thousands of names. */
+const MAX_LITERALS_PER_FILE = 500;
+
+/** Walk the raw source for identifier-shaped string literals. Returns
+ *  hits with 1-based line numbers, attributed to the smallest enclosing
+ *  flat symbol when possible. Deduplicated by `(value, line)` so two
+ *  occurrences of `"foo"` on the same line collapse to one hit. */
+function extractStringLiterals(
+  source: string,
+  flatSymbols: IndexedSymbol[],
+): IndexedLiteral[] {
+  const out: IndexedLiteral[] = [];
+  const seen = new Set<string>();
+
+  // Precompute line offsets once — `source.slice(0, idx).split("\n").length`
+  // is O(n) per match and quickly becomes the dominant cost on big files.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source.charCodeAt(i) === 10 /* \n */) lineStarts.push(i + 1);
+  }
+  // Binary search: largest j with lineStarts[j] <= idx → line = j + 1.
+  function lineOf(idx: number): number {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if (lineStarts[mid] <= idx) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  }
+
+  IDENT_STRING_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = IDENT_STRING_RE.exec(source)) !== null) {
+    if (out.length >= MAX_LITERALS_PER_FILE) break;
+    const value = m[2];
+    const line = lineOf(m.index);
+    const key = `${value} ${line}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const enclosing = findEnclosingFlat(flatSymbols, line);
+    out.push({
+      value,
+      line,
+      ...(enclosing ? { enclosingQname: enclosing.qualifiedName } : {}),
+    });
+  }
   return out;
 }
 
@@ -310,6 +416,10 @@ async function parseOneFile(absPath: string, relPath: string): Promise<ParsedFil
     const { specs: importSpecifiers, bindings: importBindings } =
       handler.extractImports(tree.rootNode);
     const rawCalls = handler.extractCallSites(tree.rootNode, flatSymbols);
+    // Literal harvest runs on the same source we just parsed — language-
+    // agnostic regex, no extra IO. Skipped on minified bundles by the
+    // 1 MB size cap above; sub-ms per typical source file.
+    const literals = extractStringLiterals(source, flatSymbols);
     return {
       path: relPath,
       language: grammar,
@@ -319,6 +429,7 @@ async function parseOneFile(absPath: string, relPath: string): Promise<ParsedFil
       importBindings,
       importSpecifiers,
       rawCalls,
+      literals,
     };
   } finally {
     tree.delete();
@@ -435,6 +546,7 @@ export async function buildCodeIndex(cwd: string): Promise<CodeIndex> {
       mtime: f.mtime,
       symbolsTree: f.symbolsTree,
       flatSymbols: f.flatSymbols,
+      literals: f.literals,
       importedFiles,
       importedBy: new Set(),
       importBindings: f.importBindings,
@@ -923,6 +1035,7 @@ export async function refreshFocalFile(
     mtime: parsed.mtime,
     symbolsTree: parsed.symbolsTree,
     flatSymbols: parsed.flatSymbols,
+    literals: parsed.literals,
     importedFiles,
     // Inverse of other files' `importedFiles`; we're not re-parsing
     // other files, so the previous build's view is still our best
@@ -1390,18 +1503,82 @@ function walkSymbols(
 }
 
 /**
- * Cmd+K palette search. Substring (case-insensitive) match — fast enough for
- * typical projects (<10k symbols) without needing a fancy fuzzy scorer. Each
- * category capped at `limit`.
+ * Collapse case + word separators so naming-style variants of the same
+ * concept all hash to one string:
+ *
+ *   user_profile   → userprofile
+ *   userProfile    → userprofile
+ *   user-profile   → userprofile
+ *   USER_PROFILE   → userprofile
+ *   User.Profile   → userprofile
+ *
+ * Why: the AI agent (and humans) freely mix snake / camel / kebab when
+ * referring to the same concept — a snake_case name in the public API
+ * surface (tool name, config key, event name) is commonly the camelCase
+ * identifier in source. Without normalization, querying with the form
+ * the user happens to remember returns zero hits, forcing trial-and-
+ * error. Run on BOTH the query and the indexed name so any variant
+ * collides on any other.
+ *
+ * Keeps `.` collapsed too so `task.created` matches `taskCreated` and
+ * vice versa — same trade-off as the others. Digits pass through
+ * untouched (`v2.api` → `v2api`).
  */
-export function searchIndex(index: CodeIndex, query: string, limit: number): SearchResponse {
-  const q = query.trim().toLowerCase();
-  if (!q) return { files: [], symbols: [] };
+function normalizeForSearch(s: string): string {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    // Skip the four separators we treat as equivalent to camel-case
+    // word boundaries: `_`, `-`, `.`, space.
+    if (c === 0x5f || c === 0x2d || c === 0x2e || c === 0x20) continue;
+    // ASCII upper → lower. Non-ASCII (CJK / Latin extended) passes
+    // through; they don't have case-mixing styles that need folding.
+    out += c >= 0x41 && c <= 0x5a ? String.fromCharCode(c + 32) : s[i];
+  }
+  return out;
+}
+
+/** Options for `searchIndex`. All optional, backward-compatible defaults. */
+export interface SearchIndexOptions {
+  /** When true, also walk `IndexedFile.literals` and surface matches in
+   *  `SearchResponse.literals`. Off by default to keep responses small
+   *  for the common case (Cmd+K palette, which only cares about
+   *  identifiers). The AI-facing search route flips this to true when
+   *  the caller passes `?includeLiterals=true`. */
+  includeLiterals?: boolean;
+}
+
+/**
+ * Cmd+K palette search (also the backbone of the AI-facing
+ * `/api/projectGraph/search` endpoint). Substring match against a
+ * separator/case-normalized form so `user_profile`, `userProfile`,
+ * `user-profile` etc. all collide on the same query. Fast enough for
+ * typical projects (<10k symbols) without needing a fuzzy scorer. Each
+ * category capped at `limit`.
+ *
+ * When `opts.includeLiterals` is set, also matches against
+ * `IndexedFile.literals` (identifier-shaped string literals harvested
+ * at index time) — covers tool names / event names / config keys that
+ * never appear as identifiers and would otherwise return zero hits.
+ */
+export function searchIndex(
+  index: CodeIndex,
+  query: string,
+  limit: number,
+  opts: SearchIndexOptions = {},
+): SearchResponse {
+  const qRaw = query.trim();
+  if (!qRaw) {
+    return opts.includeLiterals
+      ? { files: [], symbols: [], literals: [] }
+      : { files: [], symbols: [] };
+  }
+  const q = normalizeForSearch(qRaw);
 
   const files: SearchHit[] = [];
   for (const f of index.files.values()) {
     if (files.length >= limit) break;
-    if (f.path.toLowerCase().includes(q)) {
+    if (normalizeForSearch(f.path).includes(q)) {
       files.push({
         type: 'file',
         label: basename(f.path),
@@ -1423,7 +1600,7 @@ export function searchIndex(index: CodeIndex, query: string, limit: number): Sea
       // Searching for 'code' / 'imports' would otherwise return dozens of these
       // useless hits per file — noise for both Cmd+K and AI consumers.
       if (s.kind === 'unknown') return false;
-      if (s.name.toLowerCase().includes(q)) {
+      if (normalizeForSearch(s.name).includes(q)) {
         symbols.push({
           type: 'symbol',
           label: s.name,
@@ -1443,7 +1620,27 @@ export function searchIndex(index: CodeIndex, query: string, limit: number): Sea
     if (bail) break outer;
   }
 
-  return { files, symbols };
+  if (!opts.includeLiterals) return { files, symbols };
+
+  const literals: LiteralHit[] = [];
+  litLoop: for (const f of index.files.values()) {
+    for (const lit of f.literals) {
+      if (literals.length >= limit) break litLoop;
+      if (normalizeForSearch(lit.value).includes(q)) {
+        literals.push({
+          type: 'literal',
+          value: lit.value,
+          filePath: f.path,
+          line: lit.line,
+          ...(lit.enclosingQname
+            ? { enclosingSymbol: lit.enclosingQname }
+            : {}),
+        });
+      }
+    }
+  }
+
+  return { files, symbols, literals };
 }
 
 // ============================================================================
