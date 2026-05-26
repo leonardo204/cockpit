@@ -28,7 +28,9 @@ export async function generateMetadata({
   const t = getMessages(locale);
   return {
     title: t.hero.headline,
-    description: t.hero.description,
+    // SEO description (≤160 chars). Separate from `hero.description`,
+    // which is the long visible tagline shown in the Hero section.
+    description: t.hero.metaDescription,
     alternates: {
       canonical: `${SITE_URL}/${locale}/`,
       languages: {
@@ -39,14 +41,22 @@ export async function generateMetadata({
     },
     openGraph: {
       title: t.hero.headline,
-      description: t.hero.description,
+      description: t.hero.metaDescription,
       url: `${SITE_URL}/${locale}/`,
       siteName: 'OpenCockpit',
       type: 'website',
       locale: locale === 'zh' ? 'zh_CN' : 'en_US',
+      // Tell social platforms the other-language variant exists.
+      alternateLocale: locale === 'zh' ? ['en_US'] : ['zh_CN'],
       images: [
         { url: '/og.png', width: 1200, height: 630, alt: t.hero.headline },
       ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: t.hero.headline,
+      description: t.hero.metaDescription,
+      images: ['/og.png'],
     },
   };
 }
@@ -117,11 +127,12 @@ export default async function HomePage({
       'Chrome browser automation',
       'PostgreSQL / MySQL / Redis bubbles',
       'LAN-shared code review',
-      'Slash modes: /qa, /fx, /ex, /go, /cg',
+      'Slash modes: /qa, /fx, /ex, /go, /cg, /cc',
       'Custom skills via SKILL.md',
       'Scheduled tasks (one-time, interval, cron)',
       'Code Map — onboard new codebases by walking the call graph (TS/JS/Python/Go/Rust)',
-      'CodeGraph — a code graph for AI agents: 6 HTTP endpoints expose the project graph (symbol / callers / impact / co-edit); /cg slash command primes graph-first exploration',
+      'CodeGraph — a code graph for AI agents: 10 HTTP endpoints (6 base: symbol / callers / callees / impact / file / coedit + 4 analytics: context / related / risk / affected, powered by PageRank · PPR · TF-IDF · Louvain with zero training); /cg slash command primes graph-first exploration',
+      'Cockpit CLI: line-oriented client for the agent — codegraph / terminal / browser subcommands, each self-documenting via --help; /cc slash command teaches the agent the CLI surface',
     ],
   };
 

@@ -18,14 +18,35 @@ export async function generateMetadata({
   const { locale } = await params;
   if (!isLocale(locale)) return {};
   const t = getMessages(locale);
+  const url = `https://opencockpit.dev/${locale}/docs/`;
   return {
     title: t.docs.title,
+    description: t.docs.description,
     alternates: {
-      canonical: `https://opencockpit.dev/${locale}/docs/`,
+      canonical: url,
       languages: {
         en: 'https://opencockpit.dev/en/docs/',
         zh: 'https://opencockpit.dev/zh/docs/',
+        'x-default': 'https://opencockpit.dev/en/docs/',
       },
+    },
+    openGraph: {
+      title: `${t.docs.title} · OpenCockpit`,
+      description: t.docs.description,
+      url,
+      siteName: 'OpenCockpit',
+      type: 'website',
+      locale: locale === 'zh' ? 'zh_CN' : 'en_US',
+      alternateLocale: locale === 'zh' ? ['en_US'] : ['zh_CN'],
+      images: [
+        { url: '/og.png', width: 1200, height: 630, alt: `${t.docs.title} · OpenCockpit` },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${t.docs.title} · OpenCockpit`,
+      description: t.docs.description,
+      images: ['/og.png'],
     },
   };
 }

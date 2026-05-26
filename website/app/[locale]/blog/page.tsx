@@ -25,13 +25,26 @@ export async function generateMetadata({
       languages: {
         en: 'https://opencockpit.dev/en/blog/',
         zh: 'https://opencockpit.dev/zh/blog/',
+        'x-default': 'https://opencockpit.dev/en/blog/',
       },
     },
     openGraph: {
       title: `${t.blog.title} · OpenCockpit`,
       description: t.blog.desc,
       url: `https://opencockpit.dev/${locale}/blog/`,
+      siteName: 'OpenCockpit',
       type: 'website',
+      locale: locale === 'zh' ? 'zh_CN' : 'en_US',
+      alternateLocale: locale === 'zh' ? ['en_US'] : ['zh_CN'],
+      images: [
+        { url: '/og.png', width: 1200, height: 630, alt: `${t.blog.title} · OpenCockpit` },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${t.blog.title} · OpenCockpit`,
+      description: t.blog.desc,
+      images: ['/og.png'],
     },
   };
 }

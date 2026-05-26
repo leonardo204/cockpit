@@ -40,16 +40,20 @@ export async function generateMetadata({
       languages: {
         en: `${SITE_URL}/en/blog/${slug}/`,
         zh: `${SITE_URL}/zh/blog/${slug}/`,
+        'x-default': `${SITE_URL}/en/blog/${slug}/`,
       },
     },
     openGraph: {
       title: c.title,
       description: c.description,
       url,
+      siteName: 'OpenCockpit',
       type: 'article',
       publishedTime: post.date,
       authors: ['Robert'],
       tags: post.keywords,
+      locale: locale === 'zh' ? 'zh_CN' : 'en_US',
+      alternateLocale: locale === 'zh' ? ['en_US'] : ['zh_CN'],
       images: [
         {
           url: '/og.png',
