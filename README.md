@@ -49,7 +49,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 | Agent can't reach your browser / DB | **Smart Bubbles**: Chrome, PostgreSQL, MySQL, Redis — drivable by the agent |
 | Reading an unfamiliar repo means a 90-min file-tree scavenger hunt | **Code Map** chip view — caller / callee pins, click to walk the call graph |
 | Reviewing AI output is friction | **LAN-shared review pages**, line-level comments, send any comment back as AI context |
-| Same "do X but don't change code" prompt every day | **Slash modes** `/qa /fx /review /commit` + custom `~/.claude/commands/*.md` |
+| Same "do X but don't change code" prompt every day | **Slash modes** `/qa /fx /ex /go /cg /cc` + custom `SKILL.md` via the Skills sidebar |
 | No automation hooks | One-time / interval / cron-based **scheduled tasks** |
 | "Cloud relay" trust concerns | **Fully local**. No telemetry. Keys (Codex / DeepSeek / Kimi) stay in `~/.cockpit/settings.json` on your laptop. |
 
@@ -80,7 +80,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 - Git **blame**, diff view, branch switching, **worktree** management
 - **LSP integration** — go to definition, find references, hover info
 - **Code Map** — every function as a chip with caller / callee pins; click to walk the call graph. Multi-language: TS/JS, Python, Go, Rust. No LSP, no project setup, works offline.
-- **CodeGraph** — a **code graph** for the agent: same tree-sitter index exposed as 6 HTTP endpoints (`search` / `callers` / `callees` / `impact` / `file` / `coedit`) so the agent queries coordinates instead of grepping text; trigger with `/cg` from chat. Coordinates only, never source — precise, cheap, and catches the conventional coupling no regex can.
+- **CodeGraph** — a **code graph** for the agent: same tree-sitter index exposed as 10 HTTP endpoints — 6 base (`search` / `callers` / `callees` / `impact` / `file` / `coedit`) + 4 analytics (`context` / `related` / `risk` / `affected`, powered by PageRank · PPR · TF-IDF · Louvain, zero training) — so the agent queries coordinates instead of grepping text; trigger with `/cg` from chat. Coordinates only, never source — precise, cheap, and catches the conventional coupling no regex can.
 - Fuzzy file search (Cmd+F), JSON viewer, Markdown preview
 
 ### Console — Terminal & smart Bubbles
@@ -103,10 +103,11 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 
 - `/qa` — **Clarify-only**: restate, ask back, never code
 - `/fx` — **Diagnose-only**: bug evidence chain, never edit
-- `/review` — read the diff, write notes, no rewrites
-- `/commit` — stage + draft a message in your repo's style + commit
-- `/cg` — **CodeGraph** project exploration: 6 HTTP endpoints for symbol / callers / impact / co-edit queries (precise where grep is fuzzy)
-- **Custom**: drop any `*.md` into `~/.claude/commands/` or `./.claude/commands/` → instant slash command
+- `/ex` — **Explore**: 6-step structured discussion skeleton (study → diverge → converge → re-diverge → iterate-verify → summarize)
+- `/go` — **Land**: take a converged plan, slice into MVP stages, write + self-verify per stage, recap at end
+- `/cg` — **CodeGraph** project exploration: 10 HTTP endpoints for symbol / callers / impact / co-edit / risk / affected queries (precise where grep is fuzzy)
+- `/cc` — **Cockpit CLI**: drive the cockpit CLI surface — codegraph subcommands, terminal observation, browser automation
+- **Custom**: drop any `SKILL.md` and add it via the Skills sidebar — it auto-appears in the slash autocomplete menu (see [Skills](#skills--extensibility))
 
 ### Scheduled tasks — Cron for AI
 
@@ -125,7 +126,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 - **Day one in an unfamiliar repo:** Open it in Code Map, click through caller/callee pins, walk the auth flow in five clicks instead of a 90-minute file-tree scavenger hunt.
 - **Two-person team:** Senior reviews via LAN-shared review page, no GitHub PR round-trip needed for in-progress work.
 - **Reviewing AI-generated PRs:** Switch the changed files into Code Map — changed functions are highlighted with their callers / callees still drawn around them, so blast-radius is one click away.
-- **Full-stack chore mode:** `/fx` in one tab on a backend bug, `/review` in another on the frontend diff, `/commit` to wrap up — three slash modes, three different agent postures.
+- **Full-stack chore mode:** `/fx` in one tab on a backend bug, `/ex` in another to plan the frontend refactor, `/go` to land it — three slash modes, three different agent postures.
 - **Cheap second opinion:** Same prompt in two tabs — Claude in one, **DeepSeek v4-pro** in the other — compare answers before you trust either.
 - **AI-driven QA:** Browser Bubble + scheduled task = "every night at 2 AM, run this UI smoke flow and post a summary".
 - **Privacy-sensitive code:** runs on your laptop. Pair with an **Ollama** tab for fully air-gapped sessions. No telemetry, no relay.

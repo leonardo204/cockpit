@@ -29,15 +29,35 @@ export async function generateMetadata({
   const { locale } = await params;
   if (!isLocale(locale)) return {};
   const t = getMessages(locale);
+  const url = `https://opencockpit.dev/${locale}/changelog/`;
   return {
     title: t.changelog.title,
     description: t.changelog.desc,
     alternates: {
-      canonical: `https://opencockpit.dev/${locale}/changelog/`,
+      canonical: url,
       languages: {
         en: 'https://opencockpit.dev/en/changelog/',
         zh: 'https://opencockpit.dev/zh/changelog/',
+        'x-default': 'https://opencockpit.dev/en/changelog/',
       },
+    },
+    openGraph: {
+      title: `${t.changelog.title} · OpenCockpit`,
+      description: t.changelog.desc,
+      url,
+      siteName: 'OpenCockpit',
+      type: 'website',
+      locale: locale === 'zh' ? 'zh_CN' : 'en_US',
+      alternateLocale: locale === 'zh' ? ['en_US'] : ['zh_CN'],
+      images: [
+        { url: '/og.png', width: 1200, height: 630, alt: `${t.changelog.title} · OpenCockpit` },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${t.changelog.title} · OpenCockpit`,
+      description: t.changelog.desc,
+      images: ['/og.png'],
     },
   };
 }

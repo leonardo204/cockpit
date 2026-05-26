@@ -14,6 +14,9 @@ export const messages = {
       pronounce: '/ˈkɒkpɪt/ — like an aircraft cockpit',
       description:
         'OpenCockpit is the open-source Claude Code GUI — and a single canvas for whatever agent you bring next. Multi-project Claude sessions out of the box; pop open a tab for Codex, DeepSeek, Kimi, or local Ollama whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.',
+      // SEO ≤160 chars — used by metadata only, not visible on the page. Don't merge with description.
+      metaDescription:
+        'Open-source Claude Code GUI — parallel AI coding across projects. Codex/DeepSeek/Kimi/Ollama tabs, terminal, Chrome & DB bubbles, code graph. Local, MIT.',
       installLabel: 'Install',
       tryOnline: 'Try Online',
       githubStar: 'Star on GitHub',
@@ -149,11 +152,12 @@ export const messages = {
     codeGraph: {
       tag: 'Agent · /cg Mode',
       headline: 'Give the AI a query graph, not a grep',
-      desc: 'A code graph is the missing layer between your AI agent and your codebase. Code Map is for your eyes; CodeGraph is for the agent. The same tree-sitter index that powers Code Map is exposed as 6 HTTP endpoints — symbol search, callers, callees, impact, file tree, co-edit history — so the agent queries coordinates instead of grepping text and Reading whole files.',
+      desc: 'A code graph is the missing layer between your AI agent and your codebase. Code Map is for your eyes; CodeGraph is for the agent. The same tree-sitter index that powers Code Map is exposed as 10 HTTP endpoints — symbol search, callers, callees, impact, file tree, co-edit history, plus four analytics layers (context, related, risk, affected) — so the agent queries coordinates instead of grepping text and Reading whole files.',
       bullets: [
-        '6 endpoints answer 6 question shapes: "where is X" / "who calls X" / "X calls what" / "changing X affects what" / "what symbols in F" / "what files are edited with F".',
+        '10 endpoints across two tiers: 6 base shapes ("where is X" / "who calls X" / "X calls what" / "changing X affects what" / "what symbols in F" / "what files are edited with F") + 4 analytics shapes (semantic context, related symbols, risk-scored impact, test-file closure).',
         'Returns coordinates only (file / line range / qname) — agent uses Read with precise offset+limit to fetch source, not full files.',
         'Co-edit endpoint catches "must-edit-together" file pairs that no static analysis can see: parallel registries, double-writes, sibling .md configs.',
+        'Analytics layer (PageRank / PPR / TF-IDF / Louvain) runs locally with no model training — ranks risk, finds semantically related code, computes affected test files.',
         'Incrementally synced via file watcher — no rebuild step; the index stays current across mid-PR edits and AI bulk changes.',
         '/cg slash command primes the agent toward graph exploration with a question→endpoint table; existing tools (grep / glob / git log) stay available alongside.',
       ],
@@ -186,7 +190,12 @@ export const messages = {
         {
           cmd: '/cg',
           name: 'CodeGraph',
-          desc: 'Project graph exploration — six HTTP endpoints answer symbol / callers / impact / co-edit questions. Precise where grep is fuzzy.',
+          desc: 'Project graph exploration — 10 HTTP endpoints answer symbol / callers / impact / co-edit / risk / affected questions. Precise where grep is fuzzy.',
+        },
+        {
+          cmd: '/cc',
+          name: 'Cockpit CLI',
+          desc: 'Drive the cockpit CLI surface — codegraph subcommands, terminal observation, browser automation. Each subcommand self-documents via --help.',
         },
       ],
       customHint: 'Custom: drop any SKILL.md and add it via the Skills sidebar — it auto-appears in the autocomplete menu.',
@@ -219,6 +228,9 @@ export const messages = {
     },
     docs: {
       title: 'Documentation',
+      // SEO description: ≤160 chars, used by docs page metadata + OG.
+      description:
+        'OpenCockpit docs — install with one npm command, run anywhere. Cockpit CLI: codegraph, terminal, browser subcommands, each self-documenting via --help.',
       comingSoon: 'Full documentation is coming soon. Meanwhile, see the README on GitHub.',
       readOnGithub: 'Read on GitHub',
       sections: {
@@ -256,6 +268,9 @@ export const messages = {
       pronounce: '/ˈkɒkpɪt/ —— 像飞机驾驶舱',
       description:
         'OpenCockpit 是开源的 Claude Code GUI —— 也是你想接入的任何 Agent 的统一画布。多项目 Claude 会话开箱即用；想用 Codex、DeepSeek、Kimi 或本地 Ollama？直接新开一个 tab。内置终端、Chrome 自动化、PostgreSQL / MySQL / Redis 气泡、代码评审与斜杠模式 —— 全部本地。',
+      // SEO ≤160 字符（CJK 计为 1.5×）—— 仅用于 metadata，不在页面展示。勿与 description 合并。
+      metaDescription:
+        '开源 Claude Code GUI —— 多项目并行 AI 编程。Codex/DeepSeek/Kimi/Ollama 多引擎切换，内置终端、Chrome 自动化、PostgreSQL/MySQL/Redis 气泡、代码图谱。全本地、MIT 协议。',
       badge: 'Claude · Codex · DeepSeek · Kimi · Ollama',
       installLabel: '安装',
       tryOnline: '在线体验',
@@ -391,11 +406,12 @@ export const messages = {
     codeGraph: {
       tag: 'Agent · /cg 模式',
       headline: '给 AI 一张查询图谱，而不是 grep',
-      desc: '代码图谱（code graph）是 AI Agent 和你代码库之间缺失的那一层。Code Map 是给眼睛看的，CodeGraph 是给 Agent 调用的。同一份 tree-sitter 索引开放为 6 个 HTTP 接口——符号搜索、调用者、被调用、影响范围、文件符号树、协同编辑历史——Agent 直接按坐标精确查询，而不是 grep 字面 + Read 全文。',
+      desc: '代码图谱（code graph）是 AI Agent 和你代码库之间缺失的那一层。Code Map 是给眼睛看的，CodeGraph 是给 Agent 调用的。同一份 tree-sitter 索引开放为 10 个 HTTP 接口——符号搜索、调用者、被调用、影响范围、文件符号树、协同编辑历史，再叠加四层分析（语义上下文、相关符号、风险打分影响面、受影响测试闭包）——Agent 直接按坐标精确查询，而不是 grep 字面 + Read 全文。',
       bullets: [
-        '6 个接口对应 6 类问题形态：「X 在哪定义」「谁调用 X」「X 调用什么」「改 X 影响什么」「文件 F 有哪些符号」「跟 F 一起改的文件」。',
+        '10 个接口分两层：基础 6 类问题（「X 在哪定义」「谁调用 X」「X 调用什么」「改 X 影响什么」「文件 F 有哪些符号」「跟 F 一起改的文件」）+ 分析 4 类（语义上下文、相关符号、风险打分影响面、受影响测试文件）。',
         '只返坐标（file / line range / qname）——Agent 用 Read 按 offset + limit 精读符号本身，不读整文件。',
         'coedit 接口抓住任何静态分析都看不见的「必须一起改」的文件对：平行注册表、双写、同名 .md 配置。',
+        '分析层（PageRank / PPR / TF-IDF / Louvain）在本地零训练运行——给改动打风险分、找语义相关代码、算出受影响的测试文件。',
         'file watcher 增量同步——无须 rebuild；PR 半途的修改和 AI 批量改动都能保持索引新鲜。',
         '/cg 斜杠模式用「问题 → 接口」对照表把 Agent 锚向图谱探索；原有 grep / glob / git log 一个不少，按需混搭。',
       ],
@@ -428,7 +444,12 @@ export const messages = {
         {
           cmd: '/cg',
           name: 'CodeGraph',
-          desc: '项目图谱探索——6 个 HTTP 接口精确回答符号 / 调用关系 / 影响范围 / 协同编辑问题，比 grep 精确、比 Read 全文省 token。',
+          desc: '项目图谱探索——10 个 HTTP 接口精确回答符号 / 调用关系 / 影响范围 / 协同编辑 / 风险 / 受影响测试问题，比 grep 精确、比 Read 全文省 token。',
+        },
+        {
+          cmd: '/cc',
+          name: 'Cockpit CLI',
+          desc: '驾驭 cockpit 命令行——codegraph 子命令、terminal 观察、browser 自动化。每个子命令通过 --help 自我说明。',
         },
       ],
       customHint: '自定义：丢入任意 SKILL.md 并通过 Skills 侧边栏添加——自动出现在补全菜单。',
@@ -461,6 +482,9 @@ export const messages = {
     },
     docs: {
       title: '文档',
+      // SEO description：≤160 字符，用于 docs 页 metadata + OG。
+      description:
+        'OpenCockpit 文档 —— 一行 npm 命令安装，任意目录启动。Cockpit CLI 参考：codegraph / terminal / browser 子命令，均通过 --help 自我说明。',
       comingSoon: '完整文档即将上线。在此之前请参考 GitHub 上的 README。',
       readOnGithub: '在 GitHub 阅读',
       sections: {
