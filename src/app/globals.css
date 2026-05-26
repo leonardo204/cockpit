@@ -435,6 +435,26 @@ body {
   border-right-color: #374151;
 }
 
+/* ---- Prism (react-syntax-highlighter) token 隔离 ----
+ *
+ * Prism 的 markdown grammar 把 token 类型直接当 className 使用
+ * （e.g. <span class="token table table-header-row">），其中 `table`
+ * 与 Tailwind 的 display utility `.table { display: table }` 同名，
+ * 会让表格行里每个 token 都被强制成 block-level table 元素，
+ * 视觉上变成每个 `|`、每个单元格独占一行。
+ *
+ * 同名风险的 token 还包括 `code`、`url`、`list`、`title` 等——
+ * 这里用一条 selector 把 Prism 高亮里所有 token 的 display 复位成
+ * inline，从源头隔绝 Prism 命名空间与 Tailwind utility 命名空间的冲突。
+ *
+ * 作用域限制：只命中 react-syntax-highlighter 渲染出的
+ * `<code class="language-xxx">` 内部，不影响其他地方的 .table / .code
+ * 等 Tailwind 工具类。
+ */
+code[class*="language-"] .token {
+  display: inline;
+}
+
 /* ============================================
    Tiptap Editor Styles
    ============================================ */
