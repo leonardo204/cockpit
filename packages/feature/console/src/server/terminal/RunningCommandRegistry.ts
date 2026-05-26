@@ -16,17 +16,43 @@ const OUTPUT_FILE_THRESHOLD = 4096;
 const PTY_RING_BUFFER_MAX = 2 * 1024 * 1024;
 
 /**
+ * Count `\n` (0x0A) characters in a string. Used by both the pipe append path
+ * (parts.length is enough there) and the PTY ring buffer to maintain its
+ * monotonic global line counter without ever scanning the whole snapshot.
+ */
+export function countNewlines(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) === 0x0A) n++;
+  }
+  return n;
+}
+
+/**
  * Append-only ring buffer for raw PTY output.
  *
  * Stores raw chunks (preserving ANSI control sequences intact) and trims the
  * oldest content when the total exceeds the cap. We keep raw text and let the
  * frontend's xterm.js parse it on replay — no per-line splitting, which would
  * corrupt cursor/styling sequences that span line boundaries.
+ *
+ * In addition to the byte ring buffer, we maintain two monotonic line counters
+ * so the CLI can use stable global line numbers as cursors:
+ *   - `totalLinesEverWritten`: total `\n` chars ever appended (only grows).
+ *   - `firstAvailableLine`: global line number of the first complete line still
+ *     reachable in the ring (advances when bytes are trimmed from the head).
+ * The pair lets callers convert any `lineno ∈ [firstAvailableLine,
+ * totalLinesEverWritten)` to "still in the ring" and detect when an older
+ * cursor has been evicted.
  */
 export class PtyRingBuffer {
   private chunks: string[] = [];
   private totalLen = 0;
   private readonly max: number;
+  /** Monotonic count of `\n` chars ever appended. Never decreases. */
+  private _totalLinesEverWritten = 0;
+  /** Global line number of the first complete line currently in the ring. */
+  private _firstAvailableLine = 0;
 
   constructor(max: number = PTY_RING_BUFFER_MAX) {
     this.max = max;
@@ -36,13 +62,17 @@ export class PtyRingBuffer {
     if (!data) return;
     this.chunks.push(data);
     this.totalLen += data.length;
+    this._totalLinesEverWritten += countNewlines(data);
     while (this.totalLen > this.max && this.chunks.length > 0) {
       const overflow = this.totalLen - this.max;
       const oldest = this.chunks[0];
       if (oldest.length <= overflow) {
+        this._firstAvailableLine += countNewlines(oldest);
         this.chunks.shift();
         this.totalLen -= oldest.length;
       } else {
+        const cut = oldest.slice(0, overflow);
+        this._firstAvailableLine += countNewlines(cut);
         this.chunks[0] = oldest.slice(overflow);
         this.totalLen -= overflow;
       }
@@ -55,6 +85,16 @@ export class PtyRingBuffer {
 
   get length(): number {
     return this.totalLen;
+  }
+
+  /** Total `\n` chars ever written — monotonic global "next line number". */
+  get totalLinesEverWritten(): number {
+    return this._totalLinesEverWritten;
+  }
+
+  /** Global line number of the first complete line still in the ring. */
+  get firstAvailableLine(): number {
+    return this._firstAvailableLine;
   }
 }
 
@@ -97,6 +137,15 @@ export interface RunningCommand {
   /** PTY raw output ring buffer — only set in PTY mode, released on finalize */
   ptyRingBuffer?: PtyRingBuffer;
   timestamp: string;
+  /**
+   * Pipe mode: monotonic count of complete (newline-terminated) lines ever
+   * appended. Never decreases — splice() trimming `outputLines` does NOT
+   * decrement this. Acts as the global "next line number" cursor.
+   * For PTY mode this is mirrored from `ptyRingBuffer.totalLinesEverWritten`.
+   */
+  totalLinesEverWritten: number;
+  /** Last time output was appended (epoch ms). Used by /api/terminal/meta. */
+  lastOutputAt?: number;
 }
 
 const GLOBAL_KEY = Symbol.for('terminal_running_commands');
@@ -131,12 +180,18 @@ function getRegistry(): Map<string, RunningCommand> {
  * Register a running command
  * Automatically attaches close/error listeners to ensure finalizeCommand always runs
  */
-export function registerCommand(cmd: Omit<RunningCommand, 'outputLines' | 'outputPartial' | 'ptyRingBuffer'>): void {
+export function registerCommand(
+  cmd: Omit<
+    RunningCommand,
+    'outputLines' | 'outputPartial' | 'ptyRingBuffer' | 'totalLinesEverWritten' | 'lastOutputAt'
+  >,
+): void {
   console.log(`[registry] register: id=${cmd.commandId}, cmd="${cmd.command}", pid=${cmd.pid}, pty=${!!cmd.ptyProcess}, server=${getServerId()}`);
   const entry: RunningCommand = {
     ...cmd,
     outputLines: [],
     outputPartial: '',
+    totalLinesEverWritten: 0,
     // Only PTY commands get a ring buffer — pipe mode replay still uses outputLines.
     ...(cmd.ptyProcess ? { ptyRingBuffer: new PtyRingBuffer() } : {}),
   };
@@ -157,6 +212,12 @@ export function registerCommand(cmd: Omit<RunningCommand, 'outputLines' | 'outpu
 
     pty.onData((data: string) => {
       entry.ptyRingBuffer?.append(data);
+      // Mirror the buffer's monotonic line counter onto the RunningCommand so
+      // CLI/HTTP read paths can use a single accessor regardless of mode.
+      if (entry.ptyRingBuffer) {
+        entry.totalLinesEverWritten = entry.ptyRingBuffer.totalLinesEverWritten;
+      }
+      entry.lastOutputAt = Date.now();
       notifyOutputListeners(cmd.commandId, data);
     });
 
@@ -201,6 +262,10 @@ export function appendCommandOutput(commandId: string, data: string): void {
 
   if (parts.length > 0) {
     cmd.outputLines.push(...parts);
+    // Monotonic global line counter. Critically: this is NOT decremented
+    // when outputLines is spliced below — the array index drifts, the
+    // global line number never does. This is what makes CLI cursors stable.
+    cmd.totalLinesEverWritten += parts.length;
     if (cmd.outputLines.length > MAX_OUTPUT_LINES) {
       cmd.outputLines.splice(0, cmd.outputLines.length - MAX_OUTPUT_LINES);
       // Reset terminal styling state — truncated head lines may contain unclosed color sequences
@@ -210,8 +275,20 @@ export function appendCommandOutput(commandId: string, data: string): void {
     }
   }
 
+  cmd.lastOutputAt = Date.now();
+
   // Notify follow listeners
   notifyOutputListeners(commandId, data);
+}
+
+/**
+ * Global line number of the first complete (line-terminated) entry still
+ * reachable. Pipe mode: derived from `totalLinesEverWritten - outputLines.length`.
+ * PTY mode: delegated to the ring buffer's own counter.
+ */
+export function getFirstAvailableLine(cmd: RunningCommand): number {
+  if (cmd.ptyRingBuffer) return cmd.ptyRingBuffer.firstAvailableLine;
+  return cmd.totalLinesEverWritten - cmd.outputLines.length;
 }
 
 function getBufferedOutput(cmd: RunningCommand): string {

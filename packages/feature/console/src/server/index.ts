@@ -19,3 +19,5 @@ export * from './plugins/neo4j/neo4jCore';
 // ============================================
 export * from './terminal/TerminalBridge';
 export * from './terminal/RunningCommandRegistry';
+export * from './terminal/writeStdin';
+export * from './terminal/outputQuery';

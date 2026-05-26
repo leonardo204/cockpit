@@ -22,6 +22,7 @@ import {
   getRegistrySize,
   getAllProjectCwds,
   findSafeStart,
+  writeStdinToCommand,
 } from "@cockpit/feature-console/server"
 import {
   isWindows,
@@ -320,40 +321,9 @@ const dispatchMessage = (
       const { commandId, data } = msg as { commandId: string; data: string }
       const cmd = getRunningCommand(commandId)
       if (!cmd) return
-
-      if (cmd.usePty && cmd.ptyProcess) {
-        try {
-          cmd.ptyProcess.write(data)
-        } catch {
-          /* exited */
-        }
-      } else {
-        if (data === "\x03" && cmd.pid) {
-          try {
-            process.kill(-cmd.pid, "SIGINT")
-          } catch {
-            try {
-              process.kill(cmd.pid, "SIGINT")
-            } catch {
-              /* exited */
-            }
-          }
-        } else if (data === "\x1a" && cmd.pid) {
-          try {
-            process.kill(cmd.pid, "SIGTSTP")
-          } catch {
-            /* exited */
-          }
-        } else if (data === "\x04") {
-          try {
-            cmd.process.stdin?.end()
-          } catch {
-            /* closed */
-          }
-        } else if (cmd.process.stdin?.writable) {
-          cmd.process.stdin.write(data)
-        }
-      }
+      // Pipe-mode control-char → signal decoding lives in writeStdinToCommand
+      // so the HTTP /api/terminal/stdin path can share the same semantics.
+      writeStdinToCommand(cmd, data)
     } else if (type === "attach") {
       const { commandId } = msg as { commandId: string }
       const cmd = getRunningCommand(commandId)
