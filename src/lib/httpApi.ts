@@ -23,6 +23,14 @@ import {
   registerTerminal,
   unregisterTerminal,
   getRunningCommand,
+  getFirstAvailableLine,
+  writeStdinToCommand,
+  readSince,
+  readTail,
+  readHead,
+  readAround,
+  grepOutput,
+  stripAnsi as stripAnsiText,
   registerBrowser,
   unregisterBrowser,
   getBrowserByShortId,
@@ -30,6 +38,7 @@ import {
   sendCommandToBrowser,
   listBrowsers,
 } from "@cockpit/feature-console/server"
+import type { ReadResult } from "@cockpit/feature-console/server"
 
 // Silence unused — kept for symmetry with their use inside the legacy wsServer
 void addOutputListener
@@ -79,6 +88,25 @@ async function readFinishedOutput(
 // /api/terminal/<action>
 // ─────────────────────────────────────────────────────────
 
+/**
+ * Actions implemented inline below. Anything else (history / aliases / env /
+ * bubble-order / ...) passes through to Next.js's App Router.
+ *
+ * Must stay in sync with the `if (action === ...)` branches in
+ * handleTerminalApi — adding a handler without listing it here makes the
+ * route 404 (this exact omission of "output" + "stdin" was the bug fixed
+ * when this set was introduced).
+ */
+const HANDLED_TERMINAL_ACTIONS = new Set([
+  "list",
+  "register",
+  "unregister",
+  "output",
+  "stdin",
+  "meta",
+  "wait",
+])
+
 export async function handleTerminalApi(
   req: IncomingMessage,
   res: import("http").ServerResponse
@@ -88,10 +116,7 @@ export async function handleTerminalApi(
   if (!match || req.method !== "POST") return false
 
   const action = match[1]
-  // Only intercept the 3 actions implemented here; everything else
-  // (history / aliases / env / bubble-order / ...) passes through to
-  // Next.js's App Router.
-  if (action !== "list" && action !== "register" && action !== "unregister") {
+  if (!HANDLED_TERMINAL_ACTIONS.has(action)) {
     return false
   }
 
@@ -104,6 +129,23 @@ export async function handleTerminalApi(
     commandId?: string
     command?: string
     projectCwd?: string
+    // ── output (read / filter / context) ────────────────────────────
+    since?: number
+    tail?: number
+    head?: number
+    around?: number
+    context?: number
+    grep?: string
+    ignoreCase?: boolean
+    noAnsi?: boolean
+    collapseCr?: boolean
+    maxBytes?: number
+    // ── wait ────────────────────────────────────────────────────────
+    pattern?: string
+    idle?: number
+    waitExit?: boolean
+    timeout?: number
+    printOutput?: boolean
   }
   try {
     body = JSON.parse(Buffer.concat(chunks).toString())
@@ -162,19 +204,75 @@ export async function handleTerminalApi(
 
   if (action === "output") {
     if (cmd) {
-      const output =
-        cmd.outputLines.join("\n") +
-        (cmd.outputPartial ? "\n" + cmd.outputPartial : "")
+      // Both modes default to noAnsi=true + collapseCr=true. Initially this
+      // was conditional on pty/pipe, on the assumption that pipe streams
+      // would not contain ANSI control sequences. Real-world dev servers
+      // (turborepo / make-driven `npm run dev` etc.) emit colourised JSON
+      // logs through pipe too, and `\r\r` line endings show up in pipe
+      // output as well. The right answer is "AI sees clean lines by
+      // default; explicit --keep-ansi/--keep-cr if you want raw bytes."
+      const noAnsi = body.noAnsi ?? true
+      const collapseCr = body.collapseCr ?? true
+      const viewOpts = { stripAnsi: noAnsi, collapseCr }
+
+      // Mode selection: exactly one of since / tail / head / around / grep,
+      // else the default = readSince(0) (full buffer).
+      let result: ReadResult
+      if (typeof body.grep === "string" && body.grep.length > 0) {
+        result = grepOutput(cmd, body.grep, {
+          ...viewOpts,
+          ignoreCase: !!body.ignoreCase,
+          since: typeof body.since === "number" ? body.since : 0,
+        })
+      } else if (typeof body.around === "number") {
+        result = readAround(
+          cmd,
+          body.around,
+          typeof body.context === "number" ? body.context : 5,
+          viewOpts,
+        )
+      } else if (typeof body.tail === "number") {
+        result = readTail(cmd, body.tail, viewOpts)
+      } else if (typeof body.head === "number") {
+        result = readHead(cmd, body.head, viewOpts)
+      } else {
+        result = readSince(
+          cmd,
+          typeof body.since === "number" ? body.since : 0,
+          viewOpts,
+        )
+      }
+
+      // Honor maxBytes from the tail of the result. We accumulate from the
+      // newest line backward so the truncation falls on the oldest material.
+      const maxBytes = body.maxBytes ?? 65536
+      let acc = 0
+      const trimmed: typeof result.matches = []
+      for (let i = result.matches.length - 1; i >= 0; i--) {
+        const t = result.matches[i].text
+        const len = t.length + 1 // +1 for the implied newline
+        if (acc + len > maxBytes && trimmed.length > 0) break
+        trimmed.unshift(result.matches[i])
+        acc += len
+      }
+      const byteTruncated = trimmed.length < result.matches.length
+
       sendJson(200, {
         ok: true,
         data: {
-          output,
+          matches: trimmed,
+          next: result.next,
+          firstAvailable: result.firstAvailable,
+          totalLines: result.totalLines,
+          truncated: result.truncated || byteTruncated,
+          running: true,
           command: entry.command,
           pid: cmd.pid,
-          running: true,
         },
       })
     } else {
+      // Already-exited command → fall back to JSONL history (legacy behavior).
+      // The new line-counter machinery only covers live commands.
       if (!entry.projectCwd) {
         sendJson(404, { ok: false, error: "Command projectCwd unknown" })
         return true
@@ -185,10 +283,13 @@ export async function handleTerminalApi(
         entry.commandId
       )
       if (historyOutput !== undefined) {
+        const out = body.noAnsi
+          ? stripAnsiText(historyOutput.output)
+          : historyOutput.output
         sendJson(200, {
           ok: true,
           data: {
-            output: historyOutput.output,
+            output: out,
             command: entry.command,
             exitCode: historyOutput.exitCode,
             running: false,
@@ -211,16 +312,12 @@ export async function handleTerminalApi(
       sendJson(400, { ok: false, error: "Missing data" })
       return true
     }
-
-    if (cmd.usePty && cmd.ptyProcess) {
-      try {
-        cmd.ptyProcess.write(data)
-      } catch {
-        /* exited */
-      }
-    } else if (cmd.process.stdin?.writable) {
-      cmd.process.stdin.write(data)
-    } else {
+    // Shared with WS /ws/terminal stdin handler — pipe-mode control chars
+    // (\x03 / \x1a / \x04) are decoded into SIGINT / SIGTSTP / EOF here so
+    // `cock terminal <id> stdin "$(printf '\x03')"` actually interrupts a
+    // pipe-mode child instead of dropping 0x03 into its stdin as data.
+    const ok2 = writeStdinToCommand(cmd, data)
+    if (!ok2) {
       sendJson(500, { ok: false, error: "stdin not writable" })
       return true
     }
@@ -228,8 +325,185 @@ export async function handleTerminalApi(
     return true
   }
 
+  if (action === "meta") {
+    if (cmd) {
+      sendJson(200, {
+        ok: true,
+        data: {
+          shortId: id,
+          commandId: cmd.commandId,
+          command: cmd.command,
+          cwd: cmd.cwd,
+          tabId: cmd.tabId,
+          pid: cmd.pid,
+          usePty: !!cmd.usePty,
+          running: true,
+          startedAt: cmd.timestamp,
+          lastOutputAt: cmd.lastOutputAt
+            ? new Date(cmd.lastOutputAt).toISOString()
+            : null,
+          totalLines: cmd.totalLinesEverWritten,
+          firstAvailable: getFirstAvailableLine(cmd),
+          exitCode: null,
+        },
+      })
+    } else {
+      sendJson(200, {
+        ok: true,
+        data: {
+          shortId: id,
+          commandId: entry.commandId,
+          command: entry.command,
+          tabId: entry.tabId,
+          running: false,
+          // Exit info / history rebuild left for a future enhancement that
+          // reads the JSONL placeholder; meta on a stopped command is mostly
+          // useful for confirming "this id existed".
+        },
+      })
+    }
+    return true
+  }
+
+  if (action === "wait") {
+    if (!cmd) {
+      sendJson(404, { ok: false, error: "Command no longer running" })
+      return true
+    }
+    const timeoutSec = body.timeout ?? 30
+    if (
+      !body.pattern &&
+      typeof body.idle !== "number" &&
+      !body.waitExit
+    ) {
+      sendJson(400, {
+        ok: false,
+        error: "wait requires one of: pattern / idle / waitExit",
+      })
+      return true
+    }
+
+    const outcome = await waitForCondition(cmd.commandId, {
+      pattern: body.pattern,
+      idle: body.idle,
+      waitExit: body.waitExit,
+      timeoutSec,
+      printOutput: !!body.printOutput,
+    })
+    sendJson(200, { ok: true, data: outcome })
+    return true
+  }
+
   sendJson(400, { ok: false, error: `Unknown action: ${action}` })
   return true
+}
+
+/**
+ * Long-poll wait for one of: pattern match / output idle / process exit /
+ * timeout. Subscribes to live listeners and resolves on the first event.
+ * All event sources go through the same Promise so cleanup is centralised.
+ */
+async function waitForCondition(
+  commandId: string,
+  opts: {
+    pattern?: string
+    idle?: number
+    waitExit?: boolean
+    timeoutSec: number
+    printOutput: boolean
+  },
+): Promise<{
+  outcome: "pattern" | "idle" | "exit" | "timeout"
+  match?: string
+  exitCode?: number
+  output?: string
+}> {
+  return new Promise((resolve) => {
+    let resolved = false
+    let unsubOutput: (() => void) | undefined
+    let unsubExit: (() => void) | undefined
+    let idleHandle: NodeJS.Timeout | undefined
+
+    // Accumulate output text for the optional `printOutput` echo.
+    const buf: string[] = []
+
+    const cleanup = () => {
+      if (unsubOutput) unsubOutput()
+      if (unsubExit) unsubExit()
+      clearTimeout(timeoutHandle)
+      if (idleHandle) clearTimeout(idleHandle)
+    }
+    const finish = (result: {
+      outcome: "pattern" | "idle" | "exit" | "timeout"
+      match?: string
+      exitCode?: number
+    }) => {
+      if (resolved) return
+      resolved = true
+      cleanup()
+      const output = opts.printOutput ? buf.join("") : undefined
+      resolve({ ...result, output })
+    }
+
+    let patternRe: RegExp | undefined
+    if (opts.pattern) {
+      try {
+        patternRe = new RegExp(opts.pattern)
+      } catch (e) {
+        finish({ outcome: "timeout" })
+        resolve({
+          outcome: "timeout",
+          match: `invalid regex: ${(e as Error).message}`,
+        })
+        return
+      }
+    }
+
+    const scheduleIdle = () => {
+      if (typeof opts.idle !== "number") return
+      if (idleHandle) clearTimeout(idleHandle)
+      idleHandle = setTimeout(
+        () => finish({ outcome: "idle" }),
+        opts.idle * 1000,
+      )
+    }
+
+    if (patternRe || typeof opts.idle === "number" || opts.printOutput) {
+      unsubOutput = addOutputListener(commandId, (data: string) => {
+        if (opts.printOutput) buf.push(data)
+        if (patternRe) {
+          // Strip ANSI before matching so patterns don't need to fight
+          // colour codes (mirrors the CLI's grep convention).
+          const stripped = stripAnsiText(data)
+          const lines = stripped.split("\n")
+          for (const line of lines) {
+            if (patternRe.test(line)) {
+              finish({ outcome: "pattern", match: line })
+              return
+            }
+          }
+        }
+        scheduleIdle()
+      })
+    }
+
+    if (opts.waitExit) {
+      unsubExit = addExitListener(commandId, (code: number) => {
+        finish({ outcome: "exit", exitCode: code })
+      })
+    }
+
+    // Start idle timer immediately so "5s no output ever" still resolves.
+    scheduleIdle()
+
+    // Referenced inside cleanup() via closure. The cleanup function is
+    // only reachable through finish(), which is only invoked from async
+    // callbacks that fire after this line — no TDZ hazard.
+    const timeoutHandle: NodeJS.Timeout = setTimeout(
+      () => finish({ outcome: "timeout" }),
+      opts.timeoutSec * 1000,
+    )
+  })
 }
 
 // ─────────────────────────────────────────────────────────
