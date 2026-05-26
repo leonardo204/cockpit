@@ -40,7 +40,7 @@ UI 上的 terminal / browser 气泡带一个 4 字符短 id（如 \`bmfb\` / \`m
 \`\`\`
 /cc cockpit terminal bmfb 看一下最近的错误日志
 /cc cockpit browser mpcw 截图当前页面
-/cc cockpit codegraph risk handleSlackMention 评估改这个的影响
+/cc cockpit codegraph risk searchIndex 评估改这个的影响
 \`\`\`
 
 收到这类输入时：
@@ -81,7 +81,7 @@ Terminal / browser bubbles in the UI carry a 4-char short id (e.g. \`bmfb\` / \`
 \`\`\`
 /cc cockpit terminal bmfb look at the recent error logs
 /cc cockpit browser mpcw take a screenshot of the current page
-/cc cockpit codegraph risk handleSlackMention assess the impact of changing this
+/cc cockpit codegraph risk searchIndex assess the impact of changing this
 \`\`\`
 
 When you receive such input:

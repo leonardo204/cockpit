@@ -240,7 +240,38 @@ export interface SearchHit {
       };
 }
 
+/**
+ * A string-literal hit returned ONLY when the search caller opts in via
+ * `?includeLiterals=true`.
+ *
+ * Motivation: tool names / event names / config keys / route paths often
+ * live as string literals in source (e.g. `name: "user_profile"`) and
+ * never appear as identifiers. The symbol index (AST identifiers only)
+ * misses them, so `search?q=user_profile` would come up empty even when
+ * the source clearly contained the string. Indexing identifier-shaped
+ * literals closes that gap without bloating responses for callers that
+ * don't ask.
+ *
+ * Off by default. Length-capped + identifier-shape filtered at index time
+ * to keep noise low (no SQL / JSX / prose strings).
+ */
+export interface LiteralHit {
+  type: 'literal';
+  /** The literal's text content (quotes stripped). */
+  value: string;
+  filePath: string;
+  /** 1-based line in the file where the literal occurs. */
+  line: number;
+  /** qname of the smallest enclosing function/class/method, when known.
+   *  Undefined when the literal sits at file scope (top-level config). */
+  enclosingSymbol?: string;
+}
+
 export interface SearchResponse {
   files: SearchHit[];
   symbols: SearchHit[];
+  /** Populated only when the request passed `?includeLiterals=true`.
+   *  Omitted (not `[]`) when the flag is off so callers can cheaply
+   *  tell "didn't ask" apart from "asked, got nothing". */
+  literals?: LiteralHit[];
 }
