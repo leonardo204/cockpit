@@ -777,6 +777,16 @@ export async function getCodeIndex(cwd: string, opts: GetIndexOptions = {}): Pro
     inflight.delete(cwd);
     // Fresh build subsumes any dirty flag that arrived during the build.
     dirtyCwds.delete(cwd);
+    // Kick off analytics precompute in the background. Lazy-require to
+    // avoid a cycle: analytics/cache imports codeIndex types, but at
+    // module-load time only — this dynamic import is evaluated after
+    // both modules are fully initialised. Fire-and-forget; analytics
+    // routes degrade gracefully if it hasn't completed yet.
+    import('../analytics/cache')
+      .then((m) => m.precomputeAnalytics(cwd, index))
+      .catch((err) => {
+        console.error('[codeIndex] analytics precompute failed:', err);
+      });
     return index;
   });
   inflight.set(cwd, p);
@@ -784,6 +794,13 @@ export async function getCodeIndex(cwd: string, opts: GetIndexOptions = {}): Pro
 }
 
 export function invalidateIndex(cwd?: string): void {
+  // Drop analytics cache in lockstep so a stale graph never outlives its
+  // CodeIndex. Same lazy-require pattern to avoid the import cycle.
+  import('../analytics/cache')
+    .then((m) => m.invalidateAnalytics(cwd))
+    .catch(() => {
+      /* analytics module not loaded yet — nothing to invalidate */
+    });
   if (!cwd) {
     indexCache.clear();
     inflight.clear();

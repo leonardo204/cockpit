@@ -88,14 +88,27 @@ async function collectHistory(
   cwd: string,
   filePath: string,
   commits: number,
+  granularity: 'commit' | 'merge' = 'commit',
 ): Promise<{ history: CoEditHistoryEntry[]; totalCommits: number }> {
   // Sentinel separator: `---SEP---<hash>|<ISO-date>` is a line that can't
   // appear inside a filename, so splitting on the sentinel is safe.
   const SEP = '---SEP---';
+  // P0-2: "merge" granularity walks first-parent merge commits with
+  //   --merges --first-parent. On squash-style projects (where each
+  //   commit touches a single file but a PR contains a logical cluster
+  //   of changes), this surfaces the cluster — which is exactly the
+  //   co-edit signal we want. `--follow` doesn't apply (it's a single-
+  //   pathspec flag and merges can rename across many files), so we
+  //   accept the trade-off that file renames may break a merge's
+  //   coupling chain. For modern workflows this is rarely a problem.
+  const baseFlags =
+    granularity === 'merge'
+      ? `--merges --first-parent --name-only`
+      : `--follow --name-only`;
   let stdout: string;
   try {
     const result = await execAsync(
-      `git log -n ${commits} --follow --name-only ` +
+      `git log -n ${commits} ${baseFlags} ` +
         `--pretty=format:'${SEP}%H|%cI' -- ${shellQuote(filePath)}`,
       { cwd, maxBuffer: 50 * 1024 * 1024 },
     );
@@ -221,11 +234,34 @@ export async function coEditFromGit(
   cwd: string,
   filePath: string,
   commits: number = DEFAULT_COMMITS,
+  granularity: 'commit' | 'merge' = 'commit',
 ): Promise<CoEditResponse> {
   const n = Math.min(Math.max(commits, 1), MAX_COMMITS);
   const [{ history, totalCommits }, uncommitted] = await Promise.all([
-    collectHistory(cwd, filePath, n),
+    collectHistory(cwd, filePath, n, granularity),
     collectUncommitted(cwd, filePath),
   ]);
   return { target: filePath, totalCommits, history, uncommitted };
+}
+
+/** P0-2: Two-pass coedit — try commit granularity first, fall back to
+ *  merge granularity if the commit pass returns insufficient signal.
+ *  This handles both:
+ *    - Feature-branch / many-files-per-commit projects (commit signal works)
+ *    - Squash / single-file commit projects (merge signal needed)
+ *
+ *  Callers that want the auto-best signal call this instead of
+ *  `coEditFromGit` directly. Returns the better of the two. */
+export async function coEditAuto(
+  cwd: string,
+  filePath: string,
+  commits: number = DEFAULT_COMMITS,
+): Promise<CoEditResponse> {
+  const byCommit = await coEditFromGit(cwd, filePath, commits, 'commit');
+  // Heuristic: if commit-granularity produced any history rows at all,
+  // use it (it's higher-precision than merge granularity). Only fall
+  // back to merges when commit gives us nothing useful.
+  if (byCommit.history.length > 0) return byCommit;
+  const byMerge = await coEditFromGit(cwd, filePath, commits, 'merge');
+  return byMerge;
 }
