@@ -21,24 +21,71 @@ let refCounter = 0;
 const refToElement = new Map();
 const elementToRef = new WeakMap();
 
+// Snapshot epoch: incremented by clearRefs() each time `snapshot` runs.
+// Refs encode the epoch as `e<N>#v<E>`, so stale refs from a previous
+// snapshot are detected explicitly rather than producing a misleading
+// "disconnected" message.
+let snapshotEpoch = 0;
+
 function clearRefs() {
   refCounter = 0;
   refToElement.clear();
+  snapshotEpoch += 1;
 }
 
 function assignRef(el) {
+  // WeakMap can't be cleared, so a previously-snapshotted element returns its
+  // OLD ref (carrying an old epoch). Detect that and re-assign at the current
+  // epoch so all refs in a single snapshot share one banner version.
   const existing = elementToRef.get(el);
-  if (existing) return existing;
-  const ref = `e${refCounter++}`;
+  if (existing) {
+    const m = existing.match(/^e\d+#v(\d+)$/);
+    if (m && Number(m[1]) === snapshotEpoch) return existing;
+    // fall through — re-assign at the current epoch
+  }
+  const ref = `e${refCounter++}#v${snapshotEpoch}`;
   refToElement.set(ref, el);
   elementToRef.set(el, ref);
   return ref;
 }
 
+// Inline stale-ref message — kept here (not in messages.js) to avoid
+// runtime cross-module loading in the content-script context. Examples
+// below are generic by policy; never inline business-specific selectors.
+function staleRefMsg(ref, kind, currentEpoch) {
+  return (
+    `Element ref "${ref}" is stale (current snapshot v=${currentEpoch}; kind: ${kind}).\n` +
+    `  Refs are valid only until the next snapshot / re-render / route change.\n` +
+    `  Fix one of:\n` +
+    `    1. Re-run \`snapshot\` to get fresh refs (banner shows v=${currentEpoch}).\n` +
+    `    2. Use a CSS selector or visible text directly:\n` +
+    `       cockpit browser <id> click --text "Sign in"\n` +
+    `       cockpit browser <id> click --selector 'button[type="submit"]'\n` +
+    `    3. Drop to evaluate:\n` +
+    `       cockpit browser <id> evaluate "(() => document.querySelector('button[aria-label=\\"Save\\"]').click())()"`
+  );
+}
+
 function findByRef(ref) {
+  if (typeof ref !== 'string' || !ref) {
+    throw new Error(staleRefMsg(String(ref), 'missing', snapshotEpoch));
+  }
+  const m = ref.match(/^e(\d+)(?:#v(\d+))?$/);
+  if (!m) {
+    throw new Error(staleRefMsg(ref, 'malformed', snapshotEpoch));
+  }
+  if (m[2] === undefined) {
+    // Legacy `eN` form (no epoch). Per spec there is no backwards compat;
+    // reject explicitly so AI knows to re-snapshot rather than guessing.
+    throw new Error(staleRefMsg(ref, 'no-epoch (use eN#vM)', snapshotEpoch));
+  }
+  const refEpoch = Number(m[2]);
+  if (refEpoch !== snapshotEpoch) {
+    throw new Error(staleRefMsg(ref, `from v=${refEpoch}`, snapshotEpoch));
+  }
   const el = refToElement.get(ref);
   if (!el || !el.isConnected) {
-    throw new Error(`Element ref "${ref}" not found or disconnected`);
+    throw new Error(staleRefMsg(ref, 'disconnected', snapshotEpoch));
   }
   return el;
 }
@@ -137,9 +184,16 @@ function getName(el) {
   return el.title || '';
 }
 
-function buildA11yTree(root = document.body, maxDepth = 12) {
+function buildA11yTree(root = document.body, opts = {}) {
+  const {
+    maxDepth = 12,
+    filter = null,           // string regex source; lines not matching are dropped
+    includeHiddenText = false, // surface innerText for container/anonymous nodes
+  } = opts;
+
   clearRefs();
   const lines = [];
+  const filterRe = filter ? safeRegex(filter) : null;
 
   function walk(el, depth) {
     if (depth > maxDepth) return;
@@ -160,6 +214,15 @@ function buildA11yTree(root = document.body, maxDepth = 12) {
       if (name) {
         const displayName = name.length > 80 ? name.slice(0, 77) + '...' : name;
         line += ` "${displayName}"`;
+      } else if (includeHiddenText) {
+        // Surface collapsed text on otherwise-nameless nodes (e.g. <summary>,
+        // <details>, headings with emoji + text). Useful when grep-ing on
+        // user-visible content rather than role+aria-label.
+        const inner = (el.innerText || '').trim().replace(/\s+/g, ' ');
+        if (inner) {
+          const snippet = inner.length > 60 ? inner.slice(0, 57) + '...' : inner;
+          line += ` …"${snippet}"`;
+        }
       }
 
       const extras = [];
@@ -177,6 +240,17 @@ function buildA11yTree(root = document.body, maxDepth = 12) {
       if (extras.length) line += ` [${extras.join(', ')}]`;
       line += ` [${ref}]`;
       lines.push(line);
+    } else if (includeHiddenText) {
+      // Even for "container" passthrough, emit a thin marker line if it has
+      // visible text — so grep can still find content collapsed by the
+      // container heuristic. We don't assign a ref here (container is just
+      // structure, not addressable).
+      const inner = (el.innerText || '').trim().replace(/\s+/g, ' ');
+      if (inner) {
+        const indent = '  '.repeat(depth);
+        const snippet = inner.length > 60 ? inner.slice(0, 57) + '...' : inner;
+        lines.push(`${indent}${el.tagName.toLowerCase()} …"${snippet}"`);
+      }
     }
 
     for (const child of el.children) {
@@ -185,7 +259,28 @@ function buildA11yTree(root = document.body, maxDepth = 12) {
   }
 
   walk(root || document.body, 0);
-  return lines.join('\n');
+
+  let kept = lines;
+  if (filterRe) kept = lines.filter(l => filterRe.test(l));
+
+  // Banner is always emitted first. AI parses v=<N> to detect epoch changes
+  // (any cached refs from a different epoch are stale per findByRef).
+  const banner = (
+    `# a11y tree v=${snapshotEpoch} — refs valid until next snapshot\n` +
+    `# Text inside <details>/<summary> and unnamed container <div>/<section> is collapsed.\n` +
+    `# Grep on role / aria-label, NOT on user-visible emoji / text.\n` +
+    `# Tips: --include-hidden-text surfaces collapsed innerText; --filter <regex> reduces output.\n` +
+    (filterRe ? `# filter: ${filter} (${kept.length}/${lines.length} lines kept)\n` : '') +
+    (includeHiddenText ? `# include-hidden-text: on\n` : '')
+  );
+  return banner + kept.join('\n');
+}
+
+// Safe regex compile — falls back to a literal-match regex if the pattern
+// is malformed, so a stray `?` or `(` from AI doesn't crash the snapshot.
+function safeRegex(src) {
+  try { return new RegExp(src); }
+  catch { return new RegExp(src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
 }
 
 // ============================================================================
@@ -283,7 +378,8 @@ const handlers = {
   back: async () => { history.back(); return { ok: true }; },
   forward: async () => { history.forward(); return { ok: true }; },
 
-  snapshot: async () => buildA11yTree(document.body),
+  snapshot: async ({ filter, includeHiddenText, maxDepth } = {}) =>
+    buildA11yTree(document.body, { filter, includeHiddenText, maxDepth }),
 
   screenshot: async () => {
     // 1) 通知父页面（项目 iframe）：切到 console view + 切到本项目 + 返回 iframe bounds
@@ -326,11 +422,33 @@ const handlers = {
     return { image: result, format: 'png' };
   },
 
-  click: async ({ ref }) => {
-    const el = findByRef(ref);
+  click: async ({ ref, text, selector, exact = false, nth = 0 }) => {
+    let el;
+    if (ref) {
+      el = findByRef(ref);
+    } else if (selector) {
+      const all = document.querySelectorAll(selector);
+      if (!all.length) throw new Error(`No element matching selector "${selector}"`);
+      if (nth >= all.length) throw new Error(`Only ${all.length} matches for selector "${selector}", nth=${nth} out of range`);
+      el = all[nth];
+    } else if (text) {
+      const candidates = Array.from(document.querySelectorAll(
+        'button, a, [role="button"], [role="link"], [role="tab"], [role="menuitem"], input[type="submit"], input[type="button"]'
+      ));
+      const matches = candidates.filter(c => {
+        const t = (c.textContent || '').trim();
+        const aria = c.getAttribute('aria-label') || '';
+        return exact ? (t === text || aria === text) : (t.includes(text) || aria.includes(text));
+      });
+      if (!matches.length) throw new Error(`No clickable element with text "${text}" (searched button / a / role=button|link|tab|menuitem / input[type=submit|button])`);
+      if (nth >= matches.length) throw new Error(`Only ${matches.length} matches for text "${text}", nth=${nth} out of range`);
+      el = matches[nth];
+    } else {
+      throw new Error('click requires one of: ref (positional or --ref), --text, --selector');
+    }
     el.scrollIntoView({ block: 'nearest' });
     el.click();
-    return { clicked: ref };
+    return { clicked: ref || (text ? `text:${text}` : `selector:${selector}`), nth };
   },
 
   type: async ({ ref, text, clear }) => {
@@ -356,13 +474,24 @@ const handlers = {
     return { typed: text, ref };
   },
 
-  fill: async ({ ref, value }) => {
-    const el = findByRef(ref);
+  fill: async ({ ref, selector, value }) => {
+    let el;
+    let target;
+    if (ref) {
+      el = findByRef(ref);
+      target = ref;
+    } else if (selector) {
+      el = document.querySelector(selector);
+      if (!el) throw new Error(`No element matching selector "${selector}"`);
+      target = `selector:${selector}`;
+    } else {
+      throw new Error('fill requires one of: ref (positional or --ref), --selector');
+    }
     el.focus();
     if (el.tagName === 'SELECT') {
       el.value = value;
       el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { filled: ref, value };
+      return { filled: target, value };
     }
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
       || Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
@@ -370,7 +499,7 @@ const handlers = {
     else el.value = value;
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    return { filled: ref, value };
+    return { filled: target, value };
   },
 
   hover: async ({ ref }) => {
@@ -422,24 +551,111 @@ const handlers = {
     return { dispatched: event, ref };
   },
 
-  wait: async ({ text, ref: waitRef, url: waitUrl, time, timeout = 10000 }) => {
+  wait: async ({
+    text,
+    ref: waitRef,
+    url: waitUrl,
+    time,
+    selector,
+    state = 'visible',
+    networkIdle,
+    domStable,
+    quietMs = 500,
+    maxRequestAgeMs = 30000,
+    timeout = 10000,
+  }) => {
     const start = Date.now();
     const poll = (check) => new Promise((resolve, reject) => {
       const interval = setInterval(() => {
-        if (check()) { clearInterval(interval); resolve(true); return; }
-        if (Date.now() - start > timeout) { clearInterval(interval); reject(new Error(`Wait timeout after ${timeout}ms`)); }
+        try {
+          if (check()) { clearInterval(interval); resolve(true); return; }
+        } catch (e) { clearInterval(interval); reject(e); return; }
+        if (Date.now() - start > timeout) {
+          clearInterval(interval);
+          reject(new Error(`Wait timeout after ${timeout}ms`));
+        }
       }, 100);
     });
 
     if (time) { await new Promise(r => setTimeout(r, time)); return { waited: `${time}ms` }; }
-    if (text) { await poll(() => document.body.textContent.includes(text)); return { waited: `text "${text}"` }; }
-    if (waitRef) { await poll(() => refToElement.has(waitRef) && refToElement.get(waitRef).isConnected); return { waited: `ref ${waitRef}` }; }
+
+    if (text) {
+      await poll(() => document.body.textContent.includes(text));
+      return { waited: `text "${text}"`, elapsedMs: Date.now() - start };
+    }
+
+    if (waitRef) {
+      await poll(() => refToElement.has(waitRef) && refToElement.get(waitRef).isConnected);
+      return { waited: `ref ${waitRef}`, elapsedMs: Date.now() - start };
+    }
+
     if (waitUrl) {
       const pat = waitUrl.includes('*') ? new RegExp('^' + waitUrl.replace(/\*/g, '.*') + '$') : null;
       await poll(() => pat ? pat.test(location.href) : location.href.includes(waitUrl));
-      return { waited: `url "${waitUrl}"` };
+      return { waited: `url "${waitUrl}"`, elapsedMs: Date.now() - start };
     }
-    throw new Error('wait requires one of: text, ref, url, time');
+
+    // F2.2 — wait for an element matching CSS selector to reach a state.
+    if (selector) {
+      const validStates = ['visible', 'hidden', 'attached', 'detached'];
+      if (!validStates.includes(state)) {
+        throw new Error(`Invalid --state "${state}"; expected one of: ${validStates.join(', ')}`);
+      }
+      await poll(() => {
+        const el = document.querySelector(selector);
+        if (state === 'attached') return !!el;
+        if (state === 'detached') return !el;
+        if (!el) return false;
+        const vis = isVisible(el);
+        return state === 'visible' ? vis : !vis;
+      });
+      return { waited: `selector "${selector}" → ${state}`, elapsedMs: Date.now() - start };
+    }
+
+    // F2.1 — wait for the page network to settle: 0 in-flight requests for
+    // `quietMs` consecutive ms. Requests older than `maxRequestAgeMs` are
+    // ignored (covers SSE / long-poll). Counts XHR + fetch from networkBuffer.
+    if (networkIdle) {
+      let quietSince = null;
+      await poll(() => {
+        const now = Date.now();
+        const inflight = networkBuffer.filter(e =>
+          e.status == null &&
+          e.startTime &&
+          (now - e.startTime) < maxRequestAgeMs
+        ).length;
+        if (inflight === 0) {
+          if (quietSince == null) quietSince = now;
+          return (now - quietSince) >= quietMs;
+        }
+        quietSince = null;
+        return false;
+      });
+      return { waited: `network-idle (quiet=${quietMs}ms)`, elapsedMs: Date.now() - start };
+    }
+
+    // F3.3 — wait until DOM mutations stop for `quietMs` consecutive ms.
+    if (domStable) {
+      return await new Promise((resolve, reject) => {
+        let lastMutation = Date.now();
+        const obs = new MutationObserver(() => { lastMutation = Date.now(); });
+        obs.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+        const tick = setInterval(() => {
+          const now = Date.now();
+          if (now - lastMutation >= quietMs) {
+            clearInterval(tick); obs.disconnect();
+            resolve({ waited: `dom-stable (quiet=${quietMs}ms)`, elapsedMs: now - start });
+            return;
+          }
+          if (now - start > timeout) {
+            clearInterval(tick); obs.disconnect();
+            reject(new Error(`Wait timeout after ${timeout}ms (dom still mutating)`));
+          }
+        }, 50);
+      });
+    }
+
+    throw new Error('wait requires one of: --text, --ref, --url, --time, --selector, --network-idle, --dom-stable');
   },
 
   evaluate: async ({ js, allFrames }) => {
@@ -643,22 +859,158 @@ const handlers = {
 
   assert: async (params) => {
     const failures = [];
-    if (params.visible !== undefined) {
-      const el = findByRef(params.ref);
-      const vis = isVisible(el);
-      if (params.visible && !vis) failures.push(`Element ${params.ref} is not visible`);
-      if (!params.visible && vis) failures.push(`Element ${params.ref} is visible`);
+
+    // F2.3 — selector-based element resolution. Either --ref OR --selector
+    // can locate the element; if both given, --selector wins (more stable
+    // across re-renders, more typical for E2E).
+    const resolveEl = () => {
+      if (params.selector) {
+        const el = document.querySelector(params.selector);
+        if (!el) throw new Error(`No element matching selector "${params.selector}"`);
+        return el;
+      }
+      if (params.ref) return findByRef(params.ref);
+      throw new Error('assert requires --ref or --selector for element-level checks');
+    };
+
+    const needsElement = params.visible !== undefined || params.text !== undefined ||
+      params.checked !== undefined || params.disabled !== undefined ||
+      params.attr !== undefined;
+    let el = null;
+    if (needsElement) {
+      try { el = resolveEl(); }
+      catch (e) { failures.push(e.message); }
     }
-    if (params.text !== undefined) {
-      const el = findByRef(params.ref);
+
+    if (el && params.visible !== undefined) {
+      const vis = isVisible(el);
+      if (params.visible && !vis) failures.push(`Element is not visible (${params.selector || params.ref})`);
+      if (!params.visible && vis) failures.push(`Element is visible (${params.selector || params.ref})`);
+    }
+    if (el && params.text !== undefined) {
       const actual = el.textContent?.trim() || '';
       if (!actual.includes(params.text)) failures.push(`Expected text "${params.text}", got "${actual.slice(0, 100)}"`);
     }
-    if (params.checked !== undefined) { const el = findByRef(params.ref); if (el.checked !== params.checked) failures.push(`Expected checked=${params.checked}, got ${el.checked}`); }
-    if (params.disabled !== undefined) { const el = findByRef(params.ref); const d = el.disabled || el.getAttribute('aria-disabled') === 'true'; if (d !== params.disabled) failures.push(`Expected disabled=${params.disabled}, got ${d}`); }
-    if (params.url) { const pat = params.url.includes('*') ? new RegExp('^' + params.url.replace(/\*/g, '.*') + '$') : null; const m = pat ? pat.test(location.href) : location.href.includes(params.url); if (!m) failures.push(`URL "${location.href}" does not match "${params.url}"`); }
-    if (params.title) { if (!document.title.includes(params.title)) failures.push(`Title "${document.title}" does not match "${params.title}"`); }
-    if (params.consoleNoErrors) { const errs = consoleBuffer.filter(m => m.level === 'error'); if (errs.length) failures.push(`Found ${errs.length} console errors: ${errs.map(e => e.text).join('; ').slice(0, 200)}`); }
+    if (el && params.checked !== undefined) {
+      if (el.checked !== params.checked) failures.push(`Expected checked=${params.checked}, got ${el.checked}`);
+    }
+    if (el && params.disabled !== undefined) {
+      const d = el.disabled || el.getAttribute('aria-disabled') === 'true';
+      if (d !== params.disabled) failures.push(`Expected disabled=${params.disabled}, got ${d}`);
+    }
+    if (el && params.attr !== undefined) {
+      // --attr "key=value" — split on first '='
+      const eq = params.attr.indexOf('=');
+      if (eq < 0) failures.push(`--attr must be "key=value" form, got "${params.attr}"`);
+      else {
+        const k = params.attr.slice(0, eq).trim();
+        const v = params.attr.slice(eq + 1);
+        const got = el.getAttribute(k);
+        if (got !== v) failures.push(`Expected attr ${k}="${v}", got ${got === null ? 'null' : `"${got}"`}`);
+      }
+    }
+
+    if (params.url) {
+      const pat = params.url.includes('*') ? new RegExp('^' + params.url.replace(/\*/g, '.*') + '$') : null;
+      const m = pat ? pat.test(location.href) : location.href.includes(params.url);
+      if (!m) failures.push(`URL "${location.href}" does not match "${params.url}"`);
+    }
+    if (params.title) {
+      if (!document.title.includes(params.title)) failures.push(`Title "${document.title}" does not match "${params.title}"`);
+    }
+    if (params.consoleNoErrors) {
+      const errs = consoleBuffer.filter(m => m.level === 'error');
+      if (errs.length) failures.push(`Found ${errs.length} console errors: ${errs.map(e => e.text).join('; ').slice(0, 200)}`);
+    }
+
+    // F2.4 — assert a matching request occurred in networkBuffer.
+    //   --network  --method M --url U --status S [--since <epoch ms>]
+    // `--url` matches as a substring (or with `*` glob).
+    // `--status` may be a literal int, "2xx", "4xx", etc.
+    // `--since` filters to entries with startTime >= since.
+    if (params.network) {
+      const sinceMs = params.since ? Number(params.since) : 0;
+      const urlPat = params.url
+        ? (params.url.includes('*')
+            ? new RegExp('^' + params.url.replace(/\*/g, '.*') + '$')
+            : null)
+        : null;
+      const methodU = params.method ? params.method.toUpperCase() : null;
+      const statusCheck = (s) => {
+        if (params.status == null) return true;
+        const want = String(params.status);
+        if (/^\d+$/.test(want)) return s === Number(want);
+        if (/^\dxx$/.test(want)) return s >= Number(want[0]) * 100 && s < (Number(want[0]) + 1) * 100;
+        return false;
+      };
+      const matches = networkBuffer.filter(e =>
+        (!sinceMs || (e.startTime || 0) >= sinceMs) &&
+        (!methodU || e.method === methodU) &&
+        (!params.url || (urlPat ? urlPat.test(e.url) : (e.url || '').includes(params.url))) &&
+        statusCheck(e.status)
+      );
+      if (!matches.length) {
+        const desc = [
+          params.method ? `method=${params.method}` : null,
+          params.url ? `url=${params.url}` : null,
+          params.status != null ? `status=${params.status}` : null,
+          sinceMs ? `since=${sinceMs}` : null,
+        ].filter(Boolean).join(' ');
+        failures.push(`No matching request in networkBuffer (${desc}); buffer has ${networkBuffer.length} entries`);
+      }
+    }
+
+    // F2.5 — assert backend by fetch + jsonpath compare.
+    //   --fetch <url> [--method M] [--body B] [--fetch-status N]
+    //   [--jsonpath P --equals V | --contains V | --not-contains V]
+    if (params.fetch) {
+      const init = { method: params.fetchMethod || 'GET', credentials: 'same-origin' };
+      init.headers = { 'Accept': 'application/json, text/plain, */*' };
+      if (params.body != null) {
+        init.body = typeof params.body === 'string' ? params.body : JSON.stringify(params.body);
+        init.headers['Content-Type'] = 'application/json';
+      }
+      let r, data, parseErr;
+      try {
+        r = await fetch(params.fetch, init);
+        const ct = r.headers.get('content-type') || '';
+        data = ct.includes('json') ? await r.json().catch(() => r.text()) : await r.text();
+      } catch (e) { parseErr = e.message; }
+      if (parseErr) {
+        failures.push(`assert --fetch ${params.fetch}: ${parseErr}`);
+      } else {
+        if (params.fetchStatus != null && r.status !== Number(params.fetchStatus)) {
+          failures.push(`assert --fetch ${params.fetch}: expected status ${params.fetchStatus}, got ${r.status}`);
+        }
+        if (params.jsonpath) {
+          let value;
+          try { value = simpleJsonPath(data, params.jsonpath); }
+          catch (e) { failures.push(`assert --fetch jsonpath ${params.jsonpath}: ${e.message}`); }
+          if (params.equals !== undefined) {
+            const want = params.equals;
+            const eq = Array.isArray(value)
+              ? JSON.stringify(value) === JSON.stringify(want)
+              : value == want; // intentional loose equal for "5" == 5
+            if (!eq) failures.push(`assert --fetch jsonpath ${params.jsonpath}: expected ${JSON.stringify(want)}, got ${JSON.stringify(value)?.slice(0, 200)}`);
+          }
+          if (params.contains !== undefined) {
+            const want = params.contains;
+            const has = Array.isArray(value)
+              ? value.some(v => v == want || (typeof v === 'string' && v.includes(String(want))))
+              : (typeof value === 'string' ? value.includes(String(want)) : false);
+            if (!has) failures.push(`assert --fetch jsonpath ${params.jsonpath}: expected to contain ${JSON.stringify(want)}, got ${JSON.stringify(value)?.slice(0, 200)}`);
+          }
+          if (params.notContains !== undefined) {
+            const dont = params.notContains;
+            const has = Array.isArray(value)
+              ? value.some(v => v == dont || (typeof v === 'string' && v.includes(String(dont))))
+              : (typeof value === 'string' ? value.includes(String(dont)) : false);
+            if (has) failures.push(`assert --fetch jsonpath ${params.jsonpath}: expected NOT to contain ${JSON.stringify(dont)}, got ${JSON.stringify(value)?.slice(0, 200)}`);
+          }
+        }
+      }
+    }
+
     return failures.length ? { pass: false, failures } : { pass: true };
   },
 
@@ -681,7 +1033,270 @@ const handlers = {
     }
     return { error: `Unknown metric: ${metric}` };
   },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // F1.6 — fetch shortcut: GET/POST/… using the page's auth session.
+  // Returns parsed JSON when Content-Type matches, otherwise text.
+  // Optional --json '<path>' extracts a value via a tiny JSONPath subset:
+  //   $              whole document
+  //   $.key          object property
+  //   $.a.b          chained property
+  //   $[N]           array index
+  //   $.a[0].b       mixed
+  //   $[*].key       map over array → array of values
+  // No filters / wildcards beyond the above.
+  // ──────────────────────────────────────────────────────────────────────
+  fetch: async ({ url, method = 'GET', body = null, headers = null, json = null }) => {
+    if (!url) throw new Error('fetch requires --url (or positional URL)');
+    const init = { method, credentials: 'same-origin' };
+    init.headers = { 'Accept': 'application/json, text/plain, */*' };
+    if (headers && typeof headers === 'object') Object.assign(init.headers, headers);
+    if (body != null) {
+      if (typeof body === 'string') {
+        init.body = body;
+        if (!('Content-Type' in init.headers)) init.headers['Content-Type'] = 'application/json';
+      } else {
+        init.body = JSON.stringify(body);
+        init.headers['Content-Type'] = 'application/json';
+      }
+    }
+    const r = await fetch(url, init);
+    const ct = r.headers.get('content-type') || '';
+    let data;
+    if (ct.includes('json')) {
+      try { data = await r.json(); }
+      catch { data = await r.text(); }
+    } else {
+      data = await r.text();
+    }
+    const result = { status: r.status, ok: r.ok, contentType: ct };
+    if (json) {
+      result.jsonpath = json;
+      result.value = simpleJsonPath(data, json);
+    } else {
+      result.data = data;
+    }
+    return result;
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // F2.6 — submit: form.requestSubmit() works on React-controlled forms
+  // where dispatching a synthetic Enter key event is ignored.
+  // ──────────────────────────────────────────────────────────────────────
+  submit: async ({ formSelector } = {}) => {
+    let form;
+    if (formSelector) {
+      form = document.querySelector(formSelector);
+      if (!form) throw new Error(`No element matching form selector "${formSelector}"`);
+      if (form.tagName !== 'FORM') {
+        // allow passing a selector to a child — climb to nearest form ancestor.
+        form = form.closest('form');
+        if (!form) throw new Error(`Element "${formSelector}" is not a <form> and has no <form> ancestor`);
+      }
+    } else {
+      const active = document.activeElement;
+      form = active && active.closest ? active.closest('form') : null;
+      if (!form) throw new Error('submit: no --form-selector given and document.activeElement is not inside a <form>');
+    }
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    return { submitted: form.getAttribute('id') || form.getAttribute('name') || form.tagName, action: form.action || null };
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // F1.8 — deep health: probes the page itself. The cheap (non-blocking)
+  // server-side health lives in src/lib/httpApi.ts and never round-trips
+  // here. Use this only with --deep.
+  // ──────────────────────────────────────────────────────────────────────
+  health_deep: async () => ({
+    extension: 'alive',
+    page: {
+      ts: Date.now(),
+      readyState: document.readyState,
+      url: window.location.href,
+      title: document.title,
+      pendingMicrotasks: 0, // best-effort; not directly observable
+      snapshotEpoch,
+    },
+  }),
+
+  // ──────────────────────────────────────────────────────────────────────
+  // F3.1 — reset: atomic test-isolation helper.
+  //   --cookies   expire every cookie visible to JS for the current host
+  //   --storage   clear localStorage + sessionStorage
+  //   --cache     drop everything in the Cache Storage API
+  //   --reload    reload the page after clearing (force-bypass cache)
+  // Returns which steps actually ran (so AI can confirm).
+  // ──────────────────────────────────────────────────────────────────────
+  reset: async ({ cookies, storage, cache, reload } = {}) => {
+    const cleared = [];
+    const errors = [];
+    if (cookies) {
+      try {
+        const host = location.hostname;
+        const parents = [host];
+        // Also try the eTLD+1 parent (e.g. "sub.example.com" → ".example.com")
+        const parts = host.split('.');
+        if (parts.length > 2) parents.push('.' + parts.slice(-2).join('.'));
+        for (const c of document.cookie.split(';')) {
+          const eq = c.indexOf('=');
+          const name = (eq > -1 ? c.slice(0, eq) : c).trim();
+          if (!name) continue;
+          const dead = 'expires=Thu, 01 Jan 1970 00:00:00 GMT';
+          document.cookie = `${name}=; ${dead}; path=/`;
+          for (const d of parents) {
+            document.cookie = `${name}=; ${dead}; path=/; domain=${d}`;
+          }
+        }
+        cleared.push('cookies');
+      } catch (e) { errors.push(`cookies: ${e.message}`); }
+    }
+    if (storage) {
+      try { localStorage.clear(); sessionStorage.clear(); cleared.push('storage'); }
+      catch (e) { errors.push(`storage: ${e.message}`); }
+    }
+    if (cache) {
+      try {
+        if (typeof caches !== 'undefined' && caches.keys) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map(k => caches.delete(k)));
+          cleared.push(`cache (${keys.length} stores)`);
+        } else {
+          errors.push('cache: Cache Storage API unavailable');
+        }
+      } catch (e) { errors.push(`cache: ${e.message}`); }
+    }
+    if (reload) {
+      // Defer the reload so the result can ship back before navigation tears
+      // down the iframe runtime.
+      setTimeout(() => location.reload(), 50);
+      cleared.push('reload (scheduled)');
+    }
+    if (!cleared.length && !errors.length) {
+      throw new Error('reset requires at least one of: --cookies, --storage, --cache, --reload');
+    }
+    return errors.length ? { cleared, errors } : { cleared };
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // F3.2 — status: one-stop "where am I" summary for AI orientation.
+  //   url, title, readyState, last console error, last failed request, top
+  //   visible actions. Keep it cheap; this is what AI runs after a long gap.
+  // ──────────────────────────────────────────────────────────────────────
+  status: async () => {
+    const now = Date.now();
+    const lastErr = consoleBuffer.filter(m => m.level === 'error').slice(-1)[0] || null;
+    const lastFailed = networkBuffer.filter(r => typeof r.status === 'number' && r.status >= 400).slice(-1)[0] || null;
+    const buttons = Array.from(document.querySelectorAll('button, [role="button"], a[role="button"], input[type="submit"]'))
+      .filter(b => isVisible(b))
+      .slice(0, 8);
+    const topActions = buttons.map(b => {
+      const t = (b.textContent || '').trim().replace(/\s+/g, ' ');
+      const aria = b.getAttribute('aria-label');
+      const label = aria || (t.length > 32 ? t.slice(0, 29) + '...' : t);
+      return label;
+    }).filter(Boolean);
+    return {
+      url: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      lastConsoleError: lastErr ? {
+        text: (lastErr.text || '').slice(0, 200),
+        ageSec: Math.round((now - lastErr.timestamp) / 1000),
+      } : null,
+      lastFailedRequest: lastFailed ? {
+        method: lastFailed.method,
+        url: lastFailed.url,
+        status: lastFailed.status,
+        ageSec: Math.round((now - (lastFailed.startTime || now)) / 1000),
+      } : null,
+      topActions,
+    };
+  },
+
+  // ──────────────────────────────────────────────────────────────────────
+  // F3.4 — set: unified writer for cookie / localStorage / sessionStorage.
+  // (Cookies are JS-visible only; HttpOnly cannot be set from page context.)
+  //   --type cookie         + --name --value [--domain --path --secure
+  //                           --samesite --expires]
+  //   --type local-storage  + --name --value
+  //   --type session-storage + --name --value
+  // ──────────────────────────────────────────────────────────────────────
+  set: async ({ type, name, value, domain, path, secure, sameSite, expires } = {}) => {
+    if (!type) throw new Error('set requires --type (one of: cookie, local-storage, session-storage)');
+    if (!name) throw new Error('set requires --name');
+    if (value === undefined) throw new Error('set requires --value');
+    const v = typeof value === 'string' ? value : JSON.stringify(value);
+    if (type === 'cookie') {
+      let str = `${name}=${encodeURIComponent(v)}`;
+      str += `; path=${path || '/'}`;
+      if (domain) str += `; domain=${domain}`;
+      if (secure) str += `; secure`;
+      if (sameSite) str += `; samesite=${sameSite}`;
+      if (expires) str += `; expires=${expires}`;
+      document.cookie = str;
+      // Verify (cookies set against a different domain are silently dropped)
+      const verify = document.cookie.split(';').some(c => c.trim().startsWith(`${name}=`));
+      return { set: 'cookie', name, verified: verify };
+    }
+    if (type === 'local-storage') { localStorage.setItem(name, v); return { set: 'local-storage', name, length: v.length }; }
+    if (type === 'session-storage') { sessionStorage.setItem(name, v); return { set: 'session-storage', name, length: v.length }; }
+    throw new Error(`set --type must be one of: cookie, local-storage, session-storage (got "${type}")`);
+  },
+
+  // Internal — used by CLI-side post-verify (F1.7). Cheap state probe.
+  probe_state: async () => {
+    // domHash: cheap-ish CRC of the visible body innerHTML length + a small sample
+    const html = document.body ? document.body.innerHTML : '';
+    const sample = html.length > 4000
+      ? html.slice(0, 1000) + html.slice(html.length / 2, html.length / 2 + 1000) + html.slice(-1000)
+      : html;
+    let hash = 0;
+    for (let i = 0; i < sample.length; i++) hash = ((hash << 5) - hash + sample.charCodeAt(i)) | 0;
+    return {
+      url: window.location.href,
+      domLen: html.length,
+      domHash: hash,
+      lastNetworkId: networkBuffer.length ? networkBuffer[networkBuffer.length - 1].id : 0,
+      ts: Date.now(),
+    };
+  },
 };
+
+// ──────────────────────────────────────────────────────────────────────
+// Simple JSONPath extractor — supports only: $, .key, [N], [*]
+// ──────────────────────────────────────────────────────────────────────
+function simpleJsonPath(data, path) {
+  if (typeof path !== 'string' || !path.startsWith('$')) {
+    throw new Error(`Invalid jsonpath "${path}" — must start with $`);
+  }
+  let rest = path.slice(1);
+  let current = [data];
+  while (rest.length) {
+    if (rest.startsWith('.')) {
+      const m = rest.match(/^\.([A-Za-z_$][\w$]*)/);
+      if (!m) throw new Error(`Invalid jsonpath segment near "${rest}"`);
+      const key = m[1];
+      current = current.flatMap(v => (v != null && typeof v === 'object' && key in v) ? [v[key]] : []);
+      rest = rest.slice(m[0].length);
+    } else if (rest.startsWith('[')) {
+      const m = rest.match(/^\[(\*|\d+)\]/);
+      if (!m) throw new Error(`Invalid jsonpath bracket near "${rest}"`);
+      if (m[1] === '*') {
+        current = current.flatMap(v => Array.isArray(v) ? v : (v != null && typeof v === 'object' ? Object.values(v) : []));
+      } else {
+        const idx = Number(m[1]);
+        current = current.flatMap(v => Array.isArray(v) && idx < v.length ? [v[idx]] : []);
+      }
+      rest = rest.slice(m[0].length);
+    } else {
+      throw new Error(`Invalid jsonpath suffix "${rest}"`);
+    }
+  }
+  // If the path involved no wildcard, return scalar; otherwise array.
+  if (path.includes('[*]')) return current;
+  return current.length ? current[0] : undefined;
+}
 
 // ============================================================================
 // 命令分发
@@ -695,13 +1310,50 @@ function handleCommand(event) {
   const handler = handlers[action];
 
   if (!handler) {
-    _realParent.postMessage({ type: 'cockpit:cmd-result', reqId, ok: false, error: `Unknown action: ${action}` }, '*');
+    // Filter internal-use actions from "Did you mean" suggestions.
+    const INTERNAL_ACTIONS = new Set(['probe_state', 'evaluate_chunk']);
+    const known = Object.keys(handlers).filter(k => !k.startsWith('_') && !INTERNAL_ACTIONS.has(k));
+    const suggestions = fuzzyTopK(action, known, 3);
+    const hint = suggestions.length ? `\n  Did you mean: ${suggestions.join(', ')}?` : '';
+    _realParent.postMessage({
+      type: 'cockpit:cmd-result',
+      reqId,
+      ok: false,
+      error: `Unknown action "${action}".${hint}\n  Run: cockpit browser --help-all`,
+    }, '*');
     return;
   }
 
   handler(params)
     .then(data => _realParent.postMessage({ type: 'cockpit:cmd-result', reqId, ok: true, data }, '*'))
     .catch(err => _realParent.postMessage({ type: 'cockpit:cmd-result', reqId, ok: false, error: err.message || String(err) }, '*'));
+}
+
+// Fuzzy ranking — surfaces "evluate" → "evaluate" while filtering unrelated
+// candidates. Uses character-bag overlap ratio (multiset intersection /
+// max length); substring matches get a bonus. Threshold 0.6.
+function fuzzyTopK(input, candidates, k) {
+  if (!input) return [];
+  const inputLow = input.toLowerCase();
+  const bag = bagCounts(inputLow);
+  const scored = candidates.map(c => {
+    const cl = c.toLowerCase();
+    const cBag = bagCounts(cl);
+    let inter = 0;
+    for (const [ch, n] of bag) inter += Math.min(n, cBag.get(ch) || 0);
+    const ratio = inter / Math.max(inputLow.length, cl.length);
+    const startsWith = cl.startsWith(inputLow) ? 0.5 : 0;
+    const contains = cl.includes(inputLow) ? 0.3 : 0;
+    return { c, score: ratio + startsWith + contains };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, k).filter(s => s.score >= 0.6).map(s => s.c);
+}
+
+function bagCounts(s) {
+  const m = new Map();
+  for (const ch of s) m.set(ch, (m.get(ch) || 0) + 1);
+  return m;
 }
 
 // ============================================================================

@@ -38,6 +38,7 @@ import {
   createPendingRequest,
   sendCommandToBrowser,
   listBrowsers,
+  getBrowserHealth,
   readBubbleTitles,
 } from "@cockpit/feature-console/server"
 import type { ReadResult } from "@cockpit/feature-console/server"
@@ -563,6 +564,19 @@ export async function handleBrowserApi(
     return true
   }
 
+  // F1.8 — server-side health. Never round-trips to the page; answers from
+  // in-process bridge state so it works even when the page is stuck on a
+  // long-running evaluate. Use `--deep` to also probe the page itself
+  // (routes via the normal WS path as action `health_deep`).
+  if (action === "health" && !(cmdParams as { deep?: boolean })?.deep) {
+    if (!id) {
+      sendJson(400, { ok: false, error: "Missing browser id" })
+      return true
+    }
+    sendJson(200, { ok: true, data: getBrowserHealth(id) })
+    return true
+  }
+
   if (!id) {
     sendJson(400, { ok: false, error: "Missing browser id" })
     return true
@@ -570,21 +584,39 @@ export async function handleBrowserApi(
 
   const browser = getBrowserByShortId(id)
   if (!browser) {
-    sendJson(404, { ok: false, error: `Browser "${id}" not found` })
+    const all = listBrowsers().map(b => b.shortId)
+    const suggestions = fuzzyTopK(id, all, 3)
+    const hint = suggestions.length
+      ? `\n  Did you mean: ${suggestions.join(", ")}?`
+      : all.length
+        ? `\n  Available: ${all.join(", ")}`
+        : "\n  No browsers currently connected. Open a browser bubble in the cockpit console."
+    sendJson(404, {
+      ok: false,
+      error: `Browser "${id}" not found.${hint}\n  Run: cockpit browser list`,
+    })
     return true
   }
   if (!browser.ws || browser.ws.readyState !== WebSocket.OPEN) {
     sendJson(503, {
       ok: false,
-      error: `Browser "${id}" is disconnected`,
+      error:
+        `Browser "${id}" is disconnected (WS closed).\n` +
+        `  Recover:\n` +
+        `    1. Refresh the browser tab to re-register the extension.\n` +
+        `    2. Run \`cockpit browser list\` to confirm the shortId.\n` +
+        `    3. If the bubble is gone, re-open it from the cockpit console panel.`,
     })
     return true
   }
 
+  // For --deep, rewrite the action so the extension picks up `health_deep`.
+  const wsAction = action === "health" ? "health_deep" : action
+
   const reqId = `r-${randomUUID().slice(0, 8)}`
-  const sent = sendCommandToBrowser(id, reqId, action, cmdParams)
+  const sent = sendCommandToBrowser(id, reqId, wsAction, cmdParams)
   if (!sent) {
-    sendJson(503, { ok: false, error: "Failed to send command" })
+    sendJson(503, { ok: false, error: "Failed to send command (WS write failed)" })
     return true
   }
 
@@ -592,9 +624,55 @@ export async function handleBrowserApi(
     const data = await createPendingRequest(reqId, timeout)
     sendJson(200, { ok: true, data })
   } catch (err) {
-    sendJson(504, { ok: false, error: (err as Error).message })
+    // Timeout / browser error. Wrap with diagnostic guidance.
+    const msg = (err as Error).message
+    if (/timeout/i.test(msg)) {
+      const h = getBrowserHealth(id)
+      sendJson(504, {
+        ok: false,
+        error:
+          `${msg} (action "${action}").\n` +
+          `  Bridge state: ws=${h.ws} pending=${h.pendingCommands}` +
+          (h.lastSuccessMs !== null ? ` lastSuccess=${Math.round(h.lastSuccessMs / 1000)}s ago (${h.lastSuccessAction})` : "") +
+          `\n` +
+          `  Diagnose:\n` +
+          `    cockpit browser ${id} health                # cheap server-side probe\n` +
+          `    cockpit browser ${id} wait --extension-ready (Phase 2)\n` +
+          `  If the bridge state shows fresh activity, the page itself is blocked.\n` +
+          `  Consider a service-level test if driven by an async LLM/agent flow.`,
+      })
+    } else {
+      sendJson(504, { ok: false, error: msg })
+    }
   }
   return true
+}
+
+// Fuzzy ranking — surfaces "evluate" → "evaluate" while filtering
+// unrelated candidates. Uses character-bag overlap ratio (multiset
+// intersection / max length); substring matches get a bonus. Threshold 0.6.
+function fuzzyTopK(input: string, candidates: string[], k: number): string[] {
+  if (!input || !candidates.length) return []
+  const inputLow = input.toLowerCase()
+  const bag = bagCounts(inputLow)
+  const scored = candidates.map(c => {
+    const cl = c.toLowerCase()
+    const cBag = bagCounts(cl)
+    let inter = 0
+    for (const [ch, n] of bag) inter += Math.min(n, cBag.get(ch) ?? 0)
+    const ratio = inter / Math.max(inputLow.length, cl.length)
+    const startsWith = cl.startsWith(inputLow) ? 0.5 : 0
+    const contains = cl.includes(inputLow) ? 0.3 : 0
+    return { c, score: ratio + startsWith + contains }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, k).filter(s => s.score >= 0.6).map(s => s.c)
+}
+
+function bagCounts(s: string): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const ch of s) m.set(ch, (m.get(ch) ?? 0) + 1)
+  return m
 }
 
 // ─────────────────────────────────────────────────────────

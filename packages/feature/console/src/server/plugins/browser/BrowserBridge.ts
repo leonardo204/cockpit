@@ -16,6 +16,10 @@ interface BrowserEntry {
   fullId: string;
   ws: WebSocket | null;
   lastSeen: number;
+  /** Last time we successfully resolved a pending command (ms epoch). */
+  lastSuccessTs?: number;
+  /** Last action name that resolved successfully — useful for diagnostics. */
+  lastSuccessAction?: string;
   /** Project cwd the browser bubble belongs to (forwarded via WS query at register). */
   projectCwd?: string;
   /** Tab id the bubble lives in (used to scope bubble-titles JSON lookups). */
@@ -110,6 +114,10 @@ export function createPendingRequest(reqId: string, timeout: number): Promise<un
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingRequests.delete(reqId);
+      // Crucial: decrement inflight on timeout, otherwise the count leaks and
+      // health/wait --extension-ready report stale pending counts forever
+      // (dogfood discovery — see Phase 3 verification).
+      recordCommandResolved(reqId, false);
       reject(new Error(`Timeout after ${timeout}ms`));
     }, timeout);
 
@@ -122,10 +130,16 @@ export function createPendingRequest(reqId: string, timeout: number): Promise<un
  */
 export function resolvePendingRequest(reqId: string, ok: boolean, data: unknown, error?: string): void {
   const pending = pendingRequests.get(reqId);
-  if (!pending) return;
+  if (!pending) {
+    // Still update inflight bookkeeping even if the pending was already removed
+    // (e.g. timeout fired just before the response arrived).
+    recordCommandResolved(reqId, ok);
+    return;
+  }
 
   clearTimeout(pending.timer);
   pendingRequests.delete(reqId);
+  recordCommandResolved(reqId, ok);
 
   if (ok) {
     pending.resolve(data);
@@ -133,6 +147,13 @@ export function resolvePendingRequest(reqId: string, ok: boolean, data: unknown,
     pending.reject(new Error(error || 'Browser command failed'));
   }
 }
+
+/** reqId → { shortId, action } for resolving health/lastSuccess + scoping pending count. */
+interface ReqMeta { shortId: string; action: string }
+const reqIdMeta: Map<string, ReqMeta> =
+  ((globalThis as unknown as { __cockpitBrowserReqMeta?: typeof reqIdMeta }).__cockpitBrowserReqMeta)
+    ?? ((globalThis as unknown as { __cockpitBrowserReqMeta: Map<string, ReqMeta> })
+      .__cockpitBrowserReqMeta = new Map());
 
 /**
  * Send a command to the specified browser.
@@ -155,5 +176,71 @@ export function sendCommandToBrowser(
     params,
   }));
 
+  // Bookkeeping for health: reqId is removed by recordCommandResolved on
+  // either response OR timeout (see createPendingRequest), so pending counts
+  // can't leak. We do NOT keep a separate counter — pending is derived from
+  // pendingRequests size scoped to this shortId.
+  reqIdMeta.set(reqId, { shortId, action });
+
   return true;
+}
+
+/**
+ * Hook called by the WS message router AND createPendingRequest's timeout, to
+ * clean reqId tracking and update success bookkeeping. Always idempotent.
+ */
+export function recordCommandResolved(reqId: string, ok: boolean): void {
+  const meta = reqIdMeta.get(reqId);
+  if (!meta) return;
+  reqIdMeta.delete(reqId);
+  if (ok) {
+    const entry = registry.get(meta.shortId);
+    if (entry) {
+      entry.lastSuccessTs = Date.now();
+      entry.lastSuccessAction = meta.action;
+      entry.lastSeen = Date.now();
+    }
+  }
+}
+
+/**
+ * Server-side health snapshot for a browser bubble. NEVER hits the page —
+ * answers from in-process state only, so it works even when the page is
+ * blocked on a long-running evaluate.
+ */
+export function getBrowserHealth(shortId: string): {
+  found: boolean;
+  ws: 'open' | 'closed' | 'unknown';
+  lastSeenMs: number | null;
+  lastSuccessMs: number | null;
+  lastSuccessAction: string | null;
+  pendingCommands: number;
+} {
+  const entry = registry.get(shortId);
+  if (!entry) {
+    return {
+      found: false,
+      ws: 'unknown',
+      lastSeenMs: null,
+      lastSuccessMs: null,
+      lastSuccessAction: null,
+      pendingCommands: 0,
+    };
+  }
+  const now = Date.now();
+  // Pending = entries in pendingRequests whose reqId still maps to this
+  // shortId. Both maps get cleaned up on timeout (via createPendingRequest's
+  // setTimeout calling recordCommandResolved), so this can't leak.
+  let pending = 0;
+  for (const reqId of pendingRequests.keys()) {
+    if (reqIdMeta.get(reqId)?.shortId === shortId) pending += 1;
+  }
+  return {
+    found: true,
+    ws: entry.ws && entry.ws.readyState === WebSocket.OPEN ? 'open' : 'closed',
+    lastSeenMs: entry.lastSeen ? now - entry.lastSeen : null,
+    lastSuccessMs: entry.lastSuccessTs ? now - entry.lastSuccessTs : null,
+    lastSuccessAction: entry.lastSuccessAction ?? null,
+    pendingCommands: pending,
+  };
 }

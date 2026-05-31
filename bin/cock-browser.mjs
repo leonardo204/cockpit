@@ -19,6 +19,19 @@
  *   cockpit browser abcd list   (list all connected browsers)
  */
 
+import {
+  TIMEOUT_MSG,
+  CONNECT_REFUSED_MSG,
+  CLICK_NO_OP_WARN,
+  HELP_WHEN_NOT_TO_USE,
+  HELP_INTERACTION_BY_SELECTOR,
+  HELP_FETCH,
+  HELP_HEALTH,
+  HELP_WAIT,
+  HELP_ASSERT,
+  HELP_LIFECYCLE,
+} from './cock-browser.messages.mjs';
+
 const args = process.argv.slice(2);
 
 // Help text
@@ -55,14 +68,16 @@ Three templates that always work:
   # 2) Set a React-controlled <input> via the native setter + input event:
   evaluate "(() => { const el = document.querySelector('input[name=foo]'); const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set; set.call(el, 'hello'); el.dispatchEvent(new Event('input', { bubbles: true })); return el.value; })()"
 
-  # 3) Click a button by aria-label / text (refs go stale after re-render):
-  evaluate "(() => { const btn = Array.from(document.querySelectorAll('button')).find(b => b.getAttribute('aria-label') === 'Send message' || b.textContent.trim() === 'Send'); if (!btn) return 'not-found'; btn.click(); return 'clicked'; })()"
+  # 3) Click a button by visible text or aria-label (refs go stale on re-render):
+  click --text "Sign in"                          # preferred shortcut
+  click --selector 'button[type="submit"]'        # exact selector
+  evaluate "(() => document.querySelector('button[aria-label=\\"Save\\"]').click())()"  # last resort
 
-Refs (e5, e23, …) returned by \`snapshot\` are valid only for the
-DOM at snapshot time. Any re-render / route change / focus shift
-invalidates them — \`Element ref "eN" not found or disconnected\`
-means you need a fresh \`snapshot\` (or just use \`evaluate\` with
-CSS selectors).
+Refs returned by \`snapshot\` are \`e<N>#v<epoch>\` — valid only until
+the next snapshot or re-render. The error message
+\`Element ref "..." is stale (current snapshot v=N)\` tells you to
+re-snapshot OR use \`click --text\` / \`click --selector\` /
+\`fill --selector\` for re-render-resilient interaction.
 
 ──────────────────────────────────────────────────────
 
@@ -74,18 +89,29 @@ Navigation:
   title                       Get page title
 
 Inspection:
-  snapshot                    Get element tree (returns refs like [e5])
-  screenshot                  Take a screenshot
+  snapshot                    a11y tree (refs like e5#v3; banner explains format)
+                              --filter <regex>           server-side grep
+                              --include-hidden-text      surface collapsed <summary>/container text
+                              --max-depth N              limit walk depth (default 12)
+  screenshot                  PNG saved to /tmp; path printed for Read tool
 
-Interaction (use ref from snapshot):
-  click <ref>                 Click element  ⚠ React/SPA: may silently miss; use evaluate
-  type <ref> <text>           Type text  ⚠ React/SPA: may silently miss; use evaluate (template 1/2)
-  fill <ref> <value>          Fill input value  ⚠ Same — prefer template 2
+${HELP_INTERACTION_BY_SELECTOR(prefix)}
+
+  type <ref> <text>           Type into ref (CDP key events; React-controlled may silently miss → use fill --selector)
   hover <ref>                 Hover element
   focus <ref>                 Focus element
   scroll --direction D        Scroll page (up/down/left/right)
   key <key>                   Press key (e.g. Enter, Ctrl+A)
-  wait --text T               Wait for text to appear
+
+${HELP_WAIT}
+
+${HELP_ASSERT}
+
+${HELP_LIFECYCLE}
+
+${HELP_FETCH}
+
+${HELP_HEALTH}
 
 DOM:
   computed <ref>              Get computed styles
@@ -110,6 +136,8 @@ Console & Debug:
   theme --mode M              Switch theme (dark|light)
   cookies                     Get cookies
   storage [--type T]          Get storage (local|session)
+
+${HELP_WHEN_NOT_TO_USE}
 
 ── Next step ──────────────────────────────────────────
 Run \`cockpit browser ${prefix} snapshot\` to inspect the page.
@@ -191,9 +219,32 @@ const params = parseFlags(args.slice(action === 'list' ? 1 : 2));
 if (params._positional?.length) {
   const pos = params._positional;
   if (action === 'navigate' && !params.url) params.url = pos[0];
-  if (action === 'click' && !params.ref) params.ref = pos[0];
+  // click: positional is the ref (or text fallback for convenience if it does
+  // not look like a ref). Refs match e<N>#v<M>; anything else is treated as
+  // visible text so `click "Sign in"` Just Works.
+  if (action === 'click') {
+    if (!params.ref && !params.text && !params.selector) {
+      if (/^e\d+#v\d+$/.test(pos[0])) params.ref = pos[0];
+      else params.text = pos[0];
+    }
+  }
   if (action === 'type' && !params.ref) { params.ref = pos[0]; if (pos[1] && !params.text) params.text = pos[1]; }
-  if (action === 'fill' && !params.ref) { params.ref = pos[0]; if (pos[1] && !params.value) params.value = pos[1]; }
+  // fill: positional[0] is ref (when matches ref pattern) else --selector form.
+  // positional[1] is the value when ref-positional is used.
+  if (action === 'fill') {
+    if (!params.ref && !params.selector) {
+      if (/^e\d+#v\d+$/.test(pos[0])) {
+        params.ref = pos[0];
+        if (pos[1] && !params.value) params.value = pos[1];
+      } else {
+        // First positional taken as selector if it contains CSS-y chars.
+        params.selector = pos[0];
+        if (pos[1] && !params.value) params.value = pos[1];
+      }
+    } else if (params.selector && !params.value && pos[0]) {
+      params.value = pos[0];
+    }
+  }
   if (action === 'hover' && !params.ref) params.ref = pos[0];
   if (action === 'focus' && !params.ref) params.ref = pos[0];
   if (action === 'evaluate' && !params.js) params.js = pos[0];
@@ -206,8 +257,32 @@ if (params._positional?.length) {
   if (action === 'events' && !params.ref) params.ref = pos[0];
   if (action === 'network_detail' && !params.id) params.id = parseInt(pos[0]);
   if (action === 'network_record' && !params.action) params.action = pos[0] || 'status';
+  if (action === 'fetch' && !params.url) params.url = pos[0];
+  if (action === 'health' && pos[0] === '--deep') params.deep = true;
   delete params._positional;
 }
+
+// kebab → camel for new Phase 2 flags.
+if (params['network-idle']) { params.networkIdle = true; delete params['network-idle']; }
+if (params['dom-stable']) { params.domStable = true; delete params['dom-stable']; }
+if (params['extension-ready']) { params.extensionReady = true; delete params['extension-ready']; }
+if (params['quiet-ms'] != null) { params.quietMs = params['quiet-ms']; delete params['quiet-ms']; }
+if (params['max-request-age-ms'] != null) { params.maxRequestAgeMs = params['max-request-age-ms']; delete params['max-request-age-ms']; }
+if (params['fetch-status'] != null) { params.fetchStatus = params['fetch-status']; delete params['fetch-status']; }
+if (params['fetch-method']) { params.fetchMethod = params['fetch-method']; delete params['fetch-method']; }
+if (params['not-contains'] !== undefined) { params.notContains = params['not-contains']; delete params['not-contains']; }
+if (params['no-cache']) { params.noCache = true; delete params['no-cache']; }
+if (params['console-no-errors']) { params.consoleNoErrors = true; delete params['console-no-errors']; }
+if (params['same-site']) { params.sameSite = params['same-site']; delete params['same-site']; }
+if (params['http-only']) { params.httpOnly = true; delete params['http-only']; }
+if (params['verify-ms'] != null) { params.verifyMs = Number(params['verify-ms']); delete params['verify-ms']; }
+
+// kebab → camel for flags that the extension expects camel.
+if (params['include-hidden-text']) { params.includeHiddenText = true; delete params['include-hidden-text']; }
+if (params['max-depth'] != null) { params.maxDepth = params['max-depth']; delete params['max-depth']; }
+if (params['form-selector']) { params.formSelector = params['form-selector']; delete params['form-selector']; }
+if (params['skip-verify']) { params.skipVerify = true; delete params['skip-verify']; }
+if (params['no-verify']) { params.skipVerify = true; delete params['no-verify']; }
 
 // Port: env COCKPIT_PORT > ~/.cockpit/server.json > default 3457
 let port = process.env.COCKPIT_PORT || 3457;
@@ -312,6 +387,43 @@ async function autoResolveChunked(baseUrl, id, data, cmdTimeout) {
 }
 
 // Send request
+// F2.7 — wait --extension-ready: poll the cheap server-side health endpoint
+// until the bridge reports quiet conditions for `quietMs` consecutive ms.
+// Replaces the manual `until cockpit browser X evaluate "1+1"` loop that AI
+// has historically used when an evaluate hangs on a busy page.
+async function waitExtensionReady({ quietMs = 500, timeoutMs = 60000 }) {
+  const start = Date.now();
+  let quietSince = null;
+  while (Date.now() - start < timeoutMs) {
+    let h = null;
+    try {
+      const r = await fetch(`${baseUrl}/api/browser/health`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, params: {}, timeout: 1000 }),
+        signal: AbortSignal.timeout(2000),
+      });
+      const j = await r.json();
+      h = j.ok ? j.data : null;
+    } catch { /* network blip — treat as not-ready */ }
+    const ready = h && h.found && h.ws === 'open' && h.pendingCommands === 0;
+    if (ready) {
+      if (quietSince == null) quietSince = Date.now();
+      if (Date.now() - quietSince >= quietMs) {
+        return { waited: `extension-ready (quiet=${quietMs}ms)`, elapsedMs: Date.now() - start };
+      }
+    } else {
+      quietSince = null;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+  throw new Error(
+    `wait --extension-ready timed out after ${timeoutMs}ms.\n` +
+    `  The bridge never reported quiet for ${quietMs}ms.\n` +
+    `  Consider a service-level test if the page is driven by an async LLM/agent flow.`
+  );
+}
+
 async function run() {
   // Only id provided without action → show help + status
   if (action === '_status') {
@@ -338,6 +450,22 @@ async function run() {
     }
     printHelp(id, status);
     return;
+  }
+
+  // F2.7 — wait --extension-ready runs entirely CLI-side: it polls the cheap
+  // server-side `health` endpoint, so it works even when the page is blocked.
+  if (action === 'wait' && params.extensionReady) {
+    try {
+      const r = await waitExtensionReady({
+        quietMs: params.quietMs ?? 500,
+        timeoutMs: timeout,
+      });
+      console.log(`waited: ${r.waited} (elapsed ${formatMs(r.elapsedMs)})`);
+      return;
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
   }
 
   const url = `${baseUrl}/api/browser/${action}`;
@@ -427,17 +555,73 @@ async function run() {
       }
     }
 
+    // F1.7 — post-verify silent failures for click / key / submit.
+    if (POST_VERIFY_ACTIONS.has(action)) {
+      try { await postVerify(action, params, resolved); } catch { /* never fail the command */ }
+    }
+
     // Format output
     await formatOutput(action, resolved);
   } catch (err) {
     if (err.name === 'TimeoutError' || err.code === 'ABORT_ERR') {
-      console.error(`Timeout: No response within ${timeout}ms. Is the browser bubble connected?`);
+      console.error(TIMEOUT_MSG(timeout, id));
     } else if (err.cause?.code === 'ECONNREFUSED') {
-      console.error(`Connection refused: Cockpit server not running at ${baseUrl}`);
+      console.error(CONNECT_REFUSED_MSG(baseUrl));
     } else {
       console.error(`Error: ${err.message}`);
     }
     process.exit(1);
+  }
+}
+
+// F1.7 — Post-verify for click / key / submit. CDP reports "success" even when
+// the framework didn't react. Diff a cheap state probe before and after; if
+// nothing observable changed in the window, warn with actionable templates.
+//
+// Default window: 1000ms (BL-1, observation period). Was 200ms but dogfood
+// showed false positives on React pages whose batched re-renders + XHR fire
+// took >200ms to surface. Users can override per command with --verify-ms;
+// --skip-verify (or --no-verify) opts out entirely.
+const POST_VERIFY_ACTIONS = new Set(['click', 'key', 'submit']);
+const POST_VERIFY_WINDOW_MS_DEFAULT = 1000;
+
+async function probeState() {
+  const r = await fetch(`${baseUrl}/api/browser/probe_state`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, params: {}, timeout: 2000 }),
+    signal: AbortSignal.timeout(3000),
+  });
+  const j = await r.json();
+  return j.ok ? j.data : null;
+}
+
+async function postVerify(action, params, originalResolved) {
+  if (params.skipVerify) return;
+  const windowMs = Number.isFinite(params.verifyMs) && params.verifyMs > 0
+    ? params.verifyMs
+    : POST_VERIFY_WINDOW_MS_DEFAULT;
+  let before;
+  try { before = await probeState(); } catch { return; }
+  if (!before) return;
+  await new Promise(r => setTimeout(r, windowMs));
+  let after;
+  try { after = await probeState(); } catch { return; }
+  if (!after) return;
+  const urlChanged = before.url !== after.url;
+  const domChanged = before.domHash !== after.domHash || before.domLen !== after.domLen;
+  const newRequests = after.lastNetworkId > before.lastNetworkId;
+  if (!urlChanged && !domChanged && !newRequests) {
+    process.stderr.write(
+      '\n' +
+      CLICK_NO_OP_WARN(action, id, {
+        windowMs,
+        urlChanged,
+        domChanged,
+        newRequests,
+      }) +
+      '\n'
+    );
   }
 }
 
@@ -485,6 +669,86 @@ async function formatOutput(action, data) {
       // Simple values: output directly
       console.log(data);
       return;
+
+    case 'health':
+      // Server-side bridge health snapshot.
+      if (!data.found) {
+        console.log(`browser "${id}" not registered (no bubble open?)`);
+        process.exit(2);
+      }
+      console.log(
+        `extension: ${data.ws === 'open' ? 'alive (ws=open)' : 'unreachable (ws=' + data.ws + ')'}` +
+        `   pending: ${data.pendingCommands}` +
+        (data.lastSuccessMs !== null
+          ? `   last-success: ${formatMs(data.lastSuccessMs)} ago (${data.lastSuccessAction || '?'})`
+          : '   last-success: never')
+      );
+      return;
+
+    case 'fetch':
+      // Default: pretty JSON. If jsonpath was used, print the extracted value plainly.
+      if (data && typeof data === 'object' && 'jsonpath' in data) {
+        console.log(`[${data.status}] ${data.jsonpath} =`);
+        console.log(typeof data.value === 'object' ? JSON.stringify(data.value, null, 2) : data.value);
+      } else if (data && typeof data === 'object' && 'data' in data) {
+        console.log(`[${data.status}] (${data.contentType || 'unknown'})`);
+        console.log(typeof data.data === 'object' ? JSON.stringify(data.data, null, 2) : data.data);
+      } else {
+        console.log(JSON.stringify(data, null, 2));
+      }
+      return;
+
+    case 'submit':
+      console.log(`submitted: ${data.submitted}${data.action ? `   → ${data.action}` : ''}`);
+      return;
+
+    case 'wait':
+      // Extension returned a structured ack — print one line summary.
+      if (data && data.waited) {
+        console.log(`waited: ${data.waited}${data.elapsedMs != null ? ` (elapsed ${formatMs(data.elapsedMs)})` : ''}`);
+        return;
+      }
+      break;
+
+    case 'reset':
+      if (data && Array.isArray(data.cleared)) {
+        console.log(`cleared: ${data.cleared.join(', ') || '(nothing)'}`);
+        if (data.errors?.length) {
+          for (const e of data.errors) process.stderr.write(`  ⚠ ${e}\n`);
+          process.exit(1);
+        }
+        return;
+      }
+      break;
+
+    case 'set':
+      if (data && data.set) {
+        const note = data.verified === false
+          ? '   ⚠ cookie was not accepted (different domain / SameSite / Secure?)'
+          : data.length != null ? `   (${data.length} bytes)` : '';
+        console.log(`set ${data.set}: ${data.name}${note}`);
+        if (data.verified === false) process.exit(1);
+        return;
+      }
+      break;
+
+    case 'status':
+      if (data && data.url != null) {
+        console.log(`URL:    ${data.url}`);
+        console.log(`Title:  ${data.title}   [${data.readyState}]`);
+        if (data.lastConsoleError) {
+          console.log(`Last console error:  ${data.lastConsoleError.text}   (${data.lastConsoleError.ageSec}s ago)`);
+        }
+        if (data.lastFailedRequest) {
+          const r = data.lastFailedRequest;
+          console.log(`Last failed request: ${r.method} ${r.url} [${r.status}]   (${r.ageSec}s ago)`);
+        }
+        if (Array.isArray(data.topActions) && data.topActions.length) {
+          console.log(`Top actions:         ${data.topActions.map(a => `"${a}"`).join('  ')}`);
+        }
+        return;
+      }
+      break;
 
     case 'screenshot':
       if (data.image) {
@@ -609,6 +873,14 @@ async function formatOutput(action, data) {
   } else {
     console.log(data);
   }
+}
+
+function formatMs(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${s % 60}s`;
 }
 
 // Export promise for external await
