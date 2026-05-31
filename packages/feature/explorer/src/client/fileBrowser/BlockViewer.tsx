@@ -1888,6 +1888,8 @@ export function BlockViewer({
           functions={workingFunctions}
           currentQname={currentFocalQname}
           onSelect={handleRulerJump}
+          notIndexed={data.notIndexed}
+          onRebuild={refresh}
         />
         {/* Scroll container — `flex-1` claims the space the TOC,
             minimap, and drawer leave. `min-w-0` so flex children

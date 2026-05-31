@@ -34,6 +34,8 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { getServerParser, grammarForExtension } from './serverTreeSitter';
 import { SUPPORTED_GRAMMARS } from '../languageMap';
 import {
@@ -968,33 +970,156 @@ export function invalidateIndex(cwd?: string): void {
  *
  * Returns `true` after successfully replacing the focal entry.
  */
-export async function refreshFocalFile(
+// ============================================================================
+// Single-file upsert helpers
+//
+// Two callers feed buildIndexedFileEntry below:
+//   - refreshFocalFile  → reparses an existing entry whose on-disk mtime
+//                         moved
+//   - addFocalFile      → adds a brand-new entry for a path that wasn't
+//                         seen at the last `buildCodeIndex`. Covers the
+//                         AI-paired workflow where new files appear after
+//                         the initial index was built (Write tool / pull /
+//                         checkout) and the lazy refresh path was
+//                         silently dropping them.
+//
+// The watcher → syncDirtyIndex path still ignores additions (it iterates
+// existing keys). That's by design — async-rebuild (separate work) covers
+// high-churn scenarios. addFocalFile covers the low-churn "user just
+// opened a brand-new file" case at query time.
+// ============================================================================
+
+const execAsync = promisify(exec);
+
+/** Conservative shell-quoter for a path used as a git pathspec.
+ *  We avoid shell-meta expansion by single-quoting and escaping any
+ *  single quotes inside. Mirror of the helper in `coedit.ts`. */
+function shellQuotePath(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * True when `relPath` belongs in this project's source fileset — same
+ * truth source as `buildCodeIndex` uses at the initial build:
+ *
+ *   - Git project: `git ls-files --cached --others --exclude-standard`
+ *     membership. `--error-unmatch` makes the command exit non-zero when
+ *     the path isn't matched (so node_modules / dist / coverage / any
+ *     .gitignored noise gets rejected).
+ *   - Non-git project: mirror `walkSource`'s `NON_GIT_FALLBACK_SKIP`
+ *     hardcoded list (.git, node_modules).
+ *
+ * The check is cheap (~10ms exec). We pay it only on cache miss inside
+ * `addFocalFile` — not on the hot refresh path.
+ */
+async function isPathInProjectFileset(
+  cwd: string,
+  relPath: string,
+): Promise<boolean> {
+  // Quick non-git heuristic so dev/test environments without git still work.
+  let isGit = true;
+  try {
+    await execAsync('git rev-parse --git-dir', { cwd });
+  } catch {
+    isGit = false;
+  }
+  if (!isGit) {
+    // Mirror walkSource's NON_GIT_FALLBACK_SKIP set + a defensive cwd-relative check.
+    if (relPath.startsWith('.git')) return false;
+    if (relPath.startsWith('node_modules/') || relPath.includes('/node_modules/')) return false;
+    return true;
+  }
+  try {
+    await execAsync(
+      `git -c core.quotePath=false ls-files --cached --others --exclude-standard --error-unmatch -- ${shellQuotePath(relPath)}`,
+      { cwd },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Lazy-invalidate the analytics cache for a cwd. Fire-and-forget — the
+ *  dynamic import avoids the circular module dependency between
+ *  `codeIndex` and `analytics/cache` (analytics imports CodeIndex types
+ *  at module load time; we need the inverse direction at runtime only).
+ *  Errors are swallowed: if analytics hasn't been loaded yet, there's
+ *  nothing to invalidate. */
+function invalidateAnalyticsAsync(cwd: string): void {
+  import('../analytics/cache')
+    .then((m) => m.invalidateAnalytics(cwd))
+    .catch(() => {
+      /* analytics module not loaded — nothing to invalidate */
+    });
+}
+
+/**
+ * Add a brand-new file to `index.files`. Called from `refreshFocalFile`
+ * when the focal path isn't already in the index.
+ *
+ * Guards (in order, cheap-first):
+ *   0. `isPathInProjectFileset` — same truth source as buildCodeIndex.
+ *      Rejects gitignored noise (node_modules / dist / coverage / etc).
+ *   1. `grammarForExtension` — file's extension must map to a registered
+ *      tree-sitter grammar. Rejects .css / .json / .md / .yaml / etc.
+ *   2. `MAX_FILES` soft cap — protects against unbounded growth in
+ *      long-lived sessions.
+ *   3. `parseOneFile` returning non-null — covers file-too-large /
+ *      tree-sitter parse failure.
+ *
+ * On success:
+ *   - Adds `parsed.path` to `index.fileSet` so subsequent refresh of
+ *     ALREADY-INDEXED files can correctly resolve imports pointing here.
+ *   - Builds and inserts the IndexedFile via the shared
+ *     `buildIndexedFileEntry`.
+ *   - Lazy-invalidates the analytics cache so risk / related / context
+ *     don't return stale rankings that pretend this file doesn't exist.
+ *
+ * Trade-off (documented, accepted):
+ *   - Other files' `incomingCalls` / `importedBy` still don't point at us
+ *     — they were computed by the last full build, and we don't re-walk
+ *     them here. Their next `refreshFocalFile` will pick us up via
+ *     `index.fileSet` membership.
+ *   - To force consistency now, the user clicks "Rebuild project graph".
+ */
+async function addFocalFile(
   cwd: string,
   relPath: string,
   index: CodeIndex,
 ): Promise<boolean> {
-  const oldEntry = index.files.get(relPath);
-  if (!oldEntry) return false;
-
-  // Stat first — cheap (~ µs) and avoids the readFile + parse cost
-  // when the cache is already fresh. The mtime check here is the
-  // hot path; almost every chip-view request that lands here in a
-  // normal session will see a match and short-circuit.
-  let onDiskMtime: number;
-  try {
-    const st = await fs.stat(path.join(cwd, relPath));
-    onDiskMtime = st.mtimeMs;
-  } catch {
-    // File deleted / inaccessible — leave the cached entry alone;
-    // the route handler will surface the 404 itself when it tries
-    // to resolveSafePath / readFile downstream.
-    return false;
-  }
-  if (onDiskMtime === oldEntry.mtime) return false;
-
+  if (!grammarForExtension(relPath)) return false;
+  if (index.files.size >= MAX_FILES) return false;
+  if (!(await isPathInProjectFileset(cwd, relPath))) return false;
   const parsed = await parseOneFile(path.join(cwd, relPath), relPath);
   if (!parsed) return false;
+  // Expose the new path to subsequent resolveSpecifier calls.
+  index.fileSet.add(parsed.path);
+  await buildIndexedFileEntry(parsed, null, index);
+  invalidateAnalyticsAsync(cwd);
+  return true;
+}
 
+/**
+ * Build a fresh `IndexedFile` entry from a parsed file and (optionally) an
+ * old entry. Shared between `refreshFocalFile` (oldEntry !== null) and
+ * `addFocalFile` (oldEntry === null).
+ *
+ * Mutates `index.files` BEFORE call resolution — see the inline comment below
+ * for why. Caller is responsible for `invalidateAnalyticsAsync(cwd)` after.
+ *
+ * Stale-tolerance contract:
+ *   - `importedBy` and `incomingCalls`: when refreshing an existing entry we
+ *     keep the old values (we're not re-parsing other files). On add we
+ *     start empty — no other file currently knows about us, and they'll
+ *     update on their next refresh. Both are made fresh by a full rebuild
+ *     via `forceRefresh: true`.
+ */
+async function buildIndexedFileEntry(
+  parsed: ParsedFile,
+  oldEntry: IndexedFile | null,
+  index: CodeIndex,
+): Promise<IndexedFile> {
   const handler = getHandler(parsed.language as Parameters<typeof getHandler>[0]);
   const ctx = index.projectContexts.get(parsed.language);
 
@@ -1039,8 +1164,9 @@ export async function refreshFocalFile(
     importedFiles,
     // Inverse of other files' `importedFiles`; we're not re-parsing
     // other files, so the previous build's view is still our best
-    // shot. Stale tolerance documented above.
-    importedBy: oldEntry.importedBy,
+    // shot. Stale tolerance documented above. On add (oldEntry===null),
+    // no other file currently points at us — start empty.
+    importedBy: oldEntry?.importedBy ?? new Set<string>(),
     importBindings: parsed.importBindings,
     resolvedImports,
     intraCalls: [],
@@ -1049,7 +1175,7 @@ export async function refreshFocalFile(
     // `importedBy` — we're choosing the cheap path. The chip view
     // surfaces this as left-column caller pins; clicking
     // "Rebuild project graph" forces a full rebuild that fixes them.
-    incomingCalls: oldEntry.incomingCalls,
+    incomingCalls: oldEntry?.incomingCalls ?? [],
     externalCalls: [],
     methodCalls: [],
     symbolsByName,
@@ -1177,6 +1303,47 @@ export async function refreshFocalFile(
   for (const e of newEntry.externalCalls) e.lines.sort((a, b) => a - b);
   for (const e of newEntry.methodCalls) e.lines.sort((a, b) => a - b);
 
+  return newEntry;
+}
+
+export async function refreshFocalFile(
+  cwd: string,
+  relPath: string,
+  index: CodeIndex,
+): Promise<boolean> {
+  const oldEntry = index.files.get(relPath);
+  if (!oldEntry) {
+    // Upsert: the file isn't in the index yet (created after build, pulled
+    // by a checkout/merge, etc). Delegate to addFocalFile, which has its
+    // own guards (project-fileset membership, grammar, MAX_FILES).
+    return addFocalFile(cwd, relPath, index);
+  }
+
+  // Stat first — cheap (~ µs) and avoids the readFile + parse cost
+  // when the cache is already fresh. The mtime check here is the
+  // hot path; almost every chip-view request that lands here in a
+  // normal session will see a match and short-circuit.
+  let onDiskMtime: number;
+  try {
+    const st = await fs.stat(path.join(cwd, relPath));
+    onDiskMtime = st.mtimeMs;
+  } catch {
+    // File deleted / inaccessible — leave the cached entry alone;
+    // the route handler will surface the 404 itself when it tries
+    // to resolveSafePath / readFile downstream.
+    return false;
+  }
+  if (onDiskMtime === oldEntry.mtime) return false;
+
+  const parsed = await parseOneFile(path.join(cwd, relPath), relPath);
+  if (!parsed) return false;
+
+  await buildIndexedFileEntry(parsed, oldEntry, index);
+  // B.y symmetry: analytics (PageRank / PPR / Louvain) computed off the
+  // pre-refresh graph is now stale. Lazy-invalidate so the next
+  // risk / related / context query triggers a rebuild — same lifecycle
+  // we already use after `addFocalFile` and a full `buildCodeIndex`.
+  invalidateAnalyticsAsync(cwd);
   return true;
 }
 

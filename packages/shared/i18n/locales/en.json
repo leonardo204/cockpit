@@ -260,7 +260,8 @@
     },
     "toc": {
       "title": "this file",
-      "empty": "No functions detected."
+      "empty": "No functions detected.",
+      "notIndexed": "File not in project graph (unsupported language / not in git tracked set / file cap reached)."
     },
     "history": {
       "title": "history",

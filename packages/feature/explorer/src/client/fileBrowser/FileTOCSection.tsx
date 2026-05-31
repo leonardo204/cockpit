@@ -44,12 +44,26 @@ interface FileTOCSectionProps {
   /** Click handler — receives qname + startLine, expected to flash +
    *  scroll-into-view via the same mechanism as the diff minimap. */
   onSelect: (qname: string, line: number) => void;
+  /** When true, the empty state renders the "file not indexed" branch
+   *  (with a rebuild affordance) instead of the generic
+   *  "no functions detected" message. Set by the server when fallback
+   *  was hit because addFocalFile rejected the path (unsupported
+   *  language / not in project fileset / MAX_FILES reached / parse fail).
+   *  See `FileFunctionsResponse.notIndexed`. */
+  notIndexed?: boolean;
+  /** Click handler for the "Rebuild project graph" button shown in the
+   *  notIndexed empty state. Typically wired to `useFileFunctions.refresh`
+   *  which triggers a forceRefresh full rebuild. Required when
+   *  `notIndexed` is true. */
+  onRebuild?: () => void;
 }
 
 export function FileTOCSection({
   functions,
   currentQname,
   onSelect,
+  notIndexed,
+  onRebuild,
 }: FileTOCSectionProps) {
   const { t } = useTranslation();
   // Filter to call-graph nodes only — same `FUNCTION_LIKE_KINDS` set
@@ -84,9 +98,24 @@ export function FileTOCSection({
       </div>
       <div className="flex-1 overflow-y-auto">
         {realFunctions.length === 0 ? (
-          <div className="px-3 py-4 text-[10px] text-muted-foreground/60 italic leading-relaxed">
-            {t('blockViewer.toc.empty')}
-          </div>
+          notIndexed ? (
+            <div className="px-3 py-4 text-[10px] text-muted-foreground/80 leading-relaxed flex flex-col gap-2">
+              <span className="italic">{t('blockViewer.toc.notIndexed')}</span>
+              {onRebuild && (
+                <button
+                  type="button"
+                  onClick={onRebuild}
+                  className="self-start px-2 py-1 rounded border border-border bg-secondary/60 hover:bg-secondary text-[10px] text-foreground transition-colors"
+                >
+                  {t('blockViewer.refresh')}
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="px-3 py-4 text-[10px] text-muted-foreground/60 italic leading-relaxed">
+              {t('blockViewer.toc.empty')}
+            </div>
+          )
         ) : (
           realFunctions.map((fn) => {
             const isCurrent = currentQname === fn.qualifiedName;

@@ -192,6 +192,15 @@ export interface FileFunctionsResponse {
   /** Cross-file callees — functions in OTHER files that the focal
    *  file's functions call. Drawn on the RIGHT of the focal column. */
   downstreamCalls: CrossFileCallEdge[];
+  /** True when the file is on disk and resolvable, but the server's
+   *  CodeIndex did NOT accept it (unsupported language / not in the
+   *  project fileset per `git ls-files` / MAX_FILES soft cap reached
+   *  / parse failure). In this state `functions` is always empty —
+   *  the client should render a "not indexed" hint with a rebuild
+   *  affordance, NOT the generic "no functions detected" empty state.
+   *  Undefined / false means the entry IS in the index and an empty
+   *  `functions` (if any) genuinely reflects the parsed file. */
+  notIndexed?: boolean;
 }
 
 // ============================================================================

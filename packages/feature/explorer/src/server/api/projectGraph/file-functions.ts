@@ -2,6 +2,7 @@
  * /api/projectGraph/file-functions — P8+ migration
  */
 import { readFile, stat } from "node:fs/promises"
+import path from "node:path"
 import { Effect } from "effect"
 import {
   fileFunctionsFromIndex,
@@ -56,30 +57,49 @@ export const GET = handler((req) =>
         new ValidationError({ field: "path", reason: "missing" })
       )
     }
+    // Normalize once at the entry — `index.files` is keyed by string and
+    // would create separate entries for "foo.ts" vs "./foo.ts" otherwise.
+    // After normalization, addFocalFile / refreshFocalFile / fileFunctionsFromIndex
+    // / resolveSafePath all see the same canonical form (matches what
+    // `git ls-files` produces in buildCodeIndex).
+    const normalizedPath = path.posix.normalize(filePath).replace(/^\.\//, "")
+    if (
+      normalizedPath.startsWith("../") ||
+      normalizedPath.startsWith("/") ||
+      normalizedPath === "" ||
+      normalizedPath === "."
+    ) {
+      return yield* Effect.fail(
+        new ValidationError({
+          field: "path",
+          reason: "must be a project-relative path",
+        })
+      )
+    }
 
     const result = yield* Effect.tryPromise({
       try: async () => {
         const index = await getCodeIndex(cwd, { forceRefresh })
-        await refreshFocalFile(cwd, filePath, index)
-        const payload = fileFunctionsFromIndex(index, filePath)
+        await refreshFocalFile(cwd, normalizedPath, index)
+        const payload = fileFunctionsFromIndex(index, normalizedPath)
         if (payload) return { kind: "indexed" as const, payload }
 
-        const fullPath = resolveSafePath(cwd, filePath)
+        const fullPath = resolveSafePath(cwd, normalizedPath)
         if (!fullPath) return { kind: "not-found" as const }
         const stats = await stat(fullPath).catch(() => null)
         if (!stats?.isFile()) return { kind: "not-found" as const }
 
-        if (/\.mdx?$/i.test(filePath)) {
+        if (/\.mdx?$/i.test(normalizedPath)) {
           const text = await readFile(fullPath, "utf-8").catch(() => null)
           if (text) {
             return {
               kind: "markdown" as const,
               payload: {
-                filePath,
+                filePath: normalizedPath,
                 language: "markdown",
                 fileCount: index.files.size,
                 mtimeMs: stats.mtimeMs,
-                functions: chunkMarkdown(filePath, text),
+                functions: chunkMarkdown(normalizedPath, text),
                 intraCalls: [],
                 externalCalls: [],
                 methodCalls: [],
@@ -92,7 +112,7 @@ export const GET = handler((req) =>
         return {
           kind: "fallback" as const,
           payload: {
-            filePath,
+            filePath: normalizedPath,
             language: "text",
             fileCount: index.files.size,
             mtimeMs: stats.mtimeMs,
@@ -102,6 +122,12 @@ export const GET = handler((req) =>
             methodCalls: [],
             upstreamCalls: [],
             downstreamCalls: [],
+            // The file is on disk and resolvable, but addFocalFile rejected
+            // it (unsupported language / not in project fileset / MAX_FILES).
+            // Client uses this flag to render a graceful "not indexed" hint
+            // with a rebuild button, instead of the generic "no functions"
+            // empty state.
+            notIndexed: true,
           },
         }
       },
@@ -116,7 +142,7 @@ export const GET = handler((req) =>
 
     if (result.kind === "not-found") {
       return yield* Effect.fail(
-        new NotFoundError({ resource: "file", id: filePath })
+        new NotFoundError({ resource: "file", id: normalizedPath })
       )
     }
     return jsonResp(result.payload, 200)
