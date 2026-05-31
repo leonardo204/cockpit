@@ -207,7 +207,7 @@ Next.js 16 · React 19 · TypeScript · TailwindCSS · xterm.js · node-pty · S
 
 ## Contributing
 
-Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and [GUIDE.md](GUIDE.md).
+Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [OpenCockpit docs](https://opencockpit.dev/en/docs/).
 
 ## License
 

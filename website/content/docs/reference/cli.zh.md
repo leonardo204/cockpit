@@ -119,32 +119,38 @@ cockpit update
 
 `<id>` 是浏览器气泡标题栏上的短 ID 徽章。点徽章注册气泡，把入门命令复制到剪贴板。
 
+CLI 是为 **AI 驱动的 E2E** 设计的：每个命令都带可执行的错误模板，沉默失败会被捕获并告警，act/wait/assert 循环能组合成原子步骤。优先用基于 selector 的交互（`--text`、`--selector`），别依赖 snapshot 返回的 ref —— 任何重渲染都会让 ref 失效。
+
 ### 快速示例
 
 ```bash
-# 当前页面什么内容？
-cock browser xa7k2 url
-cock browser xa7k2 title
+# 诊断 AI 当前停在哪（轻量，永不阻塞）
+cock browser xa7k2 health
+cock browser xa7k2 status
 
-# 检查 DOM 找按钮
-cock browser xa7k2 snapshot
-cock browser xa7k2 click e5            # 'e5' 是 snapshot 返回的 ref
+# 找元素并交互（selector 优先；ref 易失效）
+cock browser xa7k2 snapshot --filter 'role=button' --include-hidden-text
+cock browser xa7k2 click --text "Sign in"
+cock browser xa7k2 click --selector 'button[type="submit"]'
+cock browser xa7k2 fill --selector 'input[name="email"]' --value "user@example.com"
+cock browser xa7k2 submit --form-selector 'form#login'
 
-# 在输入框打字
-cock browser xa7k2 type e3 "hello"
-cock browser xa7k2 fill e7 "search query"
+# 探后端（继承页面登录态）
+cock browser xa7k2 fetch /api/users/me
+cock browser xa7k2 fetch /api/items --method POST --body '{"name":"hello"}'
+cock browser xa7k2 fetch /api/items --json '$.data[0].id'
 
-# 导航
-cock browser xa7k2 navigate --url https://example.com
-cock browser xa7k2 back
-cock browser xa7k2 reload --noCache
+# act → wait → assert（E2E 原子步骤）
+cock browser xa7k2 click --text "Save"
+cock browser xa7k2 wait --network-idle --quiet-ms 500
+cock browser xa7k2 assert --selector '[role="status"]' --text "Saved"
+cock browser xa7k2 assert --fetch /api/items --jsonpath '$.count' --equals 5
 
-# 截图和抓网络
-cock browser xa7k2 screenshot
-cock browser xa7k2 network --status 4xx,5xx
-cock browser xa7k2 perf
+# 测试隔离
+cock browser xa7k2 reset --cookies --storage --reload
+cock browser xa7k2 set --type cookie --name token --value abc123 --path /
 
-# 跑任意 JS
+# 跑任意 JS（逃生口 —— 能用 fetch/click-by-selector 就别用 evaluate）
 cock browser xa7k2 evaluate "document.title"
 cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json())"
 ```
@@ -156,10 +162,11 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 | Action | 做什么 |
 |---|---|
 | `list` | 列出所有当前注册的浏览器气泡 |
-| `snapshot` | 页面元素树；每个元素带一个 ref 如 `e5` 给其它 action 用 |
+| `snapshot [--filter <regex>] [--include-hidden-text] [--max-depth N]` | 无障碍树。开头几行 banner 解释格式。`--filter` 在服务端 grep；`--include-hidden-text` 把 `<summary>`、容器节点折叠的文本展开 |
 | `screenshot` | 页面 PNG，存到 `/tmp`，打印路径 |
 | `url` | 当前 URL |
 | `title` | 页面标题 |
+| `status` | 一行摘要：URL、title、上次 console 错、上次失败请求、可见 top 按钮。隔了一段时间后用它定位 |
 | `bounds <ref>` | 元素位置和尺寸 |
 | `attrs <ref>` | 元素所有 HTML 属性 |
 | `computed <ref>` | 元素计算后的 CSS |
@@ -170,16 +177,37 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 
 #### 交互
 
+基于 selector 的形式更稳 —— ref 只在 snapshot 之后到下次重渲染之前有效。
+
 | Action | 做什么 |
 |---|---|
-| `click <ref>` | 点击元素 |
-| `type <ref> <text>` | 在输入框打字 |
-| `fill <ref> <value>` | 设置 input 或 `<select>` 的值 |
+| `click [<ref>] [--text <substr>] [--selector <css>] [--nth N] [--exact]` | 按 ref、可见文本 / aria-label、或 CSS selector 点击。Ref 重渲染就失效；selector 和 `--text` 不会 |
+| `fill [<ref>] [--selector <css>] --value <v>` | 用 native setter 写值 + 派 `input` 事件（在 React 受控 input 上有效） |
+| `type <ref> <text>` | 通过 CDP 键盘事件往聚焦的 input 里打字。React 受控 input 上可能静默无效 —— 优先用 `fill --selector` |
+| `submit [--form-selector <css>]` | 调 `form.requestSubmit()`。在 `onKeyDown` 无视 Enter 的场景能工作 |
 | `hover <ref>` | 悬停元素 |
 | `focus <ref>` | 聚焦元素 |
 | `scroll --direction up\|down\|left\|right` | 滚动页面 |
-| `key <key>` | 按键（`Enter`、`Ctrl+A`、`Shift+Tab` …） |
-| `wait --text <text>` / `--time <ms>` / `--ref <ref>` / `--url <url>` | 等待条件 |
+| `key <key>` | 按键（`Enter`、`Ctrl+A`、`Shift+Tab` …）。React input 上优先用 `submit` |
+
+#### 等待（act 与 assert 之间的同步原语）
+
+| Action | 做什么 |
+|---|---|
+| `wait --network-idle [--quiet-ms 500] [--max-request-age-ms 30000]` | 等到 in-flight HTTP 请求为 0 持续 `quiet-ms`。超过 `max-request-age-ms` 的长连接（SSE / long-poll）会被排除 |
+| `wait --selector <css> [--state visible\|hidden\|attached\|detached]` | 等元素到指定状态。默认 `visible` |
+| `wait --dom-stable [--quiet-ms 300]` | 用 `MutationObserver` 等 `quiet-ms` 内无 DOM 变化（在 act 后拍 snapshot 前用） |
+| `wait --extension-ready [--quiet-ms 500]` | CLI 侧轮询 `health`。**不进 page**，所以 page 卡时不会被拖死。替代手写 `until evaluate "1+1"` |
+| `wait --text <substr>` / `--url <pat>` / `--ref <ref>` / `--time <ms>` | 经典条件：文本出现、URL 匹配、ref 仍存在、sleep |
+
+#### 断言（失败时非零退出）
+
+| Action | 做什么 |
+|---|---|
+| `assert --selector <css> [--text <substr>] [--visible <bool>] [--attr "k=v"]` | 元素级断言。`--ref` 仍可用但易失效；selector 更稳 |
+| `assert --network --method <M> --url <pat> --status <S> [--since <ms>]` | 断言 networkBuffer 里有一条匹配请求。`--status` 接整数（`200`）或范围（`2xx`） |
+| `assert --fetch <url> [--fetch-method M] [--body B] [--fetch-status N]` `[--jsonpath <P> --equals V \| --contains V \| --not-contains V]` | 发一个 fetch（继承 page auth）然后断言状态码或 JSONPath 值。JSONPath 子集：`$`、`.key`、`[N]`、`[*]` |
+| `assert --url <pat>` / `--title <substr>` / `--console-no-errors` | 页面级断言 |
 
 #### 导航
 
@@ -190,17 +218,43 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 | `back` | 后退一格历史 |
 | `forward` | 前进一格历史 |
 
+#### 后端探查
+
+| Action | 做什么 |
+|---|---|
+| `fetch <url> [--method <M>] [--body <B>] [--headers <JSON>]` `[--json <jsonpath>]` | 用 page 的登录态发请求。`--json` 用与 `assert --fetch` 同样的 JSONPath 子集提取值。返回 `{ status, contentType, data }` 或 `{ status, jsonpath, value }` |
+
+AI 读 / 改后端推荐用 `fetch` —— 比把 `await fetch(...).then(r => r.json())` 裹进 `evaluate` 清晰。
+
 #### JavaScript
 
 | Action | 做什么 |
 |---|---|
-| `evaluate <js>` | 在页面里跑 JS 表达式；结果以 JSON 打印。`--all-frames` 在每个 iframe 里跑。 |
+| `evaluate <js>` | 在页面里跑 JS 表达式；结果以 JSON 打印。`--all-frames` 在每个 iframe 里跑。大结果会被透明地分片传回 CLI |
 
-#### 网络
+把 `evaluate` 当逃生口用 —— 高层 action 不够用时才上。普通 HTTP 调用用 `fetch`；点击用 `click --text` / `--selector`；断言用 `assert --selector`。
+
+#### 生命周期 / 夹具
 
 | Action | 做什么 |
 |---|---|
-| `network [--status <code>] [--method <method>] [--type <type>] [--clear]` | 列出抓到的请求，带过滤 |
+| `reset [--cookies] [--storage] [--cache] [--reload]` | 原子化测试隔离。按需组合 flag。`--cookies` 让 JS 可见的 cookie 过期；`--storage` 清 `localStorage` 与 `sessionStorage`；`--cache` 删 Cache Storage 条目；`--reload` 清完刷新 |
+| `set --type cookie --name <K> --value <V>` `[--domain <D>] [--path <P>] [--secure] [--same-site Lax\|Strict\|None] [--expires <date>]` | 写一个 JS 可见的 cookie。若浏览器拒收（跨域 / `SameSite` 不符 / HTTP 下 `Secure`），返回 `verified: false` |
+| `set --type local-storage --name <K> --value <V>` | 写 `localStorage` |
+| `set --type session-storage --name <K> --value <V>` | 写 `sessionStorage` |
+
+#### 诊断
+
+| Action | 做什么 |
+|---|---|
+| `health` | **服务端**视角的桥接快照：WS 状态、pending 命令数、距上次成功命令的耗时。**不经 page**，所以即使页面卡在长 `evaluate` 上也工作 |
+| `health --deep` | 进 page 再探一次（`readyState`、`snapshotEpoch`、page 时间戳）。page 卡时会一起卡 |
+
+#### 网络抓取
+
+| Action | 做什么 |
+|---|---|
+| `network [--status <code>] [--method <method>] [--type <type>] [--clear]` | 列出抓到的请求，带过滤。`--status` 接 `4xx,5xx` 这种逗号分隔 |
 | `network_record start [--url <pat>] [--method <m>] [--status <code>]` | 开始录制请求 / 响应 body |
 | `network_record stop` | 停止录制 |
 | `network_record status` | 录制开了没 |
@@ -208,19 +262,45 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 | `console [--level error\|warn\|info\|debug] [--clear]` | 控制台消息 |
 | `perf [--metric timing\|memory\|resources]` | 性能指标，含 Core Web Vitals |
 
-#### 断言（给脚本用）
+### snapshot 输出
 
-| Action | 做什么 |
+`snapshot` 返回纯文本无障碍树。前 4-5 行是 banner，解释格式并标注当前 **snapshot 版本**（`v=N`）：
+
+```text
+# a11y tree v=3 — refs valid until next snapshot
+# Text inside <details>/<summary> and unnamed container <div>/<section> is collapsed.
+# Grep on role / aria-label, NOT on user-visible emoji / text.
+# Tips: --include-hidden-text surfaces collapsed innerText; --filter <regex> reduces output.
+body [e0#v3]
+  ...
+```
+
+每个可定位元素带形如 `e5#v3` 的 ref。`#v3` 后缀是 snapshot 的 epoch —— 来自更早 snapshot 的 ref 会被拒绝，错误信息直接指向 `click --text` / `click --selector` 这种重渲染安全的写法。**大多数 AI 流程不需要碰 ref，直接用 `--text` / `--selector` 就够了。**
+
+### `click` / `key` / `submit` 的 post-verify
+
+这三个 action 最容易 **沉默失败** —— CDP 报 "成功" 但框架没真反应（React 受控 input 忽略合成 `keydown`、portal 渲染的按钮没有真 handler 等）。CLI 会在 action 前后悄悄探一次页面状态；如果 verify 窗口内没有任何可观察的变化，就往 stderr 写警告 + 可执行模板（不影响 stdout 的主结果）。
+
+| Flag | 做什么 |
 |---|---|
-| `assert --ref <ref> --visible true\|false`（以及类似） | 检查条件。断言失败时退出非零 —— CI 里有用。 |
+| `--verify-ms <ms>` | 覆盖 verify 窗口。默认 `1000` 毫秒。调小 = 更快但 React 慢渲染上更容易误报；调大 = 更宽容 |
+| `--skip-verify`（或 `--no-verify`）| 关闭本次命令的 post-verify（比如确认无可见副作用的合法 click） |
 
 ### 输出格式
 
-大多数 action 在 stdout 返回 **JSON** —— 容易管道到 `jq`、`gron`，或 AI 读取。`url`、`title`、`network_detail` 返回纯文本。`screenshot` 返回文件路径。
+大多数 action 在 stdout 返回 **JSON** —— 容易管道到 `jq`、`gron`，或 AI 读取。`url`、`title`、`network_detail` 返回纯文本。`screenshot` 返回文件路径。`snapshot` 返回 banner + 纯文本树。`health`、`status`、`wait`、`assert` 输出一行人类友好摘要。`fetch` 先打印 `[status] (contentType)` 再打印 body，或 `[status] $.jsonpath =` 再打印提取值。
+
+警告（沉默失败检测、cookie 被拒收等）都写 **stderr**。主结果留在 stdout，所以 `>` 重定向能抓真数据同时让 AI 看到警告。
 
 ### 退出码
 
-成功 `0`，失败非零（ref 错、网络错、断言失败）。完整退出码列表见 [主 CLI 页](#cockpit-and-cock)。
+成功 `0`，失败非零（ref 失效、网络错、断言失败、selector 无匹配 …）。完整退出码列表见 [主 CLI 页](#cockpit-and-cock)。
+
+### 何时不该用这个 CLI
+
+- **测 LLM agent 驱动的端到端流程**。agent 的随机工具选择和 `stop_reason` 会让 UI 断言不稳定。优先写一个直接调中间件 / 服务的运行时脚本，用受控输入跑。
+- **页面持续 stream / 重渲染超过 10 秒**。`evaluate` 会被 page 工作排队，可能超时（~15 秒默认）。act 与 assert 之间用 `wait --extension-ready`；如果还是挂，切到服务层测试。
+- **多 tab / OAuth 弹窗**。每个浏览器气泡只跟一个 tab。把第二个 tab 开成独立气泡，或把 OAuth 流 stub 掉。
 
 ## cockpit terminal
 

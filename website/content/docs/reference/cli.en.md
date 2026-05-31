@@ -119,32 +119,38 @@ Equivalent to `npm install -g @surething/cockpit@latest`. See [`cockpit update`]
 
 The `<id>` is the short ID badge from the Browser bubble's title bar. Click the badge to register the bubble and copy a starter command to your clipboard.
 
+The CLI is designed for **AI-driven E2E**: every command has an actionable error template, silent failures are caught and warned, and the act/wait/assert cycle composes into atomic steps. Prefer selector-based interaction (`--text`, `--selector`) over snapshot refs — refs go stale on every re-render.
+
 ### Quick examples
 
 ```bash
-# What's currently on the page?
-cock browser xa7k2 url
-cock browser xa7k2 title
+# Diagnose where the AI is currently parked (cheap, never blocks)
+cock browser xa7k2 health
+cock browser xa7k2 status
 
-# Inspect the DOM and find a button
-cock browser xa7k2 snapshot
-cock browser xa7k2 click e5            # 'e5' is a ref from the snapshot
+# Find and interact (selector-first; refs go stale on re-render)
+cock browser xa7k2 snapshot --filter 'role=button' --include-hidden-text
+cock browser xa7k2 click --text "Sign in"
+cock browser xa7k2 click --selector 'button[type="submit"]'
+cock browser xa7k2 fill --selector 'input[name="email"]' --value "user@example.com"
+cock browser xa7k2 submit --form-selector 'form#login'
 
-# Type into an input
-cock browser xa7k2 type e3 "hello"
-cock browser xa7k2 fill e7 "search query"
+# Probe the backend (inherits page auth)
+cock browser xa7k2 fetch /api/users/me
+cock browser xa7k2 fetch /api/items --method POST --body '{"name":"hello"}'
+cock browser xa7k2 fetch /api/items --json '$.data[0].id'
 
-# Navigate
-cock browser xa7k2 navigate --url https://example.com
-cock browser xa7k2 back
-cock browser xa7k2 reload --noCache
+# act → wait → assert (atomic E2E)
+cock browser xa7k2 click --text "Save"
+cock browser xa7k2 wait --network-idle --quiet-ms 500
+cock browser xa7k2 assert --selector '[role="status"]' --text "Saved"
+cock browser xa7k2 assert --fetch /api/items --jsonpath '$.count' --equals 5
 
-# Capture screen and network
-cock browser xa7k2 screenshot
-cock browser xa7k2 network --status 4xx,5xx
-cock browser xa7k2 perf
+# Test isolation
+cock browser xa7k2 reset --cookies --storage --reload
+cock browser xa7k2 set --type cookie --name token --value abc123 --path /
 
-# Run arbitrary JS
+# Run arbitrary JS (escape hatch — prefer fetch/click-by-selector when possible)
 cock browser xa7k2 evaluate "document.title"
 cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json())"
 ```
@@ -156,10 +162,11 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 | Action | What it does |
 |---|---|
 | `list` | List every Browser bubble currently registered |
-| `snapshot` | Element tree of the page; each element has a `ref` like `e5` for use in other actions |
-| `screenshot` | PNG of the page, saved to `/tmp` and the path printed |
+| `snapshot [--filter <regex>] [--include-hidden-text] [--max-depth N]` | Accessibility tree. Banner explains the format. `--filter` greps server-side; `--include-hidden-text` surfaces text collapsed inside `<summary>` / container nodes |
+| `screenshot` | PNG of the page, saved to `/tmp`; the path is printed |
 | `url` | Current URL |
 | `title` | Page title |
+| `status` | One-line summary: URL, title, last console error, last failed request, top visible buttons. Run after a long gap to re-orient |
 | `bounds <ref>` | Position and size of an element |
 | `attrs <ref>` | All HTML attributes of an element |
 | `computed <ref>` | Computed CSS for an element |
@@ -170,16 +177,37 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 
 #### Interaction
 
+Selector-based forms are preferred — refs are valid only until the next snapshot or re-render.
+
 | Action | What it does |
 |---|---|
-| `click <ref>` | Click an element |
-| `type <ref> <text>` | Type into an input |
-| `fill <ref> <value>` | Set the value of an input or `<select>` |
+| `click [<ref>] [--text <substr>] [--selector <css>] [--nth N] [--exact]` | Click by ref, by visible text/aria-label, or by CSS selector. Refs go stale on re-render; selector and `--text` survive |
+| `fill [<ref>] [--selector <css>] --value <v>` | Set the value via native setter + dispatch `input` event (works on React-controlled inputs) |
+| `type <ref> <text>` | Type into the focused input via CDP key events. May silently miss on React-controlled inputs — prefer `fill --selector` |
+| `submit [--form-selector <css>]` | Call `form.requestSubmit()`. Works where pressing `Enter` is ignored by `onKeyDown` |
 | `hover <ref>` | Hover over an element |
 | `focus <ref>` | Focus an element |
 | `scroll --direction up\|down\|left\|right` | Scroll the page |
-| `key <key>` | Press a key (`Enter`, `Ctrl+A`, `Shift+Tab`, …) |
-| `wait --text <text>` / `--time <ms>` / `--ref <ref>` / `--url <url>` | Wait for a condition |
+| `key <key>` | Press a key (`Enter`, `Ctrl+A`, `Shift+Tab`, …). On React inputs, prefer `submit` |
+
+#### Wait — synchronisation between act and assert
+
+| Action | What it does |
+|---|---|
+| `wait --network-idle [--quiet-ms 500] [--max-request-age-ms 30000]` | Wait until 0 in-flight HTTP requests for `quiet-ms` consecutive ms. Long-running streams (SSE / long-poll) older than `max-request-age-ms` are excluded |
+| `wait --selector <css> [--state visible\|hidden\|attached\|detached]` | Wait for the matching element to reach the given state. Default state is `visible` |
+| `wait --dom-stable [--quiet-ms 300]` | Wait until a `MutationObserver` reports no DOM changes for `quiet-ms` (useful between an act and a snapshot) |
+| `wait --extension-ready [--quiet-ms 500]` | CLI-side poll of `health`. Never blocks on the page. Replaces manual `until evaluate "1+1"` loops when the page is busy |
+| `wait --text <substr>` / `--url <pat>` / `--ref <ref>` / `--time <ms>` | Classic conditions: text appears, URL matches, ref is still attached, sleep |
+
+#### Assert — non-zero exit on failure
+
+| Action | What it does |
+|---|---|
+| `assert --selector <css> [--text <substr>] [--visible <bool>] [--attr "k=v"]` | Element-level assertion via selector. Refs are also accepted (`--ref`) but go stale; selector is preferred |
+| `assert --network --method <M> --url <pat> --status <S> [--since <ms>]` | Assert that a matching request occurred in the network buffer. `--status` accepts ints (`200`) or ranges (`2xx`) |
+| `assert --fetch <url> [--fetch-method M] [--body B] [--fetch-status N]` `[--jsonpath <P> --equals V \| --contains V \| --not-contains V]` | Make a fetch (inherits page auth) and assert the response status or a JSONPath value. JSONPath subset: `$`, `.key`, `[N]`, `[*]` |
+| `assert --url <pat>` / `--title <substr>` / `--console-no-errors` | Page-level assertions |
 
 #### Navigation
 
@@ -190,17 +218,43 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 | `back` | Go back one history entry |
 | `forward` | Go forward one history entry |
 
+#### Backend probing
+
+| Action | What it does |
+|---|---|
+| `fetch <url> [--method <M>] [--body <B>] [--headers <JSON>]` `[--json <jsonpath>]` | GET (or any method) against the page's auth session. `--json` extracts a value via the same JSONPath subset as `assert --fetch`. Returns `{ status, contentType, data }` or `{ status, jsonpath, value }` |
+
+`fetch` is the preferred way to read or mutate the backend from the AI — clearer than wrapping `await fetch(...).then(r => r.json())` inside `evaluate`.
+
 #### JavaScript
 
 | Action | What it does |
 |---|---|
-| `evaluate <js>` | Run a JS expression in the page; result printed as JSON. `--all-frames` runs in every iframe. |
+| `evaluate <js>` | Run a JS expression in the page; result printed as JSON. `--all-frames` runs in every iframe. Large results are transparently chunked back to the CLI |
 
-#### Network
+Use `evaluate` as an escape hatch when none of the higher-level actions fit. For plain HTTP calls, prefer `fetch`; for clicks, prefer `click --text` / `--selector`; for assertions, prefer `assert --selector`.
+
+#### Lifecycle / fixtures
 
 | Action | What it does |
 |---|---|
-| `network [--status <code>] [--method <method>] [--type <type>] [--clear]` | List captured network requests with filters |
+| `reset [--cookies] [--storage] [--cache] [--reload]` | Atomic test-isolation helper. Combine flags as needed. `--cookies` expires JS-visible cookies; `--storage` clears `localStorage` and `sessionStorage`; `--cache` drops Cache Storage entries; `--reload` reloads the page after clearing |
+| `set --type cookie --name <K> --value <V>` `[--domain <D>] [--path <P>] [--secure] [--same-site Lax\|Strict\|None] [--expires <date>]` | Write a JS-visible cookie. Returns `verified: false` if the browser silently rejected the value (cross-domain / `SameSite` mismatch / `Secure` over HTTP) |
+| `set --type local-storage --name <K> --value <V>` | Write to `localStorage` |
+| `set --type session-storage --name <K> --value <V>` | Write to `sessionStorage` |
+
+#### Diagnostics
+
+| Action | What it does |
+|---|---|
+| `health` | **Server-side** snapshot of the bridge: WS status, pending command count, time since last successful command. Never round-trips to the page, so it works even when the page itself is blocked on a long-running `evaluate` |
+| `health --deep` | Also probes the page itself (`readyState`, `snapshotEpoch`, page-side timestamp). May block if the page is busy |
+
+#### Network capture
+
+| Action | What it does |
+|---|---|
+| `network [--status <code>] [--method <method>] [--type <type>] [--clear]` | List captured network requests with filters. `--status` accepts comma-separated `4xx,5xx` |
 | `network_record start [--url <pat>] [--method <m>] [--status <code>]` | Start recording request/response bodies |
 | `network_record stop` | Stop recording |
 | `network_record status` | Whether recording is on |
@@ -208,19 +262,45 @@ cock browser xa7k2 evaluate --all-frames "await fetch('/api/x').then(r=>r.json()
 | `console [--level error\|warn\|info\|debug] [--clear]` | Console messages |
 | `perf [--metric timing\|memory\|resources]` | Performance metrics including Core Web Vitals |
 
-#### Assertion (for scripts)
+### Snapshot output
 
-| Action | What it does |
+`snapshot` returns a plain-text accessibility tree. The first 4–5 lines are a banner explaining the format, including the current **snapshot version** (`v=N`):
+
+```text
+# a11y tree v=3 — refs valid until next snapshot
+# Text inside <details>/<summary> and unnamed container <div>/<section> is collapsed.
+# Grep on role / aria-label, NOT on user-visible emoji / text.
+# Tips: --include-hidden-text surfaces collapsed innerText; --filter <regex> reduces output.
+body [e0#v3]
+  ...
+```
+
+Each addressable element gets a ref like `e5#v3`. The `#v3` suffix is the snapshot epoch — refs from an earlier snapshot are rejected with a clear "stale" error that points you to `click --text` / `click --selector` as the re-render-safe alternative. **Most AI workflows should skip refs entirely and use `--text` / `--selector` directly.**
+
+### Post-verify for `click` / `key` / `submit`
+
+These actions are most prone to **silent failure** — CDP reports "succeeded" even when the framework didn't actually react to the event (React-controlled inputs ignoring synthetic `keydown`, portal-rendered buttons with no real handler, etc.). The CLI silently probes the page state before and after each action; if nothing observable changed in the verify window, it writes a warning to stderr along with actionable templates (without affecting the action's main `stdout`).
+
+| Flag | What it does |
 |---|---|
-| `assert --ref <ref> --visible true\|false` (and similar) | Check a condition. Exits non-zero if the assertion fails — useful in CI. |
+| `--verify-ms <ms>` | Override the verify window. Default is `1000` ms. Lower = faster but more false positives on slow-rendering React; higher = more tolerant |
+| `--skip-verify` (or `--no-verify`) | Disable post-verify for the current command (e.g. legitimate clicks with no observable side-effect) |
 
 ### Output format
 
-Most actions return **JSON** on stdout — easy to pipe into `jq`, `gron`, or to read from the AI. `url`, `title`, and `network_detail` return plain text. `screenshot` returns a file path.
+Most actions return **JSON** on stdout — easy to pipe into `jq`, `gron`, or to read from the AI. `url`, `title`, and `network_detail` return plain text. `screenshot` returns a file path. `snapshot` returns the banner + plain-text accessibility tree. `health`, `status`, `wait`, and `assert` print a one-line human-friendly summary. `fetch` prints `[status] (contentType)` followed by the body, or `[status] $.jsonpath =` followed by the extracted value.
+
+Warnings (silent-failure detection, cookie not accepted, etc.) go to **stderr**. The main result stays on stdout, so a `>` redirect captures the real data while letting the AI still see the warning.
 
 ### Exit codes
 
-`0` on success, non-zero on failure (bad ref, network error, assertion failure). See the [main CLI page](#cockpit-and-cock) for the full exit code list.
+`0` on success, non-zero on failure (stale ref, network error, assertion failure, no matching element, etc.). See the [main CLI page](#cockpit-and-cock) for the full exit code list.
+
+### When NOT to use this CLI
+
+- **Testing LLM-agent driven flows end-to-end.** The agent's stochastic tool choice and `stop_reason` make UI assertions flaky. Prefer a thin runtime script that calls the same middleware or service directly with controlled inputs.
+- **Pages that stream or re-render for >10 s.** `evaluate` calls queue behind page work and may time out (~15 s default). Run `wait --extension-ready` between acts and asserts; if it stays hung, pivot to a service-level test.
+- **Multi-tab / popup OAuth flows.** Each Browser bubble tracks one tab. Open the secondary tab in its own bubble, or stub the OAuth handshake.
 
 ## cockpit terminal
 
