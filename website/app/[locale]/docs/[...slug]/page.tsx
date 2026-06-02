@@ -13,7 +13,9 @@ import {
   getAvailablePages,
 } from '@/content/docs/sidebar';
 import { DocsPager } from '@/components/docs/DocsPager';
+import { DocsToc } from '@/components/docs/DocsToc';
 import { mdxComponents } from '@/components/docs/mdxComponents';
+import { extractHeadings } from '@/components/docs/toc';
 
 const SITE_URL = 'https://opencockpit.dev';
 const GITHUB_DOCS_BASE = 'https://github.com/Surething-io/cockpit/tree/main/website/content/docs';
@@ -120,11 +122,18 @@ export default async function DocsContentPage({ params }: DocsPageProps) {
   const pageLabel =
     t.docs.sidebar.pages[page.labelKey as keyof typeof t.docs.sidebar.pages] ?? page.labelKey;
 
+  // Right-hand "On this page" TOC, derived from the same Markdown source so its
+  // anchors match the heading ids set in `mdxComponents`. Built at static-export
+  // time — no client JS.
+  const headings = extractHeadings(source!);
+
   // The outer flex wrapper and `<DocsSidebar />` live in
   // `app/[locale]/docs/layout.tsx` now — keeping them out of the page route
   // lets the sidebar DOM node persist across navigation (preserves
-  // `scrollTop`). The page is just the article column.
+  // `scrollTop`). The page renders the article column plus the right-hand TOC
+  // as flex siblings under that wrapper.
   return (
+    <>
     <article className="min-w-0 flex-1 px-6 py-10 lg:py-12 max-w-3xl">
       <div className="mb-8">
         <div className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -157,5 +166,8 @@ export default async function DocsContentPage({ params }: DocsPageProps) {
 
       <DocsPager locale={locale as Locale} slug={slugStr} />
     </article>
+
+    <DocsToc headings={headings} label={t.docs.onThisPage} />
+    </>
   );
 }

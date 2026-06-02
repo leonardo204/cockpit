@@ -1,25 +1,16 @@
 import Link from 'next/link';
-import type { ComponentPropsWithoutRef } from 'react';
+import type { ComponentPropsWithoutRef, ReactNode } from 'react';
 import { CopyableCodeBlock } from './CopyableCodeBlock';
+import { nodeToText, slugify } from './toc';
 
 /**
- * Generate a stable, URL-safe slug from a heading's text children so we can
- * link to sections with `#anchors`. Mirrors what GitHub Markdown does:
- * lowercase, strip non-word chars, collapse spaces to hyphens. Kept simple —
- * the full TOC sidebar is Phase 2; for now anchors are good-enough.
+ * Heading `id` for `#anchor` links. Flattens the heading's children to plain
+ * text (including inline `<code>` / `<strong>` text) and slugs it through the
+ * shared `slugify` in `./toc`, so the anchors here stay byte-for-byte in sync
+ * with the "On this page" TOC that's derived from the same Markdown source.
  */
-function slugify(value: unknown): string | undefined {
-  if (typeof value !== 'string') {
-    // For multi-node children (e.g. headings with inline <code>), recursively
-    // extract text. Keeping this lazy because most headings are plain strings.
-    if (Array.isArray(value)) return slugify(value.map((c) => (typeof c === 'string' ? c : '')).join(''));
-    return undefined;
-  }
-  return value
-    .toLowerCase()
-    .trim()
-    .replace(/[^\p{L}\p{N}\s-]/gu, '')
-    .replace(/\s+/g, '-');
+function headingId(children: ReactNode): string {
+  return slugify(nodeToText(children));
 }
 
 /**
@@ -34,16 +25,16 @@ function slugify(value: unknown): string | undefined {
  */
 export const mdxComponents = {
   h1: (props: ComponentPropsWithoutRef<'h1'>) => (
-    <h1 id={slugify(props.children)} className="text-3xl font-bold tracking-tight mt-8 mb-4 first:mt-0" {...props} />
+    <h1 id={headingId(props.children)} className="text-3xl font-bold tracking-tight mt-8 mb-4 first:mt-0" {...props} />
   ),
   h2: (props: ComponentPropsWithoutRef<'h2'>) => (
-    <h2 id={slugify(props.children)} className="text-2xl font-semibold tracking-tight mt-10 mb-3 pb-2 border-b border-border" {...props} />
+    <h2 id={headingId(props.children)} className="text-2xl font-semibold tracking-tight mt-10 mb-3 pb-2 border-b border-border" {...props} />
   ),
   h3: (props: ComponentPropsWithoutRef<'h3'>) => (
-    <h3 id={slugify(props.children)} className="text-xl font-semibold mt-8 mb-2" {...props} />
+    <h3 id={headingId(props.children)} className="text-xl font-semibold mt-8 mb-2" {...props} />
   ),
   h4: (props: ComponentPropsWithoutRef<'h4'>) => (
-    <h4 id={slugify(props.children)} className="text-base font-semibold mt-6 mb-2" {...props} />
+    <h4 id={headingId(props.children)} className="text-base font-semibold mt-6 mb-2" {...props} />
   ),
   p: (props: ComponentPropsWithoutRef<'p'>) => (
     <p className="my-4 leading-7 text-foreground/90" {...props} />
