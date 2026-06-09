@@ -1000,7 +1000,9 @@
     "title": "搜索结果",
     "nMatches": "({{count}} 处匹配)",
     "searching": "搜索中...",
-    "noResults": "无匹配结果"
+    "noResults": "无匹配结果",
+    "scopeSelected": "选中",
+    "scopeAll": "全部"
   },
   "references": {
     "title": "引用",

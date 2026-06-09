@@ -1000,7 +1000,9 @@
     "title": "Search Results",
     "nMatches": "({{count}} matches)",
     "searching": "Searching...",
-    "noResults": "No matches"
+    "noResults": "No matches",
+    "scopeSelected": "Selected",
+    "scopeAll": "All"
   },
   "references": {
     "title": "References",

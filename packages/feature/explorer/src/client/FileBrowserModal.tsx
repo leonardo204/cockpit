@@ -282,6 +282,14 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
 
   const showSearchResults = showSearchPanel && contentSearch.contentSearchResults.length > 0;
 
+  // Search results scope toggle: 'selected' shows only the tree-selected file's
+  // matches, 'all' shows every result. Reset to 'selected' whenever a new search
+  // completes.
+  const [searchResultScope, setSearchResultScope] = useState<'selected' | 'all'>('selected');
+  useEffect(() => {
+    setSearchResultScope('selected');
+  }, [contentSearch.contentSearchResults]);
+
   // ========== LSP handlers (depend on fileTree) ==========
   const isLSPSupported = fileTree.selectedPath ? getLanguageForFile(fileTree.selectedPath) !== null : false;
 
@@ -1932,6 +1940,9 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                     handleSelectFileWithSave(path, lineNumber);
                   }}
                   onClose={() => setShowSearchPanel(false)}
+                  scope={searchResultScope}
+                  onScopeChange={setSearchResultScope}
+                  selectedPath={fileTree.selectedPath}
                 />
               </div>
             )}
