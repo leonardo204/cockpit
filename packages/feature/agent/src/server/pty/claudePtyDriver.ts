@@ -83,8 +83,11 @@ export interface RunTurnOptions {
   onPtyData?: (data: string) => void;
   /** REPL is ready and the prompt has been submitted. */
   onSubmit?: () => void;
-  /** Turn completed (via: 'stop_hook_summary' | 'idle'). */
+  /** Turn completed (via: 'stop_hook_summary' | 'idle' | 'question_esc'). */
   onComplete?: (via: string) => void;
+  /** AskUserQuestion interactive selector detected → auto-ESC'd and the turn was ended (D-question).
+   *  Lets the route surface a pty_notice so the user knows why the turn ended early. */
+  onQuestionEsc?: () => void;
   /** Interrupt (ESC / stop button): on abort, send Ctrl+C and exit. */
   signal?: AbortSignal;
   /** Debug logging. */
@@ -168,7 +171,7 @@ export function writeToPtySession(sessionId: string, data: string): boolean {
  */
 export function runClaudeTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
   const {
-    cwd, prompt, onJsonlLine, onPtyData, onSubmit, onComplete, signal,
+    cwd, prompt, onJsonlLine, onPtyData, onSubmit, onComplete, onQuestionEsc, signal,
     debug = false, idleMs = 3000, timeoutMs, cols = 80, rows = 24,
     stuckMs = 10_000, graceMs = 30_000, onStuck,
   } = opts;
@@ -237,6 +240,7 @@ export function runClaudeTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
     let rawBuf = '';
     let lastDataTs = Date.now();
     let menuHandled = false;
+    let questionEscSent = false;
     let promptSent = false;
     let completed = false;
     let completedVia: string | null = null;
@@ -278,6 +282,20 @@ export function runClaudeTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
         log('accept menu → Down + Enter');
         setTimeout(() => term.write('\x1b[B'), 400);
         setTimeout(() => term.write('\r'), 700);
+      }
+
+      // AskUserQuestion interactive selector ("Enter to select · Tab/Arrow keys to navigate · Esc to
+      // cancel"): autonomous driving has nobody to answer, so the turn would hang until killed. ESC
+      // dismisses the dialog, but ESC counts as a user interrupt → no stop_hook_summary will ever fire,
+      // so we must also end the turn ourselves. The question itself is already in the jsonl (assistant
+      // tool_use) and thus visible in the chat view; the user answers it as the next turn's message.
+      // Gated on promptSent: the footer can only belong to this turn's dialog, never startup menus.
+      if (!questionEscSent && promptSent && !completed && /Enter to select.*Esc to cancel/i.test(rawBuf)) {
+        questionEscSent = true;
+        log('AskUserQuestion UI detected → ESC + end turn');
+        onQuestionEsc?.();
+        setTimeout(() => { try { term.write('\x1b'); } catch { /* */ } }, 300);   // dismiss dialog → idle prompt
+        setTimeout(() => complete('question_esc'), 600);                          // then exit cleanly via Ctrl+C path
       }
     });
 

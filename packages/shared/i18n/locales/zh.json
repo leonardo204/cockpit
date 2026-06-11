@@ -422,7 +422,8 @@
     "ptyExpand": "展开",
     "ptyStuck": "PTY 似乎卡住（可能在等待对话框输入），请在 PTY 终端手动处理。",
     "ptyTimedOut": "PTY 超时未人工处理，已结束该回合。",
-    "ptyCrash": "Claude CLI 渲染崩溃（上游 bug）：{{error}}。该会话历史可能含无法渲染的编辑记录。"
+    "ptyCrash": "Claude CLI 渲染崩溃（上游 bug）：{{error}}。该会话历史可能含无法渲染的编辑记录。",
+    "ptyQuestionEsc": "AI 弹出了交互式提问，已自动按 ESC 取消并结束本轮。问题内容见聊天区，下一条消息直接回答即可。"
   },
   "console": {
     "enterCommandOrUrl": "输入命令或网址开始使用",

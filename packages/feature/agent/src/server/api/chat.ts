@@ -163,6 +163,11 @@ export const POST = handler((request) =>
               onStuck: () => {
                 safeEnqueue(`data: ${JSON.stringify({ type: 'pty_notice', level: 'warning', messageKey: 'chat.ptyStuck' })}\n\n`);
               },
+              // AskUserQuestion selector auto-cancelled (ESC) and the turn ended early; the question
+              // itself reaches the chat via the jsonl mapping, so a transient notice is enough.
+              onQuestionEsc: () => {
+                safeEnqueue(`data: ${JSON.stringify({ type: 'pty_notice', level: 'warning', messageKey: 'chat.ptyQuestionEsc' })}\n\n`);
+              },
             });
             // claude-code itself crashed (upstream bug, e.g. rendering edit history on resume).
             // Terminal notice → shown as the assistant message content.
