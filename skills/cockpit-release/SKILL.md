@@ -56,8 +56,11 @@ This step exists because three out of three `1.0.198 → 199 → 200 → 201` re
 ```bash
 # Build the artifact CI will publish. TURBOPACK= overrides any shell-leaked
 # TURBOPACK env (e.g. from a running dev cockpit), which would conflict with
-# `next build --webpack` in package.json.
-TURBOPACK= npm run build && npm run build:server
+# `next build --webpack` in package.json. `env -u NODE_ENV` strips a leaked
+# NODE_ENV=development (same source), which otherwise makes `next build`
+# mix React dev bundles into the prod build and crash prerender with
+# "Cannot read properties of null (reading 'useContext')" (seen in v1.0.220).
+env -u NODE_ENV TURBOPACK= npm run build && env -u NODE_ENV npm run build:server
 
 # `npm pack` does NOT trigger `prepublishOnly`, so the webpack cache that
 # `prepublishOnly` cleans is still present and would bloat the tarball from
