@@ -171,8 +171,8 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
       if (tab.sessionId && tab.deepseekModel) {
         deepseekModels[tab.sessionId] = tab.deepseekModel;
       }
-      // only persist non-default values (pty); 'sdk' is the default and isn't written
-      if (tab.sessionId && tab.chatMode === 'pty') {
+      // only persist non-default values (sdk); 'pty' is the default and isn't written
+      if (tab.sessionId && tab.chatMode === 'sdk') {
         chatModes[tab.sessionId] = tab.chatMode;
       }
     }
