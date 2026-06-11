@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Portal, toast } from '@cockpit/shared-ui';
-import { X, CircleDot, CheckSquare, Square, Copy, PenLine } from 'lucide-react';
+import { X, CircleDot, CheckSquare, Square, Copy, PenLine, Send } from 'lucide-react';
+import { useChatContextOptional } from './ChatContext';
 import type { ToolCallInfo } from './types';
 
 // Migrated from src/components/project/AskQuestionViewerModal.tsx.
@@ -53,6 +54,7 @@ function questionKey(tcIdx: number, qIdx: number): string {
 
 export function AskQuestionViewerModal({ toolCalls, onClose }: AskQuestionViewerModalProps) {
   const { t } = useTranslation();
+  const chatCtx = useChatContextOptional();
   // Answer selection per question: key = "tcIdx-qIdx", value = selected label or custom text
   const [selections, setSelections] = useState<Record<string, string>>({});
   // Custom input expanded state
@@ -128,14 +130,14 @@ export function AskQuestionViewerModal({ toolCalls, onClose }: AskQuestionViewer
     setChecked(prev => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  const handleCopy = useCallback(() => {
+  // Build Q&A text from checked questions (or all if none checked)
+  const buildQAText = useCallback(() => {
     const hasChecked = checkedCount > 0;
     const parts: string[] = [];
     toolCalls.forEach((tc, tcIdx) => {
       const { questions } = extractQA(tc);
       questions.forEach((q, qIdx) => {
         const key = questionKey(tcIdx, qIdx);
-        // If any are checked, copy only checked ones; otherwise copy all
         if (hasChecked && !checked[key]) return;
         const answer = selections[key];
         parts.push(`Q: ${q.question}`);
@@ -143,9 +145,23 @@ export function AskQuestionViewerModal({ toolCalls, onClose }: AskQuestionViewer
         parts.push('');
       });
     });
-    navigator.clipboard.writeText(parts.join('\n').trim());
-    toast(hasChecked ? t('toast.copiedQA', { count: checkedCount }) : t('toast.copiedAllQA'));
+    return parts.join('\n').trim();
   }, [toolCalls, selections, checked, checkedCount, t]);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(buildQAText());
+    toast(checkedCount > 0 ? t('toast.copiedQA', { count: checkedCount }) : t('toast.copiedAllQA'));
+  }, [buildQAText, checkedCount, t]);
+
+  const handleSendToAI = useCallback(() => {
+    if (!chatCtx) {
+      toast(t('askQuestion.sendNoChat'));
+      return;
+    }
+    chatCtx.sendMessage(buildQAText());
+    toast(t('toast.sentQA'));
+    onClose();
+  }, [chatCtx, buildQAText, onClose, t]);
 
   const modalContent = (
     <div
@@ -166,6 +182,13 @@ export function AskQuestionViewerModal({ toolCalls, onClose }: AskQuestionViewer
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleSendToAI}
+              className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
+              title={checkedCount > 0 ? t('askQuestion.sendChecked', { count: checkedCount }) : t('askQuestion.sendAll')}
+            >
+              <Send className="w-4 h-4" />
+            </button>
             <button
               onClick={handleCopy}
               className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
