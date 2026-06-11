@@ -16,6 +16,8 @@ export interface ScheduledTask {
   cwd: string;
   tabId: string;
   sessionId: string;
+  engine?: string;
+  model?: string;
   message: string;
   type: 'once' | 'interval' | 'cron';
   delayMinutes?: number;
@@ -37,6 +39,8 @@ interface CreateTaskParams {
   cwd: string;
   tabId: string;
   sessionId: string;
+  engine?: string;
+  model?: string;
   message: string;
   type: 'once' | 'interval' | 'cron';
   delayMinutes?: number;

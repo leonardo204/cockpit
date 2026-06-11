@@ -51,6 +51,8 @@ interface ChatProps {
     cwd: string;
     tabId: string;
     sessionId: string;
+    engine?: string;
+    model?: string;
     message: string;
     type: 'once' | 'interval' | 'cron';
     delayMinutes?: number;
@@ -328,9 +330,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
         cwd: initialCwd,
         tabId,
         sessionId,
+        engine,
+        ...(engine === 'ollama' && ollamaModel && { model: ollamaModel }),
+        ...(engine === 'deepseek' && deepseekModel && { model: deepseekModel }),
       });
     };
-  }, [onCreateScheduledTask, initialCwd, tabId, sessionId]);
+  }, [onCreateScheduledTask, initialCwd, tabId, sessionId, engine, ollamaModel, deepseekModel]);
 
   return (
     <div className={`flex ${hideHeader && hideSidebar ? 'h-full' : 'h-screen'} bg-card`}>

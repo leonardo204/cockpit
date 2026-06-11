@@ -61,6 +61,8 @@ export type AgentErrorKind =
   | "rate-limit"
   | "timeout"
   | "protocol"
+  | "session-not-found"
+  | "unsupported-engine"
   | "unknown"
 
 export class AgentError extends Data.TaggedError("AgentError")<{

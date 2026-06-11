@@ -1,8 +1,13 @@
+import { existsSync } from 'fs';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { SCHEDULED_TASKS_FILE, CLAUDE2_DIR, readJsonFile, writeJsonFile } from '@cockpit/shared-utils';
+import {
+  SCHEDULED_TASKS_FILE, CLAUDE2_DIR, readJsonFile, writeJsonFile,
+  getClaudeSessionPath, getClaude2SessionPath, getOllamaSessionPath,
+  getDeepseekSessionPath, findCodexSessionPath, findKimiSessionPath,
+} from '@cockpit/shared-utils';
 import { updateGlobalState, getSessionTitle } from './state/globalState';
 import { Effect } from 'effect';
-import { AgentError, CockpitConfig } from '@cockpit/effect-core';
+import { AgentError, CockpitConfig, type AgentProvider } from '@cockpit/effect-core';
 import { AppRuntime } from '@cockpit/effect-runtime/server';
 
 // ============================================
@@ -15,7 +20,8 @@ export interface ScheduledTask {
   cwd: string;
   tabId: string;
   sessionId: string;       // chat session id
-  engine?: string;         // 'claude2' uses ~/.claude2
+  engine?: string;         // ChatEngine at creation; absent = 'claude' (pre-persistence tasks)
+  model?: string;          // ollama/deepseek: model name snapshot at creation
   message: string;
   type: 'once' | 'interval' | 'cron';
   delayMinutes?: number;   // type=once
@@ -102,7 +108,7 @@ export function getNextCronTime(cronExpr: string, after: Date = new Date()): num
 // ============================================
 
 /**
- * Effect form of sendChatMessage.
+ * Claude / Claude2 execution path.
  *
  * 1. updateGlobalState 'loading' (silent; failure does not block)
  * 2. Claude SDK query() stream iteration, with up to 1 compaction retry
@@ -110,7 +116,7 @@ export function getNextCronTime(cronExpr: string, after: Date = new Date()): num
  *
  * Failures are uniformly mapped to AgentError (sessionId / cwd context preserved).
  */
-export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, AgentError> => {
+const sendClaudeMessageEff = (task: ScheduledTask): Effect.Effect<boolean, AgentError> => {
   const options = {
     resume: task.sessionId,
     cwd: task.cwd,
@@ -174,6 +180,90 @@ export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, 
     ).pipe(Effect.orElse(() => Effect.void));
 
     return true;
+  });
+};
+
+/**
+ * Loopback-HTTP execution path for engines whose execution lives inside their
+ * /api/chat/<engine> SSE route (ollama / codex / kimi / deepseek). The route
+ * handles session persistence and 'loading'/'unread' global state itself;
+ * here we only drain the stream until it ends.
+ */
+const sendHttpEngineMessageEff = (
+  task: ScheduledTask,
+  engine: AgentProvider,
+): Effect.Effect<boolean, AgentError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const res = await fetch(`http://127.0.0.1:${task.port}/api/chat/${engine}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: task.message,
+          sessionId: task.sessionId,
+          cwd: task.cwd,
+          ...(task.model && { model: task.model }),
+        }),
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`${engine} chat route responded ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      while (!(await reader.read()).done) { /* drain SSE until route closes */ }
+      return true as const;
+    },
+    catch: (cause) => new AgentError({ provider: engine, kind: 'unknown', cause }),
+  });
+
+/**
+ * resume-target session file per engine (used for the pre-flight existence
+ * check). codex/kimi store sessions outside the cwd-encoded layout, so their
+ * helpers glob by sessionId and return null when not found.
+ */
+function sessionPathFor(engine: string, task: ScheduledTask): string | null {
+  if (engine === 'claude2') return getClaude2SessionPath(task.cwd, task.sessionId);
+  if (engine === 'ollama') return getOllamaSessionPath(task.cwd, task.sessionId);
+  if (engine === 'deepseek') return getDeepseekSessionPath(task.cwd, task.sessionId);
+  if (engine === 'codex') return findCodexSessionPath(task.sessionId);
+  if (engine === 'kimi') return findKimiSessionPath(task.sessionId);
+  return getClaudeSessionPath(task.cwd, task.sessionId);
+}
+
+/**
+ * Engine dispatcher. Tasks without an engine field predate engine persistence
+ * and are treated as 'claude' (their historical behavior).
+ *
+ * Pre-flight: the resume-target session file must exist, otherwise fail with
+ * a semantic 'session-not-found' instead of the engine's opaque error.
+ */
+export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, never> =>
+  Effect.gen(function* () {
+    const engine = task.engine ?? 'claude';
+
+    if (!['claude', 'claude2', 'ollama', 'codex', 'kimi', 'deepseek'].includes(engine)) {
+      return yield* Effect.fail(
+        new AgentError({
+          provider: 'claude',
+          kind: 'unsupported-engine',
+          cause: new Error(`scheduled tasks not supported for engine '${engine}' (task ${task.id})`),
+        }),
+      );
+    }
+
+    const sessionPath = sessionPathFor(engine, task);
+    if (!sessionPath || !existsSync(sessionPath)) {
+      return yield* Effect.fail(
+        new AgentError({
+          provider: (engine === 'claude2' ? 'claude' : engine) as AgentProvider,
+          kind: 'session-not-found',
+          cause: new Error(`session file missing: ${sessionPath ?? `(no session for ${task.sessionId})`} (task ${task.id}, engine ${engine})`),
+        }),
+      );
+    }
+
+    return engine === 'claude' || engine === 'claude2'
+      ? yield* sendClaudeMessageEff(task)
+      : yield* sendHttpEngineMessageEff(task, engine as AgentProvider);
   }).pipe(
     Effect.catchAll((err) =>
       Effect.gen(function* () {
@@ -186,7 +276,6 @@ export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, 
       })
     ),
   );
-};
 
 /**
  * Promise<boolean> entry point that delegates to the Effect version internally.

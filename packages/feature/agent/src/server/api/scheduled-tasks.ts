@@ -33,6 +33,8 @@ export const POST = handler((req) =>
       cwd?: string
       tabId?: string
       sessionId?: string
+      engine?: string
+      model?: string
       message?: string
       type?: "once" | "interval" | "cron"
       delayMinutes?: number
@@ -45,6 +47,8 @@ export const POST = handler((req) =>
       cwd,
       tabId,
       sessionId,
+      engine,
+      model,
       message,
       type,
       delayMinutes,
@@ -58,6 +62,19 @@ export const POST = handler((req) =>
         new ValidationError({
           field: "cwd|tabId|sessionId|message|type",
           reason: "missing",
+        })
+      )
+    }
+    // Safety net: engine must be one sendChatMessageEff knows how to dispatch
+    // (all current ChatEngine values; rejects only unknown/future ids).
+    if (
+      engine &&
+      !["claude", "claude2", "ollama", "codex", "kimi", "deepseek"].includes(engine)
+    ) {
+      return yield* Effect.fail(
+        new ValidationError({
+          field: "engine",
+          reason: `unknown engine '${engine}'`,
         })
       )
     }
@@ -84,6 +101,9 @@ export const POST = handler((req) =>
       cwd,
       tabId,
       sessionId,
+      engine,
+      // model snapshot only matters for engines whose chat route accepts it
+      model: engine === "ollama" || engine === "deepseek" ? model : undefined,
       message,
       type,
       delayMinutes: type === "once" ? delayMinutes : undefined,
