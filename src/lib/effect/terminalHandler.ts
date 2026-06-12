@@ -240,6 +240,16 @@ const dispatchMessage = (
         USER: process.env.USER,
         SHELL: process.env.SHELL,
         TERM: "xterm-256color",
+        // UTF-8 locale so the pty renders multi-byte text (CJK, emoji) correctly.
+        // ptyEnv is rebuilt from scratch (not inherited from process.env), and a
+        // macOS `--login` shell does NOT restore LANG (Terminal.app/iTerm inject it,
+        // not the rc files) — so without this, vim/less open UTF-8 files in the
+        // C/POSIX locale and mojibake every non-ASCII char. Pass the real locale
+        // through when present, else fall back to a UTF-8 default; LC_ALL/LC_CTYPE
+        // stay undefined (and are skipped below) unless the server actually has them.
+        LANG: process.env.LANG ?? "en_US.UTF-8",
+        LC_ALL: process.env.LC_ALL,
+        LC_CTYPE: process.env.LC_CTYPE,
         FORCE_COLOR: "1",
         CLICOLOR: "1",
         CLICOLOR_FORCE: "1",
