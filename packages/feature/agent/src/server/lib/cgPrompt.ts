@@ -16,12 +16,26 @@
  * qa/fx/ex/go — to prime the model into graph-tool mindset rather than
  * defaulting to grep/glob/Read. `labelFor` in slashCommands.ts picks these
  * up automatically when this command is registered.
+ *
+ * Positioning vs siblings:
+ *   /qa  — lightweight requirement clarification, ASKS the user back
+ *   /fx  — bug evidence-chain analysis (analysis only)
+ *   /ex  — heavy structured discussion (analysis only, no asking back)
+ *   /go  — landing mode (writes code, self-verifies per stage)
+ *   /cg  — CodeGraph exploration
+ *   /cc  — Cockpit CLI operation (drive bubbles / codegraph via the CLI)
+ *   /cr  — full code review (static triangulation + dynamic modelling)
  */
 
 export const CG_LABEL_ZH = '探索问题：';
 export const CG_LABEL_EN = 'Exploration: ';
 
-export const CG_PROMPT_ZH = `进入项目图谱探索模式（CodeGraph）
+export const CG_PROMPT_ZH = `---
+name: cg
+description: "进入项目图谱（CodeGraph）探索模式：用预建的符号 + 调用图 + git 协同视图（search/callers/callees/impact/file/coedit + context/related/risk/affected）追代码、评估影响范围，返回坐标而非源码。"
+---
+
+进入项目图谱探索模式（CodeGraph）
 
 CodeGraph = 项目预建的符号 + 调用图索引 + git 协同视图。6 个接口各回答一类问题：
 
@@ -102,7 +116,12 @@ curl -fsS "{{BASE_URL}}/api/projectGraph/affected?cwd=\$PWD&files=<a.ts,b.ts>&de
 - related 响应若有 \`ambiguousIn\`，表示同名符号跨多文件，下次调用补 \`&filePath=\`
 - 这 3 个接口同样只返坐标，源码用 Read 自取`;
 
-export const CG_PROMPT_EN = `Enter project graph exploration mode (CodeGraph).
+export const CG_PROMPT_EN = `---
+name: cg
+description: "Enter project graph (CodeGraph) exploration mode: use the pre-built symbol + call-graph + git co-edit index (search/callers/callees/impact/file/coedit + context/related/risk/affected) to trace code and assess change impact; responses are coordinates, not source."
+---
+
+Enter project graph exploration mode (CodeGraph).
 
 CodeGraph = pre-built symbol + call-graph index + git co-edit view. Six endpoints, each answers one class of question:
 

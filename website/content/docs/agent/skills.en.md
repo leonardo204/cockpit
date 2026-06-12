@@ -1,8 +1,8 @@
-**Skills** are short prompts you trigger with `/` in any Agent tab — each one rewires how the AI works on a single reply. Cockpit ships **6 built-in Skills** (the `/qa /fx /ex /go /cg /cc` modes); you can also write your own as `SKILL.md` files and install them the same way. Both flavours live in the same `/` menu.
+**Skills** are short prompts you trigger with `/` in any Agent tab — each one rewires how the AI works on a single reply. Cockpit ships **7 built-in Skills** (the `/qa /fx /ex /go /cg /cc /cr` modes); you can also write your own as `SKILL.md` files and install them the same way. Both flavours live in the same `/` menu.
 
-> Don't confuse these with the slash menu inside **Notes** (the project-notes editor), which is a formatter palette for headings, lists, tables and so on. The chat input only recognises Skills — typing `/` there opens a menu listing exactly `/qa /fx /ex /go /cg /cc` plus any installed `/skill-name`.
+> Don't confuse these with the slash menu inside **Notes** (the project-notes editor), which is a formatter palette for headings, lists, tables and so on. The chat input only recognises Skills — typing `/` there opens a menu listing exactly `/qa /fx /ex /go /cg /cc /cr` plus any installed `/skill-name`.
 
-## The 6 built-in Skills
+## The 7 built-in Skills
 
 | Command | Intent | Asks back? | Writes code? |
 |---|---|---|---|
@@ -12,6 +12,7 @@
 | **`/go`** | Execution / landing mode | ❌ | ✅ Yes, with self-verification |
 | **`/cg`** | CodeGraph project exploration | ❌ | ❌ |
 | **`/cc`** | End-to-end verification via `cock` CLI (browser + terminal bubbles) | ❌ | ❌ (drives bubbles, not source edits) |
+| **`/cr`** | Full code review (static + dynamic) | ❌ | ❌ (produces findings, no edits) |
 
 ## `/qa` — Clarify before changing anything
 
@@ -101,6 +102,18 @@ Use when the code change is done and you want the AI to **actually run it**, cli
 
 Typically chained after [`/go`](#go-land-the-change) — `/go` writes the code, `/cc` verifies it actually works in the rendered UI. Full walkthrough in [Quickstart](/en/docs/get-started/quickstart/#end-to-end-verification--console---cc).
 
+## `/cr` — Full code review (static + dynamic)
+
+Use when a PR is done and you want one complete review pass — both static correctness and the dynamic behaviour (timing / state / concurrency) you can't catch line-by-line.
+
+```text
+/cr review the current branch against main
+```
+
+`/cr` splits the review into two tracks: **static triangulation** (cross-locate each change against three references — intent / input domain / surrounding contracts) sweeps every change; slices touching state / timing / concurrency additionally run **dynamic derivation** (draw a state diagram + timeline, evaluate 6 classes of dynamic risk). The actual review runs in clean subagents while the main session only dispatches and merges, ending with findings ranked by impact × probability plus a gradient chart.
+
+It's a self-contained methodology with no external tooling; trivial changes skip the dynamic track and get a static-only report. Typically paired with [`/go`](#go-land-the-change) — `/go` lands the change, `/cr` does the quality pass.
+
 ## Pattern: chain modes
 
 A typical end-to-end task chains modes:
@@ -110,6 +123,7 @@ A typical end-to-end task chains modes:
 /cg what handlers touch /api/heavy-endpoint?   ← discover code
 /fx why is the endpoint slow?                  ← analyse
 /go add a Redis cache with 60s TTL             ← execute
+/cr review this change                         ← review
 ```
 
 The right entry point depends on what you have:
@@ -119,12 +133,13 @@ The right entry point depends on what you have:
 - If you have a question about the code → `/cg`
 - If you want analysis without interruption → `/ex`
 - If the plan is ready → `/go`
+- If a change is done and needs review → `/cr`
 
-> The 6 built-in Skills above are the complete set Cockpit ships. For repeated workflows of your own, see [Custom Skills](#custom-skills) below — they show up in the same `/` menu as `/skill-name`.
+> The 7 built-in Skills above are the complete set Cockpit ships. For repeated workflows of your own, see [Custom Skills](#custom-skills) below — they show up in the same `/` menu as `/skill-name`.
 
 ## Custom Skills
 
-Custom Skills are your own slash commands — the same idea as the 6 built-in modes above, except you write the prompt yourself. Trigger them as `/your-skill-name` in chat.
+Custom Skills are your own slash commands — the same idea as the 7 built-in modes above, except you write the prompt yourself. Trigger them as `/your-skill-name` in chat.
 
 If you find yourself pasting the same long instruction to Claude every week — "review this PR for these specific things", "summarise commits in this format", "follow this debugging checklist" — turn it into a Skill once and reuse it forever.
 
@@ -178,7 +193,7 @@ To remove a skill, hover its card and click the trash icon.
 
 Once installed, just type `/` in any Agent tab. The chat dropdown shows two sections:
 
-- **Commands** — the six built-in AI mode commands.
+- **Commands** — the seven built-in AI mode commands.
 - **Skills** — everything you've installed, with their icons and argument hints.
 
 Type to filter, then press Enter or Tab to insert. The chat input gets `/your-skill-name ` (with a trailing space, ready for arguments). Type any arguments you want, press Enter to send.

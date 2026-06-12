@@ -49,7 +49,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 | Agent can't reach your browser / DB | **Smart Bubbles**: Chrome, PostgreSQL, MySQL, Redis — drivable by the agent |
 | Reading an unfamiliar repo means a 90-min file-tree scavenger hunt | **Code Map** chip view — caller / callee pins, click to walk the call graph |
 | Reviewing AI output is friction | **LAN-shared review pages**, line-level comments, send any comment back as AI context |
-| Same "do X but don't change code" prompt every day | **Slash modes** `/qa /fx /ex /go /cg /cc` + custom `SKILL.md` via the Skills sidebar |
+| Same "do X but don't change code" prompt every day | **Slash modes** `/qa /fx /ex /go /cg /cc /cr` + custom `SKILL.md` via the Skills sidebar |
 | No automation hooks | One-time / interval / cron-based **scheduled tasks** |
 | "Cloud relay" trust concerns | **Fully local**. No telemetry. Keys (Codex / DeepSeek / Kimi) stay in `~/.cockpit/settings.json` on your laptop. |
 
@@ -107,6 +107,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 - `/go` — **Land**: take a converged plan, slice into MVP stages, write + self-verify per stage, recap at end
 - `/cg` — **CodeGraph** project exploration: 10 HTTP endpoints for symbol / callers / impact / co-edit / risk / affected queries (precise where grep is fuzzy)
 - `/cc` — **Cockpit CLI**: drive the cockpit CLI surface — codegraph subcommands, terminal observation, browser automation
+- `/cr` — **Code review**: full PR review — static triangulation (intent / input domain / surroundings) + dynamic modelling (state diagram + timeline → 6 risk classes), findings ranked by impact × probability
 - **Custom**: drop any `SKILL.md` and add it via the Skills sidebar — it auto-appears in the slash autocomplete menu (see [Skills](#skills--extensibility))
 
 ### Scheduled tasks — Cron for AI

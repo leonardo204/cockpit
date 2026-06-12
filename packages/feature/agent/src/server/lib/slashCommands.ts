@@ -8,14 +8,20 @@
 // command wants to override the default neutral "问题：" / "Question: "
 // prefix attached to the user's trailing text — see `/cg` which uses
 // "探索问题：" / "Exploration: " to prime a stronger model mindset.
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { COCKPIT_DIR } from '@cockpit/shared-utils';
 import { CC_LABEL_EN, CC_LABEL_ZH, CC_PROMPT_EN, CC_PROMPT_ZH } from './ccPrompt';
 import { CG_LABEL_EN, CG_LABEL_ZH, CG_PROMPT_EN, CG_PROMPT_ZH } from './cgPrompt';
+import { CR_PROMPT_EN, CR_PROMPT_ZH } from './crPrompt';
 import { EX_PROMPT_EN, EX_PROMPT_ZH } from './exPrompt';
 import { FX_PROMPT_EN, FX_PROMPT_ZH } from './fxPrompt';
 import { GO_PROMPT_EN, GO_PROMPT_ZH } from './goPrompt';
 import { QA_PROMPT_EN, QA_PROMPT_ZH } from './qaPrompt';
 
 interface CommandEntry {
+  /** Prompt content for each language — a COMPLETE SKILL.md (YAML frontmatter +
+   *  body), same shape as a user-defined skill. Written to disk verbatim. */
   zh: string;
   en: string;
   /** Optional override for the "問題：" / "Question: " prefix prepended to the
@@ -31,7 +37,13 @@ export const COMMAND_CONTENT: Record<string, CommandEntry> = {
   go: { zh: GO_PROMPT_ZH, en: GO_PROMPT_EN },
   cg: { zh: CG_PROMPT_ZH, en: CG_PROMPT_EN, labelZh: CG_LABEL_ZH, labelEn: CG_LABEL_EN },
   cc: { zh: CC_PROMPT_ZH, en: CC_PROMPT_EN, labelZh: CC_LABEL_ZH, labelEn: CC_LABEL_EN },
+  cr: { zh: CR_PROMPT_ZH, en: CR_PROMPT_EN },
 };
+
+/** Directory holding the on-disk copies of builtin slash commands, written as
+ *  SKILL.md files so the model reads them through the SAME flow as user-defined
+ *  skills (`请读取这个 skill 文件：<path>`) instead of inlining the full template. */
+const BUILTIN_SKILLS_DIR = join(COCKPIT_DIR, 'skills');
 
 /**
  * Derive the base URL the AI should use in its curl recipes.
@@ -65,15 +77,20 @@ function deriveBaseUrl(req?: Request): string {
   return `http://localhost:${port}`;
 }
 
-// Expands /qa, /fx, /cg etc. into their full instruction text before the
-// prompt is sent to the model. Reads COMMAND_CONTENT keyed by the verb after
-// the slash and the user's language (zh / en).
+// Resolves /qa, /fx, /cg etc. before the prompt is sent to the model. Reads
+// COMMAND_CONTENT keyed by the verb after the slash and the user's language
+// (zh / en).
+//
+// Rather than inlining the (long) instruction template into the message, we
+// write it to ~/.cockpit/skills/<cmd>/SKILL.md and return a short pointer
+// ("请读取这个 skill 文件：<path>") — the SAME flow user-defined skills use.
+// The model reads the file on demand, keeping the first message compact.
 //
 // `{{BASE_URL}}` placeholders inside the content are substituted with the
 // live base URL derived from the incoming request (or fallback to
-// http://localhost:<port>). This makes /cg's curl recipes reachable from
-// whatever URL the user actually sees cockpit at — localhost for local dev,
-// the deployment's public URL when behind a reverse proxy.
+// http://localhost:<port>) at WRITE time. This makes /cg's curl recipes
+// reachable from whatever URL the user actually sees cockpit at — localhost
+// for local dev, the deployment's public URL when behind a reverse proxy.
 export function resolveCommandPrompt(
   prompt: string,
   language = 'en',
@@ -92,6 +109,11 @@ export function resolveCommandPrompt(
   const baseUrl = deriveBaseUrl(req);
   const content = tmpl.replaceAll('{{BASE_URL}}', baseUrl);
 
+  // Persist the resolved template as a SKILL.md and get its path back. If the
+  // write fails (rare; perms / disk), fall back to inlining the content so the
+  // command never silently no-ops.
+  const skillPath = writeBuiltinSkill(cmd, content);
+
   const rest = trimmed.slice(match[0].length).trimStart();
   // The label prepended to the user's trailing text isn't just a separator —
   // it's a mindset primer for the model. `/cg` switches the user into project
@@ -99,7 +121,39 @@ export function resolveCommandPrompt(
   // anchors the model on graph-tool usage instead of defaulting to grep/glob.
   // Other commands keep the neutral "问题：" / "Question:" label.
   const label = labelFor(entry, lang);
-  return rest ? `${content}\n\n${label}${rest}` : content;
+
+  if (!skillPath) {
+    return rest ? `${content}\n\n${label}${rest}` : content;
+  }
+
+  const pointer =
+    lang === 'zh'
+      ? `请读取这个 skill 文件：\n${skillPath}`
+      : `Please read this skill file:\n${skillPath}`;
+  return rest ? `${pointer}\n\n${label}${rest}` : pointer;
+}
+
+// Write a builtin command's resolved SKILL.md to ~/.cockpit/skills/<cmd>/SKILL.md
+// and return the absolute path. `content` IS a complete SKILL.md (YAML
+// frontmatter + body) — identical in shape to a user-defined skill — so it's
+// written verbatim, no frontmatter synthesis. Overwritten on every dispatch so
+// the file always reflects the current code + the current request's base URL.
+// Returns null on any failure so the caller can fall back to inlining.
+//
+// Synchronous fs on purpose: keeps resolveCommandPrompt's sync signature — all
+// five engine chat handlers (chat.ts + chat/{codex,deepseek,kimi,ollama}.ts)
+// invoke it inline inside an Effect.gen — and the payload is a single small
+// local file, same pattern as notifyReviewChange.
+function writeBuiltinSkill(cmd: string, content: string): string | null {
+  try {
+    const dir = join(BUILTIN_SKILLS_DIR, cmd);
+    mkdirSync(dir, { recursive: true });
+    const filePath = join(dir, 'SKILL.md');
+    writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf-8');
+    return filePath;
+  } catch {
+    return null;
+  }
 }
 
 /** Pick the "label:" prefix for a command's trailing user text. Uses the

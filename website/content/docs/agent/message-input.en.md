@@ -56,7 +56,7 @@ The AI gets the directory listing plus your note. Fastest way to give the AI gro
 
 Type `/` at the start of the input and a menu pops up, split into two sections:
 
-- **Commands** (built-in) — `/qa`, `/fx`, `/ex`, `/go`, `/cg` (see [AI Mode Commands](/en/docs/agent/skills/)).
+- **Commands** (built-in) — `/qa`, `/fx`, `/ex`, `/go`, `/cg`, `/cc`, `/cr` (see [AI Mode Commands](/en/docs/agent/skills/)).
 - **Skills** (your installed ones) — `/your-skill-name` (see [Skills](/en/docs/agent/skills/#custom-skills)).
 
 Type to filter. `Tab` or `Enter` inserts the selected command into the input — then type your actual message after it and press `Enter` to send.

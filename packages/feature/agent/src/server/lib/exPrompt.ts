@@ -5,10 +5,14 @@
  * is long enough to drown the registry. /qa and /fx stay inline because they
  * are short; /ex is a full methodology skeleton.
  *
- * Positioning vs /qa and /fx (mirrored from the source SKILL.md):
+ * Positioning vs siblings:
  *   /qa  — lightweight requirement clarification, ASKS the user back
- *   /fx  — bug evidence-chain analysis
- *   /ex  — heavy structured discussion: 6-step skeleton, NEVER asks back
+ *   /fx  — bug evidence-chain analysis (analysis only)
+ *   /ex  — heavy structured discussion (analysis only, no asking back)
+ *   /go  — landing mode (writes code, self-verifies per stage)
+ *   /cg  — CodeGraph exploration
+ *   /cc  — Cockpit CLI operation (drive bubbles / codegraph via the CLI)
+ *   /cr  — full code review (static triangulation + dynamic modelling)
  *
  * Source: /Users/ka/Cherry/07-Skills/ex/SKILL.md — kept verbatim including the
  * YAML frontmatter so nothing about the skill is lost on the way in.

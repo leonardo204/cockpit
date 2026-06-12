@@ -30,6 +30,7 @@ const BUILTIN_COMMANDS: CommandInfo[] = [
   { name: "/go", description: "Enter landing mode: MVP staged implementation with self-verify", source: "builtin" },
   { name: "/cg", description: "Enter project graph (codegraph) exploration mode", source: "builtin" },
   { name: "/cc", description: "Enter Cockpit CLI (cock subcommands) operation mode", source: "builtin" },
+  { name: "/cr", description: "Full code review: static triangulation + dynamic modelling", source: "builtin" },
 ]
 
 export const GET = handler(() =>

@@ -12,12 +12,26 @@
  * "问题：" / "Question: ") so the model treats follow-on text as an
  * action to execute via the CLI rather than a question to answer in
  * prose. `labelFor` in slashCommands.ts picks these up automatically.
+ *
+ * Positioning vs siblings:
+ *   /qa  — lightweight requirement clarification, ASKS the user back
+ *   /fx  — bug evidence-chain analysis (analysis only)
+ *   /ex  — heavy structured discussion (analysis only, no asking back)
+ *   /go  — landing mode (writes code, self-verifies per stage)
+ *   /cg  — CodeGraph exploration
+ *   /cc  — Cockpit CLI operation (drive bubbles / codegraph via the CLI)
+ *   /cr  — full code review (static triangulation + dynamic modelling)
  */
 
 export const CC_LABEL_ZH = '任务：';
 export const CC_LABEL_EN = 'Task: ';
 
-export const CC_PROMPT_ZH = `进入 Cockpit CLI 操作模式
+export const CC_PROMPT_ZH = `---
+name: cc
+description: "进入 Cockpit CLI（cock/cockpit 子命令）操作模式：通过瘦客户端驱动本机 server 的 terminal/browser 气泡与 codegraph 等子命令。"
+---
+
+进入 Cockpit CLI 操作模式
 
 Cockpit CLI 是本机 Cockpit server 的瘦客户端：每个调用都把请求转发到正在跑的 server，复用其索引、缓存、git 视图等。
 
@@ -78,7 +92,12 @@ cockpit <subcommand> --help
 cockpit codegraph <subsubcmd> --help
 \`\`\``;
 
-export const CC_PROMPT_EN = `Enter Cockpit CLI operation mode.
+export const CC_PROMPT_EN = `---
+name: cc
+description: "Enter Cockpit CLI (cock/cockpit subcommands) operation mode: drive the running server's terminal/browser bubbles and codegraph subcommands through the thin local client."
+---
+
+Enter Cockpit CLI operation mode.
 
 The Cockpit CLI is a thin local client over the running Cockpit server: each invocation forwards to the server and reuses its CodeIndex / caches / git views.
 

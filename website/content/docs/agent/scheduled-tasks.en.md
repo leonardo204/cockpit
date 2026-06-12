@@ -89,4 +89,4 @@ A few patterns that actually work in practice:
 ## Next
 
 - [Sessions](/en/docs/agent/sessions/) — what scheduled-task runs look like once they happen
-- [Skills](/en/docs/agent/skills/) — prompts in your scheduled task can use `/qa`, `/fx`, `/cg`, etc.
+- [Skills](/en/docs/agent/skills/) — prompts in your scheduled task can use `/qa`, `/fx`, `/cg`, `/cr`, etc.

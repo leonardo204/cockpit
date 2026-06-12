@@ -10,6 +10,9 @@
  *   /ex  — heavy structured discussion (analysis only, no asking back)
  *   /go  — landing mode: MVP-sized stages, write code + self-verify, never
  *          pause for sign-off between stages
+ *   /cg  — CodeGraph exploration
+ *   /cc  — Cockpit CLI operation (drive bubbles / codegraph via the CLI)
+ *   /cr  — full code review (static triangulation + dynamic modelling)
  *
  * Source: /Users/ka/Cherry/07-Skills/go/SKILL.md — kept verbatim including the
  * YAML frontmatter so nothing about the skill is lost on the way in.
