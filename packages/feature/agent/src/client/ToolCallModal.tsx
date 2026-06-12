@@ -47,14 +47,17 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
   const [showSubagent, setShowSubagent] = useState(false);
 
   const toolIcon = TOOL_ICONS[toolCall.name] || '🔧';
-  const isSubagentCall =
-    (toolCall.name === 'Agent' || toolCall.name === 'Task') && !!cwd && !!sessionId;
+  const isAgentTool = toolCall.name === 'Agent' || toolCall.name === 'Task';
+  const isSubagentCall = isAgentTool && !!cwd && !!sessionId;
 
   // Extract file path or key info from input
   const getDisplayInfo = () => {
     const input = toolCall.input;
     if (toolCall.name === 'Bash' && input.command && typeof input.command === 'string') {
       return input.command;
+    }
+    if (isAgentTool && input.description && typeof input.description === 'string') {
+      return input.description;
     }
     if (toolCall.name === 'Glob' && input.pattern && typeof input.pattern === 'string') {
       return input.pattern;
@@ -85,7 +88,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
   };
 
   const displayInfo = getDisplayInfo();
-  const skipRelativePath = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'Bash';
+  const skipRelativePath = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'Bash' || isAgentTool;
   const displayPath = displayInfo ? (skipRelativePath ? displayInfo : getRelativePath(displayInfo)) : null;
 
   const openPreview = (type: 'input' | 'result') => {
@@ -118,32 +121,34 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
             >
               {displayPath}
             </span>
-            <span
-              role="button"
-              tabIndex={0}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (displayInfo) {
-                  navigator.clipboard.writeText(displayInfo);
-                  toast(t('common.copiedPath'));
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
+            {!isAgentTool && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
                   e.stopPropagation();
                   if (displayInfo) {
                     navigator.clipboard.writeText(displayInfo);
                     toast(t('common.copiedPath'));
                   }
-                }
-              }}
-              className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0 cursor-pointer"
-              title={t('common.copyAbsPath')}
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-            </span>
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation();
+                    if (displayInfo) {
+                      navigator.clipboard.writeText(displayInfo);
+                      toast(t('common.copiedPath'));
+                    }
+                  }
+                }}
+                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0 cursor-pointer"
+                title={t('common.copyAbsPath')}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </span>
+            )}
           </>
         )}
         {/* Right action area */}
