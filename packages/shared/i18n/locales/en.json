@@ -424,7 +424,7 @@
     "ptyStuck": "PTY seems stuck (waiting for a dialog?). Please handle it in the terminal below.",
     "ptyTimedOut": "PTY timed out without manual handling; the turn was terminated.",
     "ptyCrash": "Claude CLI render crash (upstream bug): {{error}}. This session's history may contain edits that fail to render.",
-    "ptyQuestionEsc": "AI asked an interactive question; auto-cancelled (ESC) and the turn was ended. See the question in the chat and answer it in your next message."
+    "ptyQuestionEsc": "AI asked an interactive question, which cannot be answered in this mode; it was auto-cancelled and the turn was ended. See the question in the chat and answer it in your next message."
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",

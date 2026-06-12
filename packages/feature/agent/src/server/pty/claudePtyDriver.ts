@@ -5,7 +5,8 @@
  * Mechanism:
  *   - spawn `claude --session-id <uuid>` (new) or `claude -r <uuid>` (resume)
  *   - --dangerously-skip-permissions + auto-accept the "Bypass Permissions mode" menu
- *   - inject a no-op Stop hook via --settings so every turn emits a stop_hook_summary completion signal
+ *   - inject hooks via --settings: a no-op Stop hook so every turn emits a stop_hook_summary
+ *     completion signal, and a PreToolUse block that turns AskUserQuestion into a plain-text question
  *   - once the REPL is ready, bracketed-paste the prompt + Enter to submit
  *   - tail <uuid>.jsonl (baselined at spawn-time line count, only new lines count); completion detection:
  *       primary = system/stop_hook_summary ; fallback = jsonl idle
@@ -83,10 +84,11 @@ export interface RunTurnOptions {
   onPtyData?: (data: string) => void;
   /** REPL is ready and the prompt has been submitted. */
   onSubmit?: () => void;
-  /** Turn completed (via: 'stop_hook_summary' | 'idle' | 'question_esc'). */
+  /** Turn completed (via: 'stop_hook_summary' | 'idle' | 'question_esc' | 'question_loop'). */
   onComplete?: (via: string) => void;
-  /** AskUserQuestion interactive selector detected → auto-ESC'd and the turn was ended (D-question).
-   *  Lets the route surface a pty_notice so the user knows why the turn ended early. */
+  /** AskUserQuestion was auto-cancelled and the turn ended early — either the selector UI got
+   *  ESC'd (question_esc) or the model kept retrying the blocked tool (question_loop). Lets the
+   *  route surface a pty_notice so the user knows why. */
   onQuestionEsc?: () => void;
   /** Interrupt (ESC / stop button): on abort, send Ctrl+C and exit. */
   signal?: AbortSignal;
@@ -143,16 +145,39 @@ export function jsonlPathFor(cwd: string, sessionId: string): string {
   return path.join(sessionDirFor(cwd), `${sessionId}.jsonl`);
 }
 
-/** Idempotently write the injected no-op Stop hook settings file, returning its path (§9.5-F). */
-let cachedSettingsPath: string | null = null;
-export function ensureStopHookSettings(): string {
-  if (cachedSettingsPath && fs.existsSync(cachedSettingsPath)) return cachedSettingsPath;
-  const p = path.join(os.tmpdir(), 'cockpit-claude-stophook.json');
+/** Steers the model away from the interactive selector: ask in plain text instead, so the turn
+ *  completes normally and the user answers in the next turn. Fed to the model via PreToolUse stderr. */
+const ASK_QUESTION_GUIDANCE =
+  'Interactive questions cannot be displayed in this session. Do NOT retry this tool. '
+  + 'Instead, present your questions as plain text in your reply - each question with its options '
+  + 'and your recommended choice - then end your turn and wait for the user to answer in the next message.';
+
+/** Idempotently write the injected hook settings file, returning its path (§9.5-F).
+ *  - Stop: no-op hook so every turn emits a stop_hook_summary completion signal.
+ *  - PreToolUse(AskUserQuestion): the interactive selector would hang autonomous driving (nobody
+ *    answers; the question_esc fallback in runClaudeTurn only salvages the turn). Block it before
+ *    execution and steer the model to ask in plain text instead. */
+export function ensureHookSettings(): string {
+  // Versioned filename: older cockpit processes sharing the tmpdir keep rewriting the old
+  // 'cockpit-claude-stophook.json' with Stop-only content; a new name avoids the clash.
+  const p = path.join(os.tmpdir(), 'cockpit-claude-hooks-v2.json');
   const content = JSON.stringify({
-    hooks: { Stop: [{ hooks: [{ type: 'command', command: 'true' }] }] },
+    hooks: {
+      Stop: [{ hooks: [{ type: 'command', command: 'true' }] }],
+      PreToolUse: [{
+        matcher: 'AskUserQuestion',
+        hooks: [{ type: 'command', command: `echo ${shq(ASK_QUESTION_GUIDANCE)} >&2; exit 2` }],
+      }],
+    },
   });
-  fs.writeFileSync(p, content);
-  cachedSettingsPath = p;
+  // Compare content, not existence: a concurrently running cockpit of another version owns the
+  // same path with different hooks and would otherwise win the file forever (existsSync caching).
+  try { if (fs.readFileSync(p, 'utf8') === content) return p; } catch { /* missing → write */ }
+  // Atomic write (temp + rename): a claude spawned by another instance may read the file at any
+  // moment; rename guarantees it sees either the old or the new JSON, never a truncated one.
+  const tmp = `${p}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, p);
   return p;
 }
 
@@ -179,7 +204,7 @@ export function runClaudeTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
   const sessionId = opts.sessionId || crypto.randomUUID();
   const isResume = opts.resume === true;   // a new turn with a uuid uses --session-id; only resume uses -r
   const jsonlPath = jsonlPathFor(cwd, sessionId);
-  const settingsPath = ensureStopHookSettings();
+  const settingsPath = ensureHookSettings();
 
   const log = (...a: unknown[]) => { if (debug) console.error('[driver]', ...a); };
 
@@ -241,6 +266,7 @@ export function runClaudeTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
     let lastDataTs = Date.now();
     let menuHandled = false;
     let questionEscSent = false;
+    let askQuestionUses = 0;
     let promptSent = false;
     let completed = false;
     let completedVia: string | null = null;
@@ -377,6 +403,20 @@ export function runClaudeTurn(opts: RunTurnOptions): Promise<RunTurnResult> {
         const blocks = Array.isArray(o.message?.content)
           ? (o.message!.content as Array<{ type?: string }>).map((b) => b.type).join(',') : '';
         if (o.type === 'assistant' && blocks.includes('text')) sawAssistantText = true;
+        // Circuit breaker: the PreToolUse hook blocks AskUserQuestion and tells the model not to
+        // retry, but a model that retries anyway defeats every completion signal at once (no Stop
+        // hook while the turn runs, jsonl/PTY never idle, no selector UI for the ESC fallback).
+        // Cap the attempts and end the turn ourselves — every turn must keep an automatic
+        // termination path that does not depend on the model cooperating.
+        if (o.type === 'assistant' && Array.isArray(o.message?.content)) {
+          askQuestionUses += (o.message!.content as Array<{ type?: string; name?: string }>)
+            .filter((b) => b.type === 'tool_use' && b.name === 'AskUserQuestion').length;
+          if (askQuestionUses >= 3 && !completed) {
+            log(`AskUserQuestion x${askQuestionUses} → break retry loop, end turn`);
+            onQuestionEsc?.();
+            complete('question_loop');
+          }
+        }
         if (o.type === 'system' && o.subtype === 'stop_hook_summary' && !completed) {
           complete('stop_hook_summary');
         }
