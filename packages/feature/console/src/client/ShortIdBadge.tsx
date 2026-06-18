@@ -113,6 +113,10 @@ export const ShortIdBadge = memo(function ShortIdBadge({
     <>
       <button
         onClick={handleClick}
+        // Swallow double-clicks so they don't bubble to the bubble header's
+        // onDoubleClick (which would maximize the window). The badge only
+        // responds to single-click (register/copy toggle).
+        onDoubleClick={(e) => e.stopPropagation()}
         className="inline-flex items-center gap-1 text-[10px] font-mono leading-none px-1.5 py-0.5 rounded flex-shrink-0 transition-colors bg-muted/60 hover:bg-muted text-muted-foreground"
         title={registered ? t('shortIdBadge.clickToDisconnect') : t('shortIdBadge.clickToRegister')}
       >
