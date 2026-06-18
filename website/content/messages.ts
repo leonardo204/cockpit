@@ -199,6 +199,15 @@ export const messages = {
         },
       ],
       customHint: 'Custom: drop any SKILL.md and add it via the Skills sidebar — it auto-appears in the autocomplete menu.',
+      workflow: {
+        tag: 'New · chain them',
+        headline: 'Stack commands into one workflow',
+        desc: 'Start several lines with / or @ and Cockpit reads the whole message as one ordered run — clarify, fix, then have a sub-agent review the fix, in a single send.',
+        mainText: 'runs in the main session',
+        subText: 'delegates the step to a sub-agent',
+        example: '/fx\nfind why retries double-charge the card\n@cr\naudit the fix for race conditions',
+        link: 'How workflows work →',
+      },
     },
     extras: {
       schedule: {
@@ -262,6 +271,7 @@ export const messages = {
           messageInput: 'Message Input',
           sessions: 'Sessions',
           skills: 'Skills',
+          workflows: 'Workflows',
           engines: 'AI Engines',
           scheduledTasks: 'Scheduled Tasks',
           notes: 'Notes',
@@ -503,6 +513,15 @@ export const messages = {
         },
       ],
       customHint: '自定义：丢入任意 SKILL.md 并通过 Skills 侧边栏添加——自动出现在补全菜单。',
+      workflow: {
+        tag: '新 · 串起来',
+        headline: '把命令叠成一条工作流',
+        desc: '让多行分别以 / 或 @ 开头，Cockpit 就把整条消息当成一条有序流程来跑——澄清、修复、再让子代理审一遍修复，一次发送搞定。',
+        mainText: '这步在主会话执行',
+        subText: '这步委派给子代理',
+        example: '/fx\n查清楚为什么重试会重复扣款\n@cr\n审一下这个修复有没有竞态',
+        link: '工作流怎么用 →',
+      },
     },
     extras: {
       schedule: {
@@ -563,6 +582,7 @@ export const messages = {
           messageInput: '消息输入',
           sessions: '会话管理',
           skills: 'Skills',
+          workflows: '工作流',
           engines: 'AI 引擎',
           scheduledTasks: '定时任务',
           notes: '笔记',

@@ -71,6 +71,10 @@ export const docsSidebar: DocSection[] = [
       // Five are built in (the AI modes /qa /fx /ex /go /cg); users add more
       // by installing SKILL.md files. Same `/` menu, same docs page.
       { slug: 'agent/skills', labelKey: 'skills', available: true },
+      // Chaining slash commands into an ordered, multi-step run — the
+      // line-led `/` + `@` syntax. Sits after Skills because it composes the
+      // commands documented there.
+      { slug: 'agent/workflows', labelKey: 'workflows', available: true },
       { slug: 'agent/engines', labelKey: 'engines', available: true },
       { slug: 'agent/scheduled-tasks', labelKey: 'scheduledTasks', available: true },
       { slug: 'agent/notes', labelKey: 'notes', available: true },

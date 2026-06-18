@@ -32,6 +32,158 @@ export interface Post {
 
 export const posts: Post[] = [
   {
+    slug: 'orchestrate-workflows-in-chat',
+    date: '2026-06-18',
+    keywords: [
+      'AI workflow orchestration',
+      'multi-step agent workflow',
+      'slash command chaining',
+      'subagent delegation',
+      'Claude sub-agent',
+      'multi-command prompt',
+      'agent pipeline',
+      'slash commands',
+      '工作流编排',
+      '多步骤 agent',
+      '斜杠命令编排',
+      '子代理',
+      'Claude Code GUI',
+      'OpenCockpit',
+      'Cockpit',
+    ],
+    content: {
+      en: {
+        title: 'Orchestrate a workflow from the message box',
+        description:
+          'A Cockpit message can now hold more than one command. Start several lines with `/` or `@` and Cockpit reads the whole message as an ordered, multi-step workflow — `/` runs in the main session, `@` delegates to a sub-agent. Plan the run once, send it once.',
+        readingTime: '4 min read',
+        body: `Most agent work isn't one instruction — it's a small sequence. *Clarify what I actually want, then fix it, then have something independent review the fix.* Until now that was three messages, sent one at a time, each waiting on the last. As of this release you can write the whole thing in one message: start lines with \`/\` or \`@\` and Cockpit reads them as an ordered workflow.
+
+## One message, several steps
+
+Every line that starts with a known command becomes a step. The first character picks where it runs:
+
+| Marker | Where the step runs |
+|---|---|
+| \`/verb\` | the **main session** — the AI continues in this chat |
+| \`@verb\` | a **sub-agent** — delegated to a separate agent, then reported back |
+
+So this:
+
+\`\`\`text
+Here is the failing test output: payment webhook 500s on retries.
+/fx
+figure out why the idempotency key isn't being honored
+@cr
+audit the fix for race conditions and missing rollbacks
+\`\`\`
+
+…becomes a single numbered plan the AI works through in order. The text before the first command rides along as shared context — paste your log or state the goal once, up top, for the whole run. Everything under a command line, including blank lines and multiple paragraphs, belongs to that step.
+
+You wrote four lines. The agent received a structured plan.
+
+## \`/\` keeps it close, \`@\` sends it away
+
+The two markers are about *attention*, not just routing:
+
+- **\`/verb\`** keeps the work in the current chat, where you can watch it turn by turn and steer. Use it for the steps you care about.
+- **\`@verb\`** hands a self-contained chunk — a review, an exploration, a focused investigation — to a sub-agent, which does it and summarizes back without cluttering the main thread.
+
+The everyday shape is "do it here, then send someone to check it":
+
+\`\`\`text
+/go
+implement the retry backoff described in the ticket
+@cr
+review what was just written for correctness and style
+\`\`\`
+
+## Your own skills, in the mix
+
+Steps aren't limited to the built-ins. Any [skill](/en/docs/agent/skills/) you've installed is a verb too, and built-ins and your skills can sit side by side in the same workflow — they all resolve through the same "read this SKILL.md" path. If a skill you wrote shares a name with a built-in, yours wins, so your version is what runs.
+
+And autocomplete now follows your cursor: type \`/\` or \`@\` at the start of *any* line — the second, the third — and the command menu pops for that line. That's what makes stacking steps feel natural instead of fiddly.
+
+## Nothing changes for one-offs
+
+If your message is a single \`/verb\` with no preamble and no \`@\`, it behaves exactly as before — one command, one turn, no ceremony. The numbered plan only appears when there's a real workflow to run: two or more commands, any \`@\` step, or leading context text. The simple case stays simple; the multi-step case finally gets to be one message.
+
+## Try it
+
+Update Cockpit, open a chat, and write two commands on two lines — say \`/qa\` then \`@cr\`. Watch the agent receive them as an ordered plan. Full details in the [Workflows](/en/docs/agent/workflows/) docs.
+
+---
+
+**Try it:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [Try Online](/try)`,
+      },
+      zh: {
+        title: '在消息框里编排一条工作流',
+        description:
+          'Cockpit 的一条消息现在可以放不止一个命令。让好几行分别以 `/` 或 `@` 开头,Cockpit 就把整条消息当成一条有序的多步工作流来读 —— `/` 在主会话执行,`@` 委派给子代理。一次规划,一次发送。',
+        readingTime: '阅读约 4 分钟',
+        body: `大多数 agent 活儿都不是一条指令,而是一小段序列。*先澄清我到底要什么,再修它,然后让一个独立的东西来审这个修复。* 在此之前这是三条消息,一条一条发,每条都等着上一条。从这个版本起,你可以把整件事写进一条消息:让行以 \`/\` 或 \`@\` 开头,Cockpit 就把它们读成一条有序工作流。
+
+## 一条消息,多个步骤
+
+每一行只要以已知命令开头,就成为一个步骤。第一个字符决定它在哪里跑:
+
+| 标记 | 步骤在哪里执行 |
+|---|---|
+| \`/verb\` | **主会话** —— AI 在这个聊天里继续 |
+| \`@verb\` | **子代理** —— 委派给一个独立 agent,完成后回报 |
+
+于是这样:
+
+\`\`\`text
+这是失败的测试输出:支付 webhook 在重试时返回 500。
+/fx
+查清楚为什么幂等键没被尊重
+@cr
+审一下这个修复有没有竞态和漏掉的回滚
+\`\`\`
+
+……就变成一份带编号的计划,AI 按序推进。第一条命令之前的文字作为共享上下文一起带上 —— 把日志贴在顶部,或为整条工作流统一交代一次目标。命令行下面的所有内容,包括空行和多个段落,都属于那个步骤。
+
+你写了四行。Agent 收到的是一份结构化计划。
+
+## \`/\` 留在身边,\`@\` 派出去
+
+这两个标记关乎的是*注意力*,不只是路由:
+
+- **\`/verb\`** 把工作留在当前聊天,你能逐轮盯着、随时纠偏。用在你真正在意的步骤上。
+- **\`@verb\`** 把一块自成一体的活儿 —— 一轮审查、一次探索、一段聚焦调查 —— 交给子代理,它办完并回来给小结,不塞满主线。
+
+日常形态就是「在这儿干,再派个人来检查」:
+
+\`\`\`text
+/go
+实现工单里描述的重试退避
+@cr
+审一下刚写的东西,看正确性和风格
+\`\`\`
+
+## 把你自己的 skill 也混进来
+
+步骤不限于内置命令。你装过的任意 [skill](/zh/docs/agent/skills/) 也是一个 verb,内置命令和你的 skill 可以并排出现在同一条工作流里 —— 它们都走同一条「读这个 SKILL.md」的路径解析。如果你写的 skill 和某个内置同名,你的优先,所以跑的是你那一版。
+
+而且自动补全现在跟着光标走:在*任意一行*开头打 \`/\` 或 \`@\` —— 第二行、第三行 —— 命令菜单就为那一行弹出。这正是让叠步骤变得自然、而不是别扭的关键。
+
+## 单次命令一切照旧
+
+如果你的消息只是一个 \`/verb\`、没有前言、也没有 \`@\`,它的行为和以前完全一样 —— 一个命令、一轮、没有多余仪式。带编号的计划只在真的有工作流要跑时才出现:两个及以上命令、任意 \`@\` 步骤、或开头有上下文文字。简单的事保持简单;多步的事终于能放进一条消息。
+
+## 试一下
+
+更新 Cockpit,打开一个聊天,在两行上写两个命令 —— 比如 \`/qa\` 然后 \`@cr\`。看着 agent 把它们当成一份有序计划接收。完整细节见[工作流](/zh/docs/agent/workflows/)文档。
+
+---
+
+**试试看:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [在线体验](/try)`,
+      },
+    },
+  },
+
+  {
     slug: 'claude-code-cli-execution-mode',
     date: '2026-06-10',
     keywords: [

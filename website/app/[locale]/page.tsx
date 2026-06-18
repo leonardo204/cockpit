@@ -185,7 +185,7 @@ export default async function HomePage({
       <Engines t={t} />
       <CodeMap t={t} />
       <CodeGraph t={t} />
-      <Modes t={t} />
+      <Modes locale={locale as Locale} t={t} />
       <PanelSection
         tag={t.panels.review.tag}
         name={t.panels.review.name}
