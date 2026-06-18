@@ -78,8 +78,8 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
   const [isUserMessagesOpen, setIsUserMessagesOpen] = useState(false);
   const [historyTokenUsage, setHistoryTokenUsage] = useState<TokenUsage | null>(null);
   // Execution mode (per-tab): controlled by TabInfo.chatMode (persisted); falls back to local state when no prop (standalone use)
-  // Default 'pty' (Claude Code CLI) — tabs without an explicit choice run in CLI mode
-  const [localChatMode, setLocalChatMode] = useState<ChatMode>('pty');
+  // Default 'sdk' (Claude Agent SDK) — tabs without an explicit choice run in SDK mode
+  const [localChatMode, setLocalChatMode] = useState<ChatMode>('sdk');
   const chatMode = chatModeProp ?? localChatMode;
   const setChatMode = useCallback((m: ChatMode) => {
     setLocalChatMode(m);
@@ -370,20 +370,20 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
             <div className="inline-flex rounded-md border border-border overflow-hidden text-xs" role="group" data-testid="chatmode-toggle">
               <button
                 type="button"
+                data-testid="chatmode-sdk"
+                onClick={() => setChatMode('sdk')}
+                className={`px-2 py-0.5 ${chatMode === 'sdk' ? 'bg-brand text-white' : 'bg-transparent text-muted-foreground hover:bg-accent'}`}
+              >
+                Claude Agent SDK
+              </button>
+              <button
+                type="button"
                 data-testid="chatmode-pty"
                 onClick={() => setChatMode('pty')}
                 className={`px-2 py-0.5 ${chatMode === 'pty' ? 'bg-brand text-white' : 'bg-transparent text-muted-foreground hover:bg-accent'}`}
                 title={t('chat.ptyModeHint', { defaultValue: 'Subscription-billing mode: driven by the interactive claude CLI' })}
               >
                 Claude Code CLI
-              </button>
-              <button
-                type="button"
-                data-testid="chatmode-sdk"
-                onClick={() => setChatMode('sdk')}
-                className={`px-2 py-0.5 ${chatMode === 'sdk' ? 'bg-brand text-white' : 'bg-transparent text-muted-foreground hover:bg-accent'}`}
-              >
-                Claude Agent SDK
               </button>
             </div>
           </div>
