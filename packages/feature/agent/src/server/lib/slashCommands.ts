@@ -8,9 +8,9 @@
 // command wants to override the default neutral "问题：" / "Question: "
 // prefix attached to the user's trailing text — see `/cg` which uses
 // "探索问题：" / "Exploration: " to prime a stronger model mindset.
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { COCKPIT_DIR } from '@cockpit/shared-utils';
+import { COCKPIT_DIR, SKILLS_FILE } from '@cockpit/shared-utils';
 import { CC_LABEL_EN, CC_LABEL_ZH, CC_PROMPT_EN, CC_PROMPT_ZH } from './ccPrompt';
 import { CG_LABEL_EN, CG_LABEL_ZH, CG_PROMPT_EN, CG_PROMPT_ZH } from './cgPrompt';
 import { CR_PROMPT_EN, CR_PROMPT_ZH } from './crPrompt';
@@ -89,63 +89,183 @@ function deriveBaseUrl(req?: Request): string {
   return `http://localhost:${port}`;
 }
 
-// Resolves /qa, /fx, /cg etc. before the prompt is sent to the model. Reads
-// COMMAND_CONTENT keyed by the verb after the slash and the user's language
-// (zh / en).
+// A single parsed command step: its marker, verb, and the body text that
+// belongs to it (everything up to the next command line).
+type StepMarker = '/' | '@';
+interface ParsedStep {
+  marker: StepMarker;
+  cmd: string;
+  body: string;
+}
+
+// One command line: `/verb …` or `@verb …` at the start of a line (leading
+// whitespace allowed). Verb starts with a letter, then letters/digits/hyphens
+// (/qa, /new-branch, /c4). Char class is kept in sync with the client
+// autocomplete (ChatInput's commandQuery).
+const COMMAND_LINE_RE = /^\s*([/@])([a-zA-Z][a-zA-Z0-9-]*)(?:\s+|$)/;
+
+// Resolves slash/at commands before the prompt is sent to the model. Supports:
+//   - multiple commands, one per line — each line starting with `/verb` or
+//     `@verb` begins a step; its body runs until the next command line
+//     (multi-line + blank lines included).
+//   - `/verb` runs in the main session; `@verb` is delegated to a subagent.
+//   - builtin commands (COMMAND_CONTENT) AND user-registered skills, mixed.
 //
-// Rather than inlining the (long) instruction template into the message, we
-// write it to ~/.cockpit/skills/<cmd>/SKILL.md and return a short pointer
-// ("请读取这个 skill 文件：<path>") — the SAME flow user-defined skills use.
-// The model reads the file on demand, keeping the first message compact.
+// Each command resolves to a "read this SKILL.md" pointer (builtins are written
+// to ~/.cockpit/skills/<verb>/SKILL.md; user skills use their registered path) —
+// the SAME flow user-defined skills use, keeping the first message compact.
 //
-// `{{BASE_URL}}` placeholders inside the content are substituted with the
-// live base URL derived from the incoming request (or fallback to
-// http://localhost:<port>) at WRITE time. This makes /cg's curl recipes
-// reachable from whatever URL the user actually sees cockpit at — localhost
-// for local dev, the deployment's public URL when behind a reverse proxy.
+// A single `/verb` command (no preamble, no `@`) keeps the original compact
+// "pointer + label + body" output. Two+ commands, or any `@`, or leading
+// preamble text, switch to a numbered step list framed for sequential dispatch.
+//
+// `{{BASE_URL}}` placeholders are substituted with the live base URL at WRITE
+// time so /cg's curl recipes are reachable from whatever URL the user sees.
 export function resolveCommandPrompt(
   prompt: string,
   language = 'en',
   req?: Request,
 ): string {
-  const trimmed = prompt.trimStart();
-  // Verb is letters, optionally with hyphens (e.g. /qa, /new-branch). Must start
-  // with a letter so a bare "/-x" doesn't match; the captured verb doubles as the
-  // COMMAND_CONTENT key and the ~/.cockpit/skills/<verb>/ dir name.
-  const match = trimmed.match(/^\/([a-zA-Z][a-zA-Z-]*)(?:\s+|$)/);
-  if (!match) return prompt;
+  const lang: 'zh' | 'en' = language.startsWith('zh') ? 'zh' : 'en';
 
-  const cmd = match[1];
-  const lang = language.startsWith('zh') ? 'zh' : 'en';
-  const entry = COMMAND_CONTENT[cmd];
-  const tmpl = entry?.[lang];
-  if (!tmpl) return prompt;
+  // Skill registry read once per dispatch (not per keystroke) so command-line
+  // recognition can tell a real `/skill-name` from ordinary text-with-slash.
+  const userSkills = listUserSkills();
+  const isKnown = (cmd: string) =>
+    !!COMMAND_CONTENT[cmd] || userSkills.some((s) => s.name === cmd);
+
+  // ── Parse: find known command lines, split bodies between them ──
+  const lines = prompt.split('\n');
+  const marks: Array<{ i: number; marker: StepMarker; cmd: string; rest: string }> = [];
+  lines.forEach((line, i) => {
+    const m = line.match(COMMAND_LINE_RE);
+    if (m && isKnown(m[2])) {
+      marks.push({ i, marker: m[1] as StepMarker, cmd: m[2], rest: line.slice(m[0].length) });
+    }
+  });
+  if (marks.length === 0) return prompt;
+
+  const preamble = lines.slice(0, marks[0].i).join('\n').trim();
+  const steps: ParsedStep[] = marks.map((mk, idx) => {
+    const end = idx + 1 < marks.length ? marks[idx + 1].i : lines.length;
+    const body = [mk.rest, ...lines.slice(mk.i + 1, end)].join('\n').trim();
+    return { marker: mk.marker, cmd: mk.cmd, body };
+  });
 
   const baseUrl = deriveBaseUrl(req);
-  const content = tmpl.replaceAll('{{BASE_URL}}', baseUrl);
+  const resolved = steps.map((s) => resolveStep(s, lang, baseUrl, userSkills));
 
-  // Persist the resolved template as a SKILL.md and get its path back. If the
-  // write fails (rare; perms / disk), fall back to inlining the content so the
-  // command never silently no-ops.
-  const skillPath = writeBuiltinSkill(cmd, content);
-
-  const rest = trimmed.slice(match[0].length).trimStart();
-  // The label prepended to the user's trailing text isn't just a separator —
-  // it's a mindset primer for the model. `/cg` switches the user into project
-  // graph EXPLORATION; tagging the input "探索问题" / "Exploration:" up-front
-  // anchors the model on graph-tool usage instead of defaulting to grep/glob.
-  // Other commands keep the neutral "问题：" / "Question:" label.
-  const label = labelFor(entry, lang);
-
-  if (!skillPath) {
-    return rest ? `${content}\n\n${label}${rest}` : content;
+  // ── Single `/command`, no preamble → original compact output ──
+  if (resolved.length === 1 && resolved[0].marker === '/' && !preamble) {
+    const r = resolved[0];
+    return r.body ? `${r.pointer}\n\n${r.label}${r.body}` : r.pointer;
   }
 
-  const pointer =
-    lang === 'zh'
-      ? `请读取这个 skill 文件：\n${skillPath}`
-      : `Please read this skill file:\n${skillPath}`;
-  return rest ? `${pointer}\n\n${label}${rest}` : pointer;
+  // ── Otherwise: numbered, locus-annotated step list ──
+  const intro = lang === 'zh' ? '请按以下步骤依次完成：' : 'Complete the following steps in order:';
+  const blocks = resolved.map((r, idx) => {
+    const where = stepHeader(idx + 1, r.marker, lang);
+    const bodyPart = r.body ? `\n${r.label}${r.body}` : '';
+    return `${where}\n${r.pointer}${bodyPart}`;
+  });
+  const parts: string[] = [];
+  if (preamble) parts.push(preamble);
+  parts.push(intro, blocks.join('\n\n'));
+  return parts.join('\n\n');
+}
+
+interface ResolvedStep {
+  marker: StepMarker;
+  body: string;
+  label: string;
+  /** The pointer text injected for this step (read-the-SKILL.md, or, if the
+   *  builtin write failed, the inlined content as a fallback). */
+  pointer: string;
+}
+
+// Resolve one parsed step to its pointer text + label. (Callers only pass known
+// verbs.) A user skill takes PRECEDENCE over a builtin of the same name —
+// restoring the pre-server-resolution behavior where the client expanded the
+// user's own skill first. So a user skill named `cr`/`new-branch` shadows the
+// builtin; the user's edits to their own skill keep taking effect.
+function resolveStep(
+  step: ParsedStep,
+  lang: 'zh' | 'en',
+  baseUrl: string,
+  userSkills: Array<{ name: string; path: string }>,
+): ResolvedStep {
+  const skill = userSkills.find((s) => s.name === step.cmd);
+  if (skill) {
+    // User-skill invocations carry no mindset-primer label — matches the old
+    // client expansion, which appended the trailing text with no prefix.
+    return { marker: step.marker, body: step.body, label: '', pointer: readSkillPointer(skill.path, lang) };
+  }
+  const entry = COMMAND_CONTENT[step.cmd]!;
+  const content = entry[lang].replaceAll('{{BASE_URL}}', baseUrl);
+  const skillPath = writeBuiltinSkill(step.cmd, content);
+  // On write failure, inline the content so the command never silently no-ops.
+  const pointer = skillPath ? readSkillPointer(skillPath, lang) : content;
+  return { marker: step.marker, body: step.body, label: labelFor(entry, lang), pointer };
+}
+
+/** "Please read this skill file: <path>" pointer in the active language. */
+function readSkillPointer(skillPath: string, lang: 'zh' | 'en'): string {
+  return lang === 'zh'
+    ? `请读取这个 skill 文件：\n${skillPath}`
+    : `Please read this skill file:\n${skillPath}`;
+}
+
+/** Step header with execution-locus annotation (main session vs subagent). */
+function stepHeader(n: number, marker: StepMarker, lang: 'zh' | 'en'): string {
+  if (lang === 'zh') {
+    return marker === '@'
+      ? `步骤 ${n}（用 subagent 执行）：`
+      : `步骤 ${n}（主会话执行）：`;
+  }
+  return marker === '@'
+    ? `Step ${n} (run in a subagent): `
+    : `Step ${n} (run in the main session): `;
+}
+
+interface SkillRecord {
+  id: string;
+  path: string;
+  addedAt: string;
+}
+
+// Read the user-skill registry (~/.cockpit/skills.json) and resolve each
+// record's `name` from its SKILL.md frontmatter. Synchronous — runs once per
+// dispatch, reads a handful of small local files; keeps resolveCommandPrompt
+// sync for the five engine handlers that call it inside Effect.gen.
+function listUserSkills(): Array<{ name: string; path: string }> {
+  try {
+    const data = JSON.parse(readFileSync(SKILLS_FILE, 'utf-8')) as {
+      skills?: SkillRecord[];
+    };
+    const out: Array<{ name: string; path: string }> = [];
+    for (const s of data.skills ?? []) {
+      const name = readSkillName(s.path);
+      if (name) out.push({ name, path: s.path });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+// Extract the `name:` field from a SKILL.md YAML frontmatter block. Minimal
+// sync parse (no async parseSkillMd dependency) — just enough to match a
+// `/name` command to its file.
+function readSkillName(path: string): string | null {
+  try {
+    const txt = readFileSync(path, 'utf-8');
+    const fm = txt.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    const block = fm ? fm[1] : txt;
+    const m = block.match(/^name:\s*["']?([^"'\n]+?)["']?\s*$/m);
+    return m ? m[1].trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 // Write a builtin command's resolved SKILL.md to ~/.cockpit/skills/<cmd>/SKILL.md

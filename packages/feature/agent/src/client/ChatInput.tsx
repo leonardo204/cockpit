@@ -59,6 +59,8 @@ interface ChatInputProps {
 export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine: _engine, onShowGitStatus, onShowComments, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
+  // Caret offset into `input`; drives line-aware command autocomplete.
+  const [caret, setCaret] = useState(0);
   const [images, setImages] = useState<ImageInfo[]>([]);
   const [commands, setCommands] = useState<CommandInfo[]>([]);
   const [skills, setSkills] = useState<CommandInfo[]>([]);
@@ -127,16 +129,34 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     return onSkillsChanged(loadSkills);
   }, [loadSkills]);
 
-  // Command filtering: useMemo derived computation, eliminates 3 setState calls per keystroke
+  // The line containing the caret — commands are line-led, so autocomplete keys
+  // off the current line, not the whole (possibly multi-line) input.
+  const activeLine = useMemo(() => {
+    const lineStart = caret === 0 ? 0 : input.lastIndexOf('\n', caret - 1) + 1;
+    const nl = input.indexOf('\n', caret);
+    const lineEnd = nl === -1 ? input.length : nl;
+    return { text: input.slice(lineStart, lineEnd), start: lineStart, end: lineEnd };
+  }, [input, caret]);
+
+  // The command being typed on the active line: a `/` or `@` marker followed by
+  // a partial verb with nothing after it yet (a trailing space starts the body
+  // and dismisses the menu). Marker-agnostic — `@qa` matches the same `/qa` entry.
+  const commandQuery = useMemo(() => {
+    // Verb char class kept in sync with the server (slashCommands' COMMAND_LINE_RE).
+    const m = activeLine.text.match(/^\s*([/@])([a-zA-Z0-9-]*)$/);
+    return m ? { marker: m[1], verb: m[2].toLowerCase() } : null;
+  }, [activeLine.text]);
+
+  // Command filtering: useMemo derived computation, eliminates setState churn per keystroke.
   // Commands first, then skills — grouped display preserves the two sections.
   const filteredCommands = useMemo(() => {
-    if (!input.startsWith('/')) return [];
-    const keyword = input.toLowerCase();
-    const match = (cmd: CommandInfo) => cmd.name.toLowerCase().startsWith(keyword);
+    if (!commandQuery) return [];
+    const { verb } = commandQuery;
+    const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
     return [...commands.filter(match), ...skills.filter(match)];
-  }, [input, commands, skills]);
+  }, [commandQuery, commands, skills]);
 
-  const showCommands = !commandsDismissed && input.startsWith('/') && filteredCommands.length > 0;
+  const showCommands = !commandsDismissed && !!commandQuery && filteredCommands.length > 0;
 
   // Reset selected index and dismiss state when input changes
   const prevInputRef = useRef(input);
@@ -161,41 +181,40 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
     const hasContent = trimmed || images.length > 0;
+    if (!hasContent || disabled) return;
 
-    if (hasContent && !disabled) {
-      // Expand leading /<skill-name> into "Please read this skill file: <abs path>\n\n<rest>"
-      let finalMessage = trimmed;
-      if (trimmed.startsWith('/') && skills.length > 0) {
-        // Longest-name-first match to handle overlapping prefixes (e.g. /foo vs /foo-bar)
-        const sorted = [...skills].sort((a, b) => b.name.length - a.name.length);
-        for (const skill of sorted) {
-          if (!skill.skillPath) continue;
-          if (trimmed === skill.name) {
-            finalMessage = `${t('chat.skillExpansionPrompt')}\n${skill.skillPath}`;
-            break;
-          }
-          const prefix = `${skill.name} `;
-          if (trimmed.startsWith(prefix)) {
-            const rest = trimmed.slice(prefix.length).trimStart();
-            finalMessage = `${t('chat.skillExpansionPrompt')}\n${skill.skillPath}\n\n${rest}`;
-            break;
-          }
-        }
-      }
-      onSend(finalMessage, images.length > 0 ? images : undefined);
-      setInput('');
-      setImages([]);
-      // Reset textarea height
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-      }
+    // Slash/at commands (/qa, @new-branch, user skills, multi-line) are resolved
+    // server-side by resolveCommandPrompt — send the raw text so the displayed
+    // message stays readable and a single resolver handles builtins + skills +
+    // sequential multi-command.
+    onSend(trimmed, images.length > 0 ? images : undefined);
+    setInput('');
+    setImages([]);
+    // Reset textarea height
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
     }
-  }, [input, images, disabled, onSend, skills, t]);
+  }, [input, images, disabled, onSend]);
 
   const handleSelectCommand = useCallback((command: CommandInfo) => {
-    setInput(command.name + ' ');
-    textareaRef.current?.focus();
-  }, []);
+    // Preserve the marker the user typed (`/` main session, `@` subagent); only
+    // replace the command token on the active line, leaving other lines intact.
+    const marker = commandQuery?.marker ?? '/';
+    const insert = `${marker}${command.name.slice(1)} `;
+    const before = input.slice(0, activeLine.start);
+    const after = input.slice(activeLine.end);
+    const next = before + insert + after;
+    const pos = before.length + insert.length;
+    setInput(next);
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(pos, pos);
+      }
+    });
+  }, [input, activeLine, commandQuery]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Check if IME composition is in progress (e.g., Chinese pinyin input)
@@ -339,7 +358,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
                 >
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-sm font-medium text-foreground">
-                      {cmd.name}
+                      {(commandQuery?.marker ?? '/') + cmd.name.slice(1)}
                     </span>
                     <span className="flex-1 text-sm text-muted-foreground truncate">
                       {cmd.source === 'builtin'
@@ -471,7 +490,11 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
         <textarea
           ref={textareaRef}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            setCaret(e.target.selectionStart ?? e.target.value.length);
+          }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={disabled ? t('chat.placeholderDisabled') : t('chat.placeholder')}
