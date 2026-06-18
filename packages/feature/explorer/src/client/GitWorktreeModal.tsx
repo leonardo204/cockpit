@@ -9,6 +9,7 @@ import {
   postGitWorktree,
   fetchBranches,
 } from './effect/gitClient';
+import { formatRelativeTime } from './fileBrowser/utils';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
 
@@ -34,6 +35,7 @@ interface WorktreeInfo {
   isDetached: boolean;
   isLocked: boolean;
   isBare: boolean;
+  createdAt: number | null;
 }
 
 interface WorktreeListResponse {
@@ -364,9 +366,22 @@ export function GitWorktreeModal({
                         )}
                       </div>
                     </div>
-                    {/* Path */}
-                    <div className="mt-1 text-xs text-muted-foreground truncate pl-4">
-                      {worktree.path}
+                    {/* Path + creation time */}
+                    <div className="mt-1 flex items-center justify-between gap-2 pl-4">
+                      <span className="text-xs text-muted-foreground truncate">
+                        {worktree.path}
+                      </span>
+                      {worktree.createdAt != null && (() => {
+                        const label = formatRelativeTime(worktree.createdAt / 1000);
+                        return (
+                          <span
+                            className={`text-xs flex-shrink-0 ${label === 'just now' ? 'text-brand' : 'text-muted-foreground/70'}`}
+                            title={new Date(worktree.createdAt).toLocaleString()}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </div>
                     {/* Detached warning */}
                     {worktree.isDetached && (

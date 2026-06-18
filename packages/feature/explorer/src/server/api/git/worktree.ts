@@ -6,6 +6,7 @@
  */
 import { exec } from "child_process"
 import { promisify } from "util"
+import { promises as fs } from "fs"
 import { dirname, basename, join } from "path"
 import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
@@ -34,6 +35,8 @@ export interface WorktreeInfo {
   isDetached: boolean
   isLocked: boolean
   isBare: boolean
+  /** Worktree creation time (ms epoch); null for the main repo or if undeterminable */
+  createdAt: number | null
 }
 
 function parseWorktreeList(output: string): WorktreeInfo[] {
@@ -46,6 +49,7 @@ function parseWorktreeList(output: string): WorktreeInfo[] {
       isDetached: false,
       isLocked: false,
       isBare: false,
+      createdAt: null,
     }
     for (const line of lines) {
       if (line.startsWith("worktree ")) worktree.path = line.substring(9)
@@ -76,6 +80,29 @@ const runGit = (
 
 const runGitOrEmpty = (cmd: string, cwd: string): Effect.Effect<string> =>
   runGit(cmd, cwd).pipe(Effect.orElseSucceed(() => ""))
+
+/**
+ * Resolve a worktree's creation time via its admin dir (.git/worktrees/<name>).
+ * A linked worktree's `.git` is a file ("gitdir: <adminDir>"); the main repo's
+ * `.git` is a directory — for which we return null (no creation semantics).
+ */
+const getWorktreeCreatedAt = (
+  worktreePath: string
+): Effect.Effect<number | null> =>
+  Effect.tryPromise({
+    try: async (): Promise<number | null> => {
+      const dotGit = join(worktreePath, ".git")
+      const st = await fs.stat(dotGit)
+      if (st.isDirectory()) return null // main repo
+      const content = await fs.readFile(dotGit, "utf8")
+      const m = content.match(/^gitdir:\s*(.+)$/m)
+      if (!m) return null
+      const adminStat = await fs.stat(m[1].trim())
+      const birth = adminStat.birthtimeMs
+      return birth > 0 ? birth : adminStat.mtimeMs
+    },
+    catch: () => null,
+  }).pipe(Effect.orElseSucceed(() => null))
 
 const getNextWorktreePath = (
   cwd: string,
@@ -115,7 +142,13 @@ export const GET = handler((req) =>
     }
 
     const stdout = yield* runGit("git worktree list --porcelain", cwd)
-    const worktrees = parseWorktreeList(stdout)
+    const worktrees = yield* Effect.forEach(
+      parseWorktreeList(stdout),
+      (w) =>
+        getWorktreeCreatedAt(w.path).pipe(
+          Effect.map((createdAt) => ({ ...w, createdAt }))
+        )
+    )
 
     const next = yield* getNextWorktreePath(cwd, worktrees)
     const gitUserName = (
