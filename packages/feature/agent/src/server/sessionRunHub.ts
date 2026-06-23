@@ -30,6 +30,10 @@ type RunListener = (ev: RunEvent) => void;
 interface RunState {
   keys: Set<string>; // all aliases for this run (provisional runId + real sessionId)
   cwd: string;
+  /** The engine's real sessionId once revealed (via rekeyRun). Lets a detached
+   *  caller that only kept the provisional runId recover the new session id after
+   *  the run — used by scheduled tasks to persist a freshly-created session. */
+  sessionId?: string;
   status: RunStatus;
   seq: number; // monotonic within the run; snapshot/tail dedupe on it
   events: unknown[]; // current in-flight turn only
@@ -132,6 +136,7 @@ export function rekeyRun(oldId: string, newId: string): void {
   const r = registry.get(oldId);
   if (!r) return;
   r.keys.add(newId);
+  r.sessionId = newId; // remember the real session id for post-run recovery
   registry.set(newId, r);
 }
 
@@ -186,6 +191,15 @@ export function getRunSnapshot(
 /** True while a turn is actively running (used by the 409 concurrent-run guard). */
 export function isRunActive(key: string): boolean {
   return registry.get(key)?.status === 'running';
+}
+
+/**
+ * The engine's real sessionId for a run, once revealed via rekeyRun. Returns null
+ * if the run was a plain resume (no rekey) or is no longer in the registry. Read it
+ * within the post-run grace window (same reliability as getRunSnapshot).
+ */
+export function getRunSessionId(key: string): string | null {
+  return registry.get(key)?.sessionId ?? null;
 }
 
 /** Register the detached run's abort fn so the stop endpoint can cancel it. */

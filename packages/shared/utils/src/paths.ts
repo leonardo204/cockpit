@@ -366,3 +366,25 @@ export function withFileLock<T>(filePath: string, fn: () => Promise<T>): Promise
   });
   return run;
 }
+
+/**
+ * Lock-serialized read-modify-write of a JSON file. The lock spans the WHOLE
+ * read→mutate→write cycle so concurrent callers can't interleave and lose each
+ * other's updates (writeJsonFile is non-atomic by design — see above).
+ *
+ * Do NOT call this (or writeJsonFile/withFileLock on the same path) from inside
+ * an existing withFileLock(samePath) block — the lock is a same-path promise
+ * chain and nesting deadlocks.
+ */
+export function mutateJsonFile<T>(
+  filePath: string,
+  defaultValue: T,
+  mutate: (current: T) => T | Promise<T>,
+): Promise<T> {
+  return withFileLock(filePath, async () => {
+    const current = await readJsonFile<T>(filePath, defaultValue);
+    const next = await mutate(current);
+    await writeJsonFile(filePath, next);
+    return next;
+  });
+}

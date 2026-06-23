@@ -9,6 +9,7 @@ import {
   getReviewFilePath,
   readJsonFile,
   writeJsonFile,
+  withFileLock,
   ensureDir,
 } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
@@ -112,44 +113,49 @@ export const POST = handler((req) =>
         await ensureDir(REVIEW_DIR)
         const id = generateReviewId(sourceFile)
         const filePath = getReviewFilePath(id)
-        const existing = await readJsonFile<ReviewData>(
-          filePath,
-          null as unknown as ReviewData
-        )
-        if (existing) {
-          existing.content = content
-          existing.title = title
-          existing.active = true
-          existing.updatedAt = Date.now()
-          await writeJsonFile(filePath, existing)
-          return {
-            id: existing.id,
-            title: existing.title,
-            active: existing.active,
-            createdAt: existing.createdAt,
-            updatedAt: existing.updatedAt,
-            existing: true,
+        // Locked read-modify-write — by-id / comments / replies all lock the same
+        // per-review filePath; without this, re-creating/updating a review here could
+        // overwrite a concurrently-added comment (read happened before the comment write).
+        return await withFileLock(filePath, async () => {
+          const existing = await readJsonFile<ReviewData>(
+            filePath,
+            null as unknown as ReviewData
+          )
+          if (existing) {
+            existing.content = content
+            existing.title = title
+            existing.active = true
+            existing.updatedAt = Date.now()
+            await writeJsonFile(filePath, existing)
+            return {
+              id: existing.id,
+              title: existing.title,
+              active: existing.active,
+              createdAt: existing.createdAt,
+              updatedAt: existing.updatedAt,
+              existing: true,
+            }
           }
-        }
-        const now = Date.now()
-        const data: ReviewData = {
-          id,
-          title,
-          content,
-          sourceFile,
-          active: true,
-          createdAt: now,
-          updatedAt: now,
-          comments: [],
-        }
-        await writeJsonFile(filePath, data)
-        return {
-          id,
-          title,
-          active: true,
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-        }
+          const now = Date.now()
+          const data: ReviewData = {
+            id,
+            title,
+            content,
+            sourceFile,
+            active: true,
+            createdAt: now,
+            updatedAt: now,
+            comments: [],
+          }
+          await writeJsonFile(filePath, data)
+          return {
+            id,
+            title,
+            active: true,
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt,
+          }
+        })
       },
       catch: (cause) =>
         new FSError({ path: REVIEW_DIR, op: "write", cause }),

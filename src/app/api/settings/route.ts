@@ -7,7 +7,7 @@ import { Effect } from "effect"
 import {
   SETTINGS_FILE,
   readJsonFile,
-  writeJsonFile,
+  mutateJsonFile,
 } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError } from "@cockpit/effect-core"
@@ -23,13 +23,6 @@ const readSettings: Effect.Effect<Settings, FSError> = Effect.tryPromise({
     new FSError({ path: SETTINGS_FILE, op: "read", cause }),
 })
 
-const writeSettings = (data: Settings): Effect.Effect<void, FSError> =>
-  Effect.tryPromise({
-    try: () => writeJsonFile(SETTINGS_FILE, data),
-    catch: (cause) =>
-      new FSError({ path: SETTINGS_FILE, op: "write", cause }),
-  })
-
 export const GET = handler(() =>
   Effect.gen(function* () {
     const settings = yield* readSettings
@@ -40,9 +33,17 @@ export const GET = handler(() =>
 export const PUT = handler((req) =>
   Effect.gen(function* () {
     const patch = (yield* parseJsonRaw(req)) as Partial<Settings>
-    const current = yield* readSettings
-    const merged = { ...current, ...patch }
-    yield* writeSettings(merged)
+    // Locked read-merge-write — serializes with push.ts's withFileLock(SETTINGS_FILE)
+    // so a concurrent VAPID-key write can't clobber this merge (and vice versa).
+    const merged = yield* Effect.tryPromise({
+      try: () =>
+        mutateJsonFile<Settings>(SETTINGS_FILE, {}, (current) => ({
+          ...current,
+          ...patch,
+        })),
+      catch: (cause) =>
+        new FSError({ path: SETTINGS_FILE, op: "write", cause }),
+    })
     return ok(merged)
   })
 )

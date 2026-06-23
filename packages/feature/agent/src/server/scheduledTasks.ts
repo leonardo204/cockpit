@@ -1,11 +1,11 @@
 import { existsSync } from 'fs';
 import {
-  SCHEDULED_TASKS_FILE, readJsonFile, writeJsonFile,
+  SCHEDULED_TASKS_FILE, readJsonFile, writeJsonFile, mutateJsonFile, withFileLock,
   getClaudeSessionPath, getClaude2SessionPath, getOllamaSessionPath,
   getDeepseekSessionPath, findCodexSessionPath, findKimiSessionPath,
 } from '@cockpit/shared-utils';
 import { updateGlobalState } from './state/globalState';
-import { isRunActive, getRunSnapshot, requestStop } from './sessionRunHub';
+import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from './sessionRunHub';
 import { Effect } from 'effect';
 import { AgentError, CockpitConfig, type AgentProvider } from '@cockpit/effect-core';
 import { AppRuntime } from '@cockpit/effect-runtime/server';
@@ -126,6 +126,7 @@ export function getNextCronTime(cronExpr: string, after: Date = new Date()): num
 const sendHttpEngineMessageEff = (
   task: ScheduledTask,
   engine: string,
+  startFresh: boolean,
 ): Effect.Effect<boolean, AgentError> =>
   Effect.tryPromise({
     try: async () => {
@@ -140,7 +141,9 @@ const sendHttpEngineMessageEff = (
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: task.message,
-          sessionId: task.sessionId,
+          // Omit sessionId to start a brand-new session when the resume target is gone;
+          // the engine generates a fresh id (captured below via getRunSessionId).
+          ...(startFresh ? {} : { sessionId: task.sessionId }),
           cwd: task.cwd,
           engine, // route uses it for claude2's CLAUDE_CONFIG_DIR; no-op for the others
           ...(task.model && { model: task.model }),
@@ -182,6 +185,17 @@ const sendHttpEngineMessageEff = (
         // before we read it (impossible inside the 60s grace, since the poll exits within
         // 500ms of markRunIdle). Treat as failure — fail closed, not a silent success.
         throw new Error(`${engine} run failed (session ${task.sessionId})`);
+      }
+      // Fresh session: the engine revealed a new id mid-run (rekeyRun). Read it from the
+      // run (key is the provisional runId, still a valid alias) and write it back so the
+      // task resumes the new session next time instead of failing on the gone one. Mutates
+      // task in place — fireTask/fireTaskManual persist it in their saveToDisk that follows.
+      if (startFresh) {
+        const newSessionId = getRunSessionId(key);
+        if (newSessionId && newSessionId !== task.sessionId) {
+          console.warn(`[ScheduledTask] task ${task.id}: rebound session ${task.sessionId} → ${newSessionId}`);
+          task.sessionId = newSessionId;
+        }
       }
       return true as const;
     },
@@ -229,18 +243,18 @@ export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, 
       );
     }
 
+    // Resume target gone (cleared history, session-id rotation, retention pruning,
+    // or codex/kimi glob miss) → don't fail; start a FRESH session running the same
+    // message and write the new session id back to the task (see sendHttpEngineMessageEff).
     const sessionPath = sessionPathFor(engine, task);
-    if (!sessionPath || !existsSync(sessionPath)) {
-      return yield* Effect.fail(
-        new AgentError({
-          provider: (engine === 'claude2' ? 'claude' : engine) as AgentProvider,
-          kind: 'session-not-found',
-          cause: new Error(`session file missing: ${sessionPath ?? `(no session for ${task.sessionId})`} (task ${task.id}, engine ${engine})`),
-        }),
+    const startFresh = !sessionPath || !existsSync(sessionPath);
+    if (startFresh) {
+      console.warn(
+        `[ScheduledTask] resume session missing (${sessionPath ?? `no session for ${task.sessionId}`}) for task ${task.id}, engine ${engine}; starting a fresh session`,
       );
     }
 
-    return yield* sendHttpEngineMessageEff(task, engine);
+    return yield* sendHttpEngineMessageEff(task, engine, startFresh);
   }).pipe(
     Effect.catchAll((err) =>
       Effect.gen(function* () {
@@ -372,10 +386,8 @@ class ScheduledTaskManager {
     await this.ensureInit();
     const fullTask: ScheduledTask = { ...task, port: this.getPort() };
 
-    // Append directly to disk (avoids dual-instance issues)
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    allTasks.push(fullTask);
-    await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    // Append directly to disk (avoids dual-instance issues); locked read-modify-write.
+    await mutateJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, [], (allTasks) => [...allTasks, fullTask]);
 
     // Sync in-memory state (the server.mjs instance needs to set a timer)
     this.tasks.push(fullTask);
@@ -390,13 +402,18 @@ class ScheduledTaskManager {
    */
   async updateTask(id: string, fields: Partial<ScheduledTask>): Promise<ScheduledTask | null> {
     await this.ensureInit();
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    const idx = allTasks.findIndex(t => t.id === id);
-    if (idx === -1) return null;
-
-    const task = { ...allTasks[idx], ...fields };
-    allTasks[idx] = task;
-    await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    // Locked read-modify-write so a concurrent fireTask/saveToDisk can't interleave
+    // and revert this update (or vice-versa).
+    const task = await withFileLock(SCHEDULED_TASKS_FILE, async () => {
+      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
+      const idx = allTasks.findIndex(t => t.id === id);
+      if (idx === -1) return null;
+      const updated = { ...allTasks[idx], ...fields };
+      allTasks[idx] = updated;
+      await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+      return updated;
+    });
+    if (!task) return null;
 
     // Sync in-memory state (the server.mjs instance needs to rebuild its timer)
     const memIdx = this.tasks.findIndex(t => t.id === id);
@@ -415,12 +432,15 @@ class ScheduledTaskManager {
    */
   async deleteTask(id: string): Promise<boolean> {
     await this.ensureInit();
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    const idx = allTasks.findIndex(t => t.id === id);
-    if (idx === -1) return false;
-
-    allTasks.splice(idx, 1);
-    await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    const removed = await withFileLock(SCHEDULED_TASKS_FILE, async () => {
+      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
+      const idx = allTasks.findIndex(t => t.id === id);
+      if (idx === -1) return false;
+      allTasks.splice(idx, 1);
+      await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+      return true;
+    });
+    if (!removed) return false;
 
     // Sync in-memory state
     const memIdx = this.tasks.findIndex(t => t.id === id);
@@ -535,15 +555,17 @@ class ScheduledTaskManager {
   async markReadBySessionId(sessionId: string): Promise<void> {
     await this.ensureInit();
     const port = this.getPort();
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    let changed = false;
-    for (const task of allTasks) {
-      if (task.port === port && task.sessionId === sessionId && task.unread) {
-        task.unread = false;
-        changed = true;
+    await withFileLock(SCHEDULED_TASKS_FILE, async () => {
+      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
+      let changed = false;
+      for (const task of allTasks) {
+        if (task.port === port && task.sessionId === sessionId && task.unread) {
+          task.unread = false;
+          changed = true;
+        }
       }
-    }
-    if (changed) await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+      if (changed) await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    });
   }
 
   /**
@@ -552,15 +574,17 @@ class ScheduledTaskManager {
   async markAllRead(): Promise<void> {
     await this.ensureInit();
     const port = this.getPort();
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    let changed = false;
-    for (const task of allTasks) {
-      if (task.port === port && task.unread) {
-        task.unread = false;
-        changed = true;
+    await withFileLock(SCHEDULED_TASKS_FILE, async () => {
+      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
+      let changed = false;
+      for (const task of allTasks) {
+        if (task.port === port && task.unread) {
+          task.unread = false;
+          changed = true;
+        }
       }
-    }
-    if (changed) await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+      if (changed) await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    });
   }
 
   /**
@@ -568,12 +592,14 @@ class ScheduledTaskManager {
    */
   async reorderTasks(orderedIds: string[]): Promise<void> {
     await this.ensureInit();
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    for (let i = 0; i < orderedIds.length; i++) {
-      const task = allTasks.find(t => t.id === orderedIds[i]);
-      if (task) task.sortIndex = i;
-    }
-    await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    await withFileLock(SCHEDULED_TASKS_FILE, async () => {
+      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
+      for (let i = 0; i < orderedIds.length; i++) {
+        const task = allTasks.find(t => t.id === orderedIds[i]);
+        if (task) task.sortIndex = i;
+      }
+      await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+    });
   }
 
   // ---- Internal ----
@@ -697,10 +723,11 @@ class ScheduledTaskManager {
 
   private async saveToDisk(): Promise<void> {
     try {
-      // Read all tasks (including other ports), merge, then write back
-      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-      const otherTasks = allTasks.filter(t => t.port !== this.port);
-      await writeJsonFile(SCHEDULED_TASKS_FILE, [...otherTasks, ...this.tasks]);
+      // Locked read-merge-write: keep other ports' tasks, replace this port's with
+      // the in-memory set. The lock serializes against updateTask/addTask/etc.
+      await mutateJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, [], (allTasks) =>
+        [...allTasks.filter(t => t.port !== this.port), ...this.tasks],
+      );
     } catch (error) {
       console.error('[ScheduledTaskManager] Failed to save:', error);
     }
