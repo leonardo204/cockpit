@@ -40,26 +40,52 @@ export interface PushPayload {
 // Cache the configured keypair so web-push.setVapidDetails runs once per process.
 let configured: PushVapid | null = null;
 
+// VAPID JWT `sub`. Apple's push service (web.push.apple.com) rejects a `sub`
+// that points at localhost or is otherwise malformed with 403 BadJwtToken —
+// while FCM ignores it, so the failure shows up only on iOS. Must be a valid
+// https: URL or a mailto: with a real (dotted) domain.
+const DEFAULT_SUBJECT = 'https://github.com/Surething-io/cockpit';
+
+function isValidVapidSubject(sub: string | undefined): sub is string {
+  if (!sub || sub.includes('localhost')) return false;
+  if (sub.startsWith('https://')) return true;
+  const m = /^mailto:[^\s@]+@([^\s@]+)$/.exec(sub);
+  return !!m && m[1].includes('.');
+}
+
 /**
  * Get the VAPID keypair, generating + persisting it on first use. Merges into
- * settings.json without clobbering other sections.
+ * settings.json without clobbering other sections. Also migrates a previously
+ * persisted invalid subject (e.g. the old mailto:cockpit@localhost default that
+ * broke Apple/iOS delivery) to a valid one.
  */
 export async function getVapid(): Promise<PushVapid> {
   if (configured) return configured;
   const vapid = await withFileLock(SETTINGS_FILE, async () => {
     const settings = await readJsonFile<Settings>(SETTINGS_FILE, {});
     if (settings.push?.publicKey && settings.push?.privateKey) {
+      const subject = isValidVapidSubject(settings.push.subject)
+        ? settings.push.subject
+        : DEFAULT_SUBJECT;
+      // Heal a bad persisted subject in place so iOS pushes stop getting
+      // rejected — the keypair is untouched, so existing subscriptions stay valid.
+      if (subject !== settings.push.subject) {
+        await writeJsonFile(SETTINGS_FILE, {
+          ...settings,
+          push: { ...settings.push, subject },
+        });
+      }
       return {
         publicKey: settings.push.publicKey,
         privateKey: settings.push.privateKey,
-        subject: settings.push.subject || 'mailto:cockpit@localhost',
+        subject,
       };
     }
     const keys = webpush.generateVAPIDKeys();
     const push: PushVapid = {
       publicKey: keys.publicKey,
       privateKey: keys.privateKey,
-      subject: 'mailto:cockpit@localhost',
+      subject: DEFAULT_SUBJECT,
     };
     await writeJsonFile(SETTINGS_FILE, { ...settings, push });
     return push;
@@ -119,8 +145,18 @@ export async function sendPushNotification(
         await webpush.sendNotification(sub, body);
         sent++;
       } catch (e) {
-        const code = (e as { statusCode?: number })?.statusCode;
-        if (code === 404 || code === 410) dead.push(sub.endpoint);
+        const err = e as { statusCode?: number; body?: string; message?: string };
+        const code = err?.statusCode;
+        if (code === 404 || code === 410) {
+          dead.push(sub.endpoint);
+        } else {
+          // Don't swallow other failures silently — e.g. Apple returns 403
+          // BadJwtToken for a malformed VAPID subject. Log host + reason so the
+          // cause is diagnosable without re-instrumenting.
+          let host = sub.endpoint;
+          try { host = new URL(sub.endpoint).host; } catch { /* keep raw */ }
+          console.error(`[push] send failed (${code ?? '?'}) to ${host}: ${err?.body || err?.message || 'unknown'}`);
+        }
       }
     }),
   );
