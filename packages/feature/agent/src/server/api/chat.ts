@@ -230,16 +230,36 @@ export const POST = handler((request) =>
             // bun-compiled native build, Grep/Glob must be listed in `tools`/allowedTools
             // to stay registered — not a concern here since we run via the node CLI.
             // Permission mode: 'plan' (read-only planning, no edits) when the client
-            // requests it; otherwise skip all permission checks. Plan mode has no
-            // canUseTool wired up — the SDK auto-denies ExitPlanMode and ends the turn
-            // cleanly ("plan-only"): the user reads the plan, then unchecks plan mode
-            // and resends to implement.
+            // requests it; otherwise skip all permission checks.
             permissionMode: (permissionMode === 'plan' ? 'plan' : 'bypassPermissions') as
               | 'plan'
               | 'bypassPermissions',
             // allowDangerouslySkipPermissions only applies to bypassPermissions; it must
             // NOT be set in plan mode or it would defeat the read-only enforcement.
             ...(permissionMode !== 'plan' && { allowDangerouslySkipPermissions: true as const }),
+            // Plan mode: intercept ExitPlanMode so the turn ends cleanly the FIRST time the
+            // model presents its plan. Without this, the SDK echoes the "Exit plan mode?"
+            // permission prompt back as an is_error tool_result; the model reads it as "the
+            // user must approve in a dialog" and loops — repeatedly begging the user to click
+            // an approval popup that does not exist in this UI. There is NO in-session approval
+            // here by design: the plan is surfaced as a card and the user approves via the
+            // card button (which turns off plan mode and resends → executes under
+            // bypassPermissions). deny+interrupt stops the turn at the first ExitPlanMode;
+            // every other tool falls through to allow, leaving plan mode's own read-only
+            // enforcement to block writes.
+            ...(permissionMode === 'plan' && {
+              canUseTool: (async (toolName: string, input: Record<string, unknown>) => {
+                if (toolName === 'ExitPlanMode') {
+                  return {
+                    behavior: 'deny' as const,
+                    message:
+                      'Plan presented to the user. There is no approval dialog to click in this environment — the user approves by turning off Plan mode (via the plan card button) and resending, which then executes. Do not ask the user to confirm in a popup; stop here.',
+                    interrupt: true,
+                  };
+                }
+                return { behavior: 'allow' as const, updatedInput: input };
+              }),
+            }),
             // Enable streaming text blocks
             includePartialMessages: true,
             // Enable 1M token context window (beta) - resolves "Prompt is too long"

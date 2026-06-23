@@ -34,6 +34,8 @@ interface MessageListProps {
   onFork?: (messageId: string) => void;
   isActive?: boolean; // Whether the tab is active (handles scroll issues for hidden tabs)
   onContentSearch?: (query: string) => void; // Selected text → project-wide search
+  /** Plan mode: approve the presented plan → turn off plan mode and resend to execute */
+  onApprovePlan?: () => void;
 }
 
 // Methods exposed to parent component
@@ -42,7 +44,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, engine, apiRetryInfo, ptyNotice, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onContentSearch },
+  { messages, isLoading, cwd, sessionId, engine, apiRetryInfo, ptyNotice, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onContentSearch, onApprovePlan },
   ref
 ) {
   const { t } = useTranslation();
@@ -414,6 +416,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   cwd={cwd}
                   sessionId={sessionId}
                   onFork={onFork}
+                  onApprovePlan={onApprovePlan}
+                  isLoading={isLoading}
                 />
               </div>
             ))}

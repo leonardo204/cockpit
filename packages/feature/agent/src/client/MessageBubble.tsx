@@ -88,6 +88,10 @@ interface MessageBubbleProps {
   cwd?: string;
   sessionId?: string | null;
   onFork?: (messageId: string) => void;
+  /** Plan mode: approve the plan card → turn off plan mode and resend to execute */
+  onApprovePlan?: () => void;
+  /** Disable the approve button while a run is streaming (no concurrent send) */
+  isLoading?: boolean;
 }
 
 // Threshold for collapsing tool calls — any tool call (≥1) renders inside a collapsible header,
@@ -95,7 +99,7 @@ interface MessageBubbleProps {
 const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
@@ -375,6 +379,24 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                 <div className="px-3 py-2">
                   <MarkdownRenderer content={planCard} isUser={false} enableMath={false} />
                 </div>
+                {/* Approve & run: the in-UI replacement for the (non-existent) "Exit plan
+                    mode?" approval dialog. Turns off plan mode and resends to execute.
+                    Disabled while a run streams (one active run per session). */}
+                {onApprovePlan && (
+                  <div className="px-3 py-2 border-t border-border flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {t('chat.planApproveHint', { defaultValue: '本环境无审批弹窗，点此退出 Plan 并执行' })}
+                    </span>
+                    <button
+                      onClick={() => onApprovePlan()}
+                      disabled={isLoading}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-brand text-white text-xs font-medium hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                    >
+                      <span>✓</span>
+                      <span>{t('chat.approvePlan', { defaultValue: '批准并执行' })}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}

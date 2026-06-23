@@ -175,7 +175,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
           toast(t('chat.planModeOn', { defaultValue: 'Plan mode on' }), 'success');
         } else {
           setPlanMode(true);
-          handleSend(rest, images);
+          // Explicit override: setPlanMode(true) above won't be reflected in handleSend's
+          // closure this tick (React state is async), so force plan mode for this send.
+          handleSend(rest, images, { permissionMode: 'plan' });
         }
         return;
       }
@@ -205,6 +207,19 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     }
     handleSend(content, images);
   }, [handleSend, initialCwd, t, isClaudeEngine, chatMode, setPlanMode]);
+
+  // Plan-card "approve & run": the user's approval for the presented plan. Persistent off —
+  // the Plan toggle visibly turns off and stays off for subsequent turns (mirrors native
+  // Claude Code's ExitPlanMode, and the documented "uncheck and resend" flow). The override
+  // forces a non-plan execution THIS turn regardless of the async toggle update.
+  const handleApprovePlan = useCallback(() => {
+    setPlanMode(false);
+    handleSend(
+      t('chat.approvePlanPrompt', { defaultValue: '已批准，按上述计划开始执行。' }),
+      undefined,
+      { permissionMode: null }
+    );
+  }, [handleSend, setPlanMode, t]);
 
   // History hook
   // #10: whether useLiveStream is actively rendering a live run for this tab. Declared
@@ -522,6 +537,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
             onFork={handleFork}
             isActive={isActive}
             onContentSearch={onContentSearch}
+            onApprovePlan={handleApprovePlan}
           />
         )}
 

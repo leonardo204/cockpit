@@ -55,7 +55,11 @@ interface UseChatStreamReturn {
   rateLimitInfo: RateLimitInfo | null;
   apiRetryInfo: ApiRetryInfo | null;
   ptyNotice: string | null;
-  handleSend: (content: string, images?: ImageInfo[]) => Promise<void>;
+  handleSend: (
+    content: string,
+    images?: ImageInfo[],
+    overrides?: { permissionMode?: 'plan' | null }
+  ) => Promise<void>;
   handleStop: () => void;
   abortControllerRef: React.RefObject<AbortController | null>;
 }
@@ -377,7 +381,20 @@ export function useChatStream(
 
   // Send message
   const handleSend = useCallback(
-    async (content: string, images?: ImageInfo[]) => {
+    async (
+      content: string,
+      images?: ImageInfo[],
+      overrides?: { permissionMode?: 'plan' | null }
+    ) => {
+      // Per-send permission override. `overrides` is an ARGUMENT (not closure state),
+      // so it is always current — unlike `planMode`, which a same-tick setPlanMode(false)
+      // does not yet reflect (React state is async). The plan-card "approve & run" button
+      // relies on this to force a non-plan resend in the same event that turns the toggle
+      // off. When no override is passed, fall back to the live planMode toggle.
+      const usePlanMode =
+        overrides && 'permissionMode' in overrides
+          ? overrides.permissionMode === 'plan'
+          : planMode;
       // Convert image format
       const messageImages: MessageImage[] | undefined = images?.map((img) => ({
         type: 'base64' as const,
@@ -440,7 +457,7 @@ export function useChatStream(
             ...(usePty && { mode: 'pty', ptyCols: PTY_COLS, ptyRows: PTY_ROWS }),
             // Plan mode: only meaningful in SDK mode on a claude engine (PTY has its own
             // Shift+Tab plan). When unchecked, omit → server defaults to bypassPermissions.
-            ...(planMode && !usePty && isClaudeEngine && { permissionMode: 'plan' }),
+            ...(usePlanMode && !usePty && isClaudeEngine && { permissionMode: 'plan' }),
           }),
         });
 
