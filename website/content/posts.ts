@@ -32,6 +32,92 @@ export interface Post {
 
 export const posts: Post[] = [
   {
+    slug: 'cockpit-on-your-phone',
+    date: '2026-06-23',
+    keywords: [
+      'mobile AI agent',
+      'monitor coding agent on phone',
+      'web push notifications',
+      'Claude Code GUI mobile',
+      'agent monitoring',
+      'mobile layout',
+      '移动端',
+      '手机监控 agent',
+      '推送通知',
+      'Claude Code GUI',
+      'OpenCockpit',
+      'Cockpit',
+    ],
+    content: {
+      en: {
+        title: 'Cockpit on your phone',
+        description:
+          'Cockpit now has a mobile layout. Open it on your phone to see your sessions, open any chat, and receive a notification when a run finishes.',
+        readingTime: '2 min read',
+        body: `Agents often keep running after you've left your desk. Until now, checking on them meant coming back to a computer. This release adds a mobile layout and notifications, so you can check on your sessions from your phone.
+
+## A mobile layout
+
+When you open Cockpit on a phone, it shows a single-column layout instead of the desktop's three panels. On a tablet, you can switch to the desktop layout if you prefer it.
+
+## Your sessions
+
+The first screen lists your recent sessions and updates as their status changes. A **Frequent** tab keeps the sessions you use often in one place. Tap a session to open its chat, with full history and live streaming, and send messages from a touch input.
+
+| On mobile | What it does |
+|---|---|
+| Session list | Shows recent sessions and their current status |
+| Chat | Full history, live streaming, touch input |
+| Diffs & previews | Open fullscreen, with a collapsible file tree |
+
+## Notifications
+
+Turn on notifications and Cockpit sends one to your phone when a run finishes, including when the app is closed. It doesn't require any extra accounts or setup.
+
+## Try it
+
+Update Cockpit and open it on your phone. Turn on notifications and start a run.
+
+---
+
+**Try it:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [Try Online](/try)`,
+      },
+      zh: {
+        title: '在手机上用 Cockpit',
+        description:
+          'Cockpit 新增了移动端布局。在手机上打开,可以查看会话、打开任意聊天,并在一轮跑完时收到通知。',
+        readingTime: '阅读约 2 分钟',
+        body: `Agent 经常在你离开桌前之后还在跑。在此之前,查看它们得回到电脑前。这个版本新增了移动端布局和通知,你可以在手机上查看自己的会话。
+
+## 移动端布局
+
+在手机上打开 Cockpit 时,显示的是单栏布局,而不是桌面的三栏。在平板上,如果你更习惯桌面布局,可以切换过去。
+
+## 你的会话
+
+第一屏列出你的最近会话,会随状态变化更新。一个 **常用会话** 标签,把你常用的会话集中在一处。点一个会话就打开它的聊天,包含完整历史和实时流式,可以用触屏输入框发消息。
+
+| 移动端 | 作用 |
+|---|---|
+| 会话列表 | 显示最近会话及其当前状态 |
+| 聊天 | 完整历史、实时流式、触屏输入 |
+| Diff 与预览 | 全屏打开,文件树可折叠 |
+
+## 通知
+
+打开通知后,一轮跑完 Cockpit 会发一条到你手机上,app 关闭时也会发。不需要额外账号或配置。
+
+## 试一下
+
+更新 Cockpit,在手机上打开。打开通知,发起一轮任务。
+
+---
+
+**试一下:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [在线体验](/try)`,
+      },
+    },
+  },
+  {
     slug: 'orchestrate-workflows-in-chat',
     date: '2026-06-18',
     keywords: [
