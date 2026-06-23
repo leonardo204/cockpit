@@ -35,9 +35,13 @@ export interface ScheduledTask {
   unread?: boolean;
   lastFiredAt?: number;
   lastResult?: 'success' | 'error';
+  consecutiveFailures?: number; // resets on success; recurring tasks auto-pause at the threshold
   createdAt: number;
   sortIndex?: number;
 }
+
+/** Recurring tasks auto-pause after this many consecutive failures (circuit breaker). */
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 // ============================================
 // Cron Parser (minimal, supports: min hour dom month dow)
@@ -481,7 +485,10 @@ class ScheduledTaskManager {
       }
     }
 
-    return this.updateTask(id, { paused: false, nextFireTime });
+    // Reset the failure counter so a resumed task (incl. one auto-paused by the
+    // circuit breaker) gets a fresh set of attempts instead of re-tripping on the
+    // first failure.
+    return this.updateTask(id, { paused: false, nextFireTime, consecutiveFailures: 0 });
   }
 
   /**
@@ -529,6 +536,9 @@ class ScheduledTaskManager {
 
       task.lastFiredAt = Date.now();
       task.lastResult = success ? 'success' : 'error';
+      // Track the counter (a manual success clears the breaker) but never auto-pause on a
+      // user-initiated trigger — only the scheduled path trips the circuit breaker.
+      task.consecutiveFailures = success ? 0 : (task.consecutiveFailures ?? 0) + 1;
       task.unread = true;
 
       // Manual trigger does not change completed / nextFireTime; preserves the existing schedule
@@ -698,10 +708,23 @@ class ScheduledTaskManager {
       // Update state
       task.lastFiredAt = Date.now();
       task.lastResult = success ? 'success' : 'error';
+      task.consecutiveFailures = success ? 0 : (task.consecutiveFailures ?? 0) + 1;
       task.unread = true;
+
+      // Circuit breaker: stop a recurring task that keeps failing (e.g. persistent
+      // rate-limit / route-down) instead of retrying forever. The jsonl-missing case
+      // self-heals (fresh session), so this guards the *other* persistent failures.
+      const tripped =
+        !success && (task.consecutiveFailures ?? 0) >= MAX_CONSECUTIVE_FAILURES;
 
       if (task.type === 'once') {
         task.completed = true;
+      } else if (tripped) {
+        task.paused = true;
+        this.clearTimer(id);
+        console.warn(
+          `[ScheduledTask] auto-paused task ${id} after ${task.consecutiveFailures} consecutive failures`,
+        );
       } else if (task.type === 'interval' && task.intervalMinutes) {
         task.nextFireTime = Date.now() + task.intervalMinutes * 60000;
         this.scheduleTask(task);

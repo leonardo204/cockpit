@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import {
   getProjectSettingsPath,
   readJsonFile,
-  writeJsonFile,
+  mutateJsonFile,
 } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
@@ -59,14 +59,13 @@ export const POST = handler((req) =>
     }
     const { cwd, settings } = body
     const settingsPath = getProjectSettingsPath(cwd)
+    // Locked read-merge-write so concurrent settings updates don't clobber each other.
     yield* Effect.tryPromise({
-      try: async () => {
-        const existing = await readJsonFile<ProjectSettings>(
-          settingsPath,
-          DEFAULT_SETTINGS
-        )
-        await writeJsonFile(settingsPath, { ...existing, ...settings })
-      },
+      try: () =>
+        mutateJsonFile<ProjectSettings>(settingsPath, DEFAULT_SETTINGS, (existing) => ({
+          ...existing,
+          ...settings,
+        })),
       catch: (cause) =>
         new FSError({ path: settingsPath, op: "write", cause }),
     })

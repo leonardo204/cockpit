@@ -8,6 +8,7 @@ import {
   getRecentFilesPath,
   readJsonFile,
   writeJsonFile,
+  withFileLock,
 } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
@@ -72,24 +73,27 @@ export const POST = handler((req) =>
     }
     const { cwd, file, scrollLine, cursorLine, cursorCol } = body
     const filePath = getRecentFilesPath(cwd)
-    let files = yield* readRecent(cwd)
-
-    const hasPosition = scrollLine != null || cursorLine != null
-    if (hasPosition) {
-      const idx = files.findIndex((f) => f.path === file)
-      if (idx !== -1) {
-        if (scrollLine != null) files[idx].scrollLine = scrollLine
-        if (cursorLine != null) files[idx].cursorLine = cursorLine
-        if (cursorCol != null) files[idx].cursorCol = cursorCol
-      }
-    } else {
-      files = files.filter((f) => f.path !== file)
-      files.unshift({ path: file })
-      files = files.slice(0, MAX_RECENT_FILES)
-    }
-
-    yield* Effect.tryPromise({
-      try: () => writeJsonFile(filePath, files),
+    // Locked read-modify-write so concurrent recent-file updates don't clobber each other.
+    const files = yield* Effect.tryPromise({
+      try: () =>
+        withFileLock(filePath, async () => {
+          let files = normalize(await readJsonFile<unknown[]>(filePath, []))
+          const hasPosition = scrollLine != null || cursorLine != null
+          if (hasPosition) {
+            const idx = files.findIndex((f) => f.path === file)
+            if (idx !== -1) {
+              if (scrollLine != null) files[idx].scrollLine = scrollLine
+              if (cursorLine != null) files[idx].cursorLine = cursorLine
+              if (cursorCol != null) files[idx].cursorCol = cursorCol
+            }
+          } else {
+            files = files.filter((f) => f.path !== file)
+            files.unshift({ path: file })
+            files = files.slice(0, MAX_RECENT_FILES)
+          }
+          await writeJsonFile(filePath, files)
+          return files
+        }),
       catch: (cause) => new FSError({ path: filePath, op: "write", cause }),
     })
 

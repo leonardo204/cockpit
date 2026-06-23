@@ -8,6 +8,7 @@ import {
   getCommentsFilePath,
   readJsonFile,
   writeJsonFile,
+  withFileLock,
 } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import {
@@ -41,16 +42,6 @@ const readComments = (
       }),
     catch: (cause) =>
       new FSError({ path: getCommentsFilePath(cwd), op: "read", cause }),
-  })
-
-const writeComments = (
-  cwd: string,
-  data: CommentsData
-): Effect.Effect<void, FSError> =>
-  Effect.tryPromise({
-    try: () => writeJsonFile(getCommentsFilePath(cwd), data),
-    catch: (cause) =>
-      new FSError({ path: getCommentsFilePath(cwd), op: "write", cause }),
   })
 
 export const GET = handler((req) =>
@@ -98,7 +89,7 @@ export const POST = handler((req) =>
       )
     }
     const { cwd, filePath, startLine, endLine, content, selectedText } = body
-    const data = yield* readComments(cwd)
+    const path = getCommentsFilePath(cwd)
     const newComment: CodeComment = {
       id: `comment-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       filePath,
@@ -108,8 +99,16 @@ export const POST = handler((req) =>
       ...(selectedText ? { selectedText } : {}),
       createdAt: Date.now(),
     }
-    data.comments.push(newComment)
-    yield* writeComments(cwd, data)
+    // Locked read-modify-write so concurrent comment adds/deletes don't clobber each other.
+    yield* Effect.tryPromise({
+      try: () =>
+        withFileLock(path, async () => {
+          const data = await readJsonFile<CommentsData>(path, { comments: [] })
+          data.comments.push(newComment)
+          await writeJsonFile(path, data)
+        }),
+      catch: (cause) => new FSError({ path, op: "write", cause }),
+    })
     return ok({ comment: newComment })
   })
 )
@@ -130,20 +129,27 @@ export const PUT = handler((req) =>
       )
     }
     const { cwd, id, content } = body
-    const data = yield* readComments(cwd)
-    const idx = data.comments.findIndex((c) => c.id === id)
-    if (idx === -1) {
-      return yield* Effect.fail(
-        new NotFoundError({ resource: "comment", id })
-      )
+    const path = getCommentsFilePath(cwd)
+    const updated = yield* Effect.tryPromise({
+      try: () =>
+        withFileLock(path, async () => {
+          const data = await readJsonFile<CommentsData>(path, { comments: [] })
+          const idx = data.comments.findIndex((c) => c.id === id)
+          if (idx === -1) return null
+          data.comments[idx] = {
+            ...data.comments[idx],
+            content,
+            updatedAt: Date.now(),
+          }
+          await writeJsonFile(path, data)
+          return data.comments[idx]
+        }),
+      catch: (cause) => new FSError({ path, op: "write", cause }),
+    })
+    if (!updated) {
+      return yield* Effect.fail(new NotFoundError({ resource: "comment", id }))
     }
-    data.comments[idx] = {
-      ...data.comments[idx],
-      content,
-      updatedAt: Date.now(),
-    }
-    yield* writeComments(cwd, data)
-    return ok({ comment: data.comments[idx] })
+    return ok({ comment: updated })
   })
 )
 
@@ -158,8 +164,12 @@ export const DELETE = handler((req) =>
         new ValidationError({ field: "cwd", reason: "missing" })
       )
     }
+    const path = getCommentsFilePath(cwd)
     if (all === "true") {
-      yield* writeComments(cwd, { comments: [] })
+      yield* Effect.tryPromise({
+        try: () => withFileLock(path, () => writeJsonFile(path, { comments: [] })),
+        catch: (cause) => new FSError({ path, op: "write", cause }),
+      })
       return ok({ success: true })
     }
     if (!id) {
@@ -167,15 +177,21 @@ export const DELETE = handler((req) =>
         new ValidationError({ field: "id", reason: "missing" })
       )
     }
-    const data = yield* readComments(cwd)
-    const idx = data.comments.findIndex((c) => c.id === id)
-    if (idx === -1) {
-      return yield* Effect.fail(
-        new NotFoundError({ resource: "comment", id })
-      )
+    const removed = yield* Effect.tryPromise({
+      try: () =>
+        withFileLock(path, async () => {
+          const data = await readJsonFile<CommentsData>(path, { comments: [] })
+          const idx = data.comments.findIndex((c) => c.id === id)
+          if (idx === -1) return false
+          data.comments.splice(idx, 1)
+          await writeJsonFile(path, data)
+          return true
+        }),
+      catch: (cause) => new FSError({ path, op: "write", cause }),
+    })
+    if (!removed) {
+      return yield* Effect.fail(new NotFoundError({ resource: "comment", id }))
     }
-    data.comments.splice(idx, 1)
-    yield* writeComments(cwd, data)
     return ok({ success: true })
   })
 )
