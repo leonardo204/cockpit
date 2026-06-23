@@ -780,6 +780,23 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
     setActiveTab('tree');
   }, [fileTree]);
 
+  // One-shot anchor to scroll to after a markdown-link cross-file navigation.
+  const [mdLinkAnchor, setMdLinkAnchor] = useState<string | null>(null);
+
+  // Open a local .md link target in-place: load + preview it, highlight it in
+  // the file tree, and (if the link had a #anchor) scroll there after render.
+  const handleOpenMarkdownLink = useCallback((targetRel: string, anchor: string | null) => {
+    fileTree.setPreviewMarkdown(true);     // defensive — ensure in-place preview
+    handleSelectFileWithSave(targetRel);   // load + preview (with edit-save guard)
+    locateInTree(targetRel);               // expand + select + scroll → tree highlight
+    setMdLinkAnchor(anchor);
+    if (anchor) {
+      // Clear after the target preview's scroll effect (~80ms) has consumed it,
+      // so later re-renders of the same file don't re-scroll.
+      setTimeout(() => setMdLinkAnchor(null), 400);
+    }
+  }, [fileTree, handleSelectFileWithSave, locateInTree]);
+
   return (
     <MenuContainerProvider container={menuContainer}>
       <div ref={menuContainerRef} className="bg-card w-full h-full flex flex-col relative">
@@ -1693,8 +1710,10 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                               BlockViewer header itself has the reverse
                               "Code" button to come back. We don't render
                               an "active" state here because this button is
-                              physically gone when Code Map mode is on. */}
-                          {fileTree.fileContent?.type === 'text' && (
+                              physically gone when Code Map mode is on.
+                              Hidden for markdown — code-structure map is
+                              meaningless for prose. */}
+                          {fileTree.fileContent?.type === 'text' && !isMarkdownFile(fileTree.selectedPath) && (
                             <button
                               onClick={() => setEditorMode('map')}
                               className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
@@ -1749,6 +1768,8 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                               filePath={fileTree.selectedPath}
                               cwd={cwd}
                               embedded
+                              onLocalMdLink={handleOpenMarkdownLink}
+                              scrollToAnchor={mdLinkAnchor}
                             />
                           </div>
                         ) : (

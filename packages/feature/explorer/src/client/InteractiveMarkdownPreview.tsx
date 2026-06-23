@@ -12,6 +12,8 @@ import { useAIBridge } from '@cockpit/shared-ui';
 import { fetchAllCommentsWithCode, clearAllComments, buildAIMessage, type CodeReference } from '@cockpit/feature-comments';
 import { MarkdownRenderer } from '@cockpit/shared-ui';
 import { rehypeSourceLines } from '@cockpit/shared-ui';
+import { scrollToHeadingAnchor } from '@cockpit/shared-ui';
+import { isMarkdownFile, resolveRelativePath } from './toolCallUtils';
 import type { CodeComment } from '@cockpit/feature-comments';
 import { TocSidebar } from '@cockpit/shared-ui';
 import { ShareReviewToggle } from '@cockpit/feature-review';
@@ -34,6 +36,13 @@ interface InteractiveMarkdownPreviewProps {
    *  and makes ESC a no-op for closing — the host owns the on/off control. Defaults to false
    *  so the modal call sites (agent chat, diff view) keep their current behavior. */
   embedded?: boolean;
+  /** Explorer-only: open a local .md link target in-place. Receives the resolved
+   *  cwd-relative path and an optional `#anchor`. Omitted in agent chat / diff,
+   *  where local links keep their default browser behavior. */
+  onLocalMdLink?: (targetRel: string, anchor: string | null) => void;
+  /** Explorer-only: after a cross-file link navigation, scroll to this heading
+   *  anchor once the new content has rendered. One-shot; cleared by the host. */
+  scrollToAnchor?: string | null;
 }
 
 interface InputCardData {
@@ -78,6 +87,8 @@ export function InteractiveMarkdownPreview({
   onClose,
   sourceFile: sourceFileProp,
   embedded = false,
+  onLocalMdLink,
+  scrollToAnchor,
 }: InteractiveMarkdownPreviewProps) {
   // Derive sourceFile (relative path)
   const sourceFile = sourceFileProp
@@ -107,6 +118,33 @@ export function InteractiveMarkdownPreview({
   useEffect(() => {
     if (containerRef.current !== containerEl) setContainerEl(containerRef.current);
   });
+
+  // Intercept markdown links → open local .md targets in-place (explorer only).
+  // Returns true when consumed so MarkdownRenderer prevents browser navigation.
+  const handleLinkClick = useCallback((href: string): boolean => {
+    if (!onLocalMdLink) return false;
+    // External schemes (http(s):, mailto:, tel:, ...) → leave to the browser.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
+    const hashIdx = href.indexOf('#');
+    const pathPart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+    const anchor = hashIdx >= 0 ? href.slice(hashIdx + 1) : null;
+    if (!pathPart) return false; // pure #anchor — handled inside MarkdownRenderer
+    let decoded = pathPart;
+    try { decoded = decodeURIComponent(pathPart); } catch { /* keep raw */ }
+    if (!isMarkdownFile(decoded)) return false; // only .md is in scope
+    onLocalMdLink(resolveRelativePath(sourceFile, decoded), anchor);
+    return true;
+  }, [onLocalMdLink, sourceFile]);
+
+  // After a cross-file link navigation, scroll to the requested heading once
+  // the new content has rendered. Keyed on content so it fires post-switch.
+  useEffect(() => {
+    if (!scrollToAnchor) return;
+    const timer = setTimeout(() => {
+      scrollToHeadingAnchor(containerRef.current, scrollToAnchor);
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [scrollToAnchor, content]);
   const { toolbarRef: floatingToolbarRef, bumpRef: bumpToolbarRef, clearToolbar } = useSelectionToolbar({
     enabled: true,
     container: containerEl,
@@ -335,6 +373,7 @@ export function InteractiveMarkdownPreview({
             <MarkdownRenderer
               content={content}
               rehypePlugins={REHYPE_PLUGINS}
+              onLinkClick={handleLinkClick}
             />
           </div>
 

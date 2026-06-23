@@ -186,6 +186,29 @@ export function isMarkdownFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith('.md');
 }
 
+/**
+ * Resolve a markdown link target against the directory of the current file,
+ * returning a cwd-relative path (the form handleSelectFile / locateInTree use).
+ *
+ * - `baseRel`: cwd-relative path of the file the link lives in (e.g. "docs/a.md")
+ * - `href`: link target — relative ("./b.md", "../c.md", "b.md") or root-absolute
+ *   ("/docs/d.md", treated as relative to the repo root / cwd).
+ *
+ * Browser-safe (no node `path`). Collapses '.' and '..' segments.
+ */
+export function resolveRelativePath(baseRel: string, href: string): string {
+  // Root-absolute links resolve from cwd root; otherwise from baseRel's dir.
+  const segs = href.startsWith('/')
+    ? []
+    : baseRel.split('/').slice(0, -1); // dirname(baseRel)
+  for (const part of href.replace(/^\//, '').split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') segs.pop();
+    else segs.push(part);
+  }
+  return segs.join('/');
+}
+
 // ============================================
 // File path extraction
 // ============================================

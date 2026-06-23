@@ -15,6 +15,7 @@ export * from './ThemeProvider';
 
 // Markdown
 export * from './MarkdownRenderer';
+export * from './markdownLinks';
 
 // Floating UI primitives
 export * from './FloatingToolbar';
