@@ -180,13 +180,15 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
       if (tab.sessionId && tab.deepseekModel) {
         deepseekModels[tab.sessionId] = tab.deepseekModel;
       }
-      // only persist non-default values (pty); 'sdk' is the default and isn't written
-      if (tab.sessionId && tab.chatMode === 'pty') {
-        chatModes[tab.sessionId] = tab.chatMode;
-      }
-      // only persist when enabled; default (false/unset) isn't written
-      if (tab.sessionId && tab.planMode) {
-        planModes[tab.sessionId] = true;
+      // Persist the explicit value for sessions THIS tab has open, so switching
+      // back to the default actually overrides a previously-saved non-default.
+      // The server merge is a union — an absent key keeps the old value, which
+      // made "off"/"sdk" un-persistable (toggle off → key omitted → stale value
+      // survives → re-applied on reload). Sessions open only in OTHER tabs aren't
+      // in this payload, so the union still preserves their settings.
+      if (tab.sessionId) {
+        chatModes[tab.sessionId] = tab.chatMode === 'pty' ? 'pty' : 'sdk';
+        planModes[tab.sessionId] = !!tab.planMode;
       }
     }
 
