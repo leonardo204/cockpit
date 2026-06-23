@@ -49,6 +49,13 @@ export const GET = dynamicHandler<Params, NotFoundError | FSError>(
           new NotFoundError({ resource: "review", id })
         )
       }
+      // Closed sharing must revoke viewing: a deactivated review is treated as
+      // not found, so previously-copied /review/{id} links stop working too.
+      if (review.active === false) {
+        return yield* Effect.fail(
+          new NotFoundError({ resource: "review", id })
+        )
+      }
       return ok({ review })
     })
 )

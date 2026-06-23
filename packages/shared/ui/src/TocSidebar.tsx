@@ -31,7 +31,9 @@ export function extractToc(content: string): TocItem[] {
     if (match) {
       items.push({
         level: match[1].length,
-        text: match[2].replace(/\s*#+\s*$/, ''),
+        text: match[2]
+          .replace(/\s*#+\s*$/, '')             // strip ATX closing #'s
+          .replace(/\\([!-\/:-@[-`{-~])/g, '$1'), // unescape markdown backslash escapes (e.g. "1\." → "1.")
         sourceLine: i + 1,
       });
     }

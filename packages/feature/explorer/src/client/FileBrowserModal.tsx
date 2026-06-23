@@ -29,6 +29,7 @@ import { CodeViewer } from '@cockpit/feature-explorer';
 import { isMarkdownFile, formatAsHumanReadable } from './toolCallUtils';
 import { buildTreeFromPaths, collectAllDirPaths, mergeFileTree } from './fileBrowser/utils';
 import { InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
+import { ShareReviewToggle } from '@cockpit/feature-review';
 import { type FileEditorHandle } from './FileEditorModal';
 import { QuickFileOpen } from './QuickFileOpen';
 import { useWebSocket } from '@cockpit/shared-ui';
@@ -1600,18 +1601,18 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                         </>
                       ) : (
                         <>
-                          {/* View mode: copy/edit/preview/blame */}
-                          {fileTree.fileContent?.type === 'text' && fileTree.fileContent.content && (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(fileTree.fileContent!.content!);
-                                toast(t('toast.copiedFileContent'));
-                              }}
-                              className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
-                              title={t('fileBrowser.copyFileContent')}
-                            >
-                              {t('common.copy')}
-                            </button>
+                          {/* View mode order: share · readable/preview · blame · copy · codemap · edit */}
+                          {/* Share first — markdown only. Style left unchanged (this component
+                              is shared with the agent-chat / diff-view preview headers). */}
+                          {fileTree.fileContent?.type === 'text' && isMarkdownFile(fileTree.selectedPath) && (
+                            <ShareReviewToggle
+                              content={fileTree.fileContent.content || ''}
+                              sourceFile={
+                                fileTree.selectedPath && cwd && fileTree.selectedPath.startsWith(cwd)
+                                  ? fileTree.selectedPath.slice(cwd.endsWith('/') ? cwd.length : cwd.length + 1)
+                                  : (fileTree.selectedPath || '')
+                              }
+                            />
                           )}
                           {fileTree.selectedPath?.endsWith('.json') && fileTree.fileContent?.type === 'text' && (
                             <button
@@ -1627,15 +1628,24 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                             </button>
                           )}
                           {fileTree.fileContent?.type === 'text' && isMarkdownFile(fileTree.selectedPath) && (
+                            <>
+                              {/* Global preview toggle: ON → main editor area renders the
+                                  markdown in-place (replacing CodeViewer); state persists
+                                  across file switches. */}
                               <button
-                                onClick={() => fileTree.setShowMarkdownPreview(true)}
-                                className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
+                                onClick={() => fileTree.setPreviewMarkdown(v => !v)}
+                                className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
+                                  fileTree.previewMarkdown
+                                    ? 'bg-brand text-white'
+                                    : 'text-muted-foreground hover:bg-accent'
+                                }`}
                                 title={t('fileBrowser.previewMarkdown')}
                               >
                                 {t('common.preview')}
                               </button>
+                            </>
                           )}
-                          {fileTree.fileContent?.type === 'text' && (
+                          {fileTree.fileContent?.type === 'text' && !(fileTree.previewMarkdown && isMarkdownFile(fileTree.selectedPath)) && (
                             <button
                               onClick={fileTree.handleToggleBlame}
                               disabled={fileTree.isLoadingBlame}
@@ -1653,6 +1663,30 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                               )}
                             </button>
                           )}
+                          {/* Edit — semi-stable (hidden only in md-preview submode), so it sits
+                              left of the always-present Copy / Code Map right-edge anchors. */}
+                          {fileTree.fileContent?.type === 'text' && !(fileTree.previewMarkdown && isMarkdownFile(fileTree.selectedPath)) && (
+                            <button
+                              onClick={() => fileTree.setShowEditor(true)}
+                              className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
+                              title={t('fileBrowser.editFile')}
+                            >
+                              {t('common.edit')}
+                            </button>
+                          )}
+                          {/* Copy file content — always present; anchored at the right edge next to Code Map. */}
+                          {fileTree.fileContent?.type === 'text' && fileTree.fileContent.content && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(fileTree.fileContent!.content!);
+                                toast(t('toast.copiedFileContent'));
+                              }}
+                              className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
+                              title={t('fileBrowser.copyFileContent')}
+                            >
+                              {t('common.copy')}
+                            </button>
+                          )}
                           {/* Code Map view — peers with Edit / Blame as a
                               third reading mode. Click to flip the right
                               panel into BlockViewer's decomposed view; the
@@ -1667,15 +1701,6 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                               title={t('blockViewer.viewerToggle.toBlock')}
                             >
                               {t('common.codeMap')}
-                            </button>
-                          )}
-                          {fileTree.fileContent?.type === 'text' && (
-                            <button
-                              onClick={() => fileTree.setShowEditor(true)}
-                              className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
-                              title={t('fileBrowser.editFile')}
-                            >
-                              {t('common.edit')}
                             </button>
                           )}
                         </>
@@ -1713,6 +1738,18 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                                 {formatAsHumanReadable(fileTree.fileContent.content)}
                               </pre>
                             </div>
+                          </div>
+                        ) : (fileTree.previewMarkdown && isMarkdownFile(fileTree.selectedPath) && !fileTree.showBlame) ? (
+                          // In-place markdown preview replaces CodeViewer when the global
+                          // toggle is on. `embedded` drops the inner header (host toolbar
+                          // owns filePath + ShareReviewToggle + the toggle).
+                          <div className="h-full flex flex-col">
+                            <InteractiveMarkdownPreview
+                              content={fileTree.fileContent.content}
+                              filePath={fileTree.selectedPath}
+                              cwd={cwd}
+                              embedded
+                            />
                           </div>
                         ) : (
                           <CodeViewer
@@ -1891,23 +1928,6 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
             )}
           </div>
         </div>
-
-        {/* Markdown preview modal (supports selection comments + send to AI) */}
-        {fileTree.showMarkdownPreview && fileTree.fileContent?.type === 'text' && fileTree.selectedPath && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => fileTree.setShowMarkdownPreview(false)}>
-            <div
-              className="bg-card rounded-lg shadow-xl w-full max-w-[90%] h-full flex flex-col"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <InteractiveMarkdownPreview
-                content={fileTree.fileContent.content || ''}
-                filePath={fileTree.selectedPath}
-                cwd={cwd}
-                onClose={() => fileTree.setShowMarkdownPreview(false)}
-              />
-            </div>
-          </div>
-        )}
 
         {/* Quick File Open (Cmd+P) */}
         {showQuickOpen && (

@@ -165,8 +165,10 @@ export function ShareReviewToggle({ content, sourceFile }: ShareReviewToggleProp
         {isSharing ? t('review.sharing') : t('review.notShared')}
       </span>
 
-      {/* Update time + link */}
-      {reviewInfo && reviewInfo.updatedAt && (
+      {/* Update time + view link — only while sharing is active. Once closed,
+          the review is deactivated and the /review/{id} page returns 404, so
+          showing a "view" link here would be misleading. */}
+      {isSharing && reviewInfo && reviewInfo.updatedAt && (
         <>
           <span className="text-[10px] text-muted-foreground">
             {formatTime(reviewInfo.updatedAt)}

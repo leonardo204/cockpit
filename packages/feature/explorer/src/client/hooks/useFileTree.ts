@@ -57,8 +57,8 @@ export function useFileTree({ cwd }: UseFileTreeOptions) {
   const [blameError, setBlameError] = useState<string | null>(null);
   const [blameSelectedCommit, setBlameSelectedCommit] = useState<CommitInfo | null>(null);
 
-  // Markdown preview modal
-  const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
+  // Markdown in-place preview — global toggle (session-level, persists across file switches)
+  const [previewMarkdown, setPreviewMarkdown] = useState(false);
 
   // Edit modal
   const [showEditor, setShowEditor] = useState(false);
@@ -541,8 +541,8 @@ export function useFileTree({ cwd }: UseFileTreeOptions) {
     setBlameSelectedCommit,
 
     // Modal state
-    showMarkdownPreview,
-    setShowMarkdownPreview,
+    previewMarkdown,
+    setPreviewMarkdown,
     showEditor,
     setShowEditor,
 

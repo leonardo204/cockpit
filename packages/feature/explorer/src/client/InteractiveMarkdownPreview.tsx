@@ -27,9 +27,13 @@ interface InteractiveMarkdownPreviewProps {
   content: string;       // Raw markdown source
   filePath: string;      // File path (comment data binding + AI reference)
   cwd: string;           // useComments + fetchAllCommentsWithCode
-  onClose: () => void;
+  onClose?: () => void;
   /** Relative path for review sourceFile matching. Derived from filePath + cwd if not provided */
   sourceFile?: string;
+  /** Embedded (in-place) mode: hides the header (filePath + ShareReviewToggle + close X)
+   *  and makes ESC a no-op for closing — the host owns the on/off control. Defaults to false
+   *  so the modal call sites (agent chat, diff view) keep their current behavior. */
+  embedded?: boolean;
 }
 
 interface InputCardData {
@@ -73,6 +77,7 @@ export function InteractiveMarkdownPreview({
   cwd,
   onClose,
   sourceFile: sourceFileProp,
+  embedded = false,
 }: InteractiveMarkdownPreviewProps) {
   // Derive sourceFile (relative path)
   const sourceFile = sourceFileProp
@@ -289,7 +294,7 @@ export function InteractiveMarkdownPreview({
         return;
       }
       if (viewingComment) { setViewingComment(null); e.stopPropagation(); return; }
-      onClose();
+      onClose?.();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
@@ -300,22 +305,25 @@ export function InteractiveMarkdownPreview({
   // ============================================
   return (
     <>
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex items-center justify-between flex-shrink-0">
-        <span className="text-sm font-medium text-foreground truncate">{filePath}</span>
-        <div className="flex items-center gap-3">
-          <ShareReviewToggle content={content} sourceFile={sourceFile} />
-          <button
-            onClick={onClose}
-            className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
-            title={t('common.close')}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+      {/* Header — hidden in embedded mode (host toolbar owns filePath + ShareReviewToggle
+          + the on/off toggle, so an inner header would be redundant). */}
+      {!embedded && (
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between flex-shrink-0">
+          <span className="text-sm font-medium text-foreground truncate">{filePath}</span>
+          <div className="flex items-center gap-3">
+            <ShareReviewToggle content={content} sourceFile={sourceFile} />
+            <button
+              onClick={onClose}
+              className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
+              title={t('common.close')}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Body: TOC sidebar + content */}
       <div className="flex-1 flex overflow-hidden">
