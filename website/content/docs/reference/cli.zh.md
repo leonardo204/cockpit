@@ -66,13 +66,13 @@ cockpit -v
 
 ### 默认端口
 
-Cockpit 监听 **3457**。可以单次用 `--port` 覆盖，或写入 `~/.cockpit/server.json` 永久生效：
+Cockpit 监听 **3457**(dev 模式 **3456**)。可单次用 `--port` 覆盖,或用 `COCKPIT_PORT` 环境变量永久设置:
 
-```json
-{ "port": 4000 }
+```bash
+COCKPIT_PORT=4000 cockpit
 ```
 
-两者都设时单次标志优先。
+两者都设时 `--port` 优先。(`<数据目录>/server.json` 由运行中的服务写入,记录活实例的 pid/端口,供 `cock` 子命令和单实例保护使用;服务**不会**回读它来决定端口,手动改无效。)
 
 ### 子命令
 
@@ -110,8 +110,25 @@ cockpit update
 
 | 变量 | 效果 |
 |---|---|
-| `COCKPIT_PORT` | 同 `--port`,被一些下游工具使用(`/cg` curl 片段等)。 |
+| `COCKPIT_HOME` | 数据目录,默认 `~/.cockpit`。指向别处可隔离某个实例的数据 —— 会话、定时任务、终端历史、设置、Skills —— 例如让 dev 实例与 prod 并存而不共享数据。支持 `~`、相对、绝对路径。 |
+| `COCKPIT_PORT` | 服务端口(同 `--port`);也被 `cock` 子命令与 `/cg` 片段读取。 |
 | `PORT` | `COCKPIT_PORT` 未设时的兜底。 |
+| `COCKPIT_HOST` | 绑定 host。默认 `127.0.0.1`(仅本机);设 `0.0.0.0` 可在局域网 / 云沙盒暴露。 |
+| `COCKPIT_NO_OPEN` | 启动后不自动开浏览器(同 `--no-open`)。 |
+| `COCKPIT_LOG_LEVEL` | 服务日志级别。 |
+| `COCKPIT_FORCE` | 跳过单实例保护(见下)。 |
+
+#### 数据目录与起第二个实例
+
+Cockpit 持久化的一切都在数据目录下 —— 默认 `~/.cockpit`,或 `COCKPIT_HOME` 指向的位置。**一份数据目录同时只允许一个实例**:启动时 Cockpit 探测 `/api/health`,若同一数据目录已有活实例,则拒绝启动并提示用 `COCKPIT_HOME`。
+
+要起第二个实例(如 dev 与 prod 并存),给它独立的数据目录:
+
+```bash
+COCKPIT_HOME=~/.cockpit-dev cockpit
+```
+
+设 `COCKPIT_FORCE=1` 跳过该保护(若是崩溃残留的过期锁,删 `<数据目录>/server.json` 也可)。
 
 ## cockpit browser
 

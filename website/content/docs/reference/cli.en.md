@@ -66,13 +66,13 @@ cockpit -v
 
 ### Default port
 
-Cockpit listens on port **3457**. You can override per-run with `--port`, or make it permanent by writing to `~/.cockpit/server.json`:
+Cockpit listens on port **3457** (dev mode: **3456**). Override per-run with `--port`, or set it permanently with the `COCKPIT_PORT` environment variable:
 
-```json
-{ "port": 4000 }
+```bash
+COCKPIT_PORT=4000 cockpit
 ```
 
-The per-run flag wins when both are set.
+The `--port` flag wins when both are set. (`<data-dir>/server.json` is written by the running server to record the live pid/port for the `cock` sub-commands and the single-instance guard — it is **not** read back to choose the port, so editing it by hand has no effect.)
 
 ### Sub-commands
 
@@ -110,8 +110,25 @@ Equivalent to `npm install -g @surething/cockpit@latest`. See [`cockpit update`]
 
 | Variable | Effect |
 |---|---|
-| `COCKPIT_PORT` | Same as `--port`, used by some downstream tools (`/cg` curl snippets, etc.). |
-| `PORT` | Fallback if `COCKPIT_PORT` is unset. |
+| `COCKPIT_HOME` | Data directory. Defaults to `~/.cockpit`. Point it elsewhere to isolate an instance's data — sessions, scheduled tasks, terminal history, settings, skills — e.g. run a dev instance beside prod without sharing data. Accepts `~`, relative, or absolute paths. |
+| `COCKPIT_PORT` | Server port (same as `--port`); also read by the `cock` sub-commands and `/cg` snippets. |
+| `PORT` | Fallback when `COCKPIT_PORT` is unset. |
+| `COCKPIT_HOST` | Bind host. Default `127.0.0.1` (local only); set `0.0.0.0` to expose on the LAN / in a cloud sandbox. |
+| `COCKPIT_NO_OPEN` | Don't auto-open the browser on start (same as `--no-open`). |
+| `COCKPIT_LOG_LEVEL` | Server log level. |
+| `COCKPIT_FORCE` | Bypass the single-instance guard (see below). |
+
+#### Data directory & running a second instance
+
+Everything Cockpit persists lives under the data directory — `~/.cockpit` by default, or wherever `COCKPIT_HOME` points. Only **one instance per data directory** may run at a time: on startup Cockpit probes `/api/health`, and if another live instance already owns the same data dir it refuses to start and points you at `COCKPIT_HOME`.
+
+To run a second instance (e.g. dev alongside prod), give it its own data dir:
+
+```bash
+COCKPIT_HOME=~/.cockpit-dev cockpit
+```
+
+Set `COCKPIT_FORCE=1` to skip the guard (or delete `<data-dir>/server.json` if it's a stale lock left by a crash).
 
 ## cockpit browser
 
