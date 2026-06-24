@@ -1,10 +1,12 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import type { ModelMessage } from '@ai-sdk/provider-utils';
-import { encodePath } from '@cockpit/shared-utils';
+import { encodePath, COCKPIT_DIR } from '@cockpit/shared-utils';
 
-const SESSIONS_ROOT = join(homedir(), '.cockpit', 'ollama-sessions');
+// Must follow COCKPIT_DIR (COCKPIT_HOME-aware) so writes land in the SAME data dir the rest of
+// cockpit reads from (paths.ts getOllamaSessionPath). Hardcoding ~/.cockpit here split the
+// write/read dirs under COCKPIT_HOME and made ollama sessions look unsaved after refresh.
+const SESSIONS_ROOT = join(COCKPIT_DIR, 'ollama-sessions');
 
 type ClaudeContentBlock =
   | { type: 'text'; text?: string }

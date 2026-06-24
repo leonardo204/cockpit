@@ -23,7 +23,11 @@ const argv = process.argv.slice(2);
 
 function readServerPort() {
   try {
-    return JSON.parse(readFileSync(join(homedir(), '.cockpit', 'server.json'), 'utf8')).port;
+    // COCKPIT_HOME-aware: must match where the server wrote server.json (server.mjs).
+    const dir = process.env.COCKPIT_HOME
+      ? resolve(process.env.COCKPIT_HOME.replace(/^~(?=$|\/)/, homedir()))
+      : join(homedir(), '.cockpit');
+    return JSON.parse(readFileSync(join(dir, 'server.json'), 'utf8')).port;
   } catch {
     return null;
   }

@@ -75,11 +75,6 @@ const logLevelConfig = Config.string("COCKPIT_LOG_LEVEL").pipe(
   Config.withDefault("info")
 )
 
-// cockpitDir cannot be evaluated at the module top level (it would call
-// os.homedir, which crashes against the browser stub). Resolve it lazily:
-// Config.string("COCKPIT_DIR") returns an Option, then inside Effect.gen a
-// dynamic import resolves homedir() when needed.
-const cockpitDirConfigOpt = Config.option(Config.string("COCKPIT_DIR"))
 
 // ─────────────────────────────────────────────────────────
 // Composition
@@ -99,15 +94,18 @@ export const CockpitConfig: Effect.Effect<CockpitConfigData> = Effect.gen(
     // dependencies and safe on the browser (the stub returns undefined, which
     // falls back to "/.cockpit"; the browser path barely consumes cockpitDir
     // anyway).
-    const cockpitDirOpt = yield* cockpitDirConfigOpt
+    // cockpitDir: COCKPIT_HOME is the single data-dir switch (also honored by paths.ts), so
+    // derived paths like logFile stay in the same data dir; else ~/.cockpit. Resolved lazily
+    // and browser-safe (env string ops only, no Node os.homedir).
     const cockpitDir = yield* Effect.sync(() => {
-      if (cockpitDirOpt._tag === "Some") return cockpitDirOpt.value
       const env =
         typeof process !== "undefined" ? process.env : undefined
       const home =
         env?.HOME ||
         env?.USERPROFILE ||
         "."
+      const homeOverride = env?.COCKPIT_HOME
+      if (homeOverride) return homeOverride.replace(/^~(?=$|\/)/, home)
       return home + "/.cockpit"
     })
 

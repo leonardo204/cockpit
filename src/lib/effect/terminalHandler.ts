@@ -255,6 +255,12 @@ const dispatchMessage = (
         CLICOLOR_FORCE: "1",
         PYTHONUNBUFFERED: "1",
         npm_config_color: "always",
+        // Propagate the cockpit data dir + server port so CLI bridges
+        // (cock-terminal/browser/connection) run inside the PTY resolve the
+        // SAME data dir and hit THIS server, not a sibling dev/prod instance.
+        // (childEnv is rebuilt from scratch, so these must be explicit.)
+        COCKPIT_HOME: process.env.COCKPIT_HOME,
+        COCKPIT_PORT: process.env.COCKPIT_PORT,
         ...env,
       }
 

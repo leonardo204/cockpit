@@ -1,5 +1,5 @@
 import { homedir } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { existsSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { execSync } from 'child_process';
@@ -9,7 +9,12 @@ import { execSync } from 'child_process';
 // ============================================
 
 export const HOME_DIR = homedir();
-export const COCKPIT_DIR = join(HOME_DIR, '.cockpit');
+// Data root. Defaults to ~/.cockpit (dev/prod share it — reusing prod data is
+// intentional). Set COCKPIT_HOME to isolate (e.g. ~/.cockpit-dev, a CI tmp dir).
+// Everything below derives from this, so this is the only switch needed.
+export const COCKPIT_DIR = process.env.COCKPIT_HOME
+  ? resolve(process.env.COCKPIT_HOME.replace(/^~(?=$|\/)/, HOME_DIR))
+  : join(HOME_DIR, '.cockpit');
 export const COCKPIT_PROJECTS_DIR = join(COCKPIT_DIR, 'projects');
 export const GLOBAL_STATE_FILE = join(COCKPIT_DIR, 'state.json');
 export const PINNED_SESSIONS_FILE = join(COCKPIT_DIR, 'pinned-sessions.json');

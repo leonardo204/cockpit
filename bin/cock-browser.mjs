@@ -284,14 +284,18 @@ if (params['form-selector']) { params.formSelector = params['form-selector']; de
 if (params['skip-verify']) { params.skipVerify = true; delete params['skip-verify']; }
 if (params['no-verify']) { params.skipVerify = true; delete params['no-verify']; }
 
-// Port: env COCKPIT_PORT > ~/.cockpit/server.json > default 3457
+// Port: env COCKPIT_PORT > <COCKPIT_HOME|~/.cockpit>/server.json > default 3457
 let port = process.env.COCKPIT_PORT || 3457;
 if (!process.env.COCKPIT_PORT) {
   try {
     const { readFileSync } = await import('fs');
-    const { join } = await import('path');
+    const { join, resolve } = await import('path');
     const { homedir } = await import('os');
-    const serverJson = JSON.parse(readFileSync(join(homedir(), '.cockpit', 'server.json'), 'utf8'));
+    // COCKPIT_HOME-aware: must match where the server wrote server.json (server.mjs).
+    const dir = process.env.COCKPIT_HOME
+      ? resolve(process.env.COCKPIT_HOME.replace(/^~(?=$|\/)/, homedir()))
+      : join(homedir(), '.cockpit');
+    const serverJson = JSON.parse(readFileSync(join(dir, 'server.json'), 'utf8'));
     if (serverJson.port) port = serverJson.port;
   } catch {}
 }

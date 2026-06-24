@@ -6,8 +6,10 @@ import {
 } from '@cockpit/shared-utils';
 import { updateGlobalState } from './state/globalState';
 import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from './sessionRunHub';
+import { dispatchChat } from './engines/orchestrator';
+import { getEngineSpec } from './engines/registry';
 import { Effect } from 'effect';
-import { AgentError, CockpitConfig, type AgentProvider } from '@cockpit/effect-core';
+import { AgentError, type AgentProvider } from '@cockpit/effect-core';
 import { AppRuntime } from '@cockpit/effect-runtime/server';
 
 // ============================================
@@ -16,7 +18,6 @@ import { AppRuntime } from '@cockpit/effect-runtime/server';
 
 export interface ScheduledTask {
   id: string;
-  port: number;            // instance port at creation time, used to isolate dev/prod
   cwd: string;
   tabId: string;
   sessionId: string;       // chat session id
@@ -127,47 +128,36 @@ export function getNextCronTime(cronExpr: string, after: Date = new Date()): num
  *
  * Scheduled tasks always resume an existing session, so the runKey is the task's sessionId.
  */
-const sendHttpEngineMessageEff = (
+const dispatchEngineMessageEff = (
   task: ScheduledTask,
   engine: string,
   startFresh: boolean,
 ): Effect.Effect<boolean, AgentError> =>
   Effect.tryPromise({
     try: async () => {
-      // claude/claude2 live at /api/chat (engine selects the credential dir); the rest at
-      // /api/chat/<engine>.
-      const isClaude = engine === 'claude' || engine === 'claude2';
-      const url = isClaude
-        ? `http://127.0.0.1:${task.port}/api/chat`
-        : `http://127.0.0.1:${task.port}/api/chat/${engine}`;
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: task.message,
-          // Omit sessionId to start a brand-new session when the resume target is gone;
-          // the engine generates a fresh id (captured below via getRunSessionId).
-          ...(startFresh ? {} : { sessionId: task.sessionId }),
-          cwd: task.cwd,
-          engine, // route uses it for claude2's CLAUDE_CONFIG_DIR; no-op for the others
-          ...(task.model && { model: task.model }),
-        }),
+      const spec = getEngineSpec(engine);
+      if (!spec) {
+        throw new Error(`no engine spec for ${engine}`);
+      }
+      // In-process dispatch — backend triggers backend directly via the orchestrator. No HTTP
+      // loopback, so scheduled tasks need no port and can't mis-target a sibling dev/prod
+      // instance. The run registers in sessionRunHub and streams to viewers via
+      // /ws/session-stream exactly like an interactive request.
+      const outcome = await dispatchChat(spec, {
+        prompt: task.message,
+        // Omit sessionId to start a brand-new session when the resume target is gone;
+        // the engine generates a fresh id (captured below via getRunSessionId).
+        ...(startFresh ? {} : { sessionId: task.sessionId }),
+        cwd: task.cwd,
+        engine, // selects claude2's CLAUDE_CONFIG_DIR; no-op for the others
+        ...(task.model && { model: task.model }),
       });
-      if (!res.ok) {
-        // 409 = session already running (the guard fired). Per design, surface it as a
-        // task error (recorded in lastResult) rather than silently skipping.
-        throw new Error(`${engine} chat route responded ${res.status}`);
+      if (!outcome.ok) {
+        // 409 = session/run already active (the guard fired). Surface as a task error
+        // (recorded in lastResult) rather than silently skipping.
+        throw new Error(`${engine} dispatch rejected (${outcome.status}): ${outcome.error}`);
       }
-      const body = (await res.json().catch(() => ({}))) as { runKey?: string };
-      if (!body.runKey) {
-        // A cockpit chat route ALWAYS returns a runKey. Its absence means the loopback hit
-        // something that isn't this route (wrong port after a restart, a non-cockpit service
-        // on 127.0.0.1:port) → the message was never dispatched. Fail closed; the old
-        // `|| task.sessionId` fallback assumed a run had started and would later read the
-        // never-registered key's null status as success.
-        throw new Error(`${engine} chat route returned no runKey (session ${task.sessionId})`);
-      }
-      const key = body.runKey;
+      const key = outcome.runKey;
       // The run is detached from this request; wait for it to finish (registry → not running).
       const deadline = Date.now() + 30 * 60 * 1000;
       while (isRunActive(key) && Date.now() < deadline) {
@@ -249,7 +239,7 @@ export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, 
 
     // Resume target gone (cleared history, session-id rotation, retention pruning,
     // or codex/kimi glob miss) → don't fail; start a FRESH session running the same
-    // message and write the new session id back to the task (see sendHttpEngineMessageEff).
+    // message and write the new session id back to the task (see dispatchEngineMessageEff).
     const sessionPath = sessionPathFor(engine, task);
     const startFresh = !sessionPath || !existsSync(sessionPath);
     if (startFresh) {
@@ -258,7 +248,7 @@ export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, 
       );
     }
 
-    return yield* sendHttpEngineMessageEff(task, engine, startFresh);
+    return yield* dispatchEngineMessageEff(task, engine, startFresh);
   }).pipe(
     Effect.catchAll((err) =>
       Effect.gen(function* () {
@@ -292,23 +282,9 @@ class ScheduledTaskManager {
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** Tasks currently inside fireTask — prevents reentrant double-fire (manual trigger + cron, HMR-leaked timer, etc.) */
   private firing = new Set<string>();
-  private port: number = 0;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
   private onTaskFired: TaskFiredCallback | null = null;
-
-  /**
-   * Return the current port (from explicit init or CockpitConfig).
-   * CockpitConfig handles `Config.orElse(COCKPIT_PORT, PORT)` plus derived
-   * dev/prod defaults; a single sync runPromise gets the unified typed value,
-   * cached into this.port.
-   */
-  private getPort(): number {
-    if (this.port) return this.port;
-    const cfg = AppRuntime.runSync(CockpitConfig);
-    this.port = cfg.port;
-    return this.port;
-  }
 
   /**
    * Ensure the manager is initialized (lazy init; supports calls from different module instances in API routes).
@@ -316,25 +292,22 @@ class ScheduledTaskManager {
   async ensureInit(): Promise<void> {
     if (this.initialized) return;
     if (this.initPromise) return this.initPromise;
-    const port = this.getPort();
-    if (!port) return; // Cannot determine port; skip
-    this.initPromise = this.init(port);
+    this.initPromise = this.init();
     return this.initPromise;
   }
 
   /**
-   * Initialize: load tasks from disk and rebuild timers.
+   * Initialize: load tasks from disk and rebuild timers. Tasks belong to this data dir
+   * (COCKPIT_DIR), not a port — a single instance per data dir is enforced at startup
+   * (server.mjs's health-probe lock), so loading the whole file is correct and safe.
    */
-  async init(port: number): Promise<void> {
+  async init(): Promise<void> {
     if (this.initialized) return;
-    this.port = port;
     this.initialized = true;
 
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    // Load only tasks belonging to the current instance's port
-    this.tasks = allTasks.filter(t => t.port === port);
+    this.tasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
 
-    console.log(`[ScheduledTaskManager] Loaded ${this.tasks.length} tasks for port ${port}`);
+    console.log(`[ScheduledTaskManager] Loaded ${this.tasks.length} scheduled tasks`);
 
     // Rebuild timers (expired tasks get their nextFireTime recalculated or are marked completed)
     for (const task of this.tasks) {
@@ -354,13 +327,10 @@ class ScheduledTaskManager {
   }
 
   /**
-   * Read tasks for the current port from disk (avoids in-memory inconsistency between dual module instances).
+   * Read tasks from disk (avoids in-memory inconsistency between dual module instances).
    */
   private async readTasksFromDisk(): Promise<ScheduledTask[]> {
-    const port = this.getPort();
-    if (!port) return [];
-    const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
-    return allTasks.filter(t => t.port === port);
+    return readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
   }
 
   /**
@@ -386,9 +356,9 @@ class ScheduledTaskManager {
   /**
    * Add a task.
    */
-  async addTask(task: Omit<ScheduledTask, 'port'>): Promise<ScheduledTask> {
+  async addTask(task: ScheduledTask): Promise<ScheduledTask> {
     await this.ensureInit();
-    const fullTask: ScheduledTask = { ...task, port: this.getPort() };
+    const fullTask: ScheduledTask = { ...task };
 
     // Append directly to disk (avoids dual-instance issues); locked read-modify-write.
     await mutateJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, [], (allTasks) => [...allTasks, fullTask]);
@@ -564,12 +534,11 @@ class ScheduledTaskManager {
    */
   async markReadBySessionId(sessionId: string): Promise<void> {
     await this.ensureInit();
-    const port = this.getPort();
     await withFileLock(SCHEDULED_TASKS_FILE, async () => {
       const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
       let changed = false;
       for (const task of allTasks) {
-        if (task.port === port && task.sessionId === sessionId && task.unread) {
+        if (task.sessionId === sessionId && task.unread) {
           task.unread = false;
           changed = true;
         }
@@ -583,12 +552,11 @@ class ScheduledTaskManager {
    */
   async markAllRead(): Promise<void> {
     await this.ensureInit();
-    const port = this.getPort();
     await withFileLock(SCHEDULED_TASKS_FILE, async () => {
       const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
       let changed = false;
       for (const task of allTasks) {
-        if (task.port === port && task.unread) {
+        if (task.unread) {
           task.unread = false;
           changed = true;
         }
@@ -746,11 +714,9 @@ class ScheduledTaskManager {
 
   private async saveToDisk(): Promise<void> {
     try {
-      // Locked read-merge-write: keep other ports' tasks, replace this port's with
-      // the in-memory set. The lock serializes against updateTask/addTask/etc.
-      await mutateJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, [], (allTasks) =>
-        [...allTasks.filter(t => t.port !== this.port), ...this.tasks],
-      );
+      // Single instance per data dir (enforced at startup): the in-memory set IS the whole
+      // file. The lock serializes against updateTask/addTask/etc.
+      await mutateJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, [], () => [...this.tasks]);
     } catch (error) {
       console.error('[ScheduledTaskManager] Failed to save:', error);
     }

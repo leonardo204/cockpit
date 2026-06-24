@@ -21,7 +21,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { homedir } from 'os';
 
 const args = process.argv.slice(2);
@@ -32,7 +32,11 @@ const args = process.argv.slice(2);
 
 function readServerPort() {
   try {
-    return JSON.parse(readFileSync(join(homedir(), '.cockpit', 'server.json'), 'utf8')).port;
+    // COCKPIT_HOME-aware: must match where the server wrote server.json (server.mjs).
+    const dir = process.env.COCKPIT_HOME
+      ? resolve(process.env.COCKPIT_HOME.replace(/^~(?=$|\/)/, homedir()))
+      : join(homedir(), '.cockpit');
+    return JSON.parse(readFileSync(join(dir, 'server.json'), 'utf8')).port;
   } catch {
     return null;
   }

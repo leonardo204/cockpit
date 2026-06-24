@@ -84,8 +84,13 @@ function fanout(state: RunState, ev: RunEvent): void {
  * no engine's stream). `_human` lets useLiveStream tell it apart from tool_result `user`
  * events.
  */
-export function startRun(key: string, cwd: string, promptText?: string): void {
+export function startRun(key: string, cwd: string, promptText?: string): boolean {
   const prev = registry.get(key);
+  // Atomic one-active guard (#10/#5): refuse to start if a turn is already live under `key`.
+  // The check and the registry.set below run in one synchronous tick (no await between), so two
+  // concurrent dispatches for the same session/runId can't both pass — the second gets false.
+  // Returning false (vs clobbering) prevents two writers from interleaving the same jsonl.
+  if (prev?.status === 'running') return false;
   // seq is monotonic across turns (never resets) so a viewer that stays connected over
   // consecutive turns keeps filtering new events by `seq > snapshotSeq`. Fall back to the
   // retained per-key seq when the prior turn has already been evicted from the registry.
@@ -109,6 +114,7 @@ export function startRun(key: string, cwd: string, promptText?: string): void {
       message: { role: 'user', content: promptText },
     });
   }
+  return true;
 }
 
 /** Append one event and fan it out to live subscribers across all alias keys. */
@@ -132,12 +138,16 @@ export function appendRun(key: string, message: unknown): void {
  * key already receive events (fanout iterates all keys), so nothing to migrate.
  */
 export function rekeyRun(oldId: string, newId: string): void {
-  if (oldId === newId) return;
   const r = registry.get(oldId);
   if (!r) return;
-  r.keys.add(newId);
-  r.sessionId = newId; // remember the real session id for post-run recovery
-  registry.set(newId, r);
+  // Always record the real session id for post-run recovery — even when oldId === newId
+  // (ollama uses the runId AS its session id, so getRunSessionId must still resolve it;
+  // otherwise scheduled ollama tasks never rebind and degrade to a fresh session each round).
+  r.sessionId = newId;
+  if (oldId !== newId) {
+    r.keys.add(newId);
+    registry.set(newId, r);
+  }
 }
 
 /** Turn finished/errored: keep state for a grace window, then evict all alias keys. */

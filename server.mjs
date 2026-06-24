@@ -1,8 +1,8 @@
 import { createServer } from 'http';
 import { exec, execSync } from 'child_process';
 import { networkInterfaces, homedir } from 'os';
-import { writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { writeFileSync, mkdirSync, readFileSync, realpathSync } from 'fs';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
 
@@ -14,6 +14,43 @@ const port = parseInt(process.env.PORT || (dev ? '3456' : '3457'), 10);
 
 process.title = dev ? 'cockpit-dev' : 'cockpit';
 process.env.COCKPIT_PORT = String(port);
+
+// Data dir (COCKPIT_HOME-aware) — single source for the instance lock + server.json.
+const cockpitHome = process.env.COCKPIT_HOME
+  ? resolve(process.env.COCKPIT_HOME.replace(/^~(?=$|\/)/, homedir()))
+  : join(homedir(), '.cockpit');
+
+// Normalize a data-dir path for comparison (resolve symlinks) so a symlinked COCKPIT_HOME
+// doesn't read as a different home and defeat the single-instance guard. Falls back to the raw
+// path if it doesn't exist yet.
+const normHome = (p) => { try { return realpathSync(p); } catch { return p; } };
+
+// Single-instance-per-data-dir guard. Probe the recorded instance's /api/health: if a live
+// cockpit on THIS data dir answers (app === 'cockpit' && home === this data dir), refuse and
+// point the user at COCKPIT_HOME. Connection refused / timeout / wrong signature → stale → take
+// over. COCKPIT_FORCE=1 bypasses. (The OS already prevents two binds on one port; this guards
+// the case of two instances on different ports sharing one data dir → would double-fire tasks.)
+async function ensureSingleInstance() {
+  if (process.env.COCKPIT_FORCE) return;
+  let prev;
+  try { prev = JSON.parse(readFileSync(join(cockpitHome, 'server.json'), 'utf8')); } catch { return; }
+  if (!prev || !prev.port) return;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 800);
+    const res = await fetch(`http://127.0.0.1:${prev.port}/api/health`, { signal: ac.signal }).finally(() => clearTimeout(timer));
+    if (!res.ok) return; // not a healthy cockpit → stale, proceed
+    const body = await res.json().catch(() => ({}));
+    if (body.app === 'cockpit' && normHome(body.home) === normHome(cockpitHome)) {
+      console.error(`\n✗ This data dir already has a running cockpit (pid ${body.pid}, port ${body.port}).`);
+      console.error(`  Data dir: ${cockpitHome}`);
+      console.error(`  To run a second instance, isolate it with COCKPIT_HOME, e.g.:`);
+      console.error(`    COCKPIT_HOME=~/.cockpit-alt cockpit`);
+      console.error(`  False alarm? Delete ${join(cockpitHome, 'server.json')} or set COCKPIT_FORCE=1.\n`);
+      process.exit(1);
+    }
+  } catch { /* connection refused / timeout / non-cockpit → stale, proceed */ }
+}
 
 // ============================================
 // 进程生命周期防护
@@ -77,6 +114,7 @@ const app = next({ dev });
 const handle = app.getRequestHandler();
 
 app.prepare().then(async () => {
+  await ensureSingleInstance();
   const upgradeHandler = app.getUpgradeHandler();
   // v2 P8: HTTP intercepts (handleTerminalApi / handleBrowserApi) moved to src/lib/httpApi.ts
   const { handleUpgrade, broadcastToGlobalState } = await import(dev ? './src/lib/wsServer.ts' : './dist/wsServer.mjs');
@@ -87,7 +125,7 @@ app.prepare().then(async () => {
   scheduledTaskManager.setOnTaskFired((task) => {
     broadcastToGlobalState({ type: 'task-fired', taskId: task.id, cwd: task.cwd, tabId: task.tabId, sessionId: task.sessionId });
   });
-  await scheduledTaskManager.init(port);
+  await scheduledTaskManager.init();
 
   const server = createServer(async (req, res) => {
     // /api/browser/* 必须在自定义 server 中处理（与 WS 共享 BrowserBridge 内存）
@@ -120,9 +158,8 @@ app.prepare().then(async () => {
 
     // 写入 server.json 供 CLI 子命令读取端口
     try {
-      const cockpitDir = join(homedir(), '.cockpit');
-      mkdirSync(cockpitDir, { recursive: true });
-      writeFileSync(join(cockpitDir, 'server.json'), JSON.stringify({ pid: process.pid, port }, null, 2));
+      mkdirSync(cockpitHome, { recursive: true });
+      writeFileSync(join(cockpitHome, 'server.json'), JSON.stringify({ pid: process.pid, port }, null, 2));
     } catch {}
 
     // prod 模式自动打开浏览器（--no-open 禁用）

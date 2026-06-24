@@ -29,6 +29,7 @@ export interface StreamEvent {
   message?: { model?: string; role?: string; content?: unknown };
   event?: { type?: string; delta?: { type?: string; text?: string } };
   result?: unknown;
+  error?: string; // {type:'error'} events emitted by engines / the orchestrator's failure path
 }
 
 export function applyStreamEvent(
@@ -97,6 +98,23 @@ export function applyStreamEvent(
       }
     }
     return out;
+  }
+
+  // in-stream error ({type:'error', error}) — emitted by codex/kimi/ollama/deepseek and the
+  // orchestrator's failure path. Without this the viewer (useLiveStream, which routes through
+  // this reducer) drops it silently and a failed turn shows as an empty bubble. (useChatStream
+  // handles 'error' itself and returns before calling this, so it is unaffected.)
+  if (ev.type === 'error') {
+    const errText = ev.error || 'An error occurred. Please try again.';
+    return messages.map((m) =>
+      m.id === assistantId
+        ? {
+            ...m,
+            content: m.content ? `${m.content}\n\n⚠️ ${errText}` : `⚠️ ${errText}`,
+            isStreaming: false,
+          }
+        : m
+    );
   }
 
   // turn end: finalize the assistant bubble

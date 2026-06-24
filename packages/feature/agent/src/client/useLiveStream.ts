@@ -54,8 +54,18 @@ export function useLiveStream(
           : '';
       const id = `live-user-${++seq.current}`;
       setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && last.role === 'user' && last.content === text) return prev;
+        // Dedup against the MOST-RECENT user bubble (scanning past trailing assistant
+        // placeholders), not just the strict last item. When this in-flight turn's user
+        // message was already loaded from disk — possibly with an assistant bubble appended
+        // after it — a strict last-only check misses it and renders the prompt twice (seen
+        // when a scheduled task fires on the session you're viewing). Only SUPPRESSES a
+        // duplicate add; never deletes, so it can't wipe real history.
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].role === 'user') {
+            if (prev[i].content === text) return prev; // already shown → skip
+            break; // most-recent user differs → a genuinely new prompt
+          }
+        }
         return [...prev, { id, role: 'user', content: text } as ChatMessage];
       });
       return;

@@ -12,7 +12,6 @@ import {
 
 export interface ScheduledTask {
   id: string;
-  port: number;
   cwd: string;
   tabId: string;
   sessionId: string;

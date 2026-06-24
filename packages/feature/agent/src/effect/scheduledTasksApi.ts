@@ -52,7 +52,7 @@ export const getTasksAndUnreadEff: Effect.Effect<
 // ─────────────────────────────────────────────────────────
 
 export const addTaskEff = (
-  task: Omit<ScheduledTask, "port">
+  task: ScheduledTask
 ): Effect.Effect<ScheduledTask, AppError> =>
   Effect.tryPromise({
     try: () => scheduledTaskManager.addTask(task),
