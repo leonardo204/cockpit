@@ -24,7 +24,7 @@ import {
   saveProjectSettings,
   loadGitWorktrees,
 } from './effect/workspaceClient';
-import { updateSessionStatus } from './effect/stateClient';
+import { updateSessionStatus, markScheduledTasksReadBySession } from './effect/stateClient';
 
 interface TabManagerProps {
   initialCwd?: string;
@@ -232,6 +232,14 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
           if (initialCwd && !targetTab?.isLoading) {
             BrowserRuntime.runFork(
               updateSessionStatus(initialCwd, sessionId, 'normal').pipe(
+                Effect.orElse(() => Effect.void)
+              )
+            );
+            // Also clear scheduled-task unread for this session: jumping in via
+            // SWITCH_SESSION (recent/pinned sessions) otherwise never decrements
+            // the scheduled-task unread badge — only the scheduled-tasks panel did.
+            BrowserRuntime.runFork(
+              markScheduledTasksReadBySession(sessionId).pipe(
                 Effect.orElse(() => Effect.void)
               )
             );
