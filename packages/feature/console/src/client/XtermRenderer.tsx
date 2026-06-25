@@ -14,6 +14,8 @@ export interface XtermSearchHandle {
   write: (data: string) => void;
   /** Reset terminal (clear screen + buffer) */
   reset: () => void;
+  /** Repaint from the buffer (e.g. after a DOM relocation that dropped the render) */
+  refresh: () => void;
 }
 
 interface XtermRendererProps {
@@ -87,6 +89,14 @@ export const XtermRenderer = memo(forwardRef<XtermSearchHandle, XtermRendererPro
     },
     reset: () => {
       termRef.current?.reset();
+    },
+    refresh: () => {
+      const term = termRef.current;
+      if (!term) return;
+      // The buffer survives DOM moves; the rendered rows don't. Re-fit (in case the
+      // new slot has a different width) and force a full repaint from the buffer.
+      try { fitAddonRef.current?.fit(); } catch { /* not ready */ }
+      try { term.refresh(0, term.rows - 1); } catch { /* not ready */ }
     },
   }), []);
 
@@ -205,10 +215,21 @@ export const XtermRenderer = memo(forwardRef<XtermSearchHandle, XtermRendererPro
 
   // Write new data incrementally (only in output-prop mode; skipped in directWrite mode)
   useEffect(() => {
-    if (directWrite) return; // In directWrite mode, parent calls ref.write() directly
-
     const term = termRef.current;
     if (!term) return;
+
+    if (directWrite) {
+      // Live data arrives via the parent's writer (subscribePtyOutput) / ref.write,
+      // so we skip the incremental sync. EXCEPT: a finished PTY bubble restored from
+      // history carries its scrollback in `output` (which stays empty for a live
+      // command, since live PTY output bypasses React state). Write it once per
+      // mounted terminal so the stored scrollback renders on (re)mount.
+      if (output && writtenLenRef.current === 0) {
+        term.write(output);
+        writtenLenRef.current = output.length;
+      }
+      return;
+    }
 
     let didReset = false;
 

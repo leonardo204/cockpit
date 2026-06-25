@@ -159,10 +159,12 @@ export async function executeCommand(options: {
   usePty?: boolean;
   cols?: number;
   rows?: number;
+  /** Originating tab's sync id, echoed back in the placeholder broadcast. */
+  sourceId?: string;
   onData: MessageHandler;
   onError: (error: string) => void;
 }): Promise<void> {
-  const { cwd, command, commandId, tabId, projectCwd, env, usePty, cols, rows, onData, onError } = options;
+  const { cwd, command, commandId, tabId, projectCwd, env, usePty, cols, rows, sourceId, onData, onError } = options;
 
   ensureConnection(projectCwd);
   try {
@@ -175,7 +177,7 @@ export async function executeCommand(options: {
   // Prevent duplicate registration for the same commandId (rerun scenario)
   commandCallbacks.delete(commandId);
   commandCallbacks.set(commandId, { onData, onError });
-  sendMessage({ type: 'exec', commandId, command, cwd, tabId, env, ...(usePty ? { usePty: true } : {}), ...(cols ? { cols, rows } : {}) });
+  sendMessage({ type: 'exec', commandId, command, cwd, tabId, env, ...(usePty ? { usePty: true } : {}), ...(cols ? { cols, rows } : {}), ...(sourceId ? { sourceId } : {}) });
 }
 
 /**

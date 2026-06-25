@@ -100,9 +100,10 @@ export const loadBubbleOrder = (
 export const saveBubbleOrder = (
   cwd: string,
   tabId: string,
-  order: string[]
+  order: string[],
+  sourceId?: string
 ): Effect.Effect<void, AppError> =>
-  httpPostJson("/api/terminal/bubble-order", { cwd, tabId, order })
+  httpPostJson("/api/terminal/bubble-order", { cwd, tabId, order, sourceId })
 
 // ─────────────────────────────────────────────────────────
 // terminal/history
@@ -132,9 +133,10 @@ export const loadHistoryPage = (
 export const saveHistoryEntry = (
   cwd: string,
   tabId: string,
-  entry: Record<string, unknown>
+  entry: Record<string, unknown>,
+  sourceId?: string
 ): Effect.Effect<void, AppError> =>
-  httpPostJson("/api/terminal/history", { cwd, tabId, entry })
+  httpPostJson("/api/terminal/history", { cwd, tabId, entry, sourceId })
 
 /**
  * Delete a single history entry.
@@ -142,10 +144,11 @@ export const saveHistoryEntry = (
 export const deleteHistoryEntry = (
   cwd: string,
   tabId: string,
-  commandId: string
+  commandId: string,
+  sourceId?: string
 ): Effect.Effect<void, AppError> =>
   httpDelete(
-    `/api/terminal/history?cwd=${encodeURIComponent(cwd)}&tabId=${encodeURIComponent(tabId)}&commandId=${encodeURIComponent(commandId)}`
+    `/api/terminal/history?cwd=${encodeURIComponent(cwd)}&tabId=${encodeURIComponent(tabId)}&commandId=${encodeURIComponent(commandId)}${sourceId ? `&sourceId=${encodeURIComponent(sourceId)}` : ""}`
   )
 
 /**
@@ -155,9 +158,10 @@ export const patchHistoryEntry = (
   cwd: string,
   tabId: string,
   id: string,
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
+  sourceId?: string
 ): Effect.Effect<void, AppError> =>
-  httpPatchJson("/api/terminal/history", { cwd, tabId, id, fields })
+  httpPatchJson("/api/terminal/history", { cwd, tabId, id, fields, sourceId })
 
 // ─────────────────────────────────────────────────────────
 // terminal/env (POST — save env vars)

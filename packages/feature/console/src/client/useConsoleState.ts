@@ -5,6 +5,7 @@ import { executeCommand as execCmd, interruptCommand as interruptCmd, attachComm
 import { matchInput, getPlugin, generatePluginItemId, type PluginItemBase } from './pluginRegistry';
 import { Effect } from 'effect';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
+import { useWebSocket } from '@cockpit/shared-ui';
 import {
   loadTerminalEnv,
   loadAliases as loadAliasesEff,
@@ -124,6 +125,16 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
   const addPluginItemRef = useRef<((type: string, input: string, afterId?: string) => void) | null>(null);
   const consoleItemsRef = useRef<ConsoleItem[]>([]);
 
+  // Stable per-browser-tab id, attached to every mutation so the cross-tab sync
+  // broadcast can be ignored when it echoes back to the tab that caused it.
+  const sourceIdRef = useRef<string>('');
+  if (!sourceIdRef.current) {
+    sourceIdRef.current =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `s_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
+
   // Scroll refs (passed in from ConsoleView)
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -241,6 +252,33 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
     };
   }, []);
 
+  // PTY repaint registry. A reorder swaps bubble positions; React relocates the
+  // DOM node of the bubble that moves to a LATER index (insertBefore), which drops
+  // xterm's rendered rows without a resize to trigger a repaint. We re-fit + repaint
+  // from the buffer after every bubbleOrder change.
+  const ptyRefreshersRef = useRef<Map<string, Set<() => void>>>(new Map());
+
+  const subscribePtyRefresh = useCallback((commandId: string, refresher: () => void) => {
+    if (!ptyRefreshersRef.current.has(commandId)) {
+      ptyRefreshersRef.current.set(commandId, new Set());
+    }
+    ptyRefreshersRef.current.get(commandId)!.add(refresher);
+    return () => {
+      ptyRefreshersRef.current.get(commandId)?.delete(refresher);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!bubbleOrder) return;
+    // Run after the DOM move has committed and painted.
+    const raf = requestAnimationFrame(() => {
+      for (const set of ptyRefreshersRef.current.values()) {
+        for (const fn of set) fn();
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [bubbleOrder]);
+
   const flushAndGetOutput = useCallback((commandId: string) => {
     if (rafIdRef.current !== null) {
       cancelAnimationFrame(rafIdRef.current);
@@ -304,10 +342,11 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
           } else {
             // Command type
             if (entry.running) continue;
+            const cmdId = entry.id.includes('-') && entry.id.split('-').length === 3
+              ? entry.id
+              : generateUniqueCommandId();
             historyCommands.push({
-              id: entry.id.includes('-') && entry.id.split('-').length === 3
-                ? entry.id
-                : generateUniqueCommandId(),
+              id: cmdId,
               command: entry.command,
               output: entry.output,
               exitCode: entry.exitCode,
@@ -355,7 +394,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
         exitCode: command.exitCode,
         timestamp: command.timestamp,
         cwd: currentCwd,
-      }).pipe(
+      }, sourceIdRef.current).pipe(
         Effect.tapError((err) =>
           Effect.sync(() => console.error('Failed to save cd history:', err))
         ),
@@ -432,6 +471,157 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
       // Network error, ignore
     }
   }, [cwd, tabId, appendOutput, flushAndGetOutput, cleanupOutputRefs]);
+
+  // ========== Cross-tab sync (bubble list + PTY stream) ==========
+
+  // Attach this tab to a running command that was created in ANOTHER browser tab
+  // (learned via a `console-delta` add). Mirrors reattachRunning's per-command
+  // subscription so output/exit flow in; the server replays the ring buffer once.
+  const attachRunningCommand = useCallback((commandId: string, usePty: boolean) => {
+    commandOutputRef.current.set(commandId, '');
+    if (usePty) commandPtyRef.current.add(commandId);
+    attachCommand({
+      commandId,
+      projectCwd: cwd,
+      onData: (type, data) => {
+        if (type === 'pid') {
+          setCommands(prev => prev.map(c => c.id === commandId ? { ...c, pid: data.pid as number } : c));
+        } else if (type === 'stdout' || type === 'stderr') {
+          appendOutput(commandId, data.data as string);
+        } else if (type === 'exit') {
+          const finalOutput = flushAndGetOutput(commandId);
+          cleanupOutputRefs(commandId);
+          setCommands(prev => prev.map(c => c.id === commandId
+            ? { ...c, output: finalOutput, exitCode: data.code as number, isRunning: false, pid: undefined }
+            : c));
+        }
+      },
+      onError: () => {
+        setCommands(prev => prev.map(c => c.id === commandId && c.isRunning ? { ...c, isRunning: false } : c));
+      },
+    }).catch(() => { /* attach failed — bubble stays as-is */ });
+  }, [cwd, appendOutput, flushAndGetOutput, cleanupOutputRefs]);
+
+  // Upsert a bubble learned from another tab (add / rerun-of-unknown). Ignores
+  // ids we already have so we never double-add or re-attach (a second attach
+  // would replay the ring buffer again). Auto-attaches running commands.
+  const addConsoleEntry = useCallback((entry: Record<string, unknown>) => {
+    const id = entry?.id as string | undefined;
+    if (!entry || !id) return;
+    if (consoleItemsRef.current.some(i => i.data.id === id)) return;
+
+    const type = entry.type as string | undefined;
+    const plugin = type ? getPlugin(type) : undefined;
+    if (plugin) {
+      setPluginItems(prev => prev.some(p => p.id === id) ? prev : [...prev, {
+        id,
+        _type: type as string,
+        timestamp: (entry.timestamp as string) ?? new Date().toISOString(),
+        ...plugin.fromHistory(entry),
+      }]);
+      if (entry.sleeping) setSleepingBubbles(prev => new Set(prev).add(id));
+    } else {
+      const running = !!entry.running;
+      setCommands(prev => prev.some(c => c.id === id) ? prev : [...prev, {
+        id,
+        command: (entry.command as string) ?? '',
+        output: (entry.output as string) ?? '',
+        exitCode: entry.exitCode as number | undefined,
+        isRunning: running,
+        timestamp: (entry.timestamp as string) ?? new Date().toISOString(),
+        cwd: entry.cwd as string | undefined,
+        usePty: entry.usePty as boolean | undefined,
+      }]);
+      if (running) attachRunningCommand(id, !!entry.usePty);
+    }
+    setBubbleOrder(prev => (prev && !prev.includes(id)) ? [...prev, id] : prev);
+  }, [attachRunningCommand]);
+
+  // Apply one delta from another tab. Last-writer-wins: add=upsert,
+  // rerun=reset+re-attach, update=patch-only-if-present (never resurrects a
+  // deleted bubble), delete/clear=remove, reorder=replace. Output never travels
+  // here — it rides the per-command terminal stream.
+  const applyConsoleDelta = useCallback((msg: {
+    op?: string;
+    entry?: Record<string, unknown>;
+    id?: string;
+    fields?: Record<string, unknown>;
+    order?: string[];
+  }) => {
+    if (msg.op === 'add') {
+      if (msg.entry) addConsoleEntry(msg.entry);
+    } else if (msg.op === 'rerun') {
+      const entry = msg.entry;
+      const id = entry?.id as string | undefined;
+      if (!entry || !id) return;
+      // Don't have this bubble yet → just add it fresh.
+      if (!consoleItemsRef.current.some(i => i.data.id === id)) {
+        addConsoleEntry(entry);
+        return;
+      }
+      // Reset the existing bubble and re-attach to the new run. Keep PTY
+      // subscribers (the mounted xterm) so the fresh ring-buffer replay lands.
+      const usePty = !!entry.usePty;
+      if (usePty) {
+        const resetters = ptyResettersRef.current.get(id);
+        if (resetters) for (const r of resetters) r();
+      }
+      cleanupOutputRefs(id, usePty);
+      setCommands(prev => prev.map(c => c.id === id
+        ? { ...c, output: '', exitCode: undefined, isRunning: true, pid: undefined }
+        : c));
+      attachRunningCommand(id, usePty);
+    } else if (msg.op === 'update') {
+      const id = msg.id;
+      const fields = msg.fields;
+      if (!id || !fields) return;
+      if (fields.sleeping !== undefined) {
+        setSleepingBubbles(prev => {
+          const next = new Set(prev);
+          if (fields.sleeping) next.add(id); else next.delete(id);
+          return next;
+        });
+      }
+      if (fields.exitCode !== undefined || fields.running !== undefined) {
+        setCommands(prev => prev.map(c => c.id === id ? {
+          ...c,
+          ...(fields.exitCode !== undefined ? { exitCode: fields.exitCode as number } : {}),
+          ...(fields.running !== undefined ? { isRunning: fields.running as boolean } : {}),
+        } : c));
+      }
+    } else if (msg.op === 'delete') {
+      const id = msg.id;
+      if (!id) return;
+      setCommands(prev => prev.filter(c => c.id !== id));
+      setPluginItems(prev => prev.filter(p => p.id !== id));
+      setBubbleOrder(prev => prev ? prev.filter(x => x !== id) : prev);
+      setSleepingBubbles(prev => { if (!prev.has(id)) return prev; const next = new Set(prev); next.delete(id); return next; });
+      cleanupOutputRefs(id);
+    } else if (msg.op === 'clear') {
+      setCommands([]);
+      setPluginItems([]);
+      setBubbleOrder([]);
+      setSleepingBubbles(new Set());
+    } else if (msg.op === 'reorder') {
+      if (Array.isArray(msg.order)) setBubbleOrder(msg.order);
+    }
+  }, [addConsoleEntry, attachRunningCommand, cleanupOutputRefs]);
+
+  useWebSocket({
+    url: '/ws/global-state',
+    enabled: !!cwd && !!tabId,
+    onMessage: (raw) => {
+      const p = raw as {
+        type?: string; cwd?: string; tabId?: string; sourceId?: string;
+        op?: string; entry?: Record<string, unknown>; id?: string;
+        fields?: Record<string, unknown>; order?: string[];
+      };
+      if (p.type !== 'console-delta') return;
+      if (p.cwd !== cwd || p.tabId !== tabId) return;
+      if (p.sourceId && p.sourceId === sourceIdRef.current) return; // ignore own echo
+      applyConsoleDelta(p);
+    },
+  });
 
   // ========== Command execution ==========
 
@@ -510,6 +700,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
         projectCwd: cwd,
         env: customEnv,
         usePty,
+        sourceId: sourceIdRef.current,
         onData: (type, data) => {
           if (type === 'pid') {
             setCommands((prev) =>
@@ -618,6 +809,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
         projectCwd: cwd,
         env: customEnv,
         usePty: cmdUsePty,
+        sourceId: sourceIdRef.current,
         ...(cmdUsePty && ptySize ? { cols: ptySize.cols, rows: ptySize.rows } : {}),
         onData: (type, data) => {
           if (type === 'pid') {
@@ -673,7 +865,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
     cleanupOutputRefs(commandId);
     if (tabId) {
       await BrowserRuntime.runPromise(
-        deleteHistoryEntry(cwd, tabId, commandId).pipe(
+        deleteHistoryEntry(cwd, tabId, commandId, sourceIdRef.current).pipe(
           Effect.tapError((err) =>
             Effect.sync(() => console.error('Failed to delete command:', err))
           ),
@@ -718,7 +910,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
       setBubbleOrder(currentOrder);
       if (tabId) {
         BrowserRuntime.runFork(
-          saveBubbleOrderEff(cwd, tabId, currentOrder).pipe(
+          saveBubbleOrderEff(cwd, tabId, currentOrder, sourceIdRef.current).pipe(
             Effect.orElse(() => Effect.void)
           )
         );
@@ -734,7 +926,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
           id: item.id,
           timestamp: item.timestamp,
           ...historyFields,
-        }).pipe(
+        }, sourceIdRef.current).pipe(
           Effect.tapError((e) =>
             Effect.sync(() => console.error(`Failed to save ${type} item:`, e))
           ),
@@ -759,7 +951,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
     // Delete persisted entry
     if (tabId) {
       BrowserRuntime.runFork(
-        deleteHistoryEntry(cwd, tabId, id).pipe(
+        deleteHistoryEntry(cwd, tabId, id, sourceIdRef.current).pipe(
           Effect.tapError((e) =>
             Effect.sync(() => console.error('Failed to delete plugin item:', e))
           ),
@@ -775,7 +967,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
   const persistSleeping = useCallback((id: string, sleeping: boolean) => {
     if (!tabId) return;
     BrowserRuntime.runFork(
-      patchHistoryEntry(cwd, tabId, id, { sleeping }).pipe(
+      patchHistoryEntry(cwd, tabId, id, { sleeping }, sourceIdRef.current).pipe(
         Effect.orElse(() => Effect.void)
       )
     );
@@ -797,7 +989,7 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
     setBubbleOrder(newOrder);
     if (!tabId) return;
     await BrowserRuntime.runPromise(
-      saveBubbleOrderEff(cwd, tabId, newOrder).pipe(
+      saveBubbleOrderEff(cwd, tabId, newOrder, sourceIdRef.current).pipe(
         Effect.orElse(() => Effect.void)
       )
     );
@@ -952,5 +1144,6 @@ export function useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange }: Us
     // PTY direct-write subscription (bypass React state, write to xterm directly)
     subscribePtyOutput,
     subscribePtyReset,
+    subscribePtyRefresh,
   };
 }

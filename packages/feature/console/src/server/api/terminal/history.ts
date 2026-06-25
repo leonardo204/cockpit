@@ -13,6 +13,7 @@ import {
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
 import { reconcileOrphanedRunning } from "../../terminal/RunningCommandRegistry"
+import { broadcastConsoleDelta } from "../../terminal/consoleBroadcast"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -135,6 +136,7 @@ export const DELETE = handler((req) =>
     const cwd = sp.get("cwd")
     const tabId = sp.get("tabId")
     const commandId = sp.get("commandId")
+    const sourceId = sp.get("sourceId") ?? undefined
 
     if (!cwd || !tabId) {
       return yield* Effect.fail(
@@ -208,6 +210,12 @@ export const DELETE = handler((req) =>
       catch: (cause) =>
         new FSError({ path: historyPath, op: "rm", cause }),
     })
+    broadcastConsoleDelta(
+      cwd,
+      tabId,
+      commandId ? { op: "delete", id: commandId } : { op: "clear" },
+      sourceId
+    )
     return ok({ success: true })
   })
 )
@@ -222,6 +230,7 @@ export const POST = handler((req) =>
       cwd?: string
       tabId?: string
       entry?: HistoryEntry
+      sourceId?: string
     }
     if (!body.cwd || !body.tabId || !body.entry) {
       return yield* Effect.fail(
@@ -231,7 +240,7 @@ export const POST = handler((req) =>
         })
       )
     }
-    const { cwd, tabId, entry } = body
+    const { cwd, tabId, entry, sourceId } = body
     const historyPath = getTerminalHistoryPath(cwd, tabId)
 
     const result = yield* Effect.tryPromise({
@@ -295,6 +304,15 @@ export const POST = handler((req) =>
       catch: (cause) =>
         new FSError({ path: historyPath, op: "write", cause }),
     })
+    // Sync the new bubble to other tabs (skip if it was a dup no-op).
+    if (result.success && !("skipped" in result && result.skipped)) {
+      broadcastConsoleDelta(
+        cwd,
+        tabId,
+        { op: "add", entry: entry as unknown as Record<string, unknown> },
+        sourceId
+      )
+    }
     return ok(result)
   })
 )
@@ -310,6 +328,7 @@ export const PATCH = handler((req) =>
       tabId?: string
       id?: string
       fields?: Record<string, unknown>
+      sourceId?: string
     }
     if (!body.cwd || !body.tabId || !body.id || !body.fields) {
       return yield* Effect.fail(
@@ -319,7 +338,7 @@ export const PATCH = handler((req) =>
         })
       )
     }
-    const { cwd, tabId, id, fields } = body
+    const { cwd, tabId, id, fields, sourceId } = body
     const historyPath = getTerminalHistoryPath(cwd, tabId)
 
     const result = yield* Effect.tryPromise({
@@ -362,6 +381,9 @@ export const PATCH = handler((req) =>
       catch: (cause) =>
         new FSError({ path: historyPath, op: "write", cause }),
     })
+    if (result.updated) {
+      broadcastConsoleDelta(cwd, tabId, { op: "update", id, fields }, sourceId)
+    }
     return ok(result)
   })
 )

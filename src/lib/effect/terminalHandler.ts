@@ -212,7 +212,7 @@ const dispatchMessage = (
     const type = msg.type as string
 
     if (type === "exec") {
-      const { commandId, command, cwd, tabId, env, usePty, cols, rows } =
+      const { commandId, command, cwd, tabId, env, usePty, cols, rows, sourceId } =
         msg as {
           commandId: string
           command: string
@@ -222,6 +222,7 @@ const dispatchMessage = (
           usePty?: boolean
           cols?: number
           rows?: number
+          sourceId?: string
         }
 
       if (!commandId || !command || !cwd || !tabId) {
@@ -295,6 +296,7 @@ const dispatchMessage = (
             ptyProcess,
             usePty: true,
             timestamp: new Date().toISOString(),
+            sourceId,
           })
           Effect.runFork(send({ type: "pid", commandId, pid: ptyProcess.pid }))
           Effect.runFork(
@@ -317,6 +319,7 @@ const dispatchMessage = (
               pid: child.pid,
               process: child,
               timestamp: new Date().toISOString(),
+              sourceId,
             })
             Effect.runFork(send({ type: "pid", commandId, pid: child.pid }))
             Effect.runFork(

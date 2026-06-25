@@ -38,6 +38,8 @@ interface CommandBubbleProps {
   subscribePtyOutput?: (commandId: string, writer: (data: string) => void) => () => void;
   /** Subscribe to PTY reset signal (rerun clears xterm) */
   subscribePtyReset?: (commandId: string, resetter: () => void) => () => void;
+  /** Subscribe to PTY refresh signal (repaint after a reorder DOM move) */
+  subscribePtyRefresh?: (commandId: string, refresher: () => void) => () => void;
   onPtyResize?: (cols: number, rows: number) => void;
   onToggleMaximize?: () => void;
   maximized?: boolean;
@@ -182,6 +184,7 @@ export const CommandBubble = memo(function CommandBubble({
   usePty,
   subscribePtyOutput,
   subscribePtyReset,
+  subscribePtyRefresh,
   onPtyResize,
   onToggleMaximize,
   maximized,
@@ -249,6 +252,29 @@ export const CommandBubble = memo(function CommandBubble({
       unsub?.();
     };
   }, [subscribePtyReset, commandId]);
+
+  // PTY refresh: subscribe to refresh signal (reorder relocates the DOM node and
+  // drops the rendered rows; repaint from the buffer).
+  useEffect(() => {
+    if (!subscribePtyRefresh || !commandId) return;
+    const trySubscribe = () => {
+      if (xtermSearchRef.current) {
+        const refresher = xtermSearchRef.current.refresh;
+        return subscribePtyRefresh(commandId, refresher);
+      }
+      return null;
+    };
+    let unsub = trySubscribe();
+    if (unsub) return unsub;
+    const timer = setInterval(() => {
+      unsub = trySubscribe();
+      if (unsub) clearInterval(timer);
+    }, 50);
+    return () => {
+      clearInterval(timer);
+      unsub?.();
+    };
+  }, [subscribePtyRefresh, commandId]);
 
   // Search state (shared by PTY and Pipe)
   const [searchVisible, setSearchVisible] = useState(false);

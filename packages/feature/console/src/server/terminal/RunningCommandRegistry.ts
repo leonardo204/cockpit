@@ -11,6 +11,7 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { getTerminalHistoryPath, getTerminalOutputPath, ensureParentDir } from '@cockpit/shared-utils';
 import { registerTerminal, finalizeTerminal, notifyOutputListeners, notifyExitListeners } from './TerminalBridge';
+import { broadcastConsoleDelta } from './consoleBroadcast';
 
 const MAX_OUTPUT_LINES = 5000;
 const OUTPUT_FILE_THRESHOLD = 4096;
@@ -139,6 +140,9 @@ export interface RunningCommand {
   /** PTY raw output ring buffer — only set in PTY mode, released on finalize */
   ptyRingBuffer?: PtyRingBuffer;
   timestamp: string;
+  /** Originating browser tab's sync id — echoed in the placeholder broadcast so
+   *  the tab that started/reran the command ignores its own delta. */
+  sourceId?: string;
   /**
    * Pipe mode: monotonic count of complete (newline-terminated) lines ever
    * appended. Never decreases — splice() trimming `outputLines` does NOT
@@ -203,7 +207,7 @@ export function registerCommand(
   registerTerminal(cmd.tabId, cmd.commandId, cmd.command, cmd.projectCwd);
 
   // Write placeholder entry to disk (no output, marked as running)
-  writeHistoryPlaceholder(cmd.commandId, cmd.command, cmd.timestamp, cmd.cwd, cmd.projectCwd, cmd.tabId, !!cmd.usePty).catch(() => {});
+  writeHistoryPlaceholder(cmd.commandId, cmd.command, cmd.timestamp, cmd.cwd, cmd.projectCwd, cmd.tabId, !!cmd.usePty, cmd.sourceId).catch(() => {});
 
   if (cmd.ptyProcess) {
     // PTY mode: single data event (stdout + stderr merged, matching a real terminal).
@@ -361,6 +365,7 @@ export function getAllProjectCwds(): string[] {
 async function writeHistoryPlaceholder(
   commandId: string, command: string, timestamp: string,
   cwd: string, projectCwd: string, tabId: string, usePty: boolean,
+  sourceId?: string,
 ): Promise<void> {
   const historyPath = getTerminalHistoryPath(projectCwd, tabId);
   await ensureParentDir(historyPath);
@@ -377,20 +382,44 @@ async function writeHistoryPlaceholder(
     existingLines = content.trim().split('\n').filter(Boolean);
   } catch { /* file does not exist */ }
 
-  // Limit to 100 entries max
-  if (existingLines.length >= 100) {
-    const removedLines = existingLines.slice(0, existingLines.length - 99);
-    for (const line of removedLines) {
-      try {
-        const old = JSON.parse(line);
-        if (old.outputFile) await fs.unlink(old.outputFile).catch(() => {});
-      } catch { /* ignore */ }
-    }
-    existingLines = existingLines.slice(-99);
+  // Rerun: an entry with this id already exists (finalized from a previous run).
+  // Replace it in place (avoids duplicate-id lines) and signal a rerun, not an add.
+  let isRerun = false;
+  for (let i = 0; i < existingLines.length; i++) {
+    try {
+      if (JSON.parse(existingLines[i]).id === commandId) {
+        existingLines[i] = JSON.stringify(entry);
+        isRerun = true;
+        break;
+      }
+    } catch { /* ignore unparseable */ }
   }
 
-  existingLines.push(JSON.stringify(entry));
+  if (!isRerun) {
+    // Limit to 100 entries max (only when appending a genuinely new bubble)
+    if (existingLines.length >= 100) {
+      const removedLines = existingLines.slice(0, existingLines.length - 99);
+      for (const line of removedLines) {
+        try {
+          const old = JSON.parse(line);
+          if (old.outputFile) await fs.unlink(old.outputFile).catch(() => {});
+        } catch { /* ignore */ }
+      }
+      existingLines = existingLines.slice(-99);
+    }
+    existingLines.push(JSON.stringify(entry));
+  }
+
   await fs.writeFile(historyPath, existingLines.join('\n') + '\n', 'utf-8');
+
+  // Sync to other tabs. sourceId lets the originating tab drop its own echo
+  // (critical for rerun: that tab already reset + re-attached locally).
+  broadcastConsoleDelta(
+    projectCwd,
+    tabId,
+    isRerun ? { op: 'rerun', entry } : { op: 'add', entry },
+    sourceId,
+  );
 }
 
 /**
@@ -463,6 +492,16 @@ export async function finalizeCommand(commandId: string, exitCode: number, pid?:
   }
 
   await fs.writeFile(historyPath, existingLines.join('\n') + '\n', 'utf-8');
+
+  // Flip the bubble to finished in other tabs. Output is NOT sent here — it rides
+  // the per-command terminal stream (each attached tab already got the exit event).
+  // sourceId = the tab that started/reran this run, so it ignores its own finalize
+  // (otherwise an old run's finalize could race a rerun and unset isRunning).
+  broadcastConsoleDelta(cmd.projectCwd, cmd.tabId, {
+    op: 'update',
+    id: cmd.commandId,
+    fields: { running: false, exitCode },
+  }, cmd.sourceId);
 }
 
 /** Sentinel exit code for a PTY/command that was still running when the server died. */

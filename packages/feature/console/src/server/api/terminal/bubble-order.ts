@@ -21,6 +21,7 @@ import {
 } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
+import { broadcastConsoleDelta } from "../../terminal/consoleBroadcast"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -97,6 +98,7 @@ export const POST = handler((req) =>
       order?: string[]
       /** Partial patch: existing entries kept; entries set to "" are deleted. */
       titles?: Record<string, string>
+      sourceId?: string
     }
     if (!body.cwd || !body.tabId) {
       return yield* Effect.fail(
@@ -136,6 +138,23 @@ export const POST = handler((req) =>
       catch: (cause) =>
         new FSError({ path: orderPath, op: "write", cause }),
     })
+    // Sync both reorder and title changes to other tabs.
+    if (hasOrder) {
+      broadcastConsoleDelta(
+        body.cwd,
+        body.tabId,
+        { op: "reorder", order: next.order },
+        body.sourceId
+      )
+    }
+    if (hasTitles) {
+      broadcastConsoleDelta(
+        body.cwd,
+        body.tabId,
+        { op: "rename", titles: body.titles as Record<string, string> },
+        body.sourceId
+      )
+    }
     return ok({ success: true })
   })
 )

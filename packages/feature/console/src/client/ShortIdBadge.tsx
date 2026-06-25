@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from '@cockpit/shared-ui';
+import { toast, useWebSocket } from '@cockpit/shared-ui';
 import { TitleEditDialog } from './TitleEditDialog';
 
 /** Use `cockpit-dev` on the dev port; `cockpit` (the recommended long-name
@@ -62,6 +62,25 @@ export const ShortIdBadge = memo(function ShortIdBadge({
       .catch(() => { /* ignore */ });
     return () => { cancelled = true; };
   }, [fullId, projectCwd, tabId]);
+
+  // Keep the title in sync when another browser tab renames this bubble.
+  // Apply is idempotent (sets the same string), so our own echo is harmless.
+  useWebSocket({
+    url: '/ws/global-state',
+    enabled: !!fullId && !!projectCwd && !!tabId,
+    onMessage: (raw) => {
+      const p = raw as {
+        type?: string; cwd?: string; tabId?: string; op?: string;
+        titles?: Record<string, string>;
+      };
+      if (p.type !== 'console-delta' || p.op !== 'rename') return;
+      if (p.cwd !== projectCwd || p.tabId !== tabId) return;
+      if (!p.titles || !fullId) return;
+      if (Object.prototype.hasOwnProperty.call(p.titles, fullId)) {
+        setTitle(p.titles[fullId] ?? '');
+      }
+    },
+  });
 
   const handleClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
