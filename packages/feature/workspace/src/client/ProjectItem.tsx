@@ -125,7 +125,7 @@ export function ProjectItem({
 
       {!collapsed && (
         <>
-          <span className="flex-1 truncate text-sm">{name}</span>
+          <span className={`flex-1 truncate text-sm ${isActive ? 'text-brand' : ''}`}>{name}</span>
 
           {/* Status indicator: active (brand color), loading dot moved to top-right of number */}
           {!isLoading && isActive ? (
