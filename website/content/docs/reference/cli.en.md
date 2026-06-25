@@ -443,10 +443,10 @@ Designed so warnings don't break shell pipelines:
 
 ### Prerequisites
 
-The CLI hits `http://localhost:3457` by default (the **same port** as the main Cockpit server — not a separate codegraph port). Override via:
+The CLI hits `http://localhost:3457` by default (the **same port** as the main Cockpit server — not a separate codegraph port). The host is always loopback (the CLI and server are always co-located); only the port is overridable:
 
 ```bash
-COCKPIT_HOST=… COCKPIT_PORT=… cock codegraph …
+COCKPIT_PORT=… cock codegraph …
 ```
 
 ### Examples

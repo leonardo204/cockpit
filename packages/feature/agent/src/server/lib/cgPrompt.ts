@@ -8,8 +8,9 @@
  * slashCommands.ts stay a thin registry.
  *
  * `{{BASE_URL}}` placeholder is resolved at expansion time by
- * resolveCommandPrompt in slashCommands.ts (substituted with the live request
- * origin, so deployed reverse-proxy URLs work).
+ * resolveCommandPrompt in slashCommands.ts (substituted with the loopback
+ * origin http://localhost:<port> — the agent runs these curls on the server
+ * host, so loopback is always reachable and needs no auth token).
  *
  * Trailing user text is labeled "探索问题：" / "Exploration:" via the
  * CG_LABEL_* exports below — not the neutral "问题：" / "Question:" used by

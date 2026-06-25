@@ -60,31 +60,14 @@ const BUILTIN_SKILLS_DIR = join(COCKPIT_DIR, 'skills');
 /**
  * Derive the base URL the AI should use in its curl recipes.
  *
- * Why we can't hard-code `http://localhost:<port>`: cockpit may be deployed
- * behind a reverse proxy (nginx / Cloudflare / Tailscale Funnel / etc) at a
- * public URL like `https://cockpit.example.com`. The AI runs bash on the
- * server, so localhost would actually work for the curl execution itself —
- * but the curl command is ALSO shown to the user as part of the AI's
- * reasoning. If the user is on a different machine, "curl localhost:3457"
- * is unreproducible noise.
- *
- * Precedence:
- *   1. X-Forwarded-Proto / X-Forwarded-Host  (reverse proxy: trust them)
- *   2. req.url's origin                       (direct connection: use it)
- *
- * The fallback (no req at all) is `http://localhost:<COCKPIT_PORT>`, used by
- * call sites that don't have a Request handy (rare; tests / CLI).
+ * Always `http://localhost:<COCKPIT_PORT>`. The only consumer of {{BASE_URL}}
+ * is /cg's curl recipes, which the agent runs via bash on the *same machine*
+ * as the server — so loopback is always reachable, never needs auth, and never
+ * leaks a token into the user-visible / on-disk SKILL.md. We deliberately do
+ * NOT honor X-Forwarded-Host: a public/proxy URL would force the curls through
+ * the auth gate (401) and is irrelevant to a co-located executor.
  */
-function deriveBaseUrl(req?: Request): string {
-  if (req) {
-    const url = new URL(req.url);
-    const proto = req.headers.get('x-forwarded-proto');
-    const host = req.headers.get('x-forwarded-host');
-    if (proto || host) {
-      return `${proto ?? url.protocol.replace(':', '')}://${host ?? url.host}`;
-    }
-    return url.origin;
-  }
+function deriveBaseUrl(): string {
   const port = process.env.COCKPIT_PORT || process.env.PORT || '3457';
   return `http://localhost:${port}`;
 }
@@ -119,12 +102,15 @@ const COMMAND_LINE_RE = /^\s*([/@])([a-zA-Z][a-zA-Z0-9-]*)(?:\s+|$)/;
 // "pointer + label + body" output. Two+ commands, or any `@`, or leading
 // preamble text, switch to a numbered step list framed for sequential dispatch.
 //
-// `{{BASE_URL}}` placeholders are substituted with the live base URL at WRITE
-// time so /cg's curl recipes are reachable from whatever URL the user sees.
+// `{{BASE_URL}}` placeholders are substituted at WRITE time with the loopback
+// base URL (http://localhost:<port>) — /cg's curl recipes are executed by the
+// agent on the server host, so loopback is always reachable and never needs a
+// token. `_req` is kept on the signature for call-site threading but is no
+// longer consulted for the base URL (see deriveBaseUrl).
 export function resolveCommandPrompt(
   prompt: string,
   language = 'en',
-  req?: Request,
+  _req?: Request,
 ): string {
   const lang: 'zh' | 'en' = language.startsWith('zh') ? 'zh' : 'en';
 
@@ -152,7 +138,7 @@ export function resolveCommandPrompt(
     return { marker: mk.marker, cmd: mk.cmd, body };
   });
 
-  const baseUrl = deriveBaseUrl(req);
+  const baseUrl = deriveBaseUrl();
   const resolved = steps.map((s) => resolveStep(s, lang, baseUrl, userSkills));
 
   // ── Single `/command`, no preamble → original compact output ──
@@ -272,7 +258,7 @@ function readSkillName(path: string): string | null {
 // and return the absolute path. `content` IS a complete SKILL.md (YAML
 // frontmatter + body) — identical in shape to a user-defined skill — so it's
 // written verbatim, no frontmatter synthesis. Overwritten on every dispatch so
-// the file always reflects the current code + the current request's base URL.
+// the file always reflects the current code + the loopback base URL.
 // Returns null on any failure so the caller can fall back to inlining.
 //
 // Synchronous fs on purpose: keeps resolveCommandPrompt's sync signature — all

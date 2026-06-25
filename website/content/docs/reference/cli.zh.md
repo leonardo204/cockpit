@@ -443,10 +443,10 @@ affected  <file>                                     # 每行一个测试路径
 
 ### 前置条件
 
-默认连接 `http://localhost:3457`(跟主 Cockpit 服务**同一个端口**,不是单独的 codegraph 端口)。如需换地址:
+默认连接 `http://localhost:3457`(跟主 Cockpit 服务**同一个端口**,不是单独的 codegraph 端口)。host 恒为 loopback(CLI 与 server 总在同机),只能改端口:
 
 ```bash
-COCKPIT_HOST=… COCKPIT_PORT=… cock codegraph …
+COCKPIT_PORT=… cock codegraph …
 ```
 
 ### 示例

@@ -18,9 +18,12 @@
  */
 import { argv, cwd, exit, stderr, stdin, stdout, env } from 'node:process';
 
-const PORT = env.COCKPIT_PORT || '3457';
-const HOST = env.COCKPIT_HOST || 'localhost';
-const BASE = `http://${HOST}:${PORT}`;
+// The CLI always talks to the co-located server over loopback — same contract
+// as /cg's agent curls. We deliberately do NOT honor COCKPIT_HOST here: pointing
+// the CLI at a remote/public host would go through the auth gate, and the only
+// real consumer is the server running on this machine.
+const PORT = env.COCKPIT_PORT || env.PORT || '3457';
+const BASE = `http://localhost:${PORT}`;
 
 const SUBCMDS = [
   'search', 'callers', 'callees', 'impact', 'file', 'coedit',
@@ -590,7 +593,7 @@ Exit codes:
 
 Prerequisites:
   Cockpit server running at ${BASE}
-  (override host/port: COCKPIT_HOST, COCKPIT_PORT)
+  (override port: COCKPIT_PORT; host is always loopback)
 
 Examples:
   cock codegraph search getCodeIndex
