@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect, memo } from 'react';
+import { useState, useCallback, useEffect, useRef, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast, useWebSocket } from '@cockpit/shared-ui';
 import { TitleEditDialog } from './TitleEditDialog';
@@ -43,6 +43,10 @@ export const ShortIdBadge = memo(function ShortIdBadge({
   const [registered, setRegistered] = useState(false);
   const [title, setTitle] = useState('');
   const [editing, setEditing] = useState(false);
+  // Anchor for the title popover. Only one trigger renders at a time
+  // (✎ when a title is set, "set title" chip otherwise), so a single ref
+  // attached to whichever is mounted is enough.
+  const editAnchorRef = useRef<HTMLButtonElement>(null);
 
   // Fetch existing title once per (fullId, projectCwd, tabId) tuple. The
   // bubble-order GET returns { order, titles } where titles is keyed by fullId
@@ -150,6 +154,7 @@ export const ShortIdBadge = memo(function ShortIdBadge({
         >
           <span className="px-1 py-0.5 rounded bg-muted/40 max-w-[120px] truncate">{title}</span>
           <button
+            ref={editAnchorRef}
             onClick={openEdit}
             className="opacity-50 hover:opacity-100 transition-opacity"
             aria-label={t('shortIdBadge.editTitle')}
@@ -161,6 +166,7 @@ export const ShortIdBadge = memo(function ShortIdBadge({
       ) : (
         // No title → muted "set title" chip; whole thing is clickable.
         <button
+          ref={editAnchorRef}
           onClick={openEdit}
           className="inline-flex items-center gap-0.5 text-[10px] leading-none flex-shrink-0 text-muted-foreground/50 hover:text-muted-foreground italic transition-colors"
           title={t('shortIdBadge.setTitle')}
@@ -170,6 +176,7 @@ export const ShortIdBadge = memo(function ShortIdBadge({
       ))}
       <TitleEditDialog
         open={editing}
+        anchorRef={editAnchorRef}
         initialValue={title}
         onCancel={() => setEditing(false)}
         onSave={saveTitle}
