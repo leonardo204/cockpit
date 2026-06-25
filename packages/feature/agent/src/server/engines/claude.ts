@@ -4,6 +4,57 @@ import { runSdkLoop, type BuildSdkOptions } from './shared/sdkLoop';
 import { runPtyTurn } from './shared/ptyBranch';
 import type { EngineSpec, RunCtx } from './types';
 
+type PlanPermissionResult =
+  | { behavior: 'allow'; updatedInput: Record<string, unknown> }
+  | { behavior: 'deny'; message: string; interrupt?: boolean };
+
+const PLAN_EDIT_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+/** True for paths inside a `.claude/plans/` directory (project- or home-relative). */
+const isPlanFilePath = (p: string): boolean => /(^|\/)\.claude\/plans\//.test(p);
+
+/**
+ * Plan-mode permission resolver. There is NO interactive approval dialog in this environment, so
+ * every tool that would raise a permission prompt must be resolved here — otherwise the request
+ * hangs and the call fails silently (e.g. the plan markdown write under the protected `.claude/`
+ * dir was being denied as a "sensitive file").
+ *
+ *  - ExitPlanMode → deny+interrupt: the turn ends the first time the model presents its plan; the
+ *    user approves by turning off Plan mode (plan card button) and resending.
+ *  - Write/Edit to `.claude/plans/**` → allow: this IS the plan artifact, not a code edit. (A)
+ *  - Any other file edit → deny with a model-visible reason (plan mode is read-only), so the model
+ *    adapts instead of receiving a blank result from a silently-dropped permission. (C)
+ */
+export function planPermission(
+  toolName: string,
+  input: Record<string, unknown>,
+  opts?: { blockedPath?: string },
+): PlanPermissionResult {
+  if (toolName === 'ExitPlanMode') {
+    return {
+      behavior: 'deny',
+      message:
+        'Plan presented to the user. There is no approval dialog to click in this environment — the user approves by turning off Plan mode (via the plan card button) and resending, which then executes. Do not ask the user to confirm in a popup; stop here.',
+      interrupt: true,
+    };
+  }
+  if (PLAN_EDIT_TOOLS.has(toolName)) {
+    const path = [input.file_path, input.notebook_path, input.path, opts?.blockedPath].find(
+      (v): v is string => typeof v === 'string',
+    );
+    if (path && isPlanFilePath(path)) {
+      return { behavior: 'allow', updatedInput: input }; // (A) plan artifact
+    }
+    return {
+      behavior: 'deny', // (C) read-only plan mode, no dialog → feedback instead of silent drop
+      message:
+        `Plan mode is read-only and this environment has no approval dialog, so "${toolName}"` +
+        `${path ? ` on ${path}` : ''} can't run. Only writes under .claude/plans/ are allowed. ` +
+        'Capture the intended changes in your plan instead of editing files now.',
+    };
+  }
+  return { behavior: 'allow', updatedInput: input };
+}
+
 /** Build claude/claude2 SDK options for one attempt. claude2 overrides the config dir. */
 function buildClaudeOptions(ctx: RunCtx): BuildSdkOptions {
   const { engine, permissionMode } = ctx.params;
@@ -16,20 +67,14 @@ function buildClaudeOptions(ctx: RunCtx): BuildSdkOptions {
     permissionMode: (isPlan ? 'plan' : 'bypassPermissions') as 'plan' | 'bypassPermissions',
     // allowDangerouslySkipPermissions only applies to bypassPermissions.
     ...(!isPlan && { allowDangerouslySkipPermissions: true as const }),
-    // Plan mode: intercept ExitPlanMode so the turn ends the first time the model presents its
-    // plan (no in-session approval dialog exists; the user approves via the plan card → resend).
+    // Plan mode: resolve every permission prompt here (see planPermission — no approval dialog
+    // exists, so unresolved requests fail silently, which is what broke the plan-file write).
     ...(isPlan && {
-      canUseTool: async (toolName: string, input: Record<string, unknown>) => {
-        if (toolName === 'ExitPlanMode') {
-          return {
-            behavior: 'deny' as const,
-            message:
-              'Plan presented to the user. There is no approval dialog to click in this environment — the user approves by turning off Plan mode (via the plan card button) and resending, which then executes. Do not ask the user to confirm in a popup; stop here.',
-            interrupt: true,
-          };
-        }
-        return { behavior: 'allow' as const, updatedInput: input };
-      },
+      canUseTool: async (
+        toolName: string,
+        input: Record<string, unknown>,
+        opts?: { blockedPath?: string },
+      ) => planPermission(toolName, input, opts),
     }),
     includePartialMessages: true,
     abortController: abort,
