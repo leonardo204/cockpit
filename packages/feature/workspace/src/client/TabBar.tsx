@@ -218,10 +218,10 @@ export function TabBar({
               onDragOver={(e) => onDragOver(e, index)}
               onDrop={() => onDrop(index)}
               onDragEnd={onDragEnd}
-              className={`group flex items-center gap-1 px-3 py-1.5 text-sm cursor-pointer rounded-t-lg transition-colors ${
+              className={`group flex items-center gap-1 px-3 py-1.5 text-sm cursor-pointer rounded-t-lg border-t-[1.5px] transition-colors ${
                 tab.id === activeTabId
-                  ? 'bg-accent text-foreground'
-                  : 'text-muted-foreground hover:bg-secondary'
+                  ? 'border-brand bg-slate-4 text-foreground font-medium'
+                  : 'border-transparent text-muted-foreground hover:bg-secondary/50'
               } ${dragTabIndex === index ? 'opacity-50' : ''} ${
                 dragOverTabIndex === index ? 'border-l-2 border-brand' : ''
               }`}
