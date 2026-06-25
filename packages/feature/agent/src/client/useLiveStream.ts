@@ -103,27 +103,54 @@ export function useLiveStream(
         ) as StreamEvent | undefined;
         const hc = humanEv?.message?.content;
         const humanText = typeof hc === 'string' ? hc : '';
-        setMessages((prev) => {
-          const base = prev.filter((m) => !(typeof m.id === 'string' && m.id.startsWith('live-')));
-          // Cut the in-flight turn's disk image ONLY when it is the exact tail shape we know
-          // it has mid-run: a trailing USER bubble whose text matches the in-flight prompt,
-          // with nothing after it (the assistant hasn't been flushed to disk yet). The
-          // snapshot then re-renders that turn from live events.
-          //
-          // Anchor on POSITION (must be the very last message), not just text. The old
-          // backward scan cut at the last user message that matched — but if the in-flight
-          // turn wasn't on disk yet, that "last user" was a COMPLETED PRIOR turn that merely
-          // shared the prompt text (a repeated "continue"/"go on"), and `slice(0,i)` deleted
-          // it AND everything after → real history vanished. If a completed assistant already
-          // follows the matching user, this is a prior turn: never delete it — accept a
-          // transient double-render that onComplete reconciles instead.
-          if (humanText) {
-            const last = base[base.length - 1];
-            if (last && last.role === 'user' && last.content === humanText) {
-              return base.slice(0, base.length - 1);
+        // Fingerprint THIS turn from the snapshot. The registry buffers only the current
+        // in-flight turn (a fresh events[] per startRun), so its top-level uuids and tool_use
+        // ids uniquely identify the turn's disk image — a prior completed turn that merely
+        // shares the prompt text carries different uuids/tool ids and won't match.
+        const snapUuids = new Set<string>();
+        const snapToolIds = new Set<string>();
+        for (const e of msg.events as StreamEvent[]) {
+          const u = (e as { uuid?: string })?.uuid;
+          if (typeof u === 'string') snapUuids.add(u);
+          if (e?.type === 'assistant' && Array.isArray(e.message?.content)) {
+            for (const b of e.message.content as Array<{ name?: string; id?: string }>) {
+              if (b?.name && typeof b.id === 'string') snapToolIds.add(b.id);
             }
           }
-          return base;
+        }
+        setMessages((prev) => {
+          const base = prev.filter((m) => !(typeof m.id === 'string' && m.id.startsWith('live-')));
+          // Drop the in-flight turn's DISK image when a viewer joined mid-run and the initial
+          // history load already rendered it — this is what prevents the "2 user + 2 assistant"
+          // double-render. The snapshot then re-renders that turn from live events.
+          if (!humanText) return base;
+          // Only the MOST-RECENT user bubble can be this turn's prompt. If it doesn't match the
+          // in-flight prompt text, the in-flight user isn't on disk → nothing to cut. (This also
+          // skips a repeated "continue"/"go on" whose matching user is an OLDER completed turn.)
+          let ui = -1;
+          for (let i = base.length - 1; i >= 0; i--) {
+            if (base[i].role === 'user') {
+              if (base[i].content === humanText) ui = i;
+              break;
+            }
+          }
+          if (ui === -1) return base;
+          // Cut [matching user … end] ONLY when everything after that user is THIS turn's
+          // already-flushed assistant — verified by uuid / tool_use id membership in the
+          // snapshot (which holds only the current turn). A Claude turn flushes its
+          // "text + tool_use" assistant message to the jsonl BEFORE the run ends, so the disk
+          // tail mid-run is `user → assistant(+tools)`, not just a bare trailing user; the old
+          // last-only check missed that assistant and double-rendered it. Anything that does NOT
+          // match the snapshot is real prior history → left untouched (the live turn still
+          // renders fresh, and onComplete reconciles any transient overlap).
+          const after = base.slice(ui + 1);
+          const isInflightTail = after.every(
+            (m) =>
+              m.role === 'assistant' &&
+              ((typeof m.id === 'string' && snapUuids.has(m.id)) ||
+                (!!m.toolCalls?.length && m.toolCalls.every((tc) => snapToolIds.has(tc.id))))
+          );
+          return isInflightTail ? base.slice(0, ui) : base;
         });
         curAssistantId.current = null;
         seq.current = 0;
