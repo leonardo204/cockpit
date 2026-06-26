@@ -148,6 +148,32 @@ export const loadSessionsByProject = <T = unknown>(
   httpJson(`/api/sessions/projects/${encodeURIComponent(encodedPath)}`)
 
 // ─────────────────────────────────────────────────────────
+// /api/global-state (GET) — the full persisted recent-session list (up to 100).
+// Backs the recent-sessions search panel; the sidebar dropdown still streams
+// its top-15 view over /ws/global-state.
+// ─────────────────────────────────────────────────────────
+
+export interface RecentSessionInfo {
+  cwd: string
+  sessionId: string
+  lastActive: number
+  status: string
+  title?: string
+  lastUserMessage?: string
+  firstMessages?: string[]
+  lastMessages?: string[]
+  engine?: string
+}
+
+export const loadRecentSessions = (): Effect.Effect<
+  ReadonlyArray<RecentSessionInfo>,
+  AppError
+> =>
+  httpJson<{ sessions: RecentSessionInfo[] }>("/api/global-state").pipe(
+    Effect.map((r) => r.sessions ?? [])
+  )
+
+// ─────────────────────────────────────────────────────────
 // /api/ollama/{models,start}
 // ─────────────────────────────────────────────────────────
 

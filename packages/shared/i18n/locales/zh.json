@@ -167,6 +167,8 @@
     "browseAllSessions": "浏览所有会话",
     "sessionList": "会话列表",
     "searchSessions": "搜索会话...",
+    "searchRecentSessions": "搜索最近会话",
+    "loadSessionsFailed": "加载会话失败",
     "loadingSessions": "加载会话中...",
     "noMatchingSessions": "未找到匹配的会话",
     "noSessionsYet": "暂无会话",

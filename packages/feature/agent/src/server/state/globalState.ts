@@ -30,7 +30,14 @@ interface GlobalState {
   sessions: GlobalSession[];
 }
 
-const MAX_SESSIONS = 15;
+// Retention for the persisted recent-session list, backing the search panel:
+//   - keep sessions active within the last week …
+//   - … but never fewer than MIN_SESSIONS (pad with older ones if the week is sparse)
+//   - … and never more than MAX_SESSIONS.
+// The sidebar dropdown still shows only the top 15 (sliced on the WS push path).
+const MAX_SESSIONS = 100;
+const MIN_SESSIONS = 15;
+const RETENTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // one week
 const MAX_TEXT_LEN = 50; // max character count for title / lastUserMessage
 
 /** Truncate by Unicode characters, appending an ellipsis if over the limit */
@@ -94,8 +101,13 @@ export async function updateGlobalState(
     // Sort by lastActive descending
     state.sessions.sort((a, b) => b.lastActive - a.lastActive);
 
-    // Keep only the most recent MAX_SESSIONS entries
-    state.sessions = state.sessions.slice(0, MAX_SESSIONS);
+    // Retention: keep the past week, clamped to [MIN_SESSIONS, MAX_SESSIONS].
+    // Sessions are sorted newest-first, so the within-week ones are a contiguous
+    // prefix — counting them gives the cut point directly.
+    const cutoff = Date.now() - RETENTION_WINDOW_MS;
+    const withinWeek = state.sessions.filter((s) => s.lastActive >= cutoff).length;
+    const keep = Math.min(MAX_SESSIONS, Math.max(MIN_SESSIONS, withinWeek));
+    state.sessions = state.sessions.slice(0, keep);
 
     await writeJsonFile(GLOBAL_STATE_FILE, state);
 

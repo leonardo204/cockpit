@@ -167,6 +167,8 @@
     "browseAllSessions": "Browse all sessions",
     "sessionList": "Session List",
     "searchSessions": "Search sessions...",
+    "searchRecentSessions": "Search recent sessions",
+    "loadSessionsFailed": "Failed to load sessions",
     "loadingSessions": "Loading sessions...",
     "noMatchingSessions": "No matching sessions",
     "noSessionsYet": "No sessions yet",

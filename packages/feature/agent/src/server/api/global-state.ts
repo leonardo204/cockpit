@@ -41,22 +41,24 @@ export const GET = handler(() =>
       }
     }
     state.sessions.sort((a, b) => b.lastActive - a.lastActive)
-    const recent = state.sessions.slice(0, 15)
-    const sessions = yield* Effect.promise(() =>
-      Promise.all(
-        recent.map(async (session) => {
-          const preview = await getSessionPreview(
-            session.cwd,
-            session.sessionId
-          )
-          return {
+    // Return the full persisted list (week-bounded, 15–100) enriched with a
+    // first/last user-message preview so the search panel can render the same
+    // card layout as ProjectSessionsModal. Each entry reads its transcript once;
+    // IO is local (<10ms) so a one-shot read on panel open is acceptable.
+    const sessions = yield* Effect.all(
+      state.sessions.map((session) =>
+        Effect.promise(() =>
+          getSessionPreview(session.cwd, session.sessionId)
+        ).pipe(
+          Effect.map((preview) => ({
             ...session,
             lastUserMessage: preview.lastUserMessage ?? session.lastUserMessage,
             firstMessages: preview.firstMessages,
             lastMessages: preview.lastMessages,
-          }
-        })
-      )
+          }))
+        )
+      ),
+      { concurrency: "unbounded" }
     )
     return ok({ sessions })
   })

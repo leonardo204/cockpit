@@ -11,6 +11,7 @@ export { MessageBubble } from './MessageBubble';
 export { OllamaModelPicker } from './OllamaModelPicker';
 export { DeepseekConfigPicker } from './DeepseekConfigPicker';
 export { ProjectSessionsModal } from './ProjectSessionsModal';
+export { RecentSessionsModal } from './RecentSessionsModal';
 export { TodoViewerModal } from './TodoViewerModal';
 export { UserMessagesModal } from './UserMessagesModal';
 export { AskQuestionViewerModal } from './AskQuestionViewerModal';

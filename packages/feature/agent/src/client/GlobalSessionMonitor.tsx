@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { fetchCurrentBranch } from '@cockpit/feature-explorer';
+import { RecentSessionsModal } from './RecentSessionsModal';
 
 export interface GlobalSession {
   cwd: string;
@@ -26,6 +27,7 @@ interface GlobalSessionMonitorProps {
 export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, sessions }: GlobalSessionMonitorProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [now, setNow] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Rich tooltip: which session is hovered + where to anchor it (fixed positioning
@@ -142,7 +144,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
       {/* Dropdown list - pops up to the upper right */}
       {isOpen && (
         <div className="absolute left-full bottom-0 ml-2 w-80 h-[450px] bg-popover border border-border rounded-lg shadow-lg z-50 flex flex-col">
-          <div className="px-3 py-2 border-b border-border bg-muted/50 flex-shrink-0 rounded-t-lg">
+          <div className="px-3 py-2 border-b border-border bg-muted/50 flex-shrink-0 rounded-t-lg flex items-center">
             <span className="text-sm font-medium">{t('sessions.recentSessions')}</span>
             {loadingCount > 0 && (
               <span className="ml-2 text-xs text-orange-11">({t('sessions.runningCount', { count: loadingCount })})</span>
@@ -150,6 +152,16 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
             {unreadCount > 0 && (
               <span className="ml-2 text-xs text-red-500">({t('sessions.unreadCount', { count: unreadCount })})</span>
             )}
+            {/* Expand into the full searchable recent-sessions panel (up to 100) */}
+            <button
+              onClick={() => { setNow(Date.now()); setIsOpen(false); setTooltip(null); setSearchOpen(true); }}
+              className="ml-auto p-1 -mr-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
+              title={t('sessions.searchRecentSessions')}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+              </svg>
+            </button>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto">
             {sessions.length === 0 ? (
@@ -248,6 +260,13 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
           ) : null}
         </div>
       )}
+
+      {/* Searchable full recent-sessions panel (up to 100) */}
+      <RecentSessionsModal
+        isOpen={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onSwitchProject={onSwitchProject}
+      />
     </div>
   );
 }
