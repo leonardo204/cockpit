@@ -70,7 +70,12 @@ html, body {
   --blue-11: 208 88% 43%;
 
   /* ---- 语义颜色 (shadcn 风格) ---- */
-  --background: 0 0% 98%;
+  /* Light-mode layering ladder (L%):
+     card/popover 100 > background 97 > muted 94.5 > secondary 92 > accent 89.5
+     > border 86 > input 81. Surfaces are spread across distinct steps (instead
+     of collapsing background↔card and secondary==muted) so panels lift and
+     hover/dividers read clearly. */
+  --background: var(--slate-2);
   --foreground: var(--slate-12);
   --card: 0 0% 100%;
   --card-foreground: var(--slate-12);
@@ -78,16 +83,16 @@ html, body {
   --popover-foreground: var(--slate-12);
   --primary: var(--slate-12);
   --primary-foreground: 0 0% 100%;
-  --secondary: var(--slate-3);
+  --secondary: var(--slate-4);
   --secondary-foreground: var(--slate-12);
   --muted: var(--slate-3);
   --muted-foreground: var(--slate-11);
-  --accent: var(--slate-4);
+  --accent: var(--slate-5);
   --accent-foreground: var(--slate-12);
   --destructive: var(--red-9);
   --destructive-foreground: 0 0% 100%;
-  --border: var(--slate-5);
-  --input: var(--slate-5);
+  --border: var(--slate-6);
+  --input: var(--slate-7);
   --ring: var(--teal-9);
   --brand: var(--teal-9);
   --brand-foreground: var(--teal-11);
