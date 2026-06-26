@@ -456,6 +456,12 @@
   },
   "console": {
     "enterCommandOrUrl": "输入命令或网址开始使用",
+    "emptyIntro": "在下方输入框输入以下内容，即可创建对应气泡：",
+    "bubbleCommand": "命令",
+    "bubbleInteractive": "交互终端",
+    "bubbleBrowser": "浏览器",
+    "bubbleDatabase": "数据库",
+    "bubbleNotebook": "笔记本",
     "loadingMore": "加载中...",
     "loadMoreHistory": "加载更多历史",
     "quickCommands": "快捷命令",

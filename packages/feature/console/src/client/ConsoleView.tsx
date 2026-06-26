@@ -27,6 +27,16 @@ interface ConsoleViewProps {
 
 const TOOLBAR_HEIGHT = 41;
 
+// Empty-state guide: supported bubble types and how to trigger each.
+// `label` is an i18n key; `triggers` are literal examples shown as code chips.
+const BUBBLE_GUIDE: { key: string; label: string; triggers: string[] }[] = [
+  { key: 'command', label: 'console.bubbleCommand', triggers: ['ls', 'git status', 'npm run dev'] },
+  { key: 'pty', label: 'console.bubbleInteractive', triggers: ['zsh', 'vim', 'python', 'top'] },
+  { key: 'browser', label: 'console.bubbleBrowser', triggers: ['https://…'] },
+  { key: 'database', label: 'console.bubbleDatabase', triggers: ['postgresql://', 'mysql://', 'redis://', 'neo4j://'] },
+  { key: 'notebook', label: 'console.bubbleNotebook', triggers: ['*.ipynb'] },
+];
+
 export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNote }: ConsoleViewProps) {
   const { t } = useTranslation();
   const state = useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange });
@@ -252,8 +262,34 @@ export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNo
       {/* Command history area */}
       <div ref={stateScrollRef} onScroll={handleScroll} className={`console-scroll-root flex-1 overflow-y-auto ${maximizedId ? '' : 'py-4 px-4'}`}>
         {consoleItems.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            {t('console.enterCommandOrUrl')}
+          <div className="flex items-center justify-center h-full">
+            <div className="w-full max-w-md flex flex-col gap-4 text-sm">
+              <p className="text-muted-foreground">{t('console.emptyIntro')}</p>
+              <ul className="flex flex-col gap-2">
+                {BUBBLE_GUIDE.map((b) => (
+                  <li key={b.key} className="flex items-start gap-3">
+                    <span className="w-16 flex-shrink-0 text-foreground font-medium">{t(b.label)}</span>
+                    <span className="flex flex-wrap gap-1">
+                      {b.triggers.map((tr) => (
+                        <code key={tr} className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono text-muted-foreground">{tr}</code>
+                      ))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                onClick={() => stateExecuteCommand('zsh')}
+                title={t('console.launchZsh')}
+                className="self-start flex items-center gap-2 px-4 py-2 rounded-lg border border-input bg-background text-sm text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 transition-all"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                New PTY
+              </button>
+            </div>
           </div>
         ) : (
           <>

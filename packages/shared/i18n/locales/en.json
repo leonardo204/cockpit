@@ -456,6 +456,12 @@
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",
+    "emptyIntro": "Type any of the following in the input bar to create a bubble:",
+    "bubbleCommand": "Command",
+    "bubbleInteractive": "Interactive",
+    "bubbleBrowser": "Browser",
+    "bubbleDatabase": "Database",
+    "bubbleNotebook": "Notebook",
     "loadingMore": "Loading...",
     "loadMoreHistory": "Load more history",
     "quickCommands": "Quick Commands",
