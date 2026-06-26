@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { MarkdownRenderer } from '@cockpit/shared-ui';
-import { SimpleCodeBlock } from '@cockpit/feature-explorer';
+import { SimpleCodeBlock, InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
 import { toast } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSkillContent } from './effect/skillsClient';
@@ -71,7 +70,7 @@ export function SkillPreviewModal({ skillId, onClose }: SkillPreviewModalProps) 
     <div className="fixed inset-0 z-[70] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
 
-      <div className="relative bg-card rounded-lg shadow-xl w-full max-w-4xl h-[85vh] mx-4 flex flex-col overflow-hidden">
+      <div className="relative bg-card rounded-lg shadow-xl w-full max-w-[70%] h-[90vh] mx-4 flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border flex-shrink-0">
           <div className="flex-1 min-w-0">
@@ -133,27 +132,32 @@ export function SkillPreviewModal({ skillId, onClose }: SkillPreviewModalProps) 
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-auto">
-          {loading ? (
-            <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-              Loading...
-            </div>
-          ) : !data || !data.valid ? (
-            <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-              File cannot be read.
-            </div>
-          ) : mode === 'preview' ? (
-            <div className="px-6 py-4">
-              <MarkdownRenderer content={data.content} />
-            </div>
-          ) : (
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+            Loading...
+          </div>
+        ) : !data || !data.valid ? (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+            File cannot be read.
+          </div>
+        ) : mode === 'preview' ? (
+          // Embedded markdown preview with TOC sidebar — same component as the chat message stream.
+          <InteractiveMarkdownPreview
+            content={data.content}
+            filePath={data.path}
+            cwd={data.path.slice(0, Math.max(0, data.path.lastIndexOf('/')))}
+            embedded
+            onClose={onClose}
+          />
+        ) : (
+          <div className="flex-1 overflow-auto">
             <SimpleCodeBlock
               content={data.content}
               filePath={data.path}
               className="min-h-full"
             />
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
