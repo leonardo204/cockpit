@@ -211,28 +211,78 @@ const SUMMARY_THRESHOLD = 10; // ≤ this many messages → all go into firstMes
 const SUMMARY_HEAD = 5;
 const SUMMARY_TAIL = 5;
 
+export const UNTITLED_SESSION = 'Untitled Session';
+
 export interface SessionPreview {
+  /** Live title (summary line preferred), regenerated from disk on every read. */
+  title: string;
   lastUserMessage?: string;
   firstMessages: string[];
   lastMessages: string[];
+  /**
+   * Full, UNTRUNCATED, lowercased corpus for the search panel: summary + every
+   * user message in order. Display fields (first/last) stay truncated+sampled;
+   * matching must not inherit that lossiness, so search reads this instead.
+   */
+  searchText: string;
+}
+
+/** Session content read in a single pass: the summary line + all user messages. */
+interface SessionContent {
+  summary: string;
+  messages: string[];
 }
 
 /**
- * Read a session preview in a single pass: the last user message plus a
- * first/last message summary, mirroring the ProjectSessionsModal cards
- * (≤10 messages → all in firstMessages; otherwise first 5 + last 5). Each
- * summary message is truncated to MAX_TEXT_LEN chars.
+ * Collect the summary line plus every user message in a single file pass,
+ * dispatching by engine. Codex/Kimi transcripts have no summary line (their
+ * title is the first user message, already covered by `messages`).
+ */
+async function getSessionContent(cwd: string, sessionId: string): Promise<SessionContent> {
+  const claudePath = getClaudeSessionPath(cwd, sessionId);
+  if (existsSync(claudePath)) return getClaudeStyleContent(claudePath);
+
+  const claude2Path = getClaude2SessionPath(cwd, sessionId);
+  if (existsSync(claude2Path)) return getClaudeStyleContent(claude2Path);
+
+  const ollamaPath = getOllamaSessionPath(cwd, sessionId);
+  if (existsSync(ollamaPath)) return getClaudeStyleContent(ollamaPath);
+
+  const codexPath = findCodexSessionPath(sessionId);
+  if (codexPath && existsSync(codexPath)) {
+    return { summary: '', messages: await getCodexUserMessages(codexPath) };
+  }
+
+  const kimiPath = findKimiSessionPath(sessionId);
+  if (kimiPath && existsSync(kimiPath)) {
+    return { summary: '', messages: await getKimiUserMessages(kimiPath) };
+  }
+
+  return { summary: '', messages: [] };
+}
+
+/**
+ * Read a session preview in a single pass: a live title, the last user message,
+ * a first/last message preview (mirroring ProjectSessionsModal cards — ≤10
+ * messages → all in firstMessages; otherwise first 5 + last 5, each truncated to
+ * MAX_TEXT_LEN), and an untruncated `searchText` corpus for the search panel.
  */
 export async function getSessionPreview(cwd: string, sessionId: string): Promise<SessionPreview> {
-  const messages = await collectUserMessages(cwd, sessionId);
+  const { summary, messages } = await getSessionContent(cwd, sessionId);
+  const title = generateTitle(summary, messages);
   const lastUserMessage = messages[messages.length - 1];
+  // Untruncated, unsampled corpus — keeps long messages and mid-conversation
+  // messages searchable even though the display fields below drop them.
+  const searchText = [summary, ...messages].join('\n').toLowerCase();
   if (messages.length <= SUMMARY_THRESHOLD) {
-    return { lastUserMessage, firstMessages: messages.map((m) => truncate(m)!), lastMessages: [] };
+    return { title, lastUserMessage, firstMessages: messages.map((m) => truncate(m)!), lastMessages: [], searchText };
   }
   return {
+    title,
     lastUserMessage,
     firstMessages: messages.slice(0, SUMMARY_HEAD).map((m) => truncate(m)!),
     lastMessages: messages.slice(-SUMMARY_TAIL).map((m) => truncate(m)!),
+    searchText,
   };
 }
 
@@ -342,6 +392,58 @@ async function getClaudeStyleUserMessages(filePath: string): Promise<string[]> {
     // ignore
   }
   return messages;
+}
+
+/**
+ * Single-pass Claude-style reader returning the summary line plus the filtered
+ * user messages (same filtering as getClaudeStyleUserMessages). Lets
+ * getSessionPreview build title + preview + search corpus from one file read.
+ */
+async function getClaudeStyleContent(filePath: string): Promise<SessionContent> {
+  let summary = '';
+  const messages: string[] = [];
+  try {
+    const fileStream = createReadStream(filePath);
+    const rl = createInterface({ input: fileStream, crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === 'summary' && entry.summary) {
+          summary = entry.summary;
+          continue;
+        }
+        if (entry.type !== 'user') continue;
+
+        const message = entry.message;
+        if (!message?.content) continue;
+
+        let text = '';
+        if (typeof message.content === 'string') {
+          text = message.content;
+        } else if (Array.isArray(message.content)) {
+          for (const block of message.content) {
+            if (block.type === 'text' && block.text) {
+              text = block.text;
+              break;
+            }
+          }
+        }
+
+        if (!text) continue;
+        const filtered = filterCommandTags(text);
+        if (filtered && isValidUserMessage(filtered)) {
+          messages.push(filtered);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { summary, messages };
 }
 
 async function getCodexUserMessages(filePath: string): Promise<string[]> {

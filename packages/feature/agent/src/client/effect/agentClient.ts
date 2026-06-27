@@ -162,6 +162,8 @@ export interface RecentSessionInfo {
   lastUserMessage?: string
   firstMessages?: string[]
   lastMessages?: string[]
+  /** Untruncated full-text corpus (cwd + title + summary + all user messages), lowercased. */
+  searchText?: string
   engine?: string
 }
 

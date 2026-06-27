@@ -15,6 +15,13 @@ interface SessionInfo {
   modifiedAt: string;
   firstMessages: string[];
   lastMessages: string[];
+  /**
+   * Untruncated, lowercased full-text corpus (title/summary + every user
+   * message) for the search panel. Display fields above stay truncated+sampled
+   * (50 chars, first 5 + last 5); matching reads this so long-message tails and
+   * mid-conversation messages remain searchable.
+   */
+  searchText: string;
   engine?: 'claude' | 'claude2' | 'ollama' | 'codex' | 'kimi';
 }
 
@@ -83,6 +90,13 @@ function generateTitle(summary: string, userMessages: string[]): string {
   // If there is only a command with no subsequent content
   if (commandName) return commandName;
   return 'Untitled Session';
+}
+
+// Build the untruncated, lowercased search corpus: the display title (summary
+// preferred) plus every user message in full. Keeps long-message tails and
+// mid-conversation messages searchable despite the truncated/sampled display.
+function buildSearchText(title: string, userMessages: string[]): string {
+  return [title, ...userMessages].join('\n').toLowerCase();
 }
 
 // Extract user message content from a jsonl file
@@ -315,12 +329,14 @@ async function loadSessions(encodedPath: string) {
           lastMessages = userMessages.slice(-5).map(m => truncateMessage(m));
         }
 
+        const displayTitle = generateTitle(title, userMessages);
         sessions.push({
           path: sessionFile.path,
-          title: generateTitle(title, userMessages),
+          title: displayTitle,
           modifiedAt: sessionFile.modifiedAt.toISOString(),
           firstMessages,
           lastMessages,
+          searchText: buildSearchText(displayTitle, userMessages),
           engine: sessionFile.engine,
         });
       } catch (error) {
@@ -367,12 +383,14 @@ async function loadSessions(encodedPath: string) {
           lastMessages = userMessages.slice(-5).map(m => truncateMessage(m));
         }
 
+        const displayTitle = generateTitle('', userMessages);
         sessions.push({
           path: filePath,
-          title: generateTitle('', userMessages),
+          title: displayTitle,
           modifiedAt: modifiedAt.toISOString(),
           firstMessages,
           lastMessages,
+          searchText: buildSearchText(displayTitle, userMessages),
           engine,
         });
       } catch (error) {

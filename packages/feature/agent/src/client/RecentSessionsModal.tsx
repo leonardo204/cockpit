@@ -78,10 +78,16 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
     });
   };
 
-  // Filter on project name / full path / title / message preview
+  // Match against the server-built full-text corpus (cwd + title + summary +
+  // every user message, untruncated) so search isn't limited by the truncated,
+  // 5+5-sampled display fields. Falls back to the display fields if an older
+  // payload lacks searchText.
   const filteredSessions = sessions.filter((session) => {
     if (!searchKeyword) return true;
     const keyword = searchKeyword.toLowerCase();
+    if (session.searchText !== undefined) {
+      return session.searchText.includes(keyword);
+    }
     return (
       session.cwd.toLowerCase().includes(keyword) ||
       (session.title?.toLowerCase().includes(keyword) ?? false) ||

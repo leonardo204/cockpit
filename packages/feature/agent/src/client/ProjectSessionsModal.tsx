@@ -13,6 +13,8 @@ interface SessionInfo {
   modifiedAt: string;
   firstMessages: string[];
   lastMessages: string[];
+  /** Untruncated full-text corpus (title + summary + all user messages), lowercased. */
+  searchText?: string;
   engine?: 'claude' | 'claude2' | 'ollama' | 'codex' | 'kimi';
 }
 
@@ -96,10 +98,15 @@ export function ProjectSessionsModal({ isOpen, onClose, cwd, onSelectSession }: 
     });
   };
 
-  // Filter sessions
+  // Match against the server-built full-text corpus (title + summary + every
+  // user message, untruncated) so search isn't limited by the truncated,
+  // 5+5-sampled display fields. Falls back to display fields for older payloads.
   const filteredSessions = sessions.filter((session) => {
     if (!searchKeyword) return true;
     const keyword = searchKeyword.toLowerCase();
+    if (session.searchText !== undefined) {
+      return session.searchText.includes(keyword);
+    }
     return (
       session.title.toLowerCase().includes(keyword) ||
       session.firstMessages.some((msg) => msg.toLowerCase().includes(keyword)) ||

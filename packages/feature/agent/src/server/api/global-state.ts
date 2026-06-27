@@ -50,12 +50,26 @@ export const GET = handler(() =>
         Effect.promise(() =>
           getSessionPreview(session.cwd, session.sessionId)
         ).pipe(
-          Effect.map((preview) => ({
-            ...session,
-            lastUserMessage: preview.lastUserMessage ?? session.lastUserMessage,
-            firstMessages: preview.firstMessages,
-            lastMessages: preview.lastMessages,
-          }))
+          Effect.map((preview) => {
+            // Live title (summary line preferred). The persisted title is a
+            // teardown-time snapshot that predates the summary, so prefer the
+            // freshly read one; fall back only when the transcript is gone.
+            const title =
+              preview.title && preview.title !== "Untitled Session"
+                ? preview.title
+                : (session.title ?? preview.title)
+            return {
+              ...session,
+              title,
+              lastUserMessage: preview.lastUserMessage ?? session.lastUserMessage,
+              firstMessages: preview.firstMessages,
+              lastMessages: preview.lastMessages,
+              // Untruncated full-text corpus for the search panel: cwd + title +
+              // summary + every user message (preview.searchText). Display fields
+              // above stay truncated; matching reads this instead.
+              searchText: `${session.cwd}\n${title}\n${preview.searchText}`,
+            }
+          })
         )
       ),
       { concurrency: "unbounded" }
