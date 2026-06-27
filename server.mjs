@@ -128,6 +128,7 @@ app.prepare().then(async () => {
   const upgradeHandler = app.getUpgradeHandler();
   // v2 P8: HTTP intercepts (handleTerminalApi / handleBrowserApi) moved to src/lib/httpApi.ts
   const { handleUpgrade, broadcastToGlobalState } = await import(dev ? './src/lib/wsServer.ts' : './dist/wsServer.mjs');
+  const auth = await import(dev ? './src/lib/auth.ts' : './dist/auth.mjs');
   const httpApi = await import(dev ? './src/lib/httpApi.ts' : './dist/httpApi.mjs');
   const { handleBrowserApi, handleTerminalApi, handleConnectionApi } = httpApi;
   flushRunningSync = httpApi.flushAllRunningSync || null;
@@ -139,7 +140,45 @@ app.prepare().then(async () => {
   });
   await scheduledTaskManager.init();
 
+  // ============================================
+  // Token gate — opt-in via `cockpit --token <value>` (COCKPIT_TOKEN).
+  // Off by default (open). Local callers (loopback peer + no forwarding header)
+  // are exempt, so the CLI / /cg curls / self-probe never need a token.
+  // ============================================
+  const gateInput = (req, isWs) => ({
+    url: req.url || '',
+    remoteAddr: req.socket?.remoteAddress,
+    cookieHeader: req.headers?.cookie,
+    authHeader: req.headers?.authorization,
+    forwarded:
+      req.headers?.['x-forwarded-for'] ||
+      req.headers?.['x-real-ip'] ||
+      req.headers?.['forwarded'],
+    isWs,
+    isHttps:
+      String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim() === 'https',
+  });
+
+  // Apply the gate to an HTTP request. Returns true if it wrote a response
+  // (blocked / redirected) and the caller should stop.
+  const applyHttpGate = (req, res) => {
+    const decision = auth.checkAccess(gateInput(req, false));
+    if (decision.action === 'redirect') {
+      res.writeHead(302, { Location: decision.location, 'Set-Cookie': decision.setCookie });
+      res.end();
+      return true;
+    }
+    if (decision.action === 'deny') {
+      res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('401 Unauthorized - append ?token=<token> to the URL to authenticate\n');
+      return true;
+    }
+    return false;
+  };
+
   const server = createServer(async (req, res) => {
+    if (applyHttpGate(req, res)) return;
+
     // /api/browser/* 必须在自定义 server 中处理（与 WS 共享 BrowserBridge 内存）
     if (req.url?.startsWith('/api/browser/') && req.method === 'POST') {
       const handled = await handleBrowserApi(req, res);
@@ -157,6 +196,12 @@ app.prepare().then(async () => {
   });
 
   server.on('upgrade', (req, socket, head) => {
+    // Cookie / ?token ride the same-origin upgrade → gate WS too.
+    if (auth.checkAccess(gateInput(req, true)).action !== 'pass') {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     if (!handleUpgrade(req, socket, head)) {
       upgradeHandler(req, socket, head);
     }
@@ -212,6 +257,9 @@ app.prepare().then(async () => {
   }
 
   const shareServer = createServer((req, res) => {
+    // Token gate first (share is also covered). Read the gate BEFORE we inject
+    // x-forwarded-for below, so the injection can't fool the local check.
+    if (applyHttpGate(req, res)) return;
     if (isShareAllowed(req.url || '')) {
       // 注入客户端真实 IP，供 /api/review/identify 使用
       const clientIp = req.socket.remoteAddress || '';

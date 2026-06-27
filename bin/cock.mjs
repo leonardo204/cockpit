@@ -27,6 +27,7 @@ Commands:
 
 Options:
   --port <port>                  Set server port (default: 3457)
+  --token <token>                Require this token for remote access (local stays open)
   --no-open                      Don't open browser after start
   -v, --version                  Show version
   -h, --help                     Show this help
@@ -55,6 +56,15 @@ const portIdx = process.argv.indexOf('--port');
 if (portIdx !== -1 && process.argv[portIdx + 1]) {
   process.env.PORT = process.argv[portIdx + 1];
   process.argv.splice(portIdx, 2);
+}
+
+// Parse --token argument → enable shared-token auth (server.mjs reads
+// COCKPIT_TOKEN). Off entirely when omitted. Local (loopback) access stays
+// exempt; remote access must present the token.
+const tokenIdx = process.argv.indexOf('--token');
+if (tokenIdx !== -1 && process.argv[tokenIdx + 1] && !process.argv[tokenIdx + 1].startsWith('-')) {
+  process.env.COCKPIT_TOKEN = process.argv[tokenIdx + 1];
+  process.argv.splice(tokenIdx, 2);
 }
 
 // Default prod port
