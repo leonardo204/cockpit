@@ -101,6 +101,12 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
     if (toolCall.name === 'Grep' && input.pattern && typeof input.pattern === 'string') {
       return input.pattern;
     }
+    if (toolCall.name === 'ToolSearch' && input.query && typeof input.query === 'string') {
+      return input.query;
+    }
+    if (toolCall.name === 'TaskCreate' && input.subject && typeof input.subject === 'string') {
+      return input.subject;
+    }
     if (input.file_path && typeof input.file_path === 'string') {
       return input.file_path;
     }
