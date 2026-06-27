@@ -99,11 +99,21 @@ Use **port 3458** for smoke — it avoids conflicts with both:
 
 The cock binary picks up `PORT=3458` from env and binds there. `env -i` strips inherited env (notably any `COCKPIT_PORT` leaked from a running dev cockpit) so the smoke can't accidentally probe the wrong instance.
 
+**Port isolation is NOT enough — you MUST also isolate the data dir with `COCKPIT_HOME`.** Cockpit guards on its data dir (`~/.cockpit/server.json`), not on the port: if *any* cockpit (the dev one on 3456, a prod one on 3457) is already running off the default `~/.cockpit`, the smoke instance refuses to boot with:
+
+```
+✗ This data dir already has a running cockpit (pid …, port …).
+  Data dir: /Users/<you>/.cockpit
+```
+
+…and exits before binding 3458, so all three probes fail with `Couldn't connect to server` — a false negative that looks like a broken tarball (cost ~5 min of confused debugging in v1.0.230). Point `COCKPIT_HOME` at a throwaway temp dir so the smoke gets its own data dir and can't collide with a cockpit the human is actively using.
+
 ```bash
 # Boot the JUST-PACKED tarball, not the globally-linked cock.
 # Re-install into a temp dir if you don't already have one from step 2a.
 SMOKE_PORT=3458
-env -i PATH="$PATH" HOME="$HOME" PORT=$SMOKE_PORT COCKPIT_ENV=prod COCKPIT_NO_OPEN=1 \
+SMOKE_HOME=$(mktemp -d)    # isolated data dir — avoids the "already running cockpit" guard
+env -i PATH="$PATH" HOME="$HOME" COCKPIT_HOME="$SMOKE_HOME" PORT=$SMOKE_PORT COCKPIT_ENV=prod COCKPIT_NO_OPEN=1 \
   "$SMOKE_DIR/bin/cock" > /tmp/cock-smoke.log 2>&1 &
 COCK_PID=$!
 sleep 12      # cold-start of next-server + WS + share server takes ~8-12s
@@ -153,9 +163,10 @@ lsof -i :$SMOKE_PORT -sTCP:LISTEN -P -n >/dev/null && {
   exit 1
 }
 
-# Drop the install dir and the local tarball — they're 39 MB / 8 MB respectively,
-# and the tarball name collides with the next bump if left behind.
-rm -rf "$SMOKE_DIR" surething-cockpit-*.tgz
+# Drop the install dir, the isolated data dir, and the local tarball — the
+# first two are ~39 MB combined, and the tarball name collides with the next
+# bump if left behind.
+rm -rf "$SMOKE_DIR" "$SMOKE_HOME" surething-cockpit-*.tgz
 ```
 
 If `$SMOKE_PORT` is unexpectedly already bound when you START step 2b, that's almost always a leftover from a previous release that wasn't cleaned up. Check `ps -o pid,lstart,command -p <pid>` to confirm it's a smoke leftover (started today, command is `cockpit`, `/api/version` returns `{"version":""}`) before killing — don't blow away an unrelated cockpit the human is actively using.
