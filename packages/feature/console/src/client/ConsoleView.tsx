@@ -29,10 +29,10 @@ const TOOLBAR_HEIGHT = 41;
 
 // Empty-state guide: supported bubble types and how to trigger each.
 // `label` is an i18n key; `triggers` are literal examples shown as code chips.
-const BUBBLE_GUIDE: { key: string; label: string; triggers: string[] }[] = [
+const BUBBLE_GUIDE: { key: string; label: string; triggers: string[]; notes?: string[] }[] = [
   { key: 'command', label: 'console.bubbleCommand', triggers: ['ls', 'git status', 'npm run dev'] },
   { key: 'pty', label: 'console.bubbleInteractive', triggers: ['zsh', 'vim', 'python', 'top'] },
-  { key: 'browser', label: 'console.bubbleBrowser', triggers: ['https://…'] },
+  { key: 'browser', label: 'console.bubbleBrowser', triggers: ['https://…'], notes: ['console.bubbleBrowserNoteIframe', 'console.bubbleBrowserNoteCookie'] },
   { key: 'database', label: 'console.bubbleDatabase', triggers: ['postgresql://', 'mysql://', 'redis://', 'neo4j://'] },
   { key: 'notebook', label: 'console.bubbleNotebook', triggers: ['*.ipynb'] },
 ];
@@ -269,9 +269,14 @@ export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNo
                 {BUBBLE_GUIDE.map((b) => (
                   <li key={b.key} className="flex items-start gap-3">
                     <span className="w-16 flex-shrink-0 text-foreground font-medium">{t(b.label)}</span>
-                    <span className="flex flex-wrap gap-1">
-                      {b.triggers.map((tr) => (
-                        <code key={tr} className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono text-muted-foreground">{tr}</code>
+                    <span className="flex-1 flex flex-col gap-1">
+                      <span className="flex flex-wrap gap-1">
+                        {b.triggers.map((tr) => (
+                          <code key={tr} className="px-1.5 py-0.5 rounded bg-muted text-xs font-mono text-muted-foreground">{tr}</code>
+                        ))}
+                      </span>
+                      {b.notes?.map((n) => (
+                        <span key={n} className="text-xs leading-snug text-muted-foreground/70">{t(n)}</span>
                       ))}
                     </span>
                   </li>
