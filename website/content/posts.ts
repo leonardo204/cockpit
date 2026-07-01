@@ -32,6 +32,117 @@ export interface Post {
 
 export const posts: Post[] = [
   {
+    slug: 'cockpit-access-token',
+    date: '2026-07-02',
+    keywords: [
+      'Cockpit access token',
+      'password protect Cockpit',
+      'share Claude Code GUI securely',
+      'COCKPIT_TOKEN',
+      'remote access token',
+      'LAN sharing',
+      'cloud sandbox',
+      '访问令牌',
+      '远程访问鉴权',
+      '安全共享',
+      'Claude Code GUI',
+      'OpenCockpit',
+      'Cockpit',
+    ],
+    content: {
+      en: {
+        title: 'Cockpit now takes an access token',
+        description:
+          'Cockpit is local-first and fully open on your own machine. When you expose it on a LAN or a cloud sandbox, an optional access token now guards remote access — while local stays frictionless.',
+        readingTime: '2 min read',
+        body: `Cockpit has always been local-first: it binds to \`127.0.0.1\`, and on your own machine anyone on that machine can use it. That's the right default for a local tool. But sometimes you put Cockpit somewhere else — on your LAN, or in a cloud sandbox — and then "anyone who can reach the port" is too open. This release adds an optional shared access token.
+
+## Turn it on
+
+Pass a token when you start the server:
+
+\`\`\`bash
+cockpit --token my-secret-value
+\`\`\`
+
+Or set \`COCKPIT_TOKEN\` in the environment. It's **off by default** — existing local setups don't change at all.
+
+## Local stays frictionless
+
+With a token set, **loopback requests are still exempt**. The CLI, \`/cg\` snippets, and a browser on the same machine keep working with no token — only *remote* requests need it. Turning this on never gets in your own way.
+
+## Three ways to present it
+
+| Client | How |
+|---|---|
+| Browser | First visit with \`?token=<value>\` — Cockpit sets a cookie and redirects to a clean URL, so the secret doesn't linger in the address bar |
+| API / WebSocket | \`Authorization: Bearer <value>\` header |
+| Anything | \`?token=<value>\` query param |
+
+A wrong or missing token is rejected, and tokens are compared in constant time.
+
+## Use it when you go remote
+
+The token pairs with network exposure. When you open Cockpit up with \`COCKPIT_HOST=0.0.0.0\` for a LAN or a cloud sandbox, add a token so it isn't wide open:
+
+\`\`\`bash
+COCKPIT_HOST=0.0.0.0 cockpit --token my-secret-value
+\`\`\`
+
+That's the whole feature. Full details are in the [CLI reference](/en/docs/reference/cli/#shared-token-access-gate).
+
+---
+
+**Try it:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [Try Online](/try)`,
+      },
+      zh: {
+        title: 'Cockpit 新增访问令牌',
+        description:
+          'Cockpit 本地优先、在自己机器上完全开放。当你把它暴露到局域网或云沙盒时,新增的可选访问令牌会保护远程访问 —— 而本机照常无感。',
+        readingTime: '阅读约 2 分钟',
+        body: `Cockpit 一直是本地优先的:它绑定 \`127.0.0.1\`,在你自己的机器上,这台机器上的任何人都能用。对本地工具来说,这是对的默认值。但有时你会把 Cockpit 放到别处 —— 局域网,或者云沙盒 —— 这时"任何能连到端口的人"就太开放了。这个版本新增了一个可选的共享访问令牌。
+
+## 开启
+
+启动服务时传一个令牌:
+
+\`\`\`bash
+cockpit --token 你的密钥
+\`\`\`
+
+或在环境里设 \`COCKPIT_TOKEN\`。它**默认关闭** —— 现有的本地用法完全不变。
+
+## 本机照常无感
+
+设了令牌后,**本机(loopback)请求仍然豁免**。CLI、\`/cg\` 片段,以及跑在同一台机器上的浏览器都无需令牌 —— 只有*远程*请求才需要。开了它也不会挡你自己的路。
+
+## 三种携带方式
+
+| 客户端 | 怎么带 |
+|---|---|
+| 浏览器 | 首次用 \`?token=<值>\` 访问 —— Cockpit 写入 cookie 并重定向到干净 URL,让密钥不残留在地址栏 |
+| API / WebSocket | \`Authorization: Bearer <值>\` 请求头 |
+| 任意 | \`?token=<值>\` 查询参数 |
+
+错误或缺失的令牌一律拒绝,令牌用常数时间比较。
+
+## 什么时候用:暴露到网络时
+
+令牌和网络暴露是搭配的。当你用 \`COCKPIT_HOST=0.0.0.0\` 把 Cockpit 开放到局域网或云沙盒时,加上令牌,别让它裸奔:
+
+\`\`\`bash
+COCKPIT_HOST=0.0.0.0 cockpit --token 你的密钥
+\`\`\`
+
+这就是这个特性的全部。完整细节见 [CLI 参考](/zh/docs/reference/cli/#共享令牌访问网关)。
+
+---
+
+**试一下:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [在线体验](/try)`,
+      },
+    },
+  },
+  {
     slug: 'cockpit-on-your-phone',
     date: '2026-06-23',
     keywords: [
