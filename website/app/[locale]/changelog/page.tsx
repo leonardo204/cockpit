@@ -83,7 +83,12 @@ export default async function ChangelogPage({
   const { locale } = await params;
   if (!isLocale(locale)) notFound();
   const t = getMessages(locale as Locale);
-  const list = releases as Release[];
+  // Show only the 10 most recent releases (defensive: the build script already
+  // caps the JSON, but this guarantees it regardless of the data on disk).
+  const list = (releases as Release[])
+    .slice()
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+    .slice(0, 10);
 
   return (
     <article className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">

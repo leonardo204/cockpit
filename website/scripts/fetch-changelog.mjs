@@ -19,6 +19,10 @@ const OUT_PATH = resolve(__dirname, '..', 'data', 'changelog.json');
 const REPO = 'Surething-io/cockpit';
 const API = `https://api.github.com/repos/${REPO}/releases?per_page=50`;
 
+// Only the most recent N releases are shown on the changelog page — older ones
+// stay available on GitHub via the "View on GitHub" links.
+const MAX_RELEASES = 10;
+
 const headers = {
   'Accept': 'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
@@ -52,7 +56,9 @@ try {
       url: r.html_url,
       body: r.body || '',
       prerelease: !!r.prerelease,
-    }));
+    }))
+    .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+    .slice(0, MAX_RELEASES);
   emit(releases);
 } catch (err) {
   console.warn(`[fetch-changelog] error: ${err?.message ?? err} — writing empty list`);
