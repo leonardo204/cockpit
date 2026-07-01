@@ -1,4 +1,5 @@
 import { PlainImg } from '../PlainImg';
+import { BrowserFrame } from '../BrowserFrame';
 
 export function PanelSection({
   tag,
@@ -7,6 +8,7 @@ export function PanelSection({
   bullets,
   screenshot,
   align = 'left',
+  tint = false,
 }: {
   tag: string;
   name: string;
@@ -14,24 +16,26 @@ export function PanelSection({
   bullets: readonly string[];
   screenshot: string;
   align?: 'left' | 'right';
+  /** Give the section the subtle tinted band background (page alternates it). */
+  tint?: boolean;
 }) {
   const textOrder = align === 'left' ? 'md:order-1' : 'md:order-2';
   const imgOrder = align === 'left' ? 'md:order-2' : 'md:order-1';
 
   return (
-    <section className="border-b border-border">
-      <div className="mx-auto max-w-6xl px-6 py-20 grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+    <section className={tint ? 'bg-card/40' : undefined}>
+      <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-12 px-6 py-20 md:grid-cols-2 md:py-28">
         <div className={textOrder}>
-          <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-brand">
+          <div className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-brand">
             <span className="size-1 rounded-full bg-brand" />
             {tag} · {name}
           </div>
-          <h2 className="mt-3 text-3xl md:text-4xl font-semibold tracking-tight">
+          <h2 className="mt-3 text-balance text-3xl font-semibold tracking-tight md:text-4xl">
             {title}
           </h2>
           <ul className="mt-6 space-y-2.5">
             {bullets.map((b) => (
-              <li key={b} className="flex gap-3 text-sm text-muted-foreground leading-relaxed">
+              <li key={b} className="flex gap-3 text-sm leading-relaxed text-muted-foreground">
                 <span className="mt-2 size-1 shrink-0 rounded-full bg-brand/70" />
                 <span>{b}</span>
               </li>
@@ -54,7 +58,7 @@ export function PanelSection({
  */
 function ScreenshotFrame({ src, alt }: { src: string; alt: string }) {
   return (
-    <div className="relative aspect-video rounded-xl border border-border bg-card overflow-hidden shadow-xl">
+    <BrowserFrame label={alt}>
       {/* Decorative gradient backdrop (always visible behind image) */}
       <div
         className="absolute inset-0 bg-gradient-to-br from-teal-3 via-card to-card opacity-80"
@@ -64,19 +68,15 @@ function ScreenshotFrame({ src, alt }: { src: string; alt: string }) {
       {/* Placeholder content (visible until real img loads on top) */}
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-2xl font-semibold text-brand/80 tracking-tight">{alt}</div>
-          <div className="mt-1 text-[11px] font-mono uppercase tracking-wider text-muted-foreground/60">
+          <div className="text-2xl font-semibold tracking-tight text-brand/80">{alt}</div>
+          <div className="mt-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/60">
             Screenshot coming soon
           </div>
         </div>
       </div>
 
       {/* Real screenshot — hides itself if the file is missing */}
-      <PlainImg src={src} alt={alt} className="absolute inset-0 w-full h-full object-cover" />
-
-      <div className="absolute bottom-3 left-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/50 select-none">
-        {alt}
-      </div>
-    </div>
+      <PlainImg src={src} alt={alt} className="absolute inset-0 h-full w-full object-cover" />
+    </BrowserFrame>
   );
 }

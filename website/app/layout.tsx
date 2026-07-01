@@ -156,10 +156,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
-    { media: '(prefers-color-scheme: dark)', color: '#0d1117' },
-  ],
+  // The site ships dark-only, so pin the browser UI + form-control rendering to
+  // dark rather than following the OS.
+  themeColor: '#111113',
+  colorScheme: 'dark',
   width: 'device-width',
   initialScale: 1,
 };
@@ -179,7 +179,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // `LocaleSync` corrects `document.documentElement.lang` on hydration; the
   // authoritative SEO signal is the `hreflang` map in `alternates.languages`.
   return (
-    <html lang="und" suppressHydrationWarning>
+    <html lang="und" className="dark" suppressHydrationWarning>
       <head>
         {PLAUSIBLE_DOMAIN ? (
           <script

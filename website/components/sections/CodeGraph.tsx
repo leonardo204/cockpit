@@ -12,22 +12,22 @@ import type { Messages } from '@/content/messages';
  */
 export function CodeGraph({ t }: { t: Messages }) {
   return (
-    <section className="border-b border-border bg-card/30">
-      <div className="mx-auto max-w-6xl px-6 py-20">
-        <div className="text-center max-w-3xl mx-auto">
-          <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-brand">
+    <section>
+      <div className="mx-auto max-w-6xl px-6 py-20 md:py-28">
+        <div className="mx-auto max-w-3xl text-center">
+          <div className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-brand">
             <span className="size-1 rounded-full bg-brand" />
             {t.codeGraph.tag}
           </div>
-          <h2 className="mt-3 text-3xl md:text-4xl font-semibold tracking-tight">
+          <h2 className="mt-3 text-balance text-3xl font-semibold tracking-tight md:text-4xl">
             {t.codeGraph.headline}
           </h2>
-          <p className="mt-4 text-muted-foreground leading-relaxed">
+          <p className="mt-4 text-balance leading-relaxed text-muted-foreground">
             {t.codeGraph.desc}
           </p>
         </div>
 
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+        <div className="mt-12 grid grid-cols-1 items-center gap-12 md:grid-cols-2">
           <ul className="space-y-2.5 md:order-1">
             {t.codeGraph.bullets.map((b) => (
               <li
@@ -68,7 +68,7 @@ function CodeGraphEndpointsCard() {
     { ep: 'coedit', q: '"files edited with F?"' },
   ];
   return (
-    <div className="relative aspect-video rounded-xl border border-border bg-card overflow-hidden shadow-xl">
+    <div className="relative aspect-video overflow-hidden rounded-2xl border border-border bg-card shadow-lg ring-1 ring-white/[0.06]">
       <div
         className="absolute inset-0 bg-gradient-to-br from-teal-3 via-card to-card opacity-80"
         aria-hidden

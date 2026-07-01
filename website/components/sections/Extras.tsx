@@ -15,19 +15,19 @@ export function Extras({ t }: { t: Messages }) {
   ];
 
   return (
-    <section className="border-b border-border">
-      <div className="mx-auto max-w-5xl px-6 py-20">
-        <div className="grid gap-5 md:grid-cols-2">
+    <section className="bg-card/40">
+      <div className="mx-auto max-w-5xl px-6 py-20 md:py-28">
+        <div className="grid gap-6 md:grid-cols-2">
           {items.map((it) => (
             <div
               key={it.title}
-              className="rounded-xl border border-border bg-card p-7 text-center"
+              className="lift rounded-2xl border border-border bg-card p-7 text-center hover:border-brand/40"
             >
-              <div className="text-xs font-mono uppercase tracking-wider text-brand">
+              <div className="font-mono text-xs uppercase tracking-wider text-brand">
                 {it.tag}
               </div>
               <h3 className="mt-2 text-xl font-semibold">{it.title}</h3>
-              <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                 {it.desc}
               </p>
             </div>

@@ -1,5 +1,6 @@
 import type { Messages } from '@/content/messages';
 import { PlainImg } from '../PlainImg';
+import { BrowserFrame } from '../BrowserFrame';
 
 /**
  * Code Map — dedicated section that advertises the chip view in Explorer.
@@ -13,22 +14,22 @@ import { PlainImg } from '../PlainImg';
  */
 export function CodeMap({ t }: { t: Messages }) {
   return (
-    <section className="border-b border-border bg-card/30">
-      <div className="mx-auto max-w-6xl px-6 py-20">
-        <div className="text-center max-w-3xl mx-auto">
-          <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-brand">
+    <section className="bg-card/40">
+      <div className="mx-auto max-w-6xl px-6 py-20 md:py-28">
+        <div className="mx-auto max-w-3xl text-center">
+          <div className="inline-flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-brand">
             <span className="size-1 rounded-full bg-brand" />
             {t.codeMap.tag}
           </div>
-          <h2 className="mt-3 text-3xl md:text-4xl font-semibold tracking-tight">
+          <h2 className="mt-3 text-balance text-3xl font-semibold tracking-tight md:text-4xl">
             {t.codeMap.headline}
           </h2>
-          <p className="mt-4 text-muted-foreground leading-relaxed">
+          <p className="mt-4 text-balance leading-relaxed text-muted-foreground">
             {t.codeMap.desc}
           </p>
         </div>
 
-        <div className="mt-12 grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+        <div className="mt-12 grid grid-cols-1 items-center gap-12 md:grid-cols-2">
           <ul className="space-y-2.5 md:order-1">
             {t.codeMap.bullets.map((b) => (
               <li
@@ -56,17 +57,17 @@ export function CodeMap({ t }: { t: Messages }) {
 
 function CodeMapFrame() {
   return (
-    <div className="relative aspect-video rounded-xl border border-border bg-card overflow-hidden shadow-xl">
+    <BrowserFrame label="Code Map">
       <div
         className="absolute inset-0 bg-gradient-to-br from-teal-3 via-card to-card opacity-80"
         aria-hidden
       />
       <div className="absolute inset-0 flex items-center justify-center">
         <div className="text-center">
-          <div className="text-2xl font-semibold text-brand/80 tracking-tight">
+          <div className="text-2xl font-semibold tracking-tight text-brand/80">
             Code Map
           </div>
-          <div className="mt-1 text-[11px] font-mono uppercase tracking-wider text-muted-foreground/60">
+          <div className="mt-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/60">
             Screenshot coming soon
           </div>
         </div>
@@ -74,11 +75,8 @@ function CodeMapFrame() {
       <PlainImg
         src="/screenshots/codemap.webp"
         alt="Code Map"
-        className="absolute inset-0 w-full h-full object-cover"
+        className="absolute inset-0 h-full w-full object-cover"
       />
-      <div className="absolute bottom-3 left-3 text-[10px] font-mono uppercase tracking-wider text-muted-foreground/50 select-none">
-        Code Map
-      </div>
-    </div>
+    </BrowserFrame>
   );
 }

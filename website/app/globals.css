@@ -1,53 +1,14 @@
 @import "tailwindcss";
 
 /* ============================================
-   Cockpit Website Design System
-   Reuses Radix Teal + Slate from main app's globals.css
+   Cockpit Website Design System — dark-only.
+   Radix Teal (brand) + Slate (UI gray), dark palette baked straight into
+   :root. <html> also carries a `.dark` class so any `.dark`-scoped CSS in the
+   docs / Shiki output keeps resolving; there is no light theme to toggle to.
    ============================================ */
 
 :root {
   /* Radix Teal (brand) */
-  --teal-1: 180 50% 99.2%;
-  --teal-2: 180 44% 97%;
-  --teal-3: 180 43% 93.8%;
-  --teal-4: 180 44% 89.7%;
-  --teal-5: 180 42% 84.3%;
-  --teal-6: 181 39% 76.8%;
-  --teal-7: 181 35% 66.3%;
-  --teal-8: 181 33% 52.5%;
-  --teal-9: 179 35% 35%;
-  --teal-10: 179 37% 31%;
-  --teal-11: 180 50% 22%;
-  --teal-12: 186 100% 7%;
-
-  /* Radix Slate (UI gray) */
-  --slate-1: 240 20% 99%;
-  --slate-2: 240 17% 97%;
-  --slate-3: 240 14% 94.5%;
-  --slate-4: 240 13% 92%;
-  --slate-5: 240 12% 89.5%;
-  --slate-6: 237 11% 86%;
-  --slate-7: 235 9% 81%;
-  --slate-8: 233 8% 70%;
-  --slate-9: 230 7% 55%;
-  --slate-10: 228 6% 50%;
-  --slate-11: 225 6% 40%;
-  --slate-12: 210 14% 13%;
-
-  /* Semantic */
-  --background: 0 0% 98%;
-  --foreground: var(--slate-12);
-  --card: 0 0% 100%;
-  --muted: var(--slate-3);
-  --muted-foreground: var(--slate-11);
-  --border: var(--slate-5);
-  --brand: var(--teal-9);
-  --brand-foreground: var(--teal-11);
-
-  --radius: 0.5rem;
-}
-
-.dark {
   --teal-1: 183 30% 7%;
   --teal-2: 183 35% 9%;
   --teal-3: 183 38% 12%;
@@ -61,6 +22,7 @@
   --teal-11: 179 55% 65%;
   --teal-12: 180 50% 85%;
 
+  /* Radix Slate (UI gray) */
   --slate-1: 240 6% 7%;
   --slate-2: 240 5% 10%;
   --slate-3: 240 5% 13%;
@@ -74,9 +36,19 @@
   --slate-11: 220 9% 70%;
   --slate-12: 220 9% 80%;
 
+  /* Semantic */
   --background: var(--slate-1);
+  --foreground: var(--slate-12);
   --card: 0 0% 12%;
+  --muted: var(--slate-3);
+  --muted-foreground: var(--slate-11);
   --border: var(--slate-6);
+  --accent: var(--slate-4);
+  --accent-foreground: var(--slate-12);
+  --brand: var(--teal-9);
+  --brand-foreground: var(--teal-11);
+
+  --radius: 0.5rem;
 }
 
 @theme inline {
@@ -89,6 +61,8 @@
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
   --color-border: hsl(var(--border));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
   --color-brand: hsl(var(--brand));
   --color-brand-foreground: hsl(var(--brand-foreground));
 
@@ -162,17 +136,60 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle gradient backdrop for hero */
+/* Aurora gradient backdrop for hero / final CTA — layered teal radials. */
 .hero-bg {
   background:
-    radial-gradient(ellipse 80% 50% at 50% -20%, hsl(var(--teal-9) / 0.15), transparent),
-    radial-gradient(ellipse 60% 40% at 80% 0%, hsl(var(--teal-7) / 0.08), transparent);
+    radial-gradient(ellipse 90% 55% at 50% -10%, hsl(var(--teal-9) / 0.28), transparent 72%),
+    radial-gradient(ellipse 50% 45% at 82% 4%, hsl(var(--teal-7) / 0.18), transparent 72%),
+    radial-gradient(ellipse 55% 45% at 16% 8%, hsl(var(--teal-8) / 0.14), transparent 72%);
 }
 
-.dark .hero-bg {
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -20%, hsl(var(--teal-9) / 0.25), transparent),
-    radial-gradient(ellipse 60% 40% at 80% 0%, hsl(var(--teal-7) / 0.15), transparent);
+/* Faint tech grid, faded out via a radial mask. Rendered as an absolutely
+   positioned layer inside the hero so it sits above the gradient but behind
+   the content. Uses slate-12 (dark in light theme, light in dark theme) so the
+   lines stay visible in both. */
+.hero-grid {
+  background-image:
+    linear-gradient(hsl(var(--slate-12) / 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--slate-12) / 0.045) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 55% at 50% 0%, black, transparent 78%);
+  mask-image: radial-gradient(ellipse 60% 55% at 50% 0%, black, transparent 78%);
+}
+
+/* Unified hover micro-interaction for cards and buttons: a small lift plus a
+   soft shadow. Gated on real hover devices so touch taps don't stick. */
+.lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+@media (hover: hover) {
+  .lift:hover {
+    transform: translateY(-2px);
+    /* Black-based so it reads as a soft shadow on light and simply fades out on
+       dark (a slate-12-based shadow would invert to a light glow on dark). */
+    box-shadow: 0 12px 32px -14px rgb(0 0 0 / 0.22);
+  }
+}
+
+/* Scroll-reveal entrance. The initial hidden state is scoped under `.js-reveal`
+   (added to <html> by the Reveal component only when JS + IntersectionObserver
+   are available) so no-JS visitors always see fully-rendered content. */
+.js-reveal [data-reveal] {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
+}
+.js-reveal [data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .js-reveal [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }
 
 /* Code block */

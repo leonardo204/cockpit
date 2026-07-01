@@ -18,7 +18,7 @@ export function CopyableCommand({ command }: { command: string }) {
   return (
     <button
       onClick={copy}
-      className="group flex items-center gap-3 rounded-md border border-border bg-card px-4 py-2.5 font-mono text-sm hover:border-brand/50 transition-colors"
+      className="lift group flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-2.5 font-mono text-sm hover:border-brand/50"
       aria-label="Copy install command"
     >
       <span className="text-muted-foreground select-none">$</span>
