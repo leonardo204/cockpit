@@ -86,7 +86,7 @@ export default async function ChangelogPage({
   const list = releases as Release[];
 
   return (
-    <article className="mx-auto max-w-3xl px-6 py-16">
+    <article className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
       <header className="border-b border-border pb-6">
         <h1 className="text-4xl font-bold tracking-tight">{t.changelog.title}</h1>
         <p className="mt-3 text-muted-foreground">{t.changelog.desc}</p>
@@ -122,7 +122,7 @@ export default async function ChangelogPage({
               </div>
 
               {r.body && (
-                <div className="prose prose-sm mt-4 max-w-none text-sm text-foreground">
+                <div className="prose prose-sm mt-4 max-w-none break-words text-sm text-foreground">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
@@ -138,6 +138,21 @@ export default async function ChangelogPage({
                         </a>
                       ),
                       code: ({ children }) => <code className="code-inline">{children}</code>,
+                      // Fenced code blocks: scroll horizontally instead of
+                      // widening the page on mobile (release notes often carry
+                      // long commit lines / commands).
+                      pre: ({ children }) => (
+                        <pre className="changelog-pre mt-3 overflow-x-auto rounded-md border border-border bg-muted/50 p-3 text-xs leading-relaxed">
+                          {children}
+                        </pre>
+                      ),
+                      // GFM tables: wrap in a horizontal scroller so wide tables
+                      // never blow out the viewport width.
+                      table: ({ children }) => (
+                        <div className="mt-3 overflow-x-auto">
+                          <table className="w-full border-collapse text-xs">{children}</table>
+                        </div>
+                      ),
                       p: ({ children }) => <p className="mt-2 text-muted-foreground leading-relaxed">{children}</p>,
                     }}
                   >

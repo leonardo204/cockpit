@@ -3,6 +3,7 @@ import Image from 'next/image';
 import { getMessages } from '@/content/messages';
 import type { Locale } from '@/lib/i18n';
 import { LangSwitch } from './LangSwitch';
+import { MobileMenu, type MobileNavLink } from './MobileMenu';
 
 const GITHUB_URL = 'https://github.com/Surething-io/cockpit';
 const X_URL = 'https://x.com/yang1365609';
@@ -10,6 +11,15 @@ const X_URL = 'https://x.com/yang1365609';
 export function Nav({ locale }: { locale: Locale }) {
   const t = getMessages(locale);
   const base = `/${locale}`;
+
+  // Shared source of truth for the primary links — the desktop row below maps
+  // them inline, the mobile menu collapses them behind a hamburger.
+  const links: MobileNavLink[] = [
+    { href: `${base}/docs/`, label: t.nav.docs },
+    { href: `${base}/blog/`, label: t.nav.blog },
+    { href: `${base}/changelog/`, label: t.nav.changelog },
+    { href: GITHUB_URL, label: t.nav.github, external: true },
+  ];
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-md">
@@ -28,7 +38,7 @@ export function Nav({ locale }: { locale: Locale }) {
           </span>
         </Link>
 
-        <nav className="flex items-center gap-6 text-sm">
+        <nav className="hidden md:flex items-center gap-6 text-sm">
           <Link
             href={`${base}/docs/`}
             className="text-muted-foreground hover:text-foreground transition-colors"
@@ -74,6 +84,13 @@ export function Nav({ locale }: { locale: Locale }) {
           <span className="h-4 w-px bg-border" />
           <LangSwitch locale={locale} />
         </nav>
+
+        <MobileMenu
+          className="md:hidden"
+          links={links}
+          locale={locale}
+          xUrl={X_URL}
+        />
       </div>
     </header>
   );

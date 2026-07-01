@@ -183,3 +183,12 @@ body {
   padding: 0.15rem 0.4rem;
   border-radius: 0.25rem;
 }
+
+/* Inside a fenced block the inline "chip" look is wrong — the <pre> already
+   provides the background/padding — so neutralize the .code-inline styling
+   there (used by the changelog release notes). */
+.changelog-pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
