@@ -27,6 +27,7 @@ interface TranscriptMessage {
   // compact summary), `origin.kind` (e.g. 'task-notification'), and
   // `sourceToolUseID` (the tool call a skill body was loaded by).
   isMeta?: boolean;
+  isCompactSummary?: boolean;
   origin?: { kind?: string };
   sourceToolUseID?: string;
   message?: {
@@ -508,6 +509,7 @@ async function parseTranscriptFile(
         if (
           obj.type === 'user' &&
           !obj.isMeta &&
+          !obj.isCompactSummary &&
           (!obj.origin?.kind || obj.origin.kind === 'human') &&
           obj.message?.content
         ) {
@@ -590,6 +592,7 @@ function injectionKind(msg: TranscriptMessage): 'skill' | 'task-notification' | 
   if (msg.origin?.kind === 'task-notification') return 'task-notification';
   if (msg.origin?.kind && msg.origin.kind !== 'human') return 'meta';
   if (msg.isMeta) return 'meta';
+  if (msg.isCompactSummary) return 'meta'; // context-compaction continuation notice (no isMeta on some versions)
   return null;
 }
 

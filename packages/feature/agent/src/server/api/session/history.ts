@@ -17,6 +17,7 @@ interface TranscriptMessage {
   // Harness-injected (non-typed) user messages — routed out of the user-bubble
   // bucket. See session-by-path.ts for the same treatment.
   isMeta?: boolean;
+  isCompactSummary?: boolean;
   origin?: { kind?: string };
   sourceToolUseID?: string;
   message?: {
@@ -83,6 +84,7 @@ function injectionKind(msg: TranscriptMessage): 'skill' | 'task-notification' | 
   if (msg.origin?.kind === 'task-notification') return 'task-notification';
   if (msg.origin?.kind && msg.origin.kind !== 'human') return 'meta';
   if (msg.isMeta) return 'meta';
+  if (msg.isCompactSummary) return 'meta'; // context-compaction continuation notice (no isMeta on some versions)
   return null;
 }
 
