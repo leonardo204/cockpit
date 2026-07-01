@@ -5,7 +5,7 @@
 // since they're used by shared-ui's ImagePreview as well — re-exported
 // here for callers that already import them from this package.
 
-export type MessageRole = 'user' | 'assistant';
+export type MessageRole = 'user' | 'assistant' | 'system';
 
 export interface ToolCallInfo {
   id: string;
@@ -13,6 +13,9 @@ export interface ToolCallInfo {
   input: Record<string, unknown>;
   result?: string;
   isLoading?: boolean;
+  // Skill body loaded by this call (e.g. the Skill tool). Folded into the tool
+  // call's expanded view instead of appearing as a separate user bubble.
+  skillContent?: string;
 }
 
 // Re-export image types from shared-utils (single source of truth).
@@ -27,6 +30,12 @@ export interface ChatMessage {
   toolCalls?: ToolCallInfo[];
   isStreaming?: boolean;
   timestamp?: string;  // Message creation time (ISO format)
+  // Set on role:'system' rows — a harness event rendered as a muted one-line bar
+  // (not a conversation bubble). `task-notification` shows the <summary> line;
+  // `meta` covers skill image annotations / compact-summary notices.
+  // `detail` is the full raw text (e.g. the complete <task-notification> block) —
+  // shown in a modal when the one-line bar is clicked. `content` stays the summary.
+  systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
 }
 
 export interface ChatSession {

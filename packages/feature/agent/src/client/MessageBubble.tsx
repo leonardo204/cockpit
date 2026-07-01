@@ -130,6 +130,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   const [toolCallsExpanded, setToolCallsExpanded] = useState(() => (message.toolCalls?.length || 0) === 1);
   const [showDiffViewer, setShowDiffViewer] = useState(false);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
+  const [showEventDetail, setShowEventDetail] = useState(false);
   const isUser = message.role === 'user';
   const hasImages = message.images && message.images.length > 0;
   const toolCallsCount = message.toolCalls?.length || 0;
@@ -262,6 +263,69 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   };
 
   const timeStr = formatTime(message.timestamp);
+
+  // System-event row (task-notification / meta): a muted one-line bar, not a
+  // conversation bubble. Kept after all hooks so hook order stays stable.
+  if (message.role === 'system') {
+    const ev = message.systemEvent;
+    const icon =
+      ev?.kind === 'task-notification'
+        ? ev.status === 'failed'
+          ? '⚠️'
+          : ev.status === 'stopped'
+            ? '⏹️'
+            : '🔔'
+        : 'ℹ️';
+    // Full text for the detail modal — the raw <task-notification> block, or the
+    // message content itself (image annotation / compact-summary notice).
+    const detail = ev?.detail || message.content;
+    return (
+      <>
+        <div className="flex justify-center my-2 px-2" data-role="system">
+          <button
+            type="button"
+            onClick={() => setShowEventDetail(true)}
+            className="flex items-center gap-1.5 max-w-[85%] text-[11px] text-muted-foreground bg-secondary/40 border border-border/50 rounded-full px-3 py-1 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+            title={t('chat.viewDetails', { defaultValue: 'Click for details' })}
+          >
+            <span className="flex-shrink-0">{icon}</span>
+            <span className="truncate">{message.content}</span>
+          </button>
+        </div>
+        {showEventDetail && (
+          <Portal>
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+              onClick={() => setShowEventDetail(false)}
+            >
+              <div
+                className="bg-card shadow-xl w-full max-w-4xl max-h-[80vh] rounded-lg flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
+                  <span className="text-sm text-foreground flex items-center gap-1.5">
+                    <span>{icon}</span>
+                    {ev?.kind === 'task-notification'
+                      ? t('chat.taskNotification', { defaultValue: 'Task notification' })
+                      : t('chat.systemNotice', { defaultValue: 'Notice' })}
+                  </span>
+                  <button
+                    onClick={() => setShowEventDetail(false)}
+                    className="text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <pre className="flex-1 overflow-auto px-4 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                  {detail}
+                </pre>
+              </div>
+            </div>
+          </Portal>
+        )}
+      </>
+    );
+  }
 
   return (
     <>

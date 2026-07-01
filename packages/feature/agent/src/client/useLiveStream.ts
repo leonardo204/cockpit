@@ -28,6 +28,10 @@ export function useLiveStream(
 ): void {
   const curAssistantId = useRef<string | null>(null);
   const seq = useRef(0);
+  // Whether a turn is actively producing (between system.init and its result). Used to tell a
+  // BACKGROUND task's notification (arrives while idle, after a result) from a foreground
+  // subagent's (arrives mid-turn, already shown as its tool call).
+  const turnActive = useRef(false);
 
   const newPlaceholder = (): string => {
     const id = `live-asst-${++seq.current}`;
@@ -38,7 +42,34 @@ export function useLiveStream(
 
   const apply = (ev: StreamEvent) => {
     if (ev.type === 'system' && ev.subtype === 'init') {
+      turnActive.current = true;
       newPlaceholder(); // turn-start → new assistant bubble
+      return;
+    }
+    // Background task reporting back. When it arrives while idle (after a result, before the next
+    // turn) it's a real background completion → render a muted system-event bar live, matching the
+    // disk-reload view. A notification that arrives mid-turn is a foreground subagent (already
+    // shown as its tool call) → skip.
+    if (ev.type === 'system' && ev.subtype === 'task_notification') {
+      if (!turnActive.current) {
+        const id = `live-tasknotif-${ev.task_id || ++seq.current}`;
+        const detail =
+          `<task-notification>\n` +
+          (ev.task_id ? `<task-id>${ev.task_id}</task-id>\n` : '') +
+          (ev.status ? `<status>${ev.status}</status>\n` : '') +
+          (ev.summary ? `<summary>${ev.summary}</summary>\n` : '') +
+          (ev.output_file ? `<output-file>${ev.output_file}</output-file>\n` : '') +
+          `</task-notification>`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id,
+            role: 'system',
+            content: ev.summary || '',
+            systemEvent: { kind: 'task-notification', ...(ev.status ? { status: ev.status } : {}), detail },
+          } as ChatMessage,
+        ]);
+      }
       return;
     }
     // Synthetic human-prompt event → render the new user bubble live. (Seeded by
@@ -70,6 +101,8 @@ export function useLiveStream(
       });
       return;
     }
+    // A result ends the active turn — after it, an incoming task_notification is a background one.
+    if (ev.type === 'result') turnActive.current = false;
     // content events need a current bubble (init normally comes first; be safe)
     const assistantId = curAssistantId.current ?? newPlaceholder();
     setMessages((prev) => applyStreamEvent(prev, ev, { engine, assistantId }));
@@ -154,6 +187,7 @@ export function useLiveStream(
         });
         curAssistantId.current = null;
         seq.current = 0;
+        turnActive.current = false;
         for (const ev of msg.events) apply(ev as StreamEvent);
         opts?.onRunningChange?.(true);
       } else if (msg.type === 'run-event' && msg.message) {

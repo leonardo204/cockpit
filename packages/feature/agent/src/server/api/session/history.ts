@@ -14,9 +14,14 @@ export const dynamic = 'force-dynamic';
 
 interface TranscriptMessage {
   type: string;
+  // Harness-injected (non-typed) user messages — routed out of the user-bubble
+  // bucket. See session-by-path.ts for the same treatment.
+  isMeta?: boolean;
+  origin?: { kind?: string };
+  sourceToolUseID?: string;
   message?: {
     role?: string;
-    content?: Array<{
+    content?: string | Array<{
       type: string;
       text?: string;
       name?: string;
@@ -49,17 +54,60 @@ interface MessageImage {
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   images?: MessageImage[];
   timestamp?: string;
+  systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
   toolCalls?: Array<{
     id: string;
     name: string;
     input: Record<string, unknown>;
     result?: string;
     isLoading: boolean;
+    skillContent?: string;
   }>;
+}
+
+// Plain text of a user message, whether string- or block-form.
+function messageText(msg: TranscriptMessage): string {
+  const c = msg.message?.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
+  return '';
+}
+
+// The harness-injection kind of a user message, or null if it's a real user turn.
+function injectionKind(msg: TranscriptMessage): 'skill' | 'task-notification' | 'meta' | null {
+  if (msg.isMeta && msg.sourceToolUseID) return 'skill';
+  if (msg.origin?.kind === 'task-notification') return 'task-notification';
+  if (msg.origin?.kind && msg.origin.kind !== 'human') return 'meta';
+  if (msg.isMeta) return 'meta';
+  return null;
+}
+
+function buildSystemEvent(msg: TranscriptMessage, kind: 'task-notification' | 'meta'): ChatMessage | null {
+  const raw = messageText(msg);
+  if (kind === 'task-notification') {
+    const summary = raw.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim();
+    const status = raw.match(/<status>([\s\S]*?)<\/status>/)?.[1]?.trim();
+    return {
+      id: msg.uuid || `sysevent-${Date.now()}`,
+      role: 'system',
+      content: summary || raw.trim().slice(0, 200),
+      timestamp: msg.timestamp,
+      systemEvent: { kind: 'task-notification', detail: raw.trim(), ...(status ? { status } : {}) },
+    };
+  }
+  const text = raw.trim();
+  if (!text) return null;
+  return {
+    id: msg.uuid || `sysevent-${Date.now()}`,
+    role: 'system',
+    content: text,
+    timestamp: msg.timestamp,
+    systemEvent: { kind: 'meta' },
+  };
 }
 
 export const GET = dynamicHandler<
@@ -116,8 +164,9 @@ function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] 
   const chatMessages: ChatMessage[] = [];
   let currentAssistantMessage: ChatMessage | null = null;
   const toolResults = new Map<string, string>();
+  const skillContents = new Map<string, string>();
 
-  // First pass: collect all tool results
+  // First pass: collect all tool results + skill bodies
   for (const msg of rawMessages) {
     if (msg.type === 'user' && msg.message?.content && Array.isArray(msg.message.content)) {
       for (const block of msg.message.content) {
@@ -126,12 +175,32 @@ function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] 
         }
       }
     }
+    if (msg.type === 'user' && injectionKind(msg) === 'skill' && msg.sourceToolUseID) {
+      const text = messageText(msg);
+      if (text) skillContents.set(msg.sourceToolUseID, text);
+    }
   }
 
   // Second pass: build the message list
   for (const msg of rawMessages) {
     // Handle user text messages
     if (msg.type === 'user' && msg.message?.role === 'user' && msg.message?.content) {
+      // Route harness-injected messages out of the user-bubble bucket:
+      // skill bodies fold into their tool call; task-notification / meta → system-event row.
+      const injected = injectionKind(msg);
+      if (injected) {
+        if (injected !== 'skill') {
+          const ev = buildSystemEvent(msg, injected);
+          if (ev) {
+            if (currentAssistantMessage) {
+              chatMessages.push(currentAssistantMessage);
+              currentAssistantMessage = null;
+            }
+            chatMessages.push(ev);
+          }
+        }
+        continue;
+      }
       // content may be a string or an array
       const content = msg.message.content;
       if (typeof content === 'string') {
@@ -227,6 +296,7 @@ function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] 
               input: tool.input || {},
               result: toolResults.get(tool.id),
               isLoading: false,
+              ...(skillContents.has(tool.id) ? { skillContent: skillContents.get(tool.id) } : {}),
             });
           }
         }

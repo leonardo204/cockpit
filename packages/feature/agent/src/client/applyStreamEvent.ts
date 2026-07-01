@@ -30,6 +30,11 @@ export interface StreamEvent {
   event?: { type?: string; delta?: { type?: string; text?: string } };
   result?: unknown;
   error?: string; // {type:'error'} events emitted by engines / the orchestrator's failure path
+  // system/task_notification fields (SDKTaskNotificationMessage) — a background task reporting back.
+  task_id?: string;
+  status?: 'completed' | 'failed' | 'stopped';
+  summary?: string;
+  output_file?: string;
 }
 
 export function applyStreamEvent(

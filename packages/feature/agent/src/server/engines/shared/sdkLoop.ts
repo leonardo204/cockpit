@@ -35,7 +35,8 @@ function follow(ctx: RunCtx): AbortController {
 export async function runSdkLoop(ctx: RunCtx, buildOptions: BuildSdkOptions): Promise<void> {
   const hasImages = !!(ctx.images && ctx.images.length > 0);
 
-  // Build message content: images first (so the model sees them before text), then text.
+  // Build the first user message content: images first (so the model sees them before text),
+  // then text.
   const content: ContentBlock[] = [];
   if (ctx.images) {
     for (const img of ctx.images) {
@@ -43,51 +44,92 @@ export async function runSdkLoop(ctx: RunCtx, buildOptions: BuildSdkOptions): Pr
     }
   }
   if (ctx.prompt) content.push({ type: 'text', text: ctx.prompt });
+  const firstContent: string | ContentBlock[] = hasImages ? content : (ctx.prompt ?? '');
 
-  const firstAbort = follow(ctx);
-  const baseOptions = buildOptions(firstAbort, ctx.sessionId);
+  // Background-task persistence: run every turn over a STREAMING input so the underlying claude
+  // process stays alive while `run_in_background` shells (and other backgrounded tasks) are still
+  // in flight. The SDK emits `system/task_started` when a task launches and
+  // `system/task_notification` when it finishes (verified: foreground subagents also notify,
+  // BEFORE their turn's `result`, so they never leave anything pending). We hold the input stream
+  // open — the process resident — until every started task has reported back, then close it so the
+  // process winds down. With no pending task, the stream closes on the first `result` —
+  // behaviourally identical to the old one-shot call. While resident, the SDK proactively delivers
+  // a background task's notification and auto-runs a follow-up turn on this same stream (no nudge).
+  const pendingTasks = new Set<string>();
 
-  let response;
-  if (hasImages) {
-    const messages = (async function* () {
-      yield {
-        type: 'user' as const,
-        message: { role: 'user' as const, content },
-        parent_tool_use_id: null,
-        session_id: ctx.sessionId || `session-${ctx.currentKey()}`,
-      };
-    })();
-    response = query({ prompt: messages, options: baseOptions });
-  } else {
-    response = query({ prompt: ctx.prompt as string, options: baseOptions });
+  // closeInput() lets the current attempt's input generator return, ending the streaming turn.
+  // Held in an outer binding so an abort (user stop) can close whichever gate is live.
+  let closeInput: () => void = () => {};
+  if (!ctx.signal.aborted) {
+    ctx.signal.addEventListener('abort', () => closeInput(), { once: true });
   }
 
-  let currentResponse = response;
-
   for (let attempt = 0; attempt <= MAX_COMPACTION_RETRIES; attempt++) {
+    let gateClosed = false;
+    const gateOpen = new Promise<void>((resolve) => {
+      closeInput = () => {
+        if (!gateClosed) {
+          gateClosed = true;
+          resolve();
+        }
+      };
+    });
+    if (ctx.signal.aborted) closeInput();
+
+    const isRetry = attempt > 0;
+    const firstYield = {
+      type: 'user' as const,
+      // A compaction retry resumes the same session with 'continue'; the first attempt sends the
+      // user turn (text ∪ images).
+      message: { role: 'user' as const, content: isRetry ? 'continue' : firstContent },
+      parent_tool_use_id: null,
+      session_id: ctx.sessionId || `session-${ctx.currentKey()}`,
+    };
+    const input = (async function* () {
+      yield firstYield;
+      await gateOpen; // keep the process resident until the turn (and any background tasks) drain
+    })();
+
+    const attemptAbort = follow(ctx);
+    const resume = isRetry ? ctx.currentKey() : ctx.sessionId;
+    const options = isRetry
+      ? { ...buildOptions(attemptAbort, resume), resume }
+      : buildOptions(attemptAbort, ctx.sessionId);
+
+    const response = query({ prompt: input, options });
+
     let receivedResult = false;
+    for await (const message of response) {
+      if (ctx.signal.aborted) {
+        closeInput();
+        break;
+      }
 
-    for await (const message of currentResponse) {
-      if (ctx.signal.aborted) break;
-
-      const msg = message as { type?: string; subtype?: string; session_id?: string };
+      const msg = message as { type?: string; subtype?: string; session_id?: string; task_id?: string };
       // New session: the engine reveals its real sessionId in the system.init event.
       if (msg.type === 'system' && msg.subtype === 'init' && msg.session_id) {
         ctx.rekey(msg.session_id);
       }
+      // Track background-task lifecycle to decide when the process may wind down.
+      if (msg.type === 'system' && msg.subtype === 'task_started' && msg.task_id) {
+        pendingTasks.add(msg.task_id);
+      }
+      if (msg.type === 'system' && msg.subtype === 'task_notification' && msg.task_id) {
+        pendingTasks.delete(msg.task_id);
+      }
       if (msg.type === 'result') receivedResult = true;
 
       ctx.emit(message as { type: string; [k: string]: unknown });
+
+      // Turn produced a result and nothing is still running in the background → close the input so
+      // the process winds down. If a task is still pending, stay resident and let the SDK deliver
+      // its notification + auto-run the follow-up turn on this stream.
+      if (msg.type === 'result' && pendingTasks.size === 0) closeInput();
     }
+    closeInput(); // ensure the generator can return even if the stream ended on its own
 
     if (receivedResult || ctx.signal.aborted) break;
 
-    // Stream ended without a result → likely context compaction; re-query to continue.
-    const retryAbort = follow(ctx);
-    const resume = ctx.currentKey(); // real sessionId after rekey, else the provisional runId
-    currentResponse = query({
-      prompt: 'continue',
-      options: { ...buildOptions(retryAbort, resume), resume },
-    });
+    // Stream ended without a result → likely context compaction; loop re-queries with 'continue'.
   }
 }

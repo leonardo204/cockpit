@@ -22,9 +22,16 @@ interface TokenUsage {
 
 interface TranscriptMessage {
   type: string;
+  // Harness-injected (non-typed) user messages are marked so they can be routed
+  // out of the "user bubble" bucket: `isMeta` (skill body / image annotation /
+  // compact summary), `origin.kind` (e.g. 'task-notification'), and
+  // `sourceToolUseID` (the tool call a skill body was loaded by).
+  isMeta?: boolean;
+  origin?: { kind?: string };
+  sourceToolUseID?: string;
   message?: {
     role?: string;
-    content?: Array<{
+    content?: string | Array<{
       type: string;
       text?: string;
       name?: string;
@@ -58,16 +65,21 @@ interface MessageImage {
 
 interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   images?: MessageImage[];
   timestamp?: string;
+  // Set on role:'system' rows — a harness event rendered as a muted one-line bar
+  // (not a conversation bubble). `task-notification` shows the <summary> line.
+  systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
   toolCalls?: Array<{
     id: string;
     name: string;
     input: Record<string, unknown>;
     result?: string;
     isLoading: boolean;
+    // Skill body loaded by this call (folded here instead of shown as a user bubble).
+    skillContent?: string;
   }>;
 }
 
@@ -490,8 +502,15 @@ async function parseTranscriptFile(
           lastUsage = obj.message.usage;
         }
 
-        // Collect user text messages for title generation
-        if (obj.type === 'user' && !obj.isMeta && obj.message?.content) {
+        // Collect user text messages for title generation. Exclude harness-injected
+        // messages: `isMeta` (skill/image/compact) and `origin.kind` (task-notification,
+        // etc.) — only 'human'-origin/unstamped turns are real user input.
+        if (
+          obj.type === 'user' &&
+          !obj.isMeta &&
+          (!obj.origin?.kind || obj.origin.kind === 'human') &&
+          obj.message?.content
+        ) {
           const content = obj.message.content;
           if (typeof content === 'string') {
             userTextMessages.push(content);
@@ -554,12 +573,60 @@ async function parseTranscriptFile(
   return { messages, title, usage: lastUsage, totalTurns, hasMore };
 }
 
+// Plain text of a user message, whether string- or block-form.
+function messageText(msg: TranscriptMessage): string {
+  const c = msg.message?.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
+  return '';
+}
+
+// The harness-injection kind of a user message, or null if it's a real user turn.
+// A real user turn has no `isMeta` and no non-'human' `origin.kind`.
+//   - 'skill': a skill body loaded by a tool call (folded into that call, not shown here)
+//   - 'task-notification' / 'meta': rendered as a muted system-event bar
+function injectionKind(msg: TranscriptMessage): 'skill' | 'task-notification' | 'meta' | null {
+  if (msg.isMeta && msg.sourceToolUseID) return 'skill';
+  if (msg.origin?.kind === 'task-notification') return 'task-notification';
+  if (msg.origin?.kind && msg.origin.kind !== 'human') return 'meta';
+  if (msg.isMeta) return 'meta';
+  return null;
+}
+
+// Build a muted system-event row from an injected message (task-notification / meta).
+function buildSystemEvent(msg: TranscriptMessage, kind: 'task-notification' | 'meta'): ChatMessage | null {
+  const raw = messageText(msg);
+  if (kind === 'task-notification') {
+    const summary = raw.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim();
+    const status = raw.match(/<status>([\s\S]*?)<\/status>/)?.[1]?.trim();
+    return {
+      id: msg.uuid || `sysevent-${Date.now()}`,
+      role: 'system',
+      content: summary || raw.trim().slice(0, 200),
+      timestamp: msg.timestamp,
+      systemEvent: { kind: 'task-notification', detail: raw.trim(), ...(status ? { status } : {}) },
+    };
+  }
+  const text = raw.trim();
+  if (!text) return null;
+  return {
+    id: msg.uuid || `sysevent-${Date.now()}`,
+    role: 'system',
+    content: text,
+    timestamp: msg.timestamp,
+    systemEvent: { kind: 'meta' },
+  };
+}
+
 function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] {
   const chatMessages: ChatMessage[] = [];
   let currentAssistantMessage: ChatMessage | null = null;
   const toolResults = new Map<string, string>();
+  // Skill bodies, keyed by the tool call (sourceToolUseID) that loaded them — folded
+  // into that tool call instead of being rendered as a user bubble.
+  const skillContents = new Map<string, string>();
 
-  // First pass: collect all tool results
+  // First pass: collect all tool results + skill bodies
   for (const msg of rawMessages) {
     if (msg.type === 'user' && msg.message?.content && Array.isArray(msg.message.content)) {
       for (const block of msg.message.content) {
@@ -568,12 +635,33 @@ function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] 
         }
       }
     }
+    if (msg.type === 'user' && injectionKind(msg) === 'skill' && msg.sourceToolUseID) {
+      const text = messageText(msg);
+      if (text) skillContents.set(msg.sourceToolUseID, text);
+    }
   }
 
   // Second pass: build the message list
   for (const msg of rawMessages) {
     // Handle user text messages
     if (msg.type === 'user' && msg.message?.role === 'user' && msg.message?.content) {
+      // Route harness-injected messages out of the user-bubble bucket.
+      const injected = injectionKind(msg);
+      if (injected) {
+        // Skill bodies are folded into their originating tool call (collected above).
+        // task-notification / meta become a muted system-event row.
+        if (injected !== 'skill') {
+          const ev = buildSystemEvent(msg, injected);
+          if (ev) {
+            if (currentAssistantMessage) {
+              chatMessages.push(currentAssistantMessage);
+              currentAssistantMessage = null;
+            }
+            chatMessages.push(ev);
+          }
+        }
+        continue;
+      }
       const content = msg.message.content;
       if (typeof content === 'string') {
         if (currentAssistantMessage) {
@@ -662,6 +750,7 @@ function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] 
               input: tool.input || {},
               result: toolResults.get(tool.id),
               isLoading: false,
+              ...(skillContents.has(tool.id) ? { skillContent: skillContents.get(tool.id) } : {}),
             });
           }
         }

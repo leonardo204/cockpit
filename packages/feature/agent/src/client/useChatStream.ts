@@ -103,6 +103,17 @@ export function useChatStream(
   const streamBufferRef = useRef<{ messageId: string; text: string } | null>(null);
   const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // #bg multi-turn (background persistence): a single resident run can now span the launch turn
+  // plus follow-up turns the SDK auto-runs when a background task reports back. `curAsstIdRef` is
+  // the assistant bubble live events fill (updated per turn so a follow-up turn gets its own
+  // bubble); `sawResultRef` marks that this run already produced a result (so the next init is a
+  // follow-up); `turnActiveRef` distinguishes a background notification (arrives while idle) from
+  // a foreground subagent's (mid-turn).
+  const curAsstIdRef = useRef<string | null>(null);
+  const sawResultRef = useRef(false);
+  const turnActiveRef = useRef(false);
+  const bgSeqRef = useRef(0);
+
   // Flush buffer to state (batched text delta → shared reducer)
   const flushStreamBuffer = useCallback(() => {
     const buffer = streamBufferRef.current;
@@ -133,8 +144,11 @@ export function useChatStream(
     flushStreamBuffer();
     setIsLoading(false);
     const ar = activeRunRef.current;
+    const curId = curAsstIdRef.current;
     if (ar) {
-      setMessages((prev) => prev.map((m) => (m.id === ar.assistantId ? { ...m, isStreaming: false } : m)));
+      setMessages((prev) =>
+        prev.map((m) => (m.id === ar.assistantId || m.id === curId ? { ...m, isStreaming: false } : m))
+      );
     }
     setActiveRun(null);
   }, [flushStreamBuffer, setMessages]);
@@ -178,13 +192,54 @@ export function useChatStream(
       return;
     }
 
-    // Handle session_id
+    // Handle session_id + turn boundary. Each turn (including a follow-up turn the SDK auto-runs
+    // after a background task completes) starts with a system.init.
     if (eventType === 'system' && event.subtype === 'init') {
       const newSessionId = event.session_id as string;
       onSessionId(newSessionId);
       sessionIdRef.current = newSessionId;
-      // Successful init means any prior retry chain has resolved
-      setApiRetryInfo(null);
+      setApiRetryInfo(null); // successful init means any prior retry chain resolved
+      // #bg: a turn that starts AFTER this run already produced a result is a follow-up (e.g. the
+      // auto-run when a background task reports back) → give it its own assistant bubble instead
+      // of merging into the launcher's.
+      if (sawResultRef.current) {
+        const autoId = `auto-asst-${++bgSeqRef.current}`;
+        curAsstIdRef.current = autoId;
+        setMessages((prev) => [
+          ...prev,
+          { id: autoId, role: 'assistant', content: '', toolCalls: [], isStreaming: true } as ChatMessage,
+        ]);
+      }
+      turnActiveRef.current = true;
+      return;
+    }
+
+    // #bg: a background task reporting back while idle (after a result, before the next turn) →
+    // render a muted system-event bar live, matching the disk-reload view. A notification during
+    // an active turn is a foreground subagent (already shown as its tool call) → skip.
+    if (eventType === 'system' && event.subtype === 'task_notification') {
+      if (!turnActiveRef.current) {
+        const status = event.status as 'completed' | 'failed' | 'stopped' | undefined;
+        const summary = (event.summary as string) || '';
+        const taskId = event.task_id as string | undefined;
+        const detail =
+          `<task-notification>\n` +
+          (taskId ? `<task-id>${taskId}</task-id>\n` : '') +
+          (status ? `<status>${status}</status>\n` : '') +
+          (summary ? `<summary>${summary}</summary>\n` : '') +
+          (event.output_file ? `<output-file>${event.output_file as string}</output-file>\n` : '') +
+          `</task-notification>`;
+        const id = `auto-tasknotif-${taskId || ++bgSeqRef.current}`;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id,
+            role: 'system',
+            content: summary,
+            systemEvent: { kind: 'task-notification', ...(status ? { status } : {}), detail },
+          } as ChatMessage,
+        ]);
+      }
       return;
     }
 
@@ -281,6 +336,10 @@ export function useChatStream(
 
     // Handle final result
     if (eventType === 'result') {
+      // #bg: a result ends the active turn — after it a task_notification is a background one, and
+      // the next init is a follow-up turn that needs its own bubble.
+      turnActiveRef.current = false;
+      sawResultRef.current = true;
       // Stream ended → drop any retry indicator
       setApiRetryInfo(null);
       // Stream ended, flush buffer immediately
@@ -359,19 +418,24 @@ export function useChatStream(
           streamFlushTimerRef.current = null;
         }
         streamBufferRef.current = null;
+        // #bg: reset per-run turn tracking and drop any live-created follow-up bubbles / event
+        // bars (id `auto-*`) so this authoritative replay rebuilds them cleanly.
+        curAsstIdRef.current = ar.assistantId;
+        sawResultRef.current = false;
+        turnActiveRef.current = false;
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === ar.assistantId ? { ...m, content: '', toolCalls: [] } : m
-          )
+          prev
+            .filter((m) => !(typeof m.id === 'string' && m.id.startsWith('auto-')))
+            .map((m) => (m.id === ar.assistantId ? { ...m, content: '', toolCalls: [] } : m))
         );
-        for (const ev of msg.events) handleStreamEvent(ev as Record<string, unknown>, ar.assistantId);
+        for (const ev of msg.events) handleStreamEvent(ev as Record<string, unknown>, curAsstIdRef.current ?? ar.assistantId);
         // Run already finished before we connected (status idle/error in the snapshot).
         if (msg.status && msg.status !== 'running') endRun();
       } else if (msg.type === 'run-event' && msg.message) {
         // 'run-ended' is the single definitive end signal (engines may emit several
         // intermediate 'result's — codex = one per turn — so we must NOT end on result).
         if (msg.message.type === 'run-ended') { endRun(); return; }
-        handleStreamEvent(msg.message, ar.assistantId);
+        handleStreamEvent(msg.message, curAsstIdRef.current ?? ar.assistantId);
       } else if (msg.type === 'run-idle') {
         endRun();
       }
@@ -425,6 +489,10 @@ export function useChatStream(
         isStreaming: true,
       };
       setMessages((prev) => [...prev, assistantMessage]);
+      // #bg: bind live rendering to this launching bubble and reset per-run turn tracking.
+      curAsstIdRef.current = assistantMessageId;
+      sawResultRef.current = false;
+      turnActiveRef.current = false;
 
       // PTY mode (claude/claude2 only). Images are written to temp files by the backend driver + the prompt carries the paths for claude to read.
       const isClaudeEngine = !engine || engine === 'claude' || engine === 'claude2';

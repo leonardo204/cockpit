@@ -276,6 +276,20 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
               </pre>
             </div>
           )}
+
+          {/* Skill body loaded by this call — folded here instead of shown as a user bubble */}
+          {toolCall.skillContent && (
+            <div className="px-3 py-2 border-t border-border">
+              <div className="mb-1">
+                <span className="text-xs text-muted-foreground">
+                  {t('toolCall.skillContent', { defaultValue: 'Skill content' })}:
+                </span>
+              </div>
+              <pre className="text-xs bg-secondary p-2 rounded overflow-x-auto max-h-60 overflow-y-auto text-foreground whitespace-pre-wrap">
+                {toolCall.skillContent}
+              </pre>
+            </div>
+          )}
         </div>
       )}
 
