@@ -1,15 +1,15 @@
 /**
- * Network Capture - Main World 网络拦截
+ * Network Capture - Main World network interception
  *
- * 注入到 iframe 的 main world（和 disguise.js 同方式），
- * 拦截真实的 fetch / XMLHttpRequest，通过 CustomEvent 把
- * 捕获的请求条目发送回 Isolated World 的 automation.js。
+ * Injected into the iframe's main world (same way as disguise.js),
+ * intercepts the real fetch / XMLHttpRequest, and sends captured
+ * request entries back to automation.js in the Isolated World via CustomEvent.
  *
- * 通信协议：
- *   Main → Isolated:  cockpit:network-entry   { ...entry }       请求发起时立即发送（占位）
- *   Main → Isolated:  cockpit:network-update  { id, status, ... } 响应完成时发送（补全字段）
+ * Communication protocol:
+ *   Main → Isolated:  cockpit:network-entry   { ...entry }       sent immediately when the request starts (placeholder)
+ *   Main → Isolated:  cockpit:network-update  { id, status, ... } sent when the response completes (fills in the fields)
  *   Isolated → Main:  cockpit:network-recording { active, filters }
- *   Isolated → Main:  cockpit:network-bridge-ready  (触发 buffer flush)
+ *   Isolated → Main:  cockpit:network-bridge-ready  (triggers buffer flush)
  */
 (function () {
   'use strict';
@@ -17,14 +17,14 @@
   let networkReqId = 0;
   const MAX_BODY_SIZE = 128 * 1024;
 
-  // 录制状态（由 Isolated World 的 automation.js 同步过来）
+  // Recording state (synced over from automation.js in the Isolated World)
   let recording = { active: false, filters: {} };
 
-  // Bridge 就绪前缓存条目，防止 automation.js 还没 import 完时丢条目
+  // Buffer entries until the bridge is ready, so entries aren't lost while automation.js is still importing
   let entryBuffer = [];
   let bridgeReady = false;
 
-  // ── 事件监听 ────────────────────────────────────────────
+  // ── Event listeners ─────────────────────────────────────
 
   window.addEventListener('cockpit:network-recording', function (e) {
     recording = e.detail;
@@ -38,7 +38,7 @@
     }
   });
 
-  // ── 工具函数 ────────────────────────────────────────────
+  // ── Utility functions ───────────────────────────────────
 
   function shouldCaptureBody(method, url, status) {
     if (!recording.active) return false;
@@ -74,7 +74,7 @@
     window.dispatchEvent(new CustomEvent('cockpit:network-update', { detail: update }));
   }
 
-  // ── Fetch 拦截 ──────────────────────────────────────────
+  // ── Fetch interception ──────────────────────────────────
 
   var originalFetch = window.fetch;
   window.fetch = async function () {
@@ -98,7 +98,7 @@
       responseHeaders: null, responseBody: null, responseSize: null,
       recorded: wantBody,
     };
-    // 立即 emit 占位条目，保持请求发起顺序
+    // Emit a placeholder entry immediately to preserve request start order
     emitEntry(entry);
 
     try {
@@ -131,7 +131,7 @@
     }
   };
 
-  // ── XMLHttpRequest 拦截 ─────────────────────────────────
+  // ── XMLHttpRequest interception ─────────────────────────
 
   var XHROpen = XMLHttpRequest.prototype.open;
   var XHRSend = XMLHttpRequest.prototype.send;
@@ -163,7 +163,7 @@
         responseHeaders: null, responseBody: null, responseSize: null,
         recorded: wantBody,
       };
-      // 立即 emit 占位条目，保持请求发起顺序
+      // Emit a placeholder entry immediately to preserve request start order
       emitEntry(entry);
       var entryMethod = entry.method;
       var entryUrl = entry.url;

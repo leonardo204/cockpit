@@ -1,11 +1,12 @@
 /**
  * Cockpit Browser Automation Layer (ES Module)
  *
- * 注入到 Cockpit iframe 中，接收来自 BrowserBubble 的自动化命令，
- * 构建 a11y tree、执行 DOM 操作、返回结果。
+ * Injected into the Cockpit iframe; receives automation commands from
+ * BrowserBubble, builds the a11y tree, performs DOM operations, and
+ * returns results.
  *
- * 通过 content.js 的 activateCockpitBridge() 动态 import()。
- * 运行在 content script isolated world 中（保留 chrome.runtime 访问权）。
+ * Dynamically import()-ed by activateCockpitBridge() in content.js.
+ * Runs in the content script isolated world (retains chrome.runtime access).
  */
 
 let _realParent = null;
@@ -14,7 +15,7 @@ let _chrome = null;
 const LOG_PREFIX = '[Cockpit Automation]';
 
 // ============================================================================
-// Ref 系统：为 a11y tree 中的元素分配稳定的 ref ID
+// Ref system: assigns stable ref IDs to elements in the a11y tree
 // ============================================================================
 
 let refCounter = 0;
@@ -91,7 +92,7 @@ function findByRef(ref) {
 }
 
 // ============================================================================
-// A11y Tree 构建
+// A11y Tree construction
 // ============================================================================
 
 const IMPLICIT_ROLES = {
@@ -284,7 +285,7 @@ function safeRegex(src) {
 }
 
 // ============================================================================
-// Console 拦截
+// Console interception
 // ============================================================================
 
 const consoleBuffer = [];
@@ -312,24 +313,26 @@ function initConsoleCapture() {
 }
 
 // ============================================================================
-// Network 捕获（接收 Main World 的 network-capture.js 通过 CustomEvent 发来的条目）
+// Network capture (receives entries sent via CustomEvent from the Main
+// World's network-capture.js)
 //
-// fetch / XHR 拦截在 Main World 执行（network-capture.js），
-// 本层只负责：存储 buffer、管理录制状态、处理 CLI 命令。
+// fetch / XHR interception runs in the Main World (network-capture.js);
+// this layer is only responsible for: storing the buffer, managing
+// recording state, and handling CLI commands.
 // ============================================================================
 
 const networkBuffer = [];
 const MAX_NETWORK_BUFFER = 500;
 
-// 录制状态：由本层管理，通过 CustomEvent 同步给 Main World
+// Recording state: managed by this layer, synced to the Main World via CustomEvent
 const networkRecording = {
   active: false,
   filters: {},   // { url, method, status }
-  timer: null,   // 自动过期定时器
+  timer: null,   // auto-expiry timer
   startedAt: 0,
 };
 
-// 清除所有 entry 的 body 数据（过期时调用）
+// Clear body data from all entries (called on expiry)
 function clearAllBodies() {
   for (const entry of networkBuffer) {
     entry.requestHeaders = null;
@@ -339,32 +342,32 @@ function clearAllBodies() {
   }
 }
 
-// 同步录制状态到 Main World 的 network-capture.js
+// Sync recording state to the Main World's network-capture.js
 function syncRecordingToMainWorld() {
   window.dispatchEvent(new CustomEvent('cockpit:network-recording', {
     detail: { active: networkRecording.active, filters: networkRecording.filters },
   }));
 }
 
-// 监听 Main World 发来的网络条目
+// Listen for network entries sent from the Main World
 function initNetworkListener() {
-  // 请求发起时收到占位条目（保持发起顺序）
+  // Placeholder entry received when a request starts (preserves initiation order)
   window.addEventListener('cockpit:network-entry', (e) => {
     networkBuffer.push(e.detail);
     if (networkBuffer.length > MAX_NETWORK_BUFFER) networkBuffer.splice(0, 1);
   });
-  // 响应完成时收到更新（补全 status / duration / body 等字段）
+  // Update received when the response completes (fills in status / duration / body etc.)
   window.addEventListener('cockpit:network-update', (e) => {
     const update = e.detail;
     const entry = networkBuffer.find(r => r.id === update.id);
     if (entry) Object.assign(entry, update);
   });
-  // 通知 Main World：Isolated World 已就绪，可以 flush 缓存的条目
+  // Notify the Main World: the Isolated World is ready, cached entries can be flushed
   window.dispatchEvent(new CustomEvent('cockpit:network-bridge-ready'));
 }
 
 // ============================================================================
-// 命令处理器
+// Command handlers
 // ============================================================================
 
 const handlers = {
@@ -382,7 +385,7 @@ const handlers = {
     buildA11yTree(document.body, { filter, includeHiddenText, maxDepth }),
 
   screenshot: async () => {
-    // 1) 通知父页面（项目 iframe）：切到 console view + 切到本项目 + 返回 iframe bounds
+    // 1) Notify the parent page (project iframe): switch to console view + switch to this project + return the iframe bounds
     const boundsReqId = 'ss-' + Date.now();
     const bounds = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timeout preparing screenshot')), 5000);
@@ -397,7 +400,7 @@ const handlers = {
       _realParent.postMessage({ type: 'cockpit:prepare-screenshot', reqId: boundsReqId }, '*');
     });
 
-    // 2) captureVisibleTab 截取整个浏览器标签页
+    // 2) captureVisibleTab captures the entire browser tab
     const dataUrl = await new Promise((resolve, reject) => {
       _chrome.runtime.sendMessage({ type: 'cockpit:capture-tab' }, (response) => {
         if (_chrome.runtime.lastError) { reject(new Error(_chrome.runtime.lastError.message)); return; }
@@ -406,7 +409,7 @@ const handlers = {
       });
     });
 
-    // 3) 裁切到 iframe 区域
+    // 3) Crop to the iframe area
     const img = new Image();
     await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
     const cropCanvas = document.createElement('canvas');
@@ -416,7 +419,7 @@ const handlers = {
     cropCtx.drawImage(img, bounds.x, bounds.y, bounds.width, bounds.height, 0, 0, bounds.width, bounds.height);
     const result = cropCanvas.toDataURL('image/png');
 
-    // 4) 通知父页面截图完成，恢复界面
+    // 4) Notify the parent page the screenshot is done, restore the UI
     _realParent.postMessage({ type: 'cockpit:screenshot-done' }, '*');
 
     return { image: result, format: 'png' };
@@ -659,11 +662,11 @@ const handlers = {
   },
 
   evaluate: async ({ js, allFrames }) => {
-    // 通过 background.js 的 chrome.scripting.executeScript 在 main world 执行
-    // 不受页面 CSP 限制，可访问页面 JS 变量（React state 等）
-    // allFrames: true → 在所有 frame 中执行（解决跨域 iframe 访问问题）
-    // 大结果 (>6 KiB) 会在 MAIN world 被 auto-stash 并以 descriptor 形式返回；
-    // cock-browser CLI 识别 descriptor 后会通过 evaluate_chunk 回填内容。
+    // Executed in the main world via background.js's chrome.scripting.executeScript.
+    // Not restricted by the page's CSP; can access page JS variables (React state, etc.).
+    // allFrames: true → execute in all frames (solves cross-origin iframe access).
+    // Large results (>6 KiB) are auto-stashed in the MAIN world and returned as a descriptor;
+    // the cock-browser CLI recognizes the descriptor and backfills the content via evaluate_chunk.
     return new Promise((resolve) => {
       _chrome.runtime.sendMessage({ type: 'cockpit:evaluate', js, allFrames: !!allFrames }, (response) => {
         if (_chrome.runtime.lastError) {
@@ -677,13 +680,15 @@ const handlers = {
   },
 
   evaluate_chunk: async ({ token, offset = 0, size = 5000 }) => {
-    // 读取 MAIN-world stash 里某个 token 的一段内容。token 由上一次 evaluate
-    // 返回的 descriptor 提供。注意 stash 在 page window 上，页面导航/刷新会丢；
-    // 必须同一个浏览器 session、同一个页面上下文。
+    // Reads a slice of a token's content from the MAIN-world stash. The token
+    // comes from the descriptor returned by the previous evaluate. Note the
+    // stash lives on the page window, so page navigation/reload loses it;
+    // must be the same browser session and the same page context.
     //
-    // 返回 { chunk, done, nextOffset, totalBytes, isString }；
-    // size 默认 5000 以确保每次返回对象 JSON 序列化 < 6000，远低于 Chrome
-    // 在 chrome.runtime 消息边界的 ~8192 字节隐性截断阈值。
+    // Returns { chunk, done, nextOffset, totalBytes, isString };
+    // size defaults to 5000 to keep each returned object's JSON serialization
+    // < 6000, well below Chrome's ~8192-byte implicit truncation threshold at
+    // the chrome.runtime message boundary.
     const offNum = Number(offset) || 0;
     const szNum = Math.min(Math.max(1, Number(size) || 5000), 7000);
     const tokStr = String(token);
@@ -755,10 +760,10 @@ const handlers = {
     };
   },
 
-  // 录制控制：start 开始捕获 body，stop 停止，status 查看状态
+  // Recording control: start begins body capture, stop ends it, status shows state
   network_record: async ({ action = 'status', url, method, status, ttl = 600 }) => {
     if (action === 'start') {
-      // 清除旧的过期定时器
+      // Clear the old expiry timer
       if (networkRecording.timer) clearTimeout(networkRecording.timer);
       networkRecording.active = true;
       networkRecording.filters = {};
@@ -767,7 +772,7 @@ const handlers = {
       if (status) networkRecording.filters.status = status;
       networkRecording.startedAt = Date.now();
       syncRecordingToMainWorld();
-      // ttl 秒后自动过期（默认 10 分钟）
+      // Auto-expire after ttl seconds (default 10 minutes)
       networkRecording.timer = setTimeout(() => {
         networkRecording.active = false;
         clearAllBodies();
@@ -784,7 +789,7 @@ const handlers = {
       networkRecording.active = false;
       if (networkRecording.timer) { clearTimeout(networkRecording.timer); networkRecording.timer = null; }
       syncRecordingToMainWorld();
-      // 停止后不立即清 body，允许查询已录制的数据
+      // Don't clear bodies immediately after stopping; allow querying the recorded data
       return { recording: false, recordedCount: networkBuffer.filter(r => r.recorded).length };
     }
     // status
@@ -1299,7 +1304,7 @@ function simpleJsonPath(data, path) {
 }
 
 // ============================================================================
-// 命令分发
+// Command dispatch
 // ============================================================================
 
 function handleCommand(event) {
@@ -1357,7 +1362,7 @@ function bagCounts(s) {
 }
 
 // ============================================================================
-// 导出初始化函数
+// Exported initialization function
 // ============================================================================
 
 export function initAutomation(realParent, chromeApi) {

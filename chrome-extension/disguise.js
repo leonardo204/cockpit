@@ -1,9 +1,9 @@
 /**
- * 伪装为顶层窗口（注入到 iframe 的 main world）
- * 让网站 JS 无法检测到自己在 iframe 内
+ * Disguise as the top-level window (injected into the iframe's main world)
+ * so the site's JS cannot detect that it is running inside an iframe.
  *
- * 由 content.js 通过 <script src="chrome-extension://xxx/disguise.js"> 加载，
- * 绕过 CSP 对内联脚本的限制。
+ * Loaded by content.js via <script src="chrome-extension://xxx/disguise.js">,
+ * bypassing CSP restrictions on inline scripts.
  */
 (function () {
   try {

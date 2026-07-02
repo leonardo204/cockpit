@@ -143,12 +143,12 @@ const knownCommands = new Set(['browser', 'terminal', 'update', 'help', 'codegra
 const arg = process.argv[2];
 let projectDir = null;
 
-// 第一个参数不是 flag 且不是已知子命令 → 视为目录路径
+// First arg is neither a flag nor a known subcommand → treat it as a directory path
 if (arg && !arg.startsWith('-') && !knownCommands.has(arg)) {
-  // 展开 ~ 为 home 目录
+  // Expand ~ to the home directory
   const raw = arg.startsWith('~') ? arg.replace(/^~/, homedir()) : arg;
   projectDir = resolve(raw);
-  // 目录不存在则创建
+  // Create the directory if it doesn't exist
   if (!existsSync(projectDir)) {
     mkdirSync(projectDir, { recursive: true });
     console.log(`Created ${projectDir}`);
@@ -173,7 +173,7 @@ const { exec } = await import('child_process');
 const running = await isServerRunning();
 
 if (running) {
-  // 服务已运行 → 打开浏览器，立即退出
+  // Server already running → open the browser and exit immediately
   const base = `http://localhost:${port}`;
   const url = projectDir ? `${base}/?cwd=${encodeURIComponent(projectDir)}` : base;
   if (!process.env.COCKPIT_NO_OPEN) {
@@ -194,7 +194,7 @@ if (!isDev && !existsSync(resolve(PROJECT_ROOT, '.next-prod', 'BUILD_ID'))) {
   process.exit(1);
 }
 
-// 传递项目目录给 server.mjs，让它打开正确的 URL
+// Hand the project directory to server.mjs so it opens the right URL
 if (projectDir) {
   process.env.COCKPIT_OPEN_PROJECT = projectDir;
 }

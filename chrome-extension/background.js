@@ -1,23 +1,23 @@
 /**
  * Cockpit Bridge - Background Service Worker
  *
- * iframe Cookie 注入：用 declarativeNetRequest 动态规则在网络层注入 Cookie 头
- * 不修改全局 Cookie 存储，只在请求层面补上 Cookie
+ * iframe Cookie injection: use declarativeNetRequest dynamic rules to inject the Cookie header at the network layer
+ * Does not modify the global cookie store; only adds the Cookie at the request level
  */
 
 // =========================================================================
-// iframe Cookie 注入
+// iframe Cookie injection
 //
-// 思路：iframe 跨站请求不带 SameSite=Lax Cookie。
-// 用 chrome.cookies.getAll 读取目标域名的全部 Cookie，
-// 通过 declarativeNetRequest 动态规则在网络层 set Cookie 请求头。
-// 不修改 Cookie 存储，只影响请求头。
+// Idea: cross-site requests from an iframe do not carry SameSite=Lax cookies.
+// Use chrome.cookies.getAll to read all cookies for the target domain,
+// then set the Cookie request header at the network layer via declarativeNetRequest dynamic rules.
+// The cookie store is not modified; only request headers are affected.
 //
-// 动态规则用 requestDomains 限定域名，tabIds 限定 Cockpit 标签页，
-// resourceTypes 覆盖 sub_frame + 子资源（XHR/script/css/image 等）。
+// The dynamic rules use requestDomains to scope the domain, tabIds to scope the Cockpit tab,
+// and resourceTypes to cover sub_frame + sub-resources (XHR/script/css/image, etc.).
 // =========================================================================
 
-// 启动时清理上次残留的 session 规则（插件重载后内存中的 map 丢失，但规则仍生效）
+// On startup, clean up session rules left over from last time (after the extension reloads, the in-memory map is lost but the rules are still in effect)
 chrome.declarativeNetRequest.getSessionRules().then(rules => {
   if (rules.length) {
     const ids = rules.map(r => r.id);
@@ -27,23 +27,23 @@ chrome.declarativeNetRequest.getSessionRules().then(rules => {
 });
 
 // =========================================================================
-// Cockpit iframe 追踪 + Cookie 注入时序保证
+// Cockpit iframe tracking + cookie injection ordering guarantee
 //
-// 双层保证机制：
-//   Layer 1: externally_connectable（BrowserBubble → background 直连）
-//     → await prepareCookies() 返回后才设置 iframe src
-//     → Cookie 规则 100% 在首次请求前就绪
+// Two-layer guarantee mechanism:
+//   Layer 1: externally_connectable (BrowserBubble → background direct connection)
+//     → the iframe src is only set after `await prepareCookies()` returns
+//     → cookie rules are 100% ready before the first request
 //
-//   Layer 2: webNavigation.onBeforeNavigate（兜底 + frame 追踪）
-//     → 记录带 _cockpit=1 的 frame，供 content script check-frame 查询
-//     → 同时触发 injectCookiesForUrl 作为兜底（刷新场景等）
+//   Layer 2: webNavigation.onBeforeNavigate (fallback + frame tracking)
+//     → records frames carrying _cockpit=1, for content script check-frame queries
+//     → also triggers injectCookiesForUrl as a fallback (refresh scenarios, etc.)
 //
-// DNR 静态规则 #3 在网络层剥离 _cockpit=1 参数，服务端永远看不到。
+// DNR static rule #3 strips the _cockpit=1 parameter at the network layer, so the server never sees it.
 // =========================================================================
 const cockpitFrames = new Set(); // "tabId-frameId"
 
 chrome.webNavigation.onBeforeNavigate.addListener((details) => {
-  // 只关注 iframe（frameId > 0）
+  // Only care about iframes (frameId > 0)
   if (details.frameId === 0) return;
 
   const key = `${details.tabId}-${details.frameId}`;
@@ -51,8 +51,8 @@ chrome.webNavigation.onBeforeNavigate.addListener((details) => {
   if (details.url.includes('_cockpit=1')) {
     cockpitFrames.add(key);
 
-    // 兜底注入：仅在 externally_connectable 未预创建规则时才触发
-    // 避免重复调用 injectCookiesForUrl 导致「先删旧规则 → 异步创建新规则」的间隙
+    // Fallback injection: only triggers when externally_connectable has not pre-created the rules
+    // Avoids duplicate injectCookiesForUrl calls causing a gap of "delete old rules first → asynchronously create new rules"
     try {
       const domain = new URL(details.url).hostname;
       const ruleKey = `${domain}:${details.tabId || 'all'}`;
@@ -68,7 +68,7 @@ chrome.webNavigation.onBeforeNavigate.addListener((details) => {
   }
 });
 
-// tab 关闭时清理该 tab 的所有记录
+// When a tab is closed, clean up all records for that tab
 chrome.tabs.onRemoved.addListener((tabId) => {
   for (const key of cockpitFrames) {
     if (key.startsWith(`${tabId}-`)) {
@@ -77,7 +77,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-// 已注入 Cookie 的域名 → rule ID 列表映射
+// Map of domains that already have injected cookies → list of rule IDs
 let nextRuleId = 1000;
 const domainRuleMap = new Map(); // "domain:tabId" → [ruleId, ruleId]
 
@@ -88,7 +88,7 @@ async function injectCookiesForUrl(url, tabId) {
     const domain = urlObj.hostname;
     const key = `${domain}:${tabId || 'all'}`;
 
-    // 已有规则则先清理
+    // If rules already exist, clean them up first
     if (domainRuleMap.has(key)) {
       const oldIds = domainRuleMap.get(key);
       await chrome.declarativeNetRequest.updateSessionRules({
@@ -96,24 +96,24 @@ async function injectCookiesForUrl(url, tabId) {
       });
     }
 
-    // 读取该域名及所有父域名的 Cookie
-    // 例如 api.github.com 需要收集：
-    //   domain=api.github.com  (精确匹配)
-    //   domain=.github.com     (父域名，通过 getAll({ domain: 'github.com' }) 拿到)
-    //   domain=.com 不需要（公共后缀，也不会有 Cookie）
+    // Read cookies for this domain and all of its parent domains
+    // e.g. api.github.com needs to collect:
+    //   domain=api.github.com  (exact match)
+    //   domain=.github.com     (parent domain, obtained via getAll({ domain: 'github.com' }))
+    //   domain=.com is not needed (public suffix, and it cannot have cookies anyway)
     const domainParts = domain.split('.');
     const domainsToQuery = [];
     for (let i = 0; i < domainParts.length - 1; i++) {
       domainsToQuery.push(domainParts.slice(i).join('.'));
     }
-    // 去重收集所有 Cookie
-    const cookieMap = new Map(); // name+domain+path → cookie（去重）
+    // Collect all cookies with deduplication
+    const cookieMap = new Map(); // name+domain+path → cookie (deduplicated)
     for (const d of domainsToQuery) {
       const result = await chrome.cookies.getAll({ domain: d });
       for (const c of result) {
-        // 验证 Cookie 的 domain 确实能匹配当前域名
-        // .github.com 匹配 api.github.com ✓
-        // .example.com 不匹配 api.github.com ✗
+        // Verify the cookie's domain actually matches the current domain
+        // .github.com matches api.github.com ✓
+        // .example.com does not match api.github.com ✗
         const cookieDomain = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
         if (domain === cookieDomain || domain.endsWith('.' + cookieDomain)) {
           cookieMap.set(`${c.name}|${c.domain}|${c.path}`, c);
@@ -126,9 +126,9 @@ async function injectCookiesForUrl(url, tabId) {
       return;
     }
 
-    // 筛选被浏览器拦截的 Cookie（Lax/Strict/未设置）
-    // 浏览器只自动发送 SameSite=None 的，其余需要我们追加
-    // 用 append 不会覆盖浏览器发的 None 版本，同名 Cookie 共存等同于正常顶层访问
+    // Filter for cookies blocked by the browser (Lax/Strict/unset)
+    // The browser only auto-sends SameSite=None cookies; the rest we need to append ourselves
+    // Using append does not override the None versions the browser sends; same-name cookies coexisting is equivalent to a normal top-level visit
     const blockedCookies = cookies.filter(c => c.sameSite !== 'none');
 
     if (!blockedCookies.length) {
@@ -136,9 +136,9 @@ async function injectCookiesForUrl(url, tabId) {
       return;
     }
 
-    // 按 Cookie 的生效域名分组
-    // .google.com 的 Cookie → requestDomains: ['google.com']（覆盖 accounts.google.com 等所有子域名）
-    // console.cloud.google.com 的 Cookie → requestDomains: ['console.cloud.google.com']
+    // Group cookies by their effective domain
+    // Cookies for .google.com → requestDomains: ['google.com'] (covers accounts.google.com and all other subdomains)
+    // Cookies for console.cloud.google.com → requestDomains: ['console.cloud.google.com']
     const domainGroups = new Map(); // effectiveDomain → [cookie, ...]
     for (const c of blockedCookies) {
       const effectiveDomain = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
@@ -166,14 +166,14 @@ async function injectCookiesForUrl(url, tabId) {
         ],
       };
 
-      // 规则 A: sub_frame（iframe 文档加载）
+      // Rule A: sub_frame (iframe document load)
       const ruleIdA = nextRuleId++;
       const conditionA = {
         requestDomains: [effectiveDomain],
         resourceTypes: ['sub_frame'],
       };
 
-      // 规则 B: 子资源（XHR/script/css 等，仅 iframe 内发起）
+      // Rule B: sub-resources (XHR/script/css etc., only those initiated inside the iframe)
       const ruleIdB = nextRuleId++;
       const conditionB = {
         requestDomains: [effectiveDomain],
@@ -212,7 +212,7 @@ async function injectCookiesForUrl(url, tabId) {
   }
 }
 
-// 监听消息
+// Listen for messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'cockpit:reload') {
     chrome.runtime.reload();
@@ -225,7 +225,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // content script 查询当前 frame 是否为 Cockpit iframe（处理重定向场景）
+  // content script asks whether the current frame is a Cockpit iframe (handles redirect scenarios)
   if (message.type === 'cockpit:check-frame') {
     const key = `${sender.tab?.id}-${sender.frameId}`;
     const isCockpit = cockpitFrames.has(key);
@@ -234,8 +234,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
-  // evaluate：在 main world 执行 JS（绕过页面 CSP 限制）
-  // allFrames: true → 在所有 frame 中执行（解决跨域 iframe 访问问题）
+  // evaluate: run JS in the main world (bypasses the page's CSP restrictions)
+  // allFrames: true → execute in all frames (solves the cross-origin iframe access problem)
   if (message.type === 'cockpit:evaluate') {
     const tabId = sender.tab?.id;
     const frameId = sender.frameId ?? 0;
@@ -250,13 +250,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       target,
       world: 'MAIN',
       func: async (code) => {
-        // Chrome extension messaging 在 sendResponse 的 structured clone 边界
-        // 存在一个隐性约 8 KiB 的截断点（复现于 session 6910d071 的 evaluate
-        // 输出精确停在 8192 字节）。为避免大结果被默默截掉，我们在 MAIN
-        // world 里先评估结果；如果序列化后 > CHUNK_THRESHOLD，把完整负载
-        // 暂存到页面 window 上的一个 Map，只把一个 descriptor 返回给上层。
-        // cock-browser CLI 会识别这个 descriptor 并通过 evaluate_chunk
-        // action 分块读取、拼回完整内容，对调用方透明。
+        // Chrome extension messaging has an implicit ~8 KiB truncation point at
+        // sendResponse's structured clone boundary (reproduced in session 6910d071
+        // where evaluate output stopped exactly at 8192 bytes). To avoid large
+        // results being silently truncated, we evaluate the result in the MAIN
+        // world first; if the serialized form is > CHUNK_THRESHOLD, we stash the
+        // full payload in a Map on the page's window and only return a descriptor
+        // to the upper layer. The cock-browser CLI recognizes this descriptor and
+        // reads it in chunks via the evaluate_chunk action, reassembling the full
+        // content — transparent to the caller.
         const CHUNK_THRESHOLD = 6000;
 
         const maybeChunk = (data) => {
@@ -269,7 +271,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 ? ''
                 : JSON.stringify(data);
           } catch {
-            // 不可序列化（循环引用等）— 原样返回，让上层照原路径处理
+            // Not serializable (circular references, etc.) — return as-is and let the upper layer handle it via the original path
             return { ok: true, data };
           }
           if (!serialized || serialized.length <= CHUNK_THRESHOLD) {
@@ -278,7 +280,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const W = window;
           if (!W.__cockpit_eval_stash_v1__) W.__cockpit_eval_stash_v1__ = new Map();
           const stash = W.__cockpit_eval_stash_v1__;
-          // 10 min GC：避免长会话页面堆积大 payload
+          // 10 min GC: prevents large payloads from piling up on long-lived session pages
           const cutoff = Date.now() - 10 * 60 * 1000;
           for (const [k, v] of stash) {
             if (v.created < cutoff) stash.delete(k);
@@ -297,14 +299,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
         };
 
-        // 层 1: 直接 eval — 覆盖表达式、多语句、IIFE、模板字面量等
-        // eval 自动返回最后一个表达式的值（类似 CDP replMode）
+        // Layer 1: direct eval — covers expressions, multiple statements, IIFEs, template literals, etc.
+        // eval automatically returns the value of the last expression (similar to CDP replMode)
         try {
           const result = (0, eval)(code);
           const data = result instanceof Promise ? await result : result;
           return maybeChunk(data);
         } catch (e1) {
-          // 层 2: AsyncFunction fallback — 覆盖含顶层 await 的代码
+          // Layer 2: AsyncFunction fallback — covers code containing top-level await
           try {
             const AF = Object.getPrototypeOf(async function(){}).constructor;
             const data = await new AF(code)();
@@ -318,7 +320,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })
       .then(results => {
         if (message.allFrames) {
-          // 多 frame：收集所有非 undefined 结果
+          // Multiple frames: collect all non-undefined results
           const all = (results || [])
             .map((r, i) => ({ frameId: r.frameId, ...r.result }))
             .filter(r => r.ok && r.data !== undefined);
@@ -333,7 +335,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
-  // 截图：automation.js 请求截取当前标签页可见区域
+  // Screenshot: automation.js requests a capture of the current tab's visible area
   if (message.type === 'cockpit:capture-tab') {
     const tabId = sender.tab?.id;
     if (!tabId) {
@@ -349,14 +351,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // =========================================================================
-// externally_connectable: Cockpit 页面直连通信
+// externally_connectable: direct communication from the Cockpit page
 //
-// BrowserBubble 在设置 iframe src 前，直接调用
+// Before setting the iframe src, BrowserBubble directly calls
 //   chrome.runtime.sendMessage(extensionId, { type: 'prepare-iframe', url })
-// 等待 Cookie 规则就绪后再渲染 iframe，彻底消除时序竞争。
+// and waits for the cookie rules to be ready before rendering the iframe,
+// completely eliminating the timing race.
 // =========================================================================
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  // 安全校验：只接受 localhost 消息
+  // Security check: only accept messages from localhost
   if (!sender.url || !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//.test(sender.url)) {
     sendResponse({ ok: false, error: 'unauthorized' });
     return;
@@ -382,8 +385,8 @@ chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => 
 });
 
 // =========================================================================
-// [调试] onSendHeaders = 所有修改完成后、实际发送到服务器的最终头
-//        extraHeaders = 才能看到 Cookie 头（Chrome 79+ 限制）
+// [调试] onSendHeaders = the final headers actually sent to the server, after all modifications are done
+//        extraHeaders = required in order to see the Cookie header (Chrome 79+ restriction)
 // =========================================================================
 chrome.webRequest.onSendHeaders.addListener(
   (details) => {

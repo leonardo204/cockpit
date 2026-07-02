@@ -332,12 +332,13 @@ async function fetchBrowserInfo(shortId) {
 
 // Chunked evaluate result resolver
 //
-// Chrome extension 的 runtime messaging 在 sendResponse 边界有一个 ~8 KiB 的
-// 隐性 structured-clone 截断点；为了避免 evaluate 大结果被默默截掉，
-// extension 侧会把 >6 KiB 的结果暂存到 page window 上的一个 Map，
-// 返回一个 { __cockpit_chunked: true, token, totalBytes, isString } 的
-// descriptor。这里遇到 descriptor 就自动走 evaluate_chunk action 把完整
-// payload 拉回来，对上层 formatOutput 完全透明。
+// Chrome extension runtime messaging has an implicit ~8 KiB structured-clone
+// truncation point at the sendResponse boundary. To keep large evaluate
+// results from being silently cut off, the extension side stashes any result
+// >6 KiB in a Map on the page window and returns a
+// { __cockpit_chunked: true, token, totalBytes, isString } descriptor.
+// Whenever we see that descriptor here, we pull the full payload back via
+// the evaluate_chunk action — fully transparent to formatOutput above.
 async function fetchOneChunk(baseUrl, id, token, offset, cmdTimeout) {
   const resp = await fetch(`${baseUrl}/api/browser/evaluate_chunk`, {
     method: 'POST',
@@ -382,7 +383,8 @@ async function autoResolveChunked(baseUrl, id, data, cmdTimeout) {
     if (data.__cockpit_chunked === true && typeof data.token === 'string') {
       return await resolveChunkedDescriptor(baseUrl, id, data, cmdTimeout);
     }
-    // allFrames=true 聚合时可能得到数组，每一项都可能是独立 chunked
+    // With allFrames=true the aggregate may be an array, and each element
+    // may be independently chunked
     if (Array.isArray(data)) {
       return Promise.all(data.map(item => autoResolveChunked(baseUrl, id, item, cmdTimeout)));
     }
@@ -491,8 +493,9 @@ async function run() {
       process.exit(1);
     }
 
-    // 大结果由 extension 端自动 stash 并返回 chunked descriptor;
-    // 这里透明地把完整内容拉回来，调用方看不到 chunking 细节。
+    // Large results are auto-stashed by the extension side, which returns a
+    // chunked descriptor; we transparently pull the full content back here —
+    // callers never see the chunking.
     const resolved = await autoResolveChunked(baseUrl, id, data.data, timeout);
 
     // Post-`type` verification — `type` via CDP dispatchKeyEvent silently no-ops

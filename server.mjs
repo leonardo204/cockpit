@@ -54,17 +54,22 @@ async function ensureSingleInstance() {
 }
 
 // ============================================
-// 进程生命周期防护
+// Process lifecycle guards
 //
-// 1) 父进程死亡后 stdout/stderr 管道断裂，Next.js 的 uncaughtException handler
-//    会尝试 console.log 报错 → 写 stdout → EPIPE → 再次触发 handler → CPU 死循环
-//    在管道错误升级为 uncaughtException 之前拦截，直接退出。
+// 1) When the parent process dies, the stdout/stderr pipes break. Next.js's
+//    uncaughtException handler then tries to console.log the error → writes
+//    to stdout → EPIPE → triggers the handler again → CPU spin loop.
+//    Intercept pipe errors before they escalate to uncaughtException and
+//    exit immediately.
 //
-// 2) Next.js 在 dev 模式下会在自己的子进程里跑 `next-server` worker（turbopack）。
-//    如果父进程被异常杀掉（npm reinstall、Ctrl+C 后 npm 包了一层、IDE 杀任务等），
-//    next-server 子进程不会跟着死，而是会失去父进程后**重新绑定到 next 自带的默认
-//    端口 3000**，然后把后续 `npm run dev` 卡死（Next 通过 .next/dev/logs 检测到
-//    "已有 dev server 在跑"而拒绝再启）。所以父进程退出前必须显式杀掉所有直接子进程。
+// 2) In dev mode Next.js runs a `next-server` worker (turbopack) in its own
+//    child process. If the parent is killed abnormally (npm reinstall,
+//    Ctrl+C through an npm wrapper, IDE killing the task, etc.), the
+//    next-server child doesn't die with it — having lost its parent it
+//    **re-binds to Next's default port 3000** and then wedges every later
+//    `npm run dev` (Next detects "a dev server is already running" via
+//    .next/dev/logs and refuses to start). So the parent must explicitly
+//    kill all direct children before exiting.
 // ============================================
 // Assigned once the server-side bundle is loaded (see app.prepare below). Lets the
 // synchronous exit hook flush live PTY scrollback to disk so a graceful restart
@@ -76,7 +81,8 @@ function killChildren() {
   if (_cleanupRan) return;
   _cleanupRan = true;
   if (process.platform === 'win32') {
-    // Windows: 走 wmic 列出子 PID 再逐个 taskkill /F /T，避免 /T 把自己也带走
+    // Windows: list child PIDs via wmic, then taskkill /F /T each one —
+    // running /T on ourselves would take this process down too
     try {
       const out = execSync(`wmic process where (ParentProcessId=${process.pid}) get ProcessId /value`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
       const pids = (out.match(/ProcessId=(\d+)/g) || []).map(s => s.split('=')[1]).filter(Boolean);
@@ -86,34 +92,39 @@ function killChildren() {
     } catch {}
     return;
   }
-  // POSIX: pkill -P 只杀直接子进程，不递归（next-server 等都是直接子进程，足够）
-  // pkill 在没有匹配到任何进程时返回 1，不当作错误
+  // POSIX: pkill -P kills direct children only, no recursion (next-server
+  // and friends are all direct children — enough).
+  // pkill exits 1 when nothing matches; not treated as an error.
   try { execSync(`pkill -TERM -P ${process.pid}`, { stdio: 'ignore' }); } catch {}
 }
 
-// 正常退出路径（包括所有的 process.exit() 调用）—— Node 保证此 handler 同步执行。
-// 所有信号/异常路径最终都走 process.exit() → 触发 'exit' → 这一个点覆盖全部优雅退出。
-// 先把活着的 PTY 滚动缓冲同步落盘，再杀子进程（flush 读的是本进程内存，与子进程无关）。
+// Normal exit path (including every process.exit() call) — Node guarantees
+// this handler runs synchronously. All signal/exception paths ultimately go
+// through process.exit() → 'exit' fires → this single hook covers every
+// graceful shutdown. Flush live PTY scrollback to disk first, then kill the
+// children (the flush reads this process's own memory — independent of them).
 process.on('exit', () => {
   try { flushRunningSync?.(); } catch {}
   killChildren();
 });
 
-// 信号路径 —— 先杀子进程再退出，并让 shell 看到正确的退出码
+// Signal paths — kill children first, then exit with the code the shell expects
 const cleanupAndExit = (code) => () => { killChildren(); process.exit(code); };
 process.on('SIGINT',  cleanupAndExit(130));
 process.on('SIGTERM', cleanupAndExit(143));
 process.on('SIGQUIT', cleanupAndExit(131));
 process.on('SIGHUP',  cleanupAndExit(0));
 
-// 未捕获异常 —— 不能让 Next.js 的默认 handler 再走 console.log 触发 EPIPE 死循环
+// Uncaught exceptions — don't let Next.js's default handler console.log its
+// way back into the EPIPE spin loop
 process.on('uncaughtException', (err) => {
   try { console.error('uncaughtException:', err); } catch {}
   killChildren();
   process.exit(1);
 });
 
-// stdout/stderr 管道断裂 → 立刻退出（exit handler 会顺手清子进程）
+// Broken stdout/stderr pipe → exit immediately (the exit handler cleans up
+// the children on the way out)
 process.stdout.on('error', (err) => {
   if (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED') process.exit(0);
 });
@@ -135,7 +146,7 @@ app.prepare().then(async () => {
   flushRunningSync = httpApi.flushAllRunningSync || null;
   const { scheduledTaskManager } = await import(dev ? '@cockpit/feature-agent/server/scheduledTasks' : './dist/scheduledTasks.mjs');
 
-  // 初始化定时任务管理器
+  // Initialize the scheduled-task manager
   scheduledTaskManager.setOnTaskFired((task) => {
     broadcastToGlobalState({ type: 'task-fired', taskId: task.id, cwd: task.cwd, tabId: task.tabId, sessionId: task.sessionId });
   });
@@ -177,17 +188,6 @@ app.prepare().then(async () => {
     return false;
   };
 
-  const server = createServer(async (req, res) => {
-    if (applyHttpGate(req, res)) return;
-
-    // /api/browser/* 必须在自定义 server 中处理（与 WS 共享 BrowserBridge 内存）
-    if (req.url?.startsWith('/api/browser/') && req.method === 'POST') {
-      const handled = await handleBrowserApi(req, res);
-      if (handled) return;
-    }
-    if (req.url?.startsWith('/api/terminal/') && req.method === 'POST') {
-      const handled = await handleTerminalApi(req, res);
-      if (handled) return;
   // ============================================
   // /api/* JSON gzip — Next's built-in compression only runs under
   // `next start`; with this custom server, API JSON goes out uncompressed
@@ -268,9 +268,21 @@ app.prepare().then(async () => {
     };
   };
 
+  const server = createServer(async (req, res) => {
+    if (applyHttpGate(req, res)) return;
+    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
+
+    // /api/browser/* must be handled inside the custom server (it shares
+    // BrowserBridge memory with the WS side)
+    if (req.url?.startsWith('/api/browser/') && req.method === 'POST') {
+      const handled = await handleBrowserApi(req, res);
+      if (handled) return;
+    }
+    if (req.url?.startsWith('/api/terminal/') && req.method === 'POST') {
+      const handled = await handleTerminalApi(req, res);
+      if (handled) return;
     }
     if (req.url?.startsWith('/api/connection/') && req.method === 'POST') {
-    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
       const handled = await handleConnectionApi(req, res);
       if (handled) return;
     }
@@ -289,19 +301,20 @@ app.prepare().then(async () => {
     }
   });
 
-  // COCKPIT_HOST: 默认 127.0.0.1（本地），云沙盒等场景设为 0.0.0.0
+  // COCKPIT_HOST: defaults to 127.0.0.1 (local-only); set 0.0.0.0 for cloud
+  // sandboxes and similar environments
   const host = process.env.COCKPIT_HOST || '127.0.0.1';
   server.listen(port, host, () => {
     const url = `http://localhost:${port}`;
     console.log(`> Ready on ${url}`);
 
-    // 写入 server.json 供 CLI 子命令读取端口
+    // Write server.json so CLI subcommands can read the port
     try {
       mkdirSync(cockpitHome, { recursive: true });
       writeFileSync(join(cockpitHome, 'server.json'), JSON.stringify({ pid: process.pid, port }, null, 2));
     } catch {}
 
-    // prod 模式自动打开浏览器（--no-open 禁用）
+    // Auto-open the browser in prod mode (disable with --no-open)
     if (!dev && !process.env.COCKPIT_NO_OPEN) {
       const openProject = process.env.COCKPIT_OPEN_PROJECT;
       const openUrl = openProject ? `${url}/?cwd=${encodeURIComponent(openProject)}` : url;
@@ -311,8 +324,8 @@ app.prepare().then(async () => {
   });
 
   // ============================================
-  // Share Server - LAN 分享评审服务
-  // 路由白名单：仅开放 /review/* 和相关资源
+  // Share Server — LAN review-sharing service.
+  // Route allowlist: only /review/* and its supporting assets are exposed.
   // ============================================
   const sharePort = port + 1000; // dev 3456→4456, prod 3457→4457
 
@@ -342,8 +355,9 @@ app.prepare().then(async () => {
     // Token gate first (share is also covered). Read the gate BEFORE we inject
     // x-forwarded-for below, so the injection can't fool the local check.
     if (applyHttpGate(req, res)) return;
+    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
     if (isShareAllowed(req.url || '')) {
-      // 注入客户端真实 IP，供 /api/review/identify 使用
+      // Inject the client's real IP for /api/review/identify
       const clientIp = req.socket.remoteAddress || '';
       req.headers['x-forwarded-for'] = clientIp;
       handle(req, res);
@@ -355,7 +369,6 @@ app.prepare().then(async () => {
 
   shareServer.listen(sharePort, '0.0.0.0', () => {
     const lanIPs = getLanIPs();
-    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
     if (lanIPs.length > 0) {
       lanIPs.forEach(ip => console.log(`> Share on http://${ip}:${sharePort}`));
     } else {

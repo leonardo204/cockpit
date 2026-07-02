@@ -21,7 +21,7 @@ try {
 }
 
 if (process.platform !== 'win32') {
-  // node-pty: spawn-helper 需要可执行权限
+  // node-pty: spawn-helper needs the executable bit
   try {
     const spawnHelper = join(
       projectRoot,
@@ -33,8 +33,8 @@ if (process.platform !== 'win32') {
 }
 
 // chrome-extension → ~/.cockpit/chrome-extension/
-// npm 安装时 projectRoot 在 node_modules 下（无 src/ 目录），需要复制到用户目录
-// npm link 时 projectRoot 是源码目录（有 src/），不需要复制
+// Installed via npm: projectRoot sits under node_modules (no src/ dir) → copy into the user dir.
+// Via npm link: projectRoot is the source checkout (has src/) → no copy needed.
 const isNpmInstall = !existsSync(join(projectRoot, 'src'));
 if (isNpmInstall) {
   try {
@@ -46,13 +46,13 @@ if (isNpmInstall) {
     cpSync(src, dest, { recursive: true, force: true });
 
     if (process.platform !== 'win32') {
-      // sudo 安装时文件 owner 是 root，Chrome 无法写入 _metadata/
-      // 用 SUDO_USER 还原为真实用户
+      // Under a sudo install the files end up owned by root and Chrome can't
+      // write _metadata/ — restore ownership to the real user via SUDO_USER
       const realUser = process.env.SUDO_USER;
       if (realUser) {
         try { execSync(`chown -R "${realUser}" "${cockpitDir}"`); } catch {}
       }
-      // macOS: 清除 com.apple.provenance 等扩展属性
+      // macOS: strip extended attributes like com.apple.provenance
       if (process.platform === 'darwin') {
         try { execSync(`xattr -cr "${dest}"`); } catch {}
       }
