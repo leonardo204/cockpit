@@ -1273,6 +1273,7 @@ cock
       'prompt library',
       'AI workflow capture',
       'slash commands',
+      'skillify',
       'OpenCockpit',
       'Cockpit',
       'team prompt sharing',
@@ -1430,17 +1431,21 @@ Cockpit's LAN-shared review surface (see [our previous post](/en/blog/claude-cod
 
 The point: **skills don't make a copy of your team's knowledge. They reference it.** When the handbook updates, the skill updates. There's only one source of truth, and it's already where your team keeps source of truth.
 
-## Meta: a skill that writes skills
+## Meta: a built-in skill that writes skills
 
-Once you have one skill, you can write a meta-skill:
+You don't even have to write the meta-skill yourself — Cockpit ships one. At the end of a session, type \`/skillify\`:
 
 \`\`\`
-/distill Read the last 50 messages in this conversation. If you
-spot any pattern that repeated 3+ times, propose a SKILL.md for
-it. Don't save automatically — show me the draft first.
+/skillify
 \`\`\`
 
-Now your Skills sidebar fills itself, slowly, from the conversations you actually have. Cockpit ships \`/qa\`, \`/fx\`, \`/cg\` as opinionated defaults — but the **best skills in your sidebar a year from now will be ones you didn't write by hand.**
+It reads the conversation, decides whether anything is *actually* worth crystallizing (most sessions aren't — it says so and stops, no file forced), and if so drafts the SKILL.md for you. Point it at a directory and it saves there — the same knowledge base you'd have chosen by hand:
+
+\`\`\`
+/skillify ~/Notes/Skills
+\`\`\`
+
+Then register it once with **+ Add Skill**, exactly as above. Now your Skills sidebar fills itself, slowly, from the conversations you actually have. Cockpit ships \`/qa\`, \`/fx\`, \`/cg\` as opinionated defaults — but the **best skills in your sidebar a year from now will be ones you didn't write by hand.**
 
 ## The bigger principle
 
@@ -1603,16 +1608,21 @@ Cockpit 的局域网共享评审页（参见[上一篇博客](/zh/blog/claude-co
 
 关键是：**Skill 不是把团队的知识复制了一份，而是引用了它。** 当 handbook 更新，skill 就更新。**只有一个事实来源**，而且就是你团队本来存放事实的地方。
 
-## 进阶：用 skill 写 skill
+## 进阶：内置一个"写 skill 的 skill"
 
-有了第一个 skill，下一步可以写一个 meta-skill：
+连这个 meta-skill 你都不用自己写 —— Cockpit 直接内置了。在一段对话末尾敲 \`/skillify\`：
 
 \`\`\`
-/distill 读这次对话最近 50 条消息。如果发现任何重复出现 3+ 次的
-模式，给我提一个 SKILL.md 草案。先别自动保存，给我看草案再说。
+/skillify
 \`\`\`
 
-从此你的 Skills 侧边栏会**自己慢慢长出来**，从你真实进行的对话里长出来。Cockpit 内置的 \`/qa\`、\`/fx\`、\`/cg\` 是有主见的默认值——但**一年后你侧边栏里最好用的那些 skill，多半不是你手写的。**
+它会读这次对话，先判断有没有*真正*值得沉淀的东西（多数对话没有 —— 它会直说并停下，不硬凑文件），有的话就替你起草 SKILL.md。给它一个目录，它就存进去 —— 就是你本来会手动选的那个知识库：
+
+\`\`\`
+/skillify ~/Notes/Skills
+\`\`\`
+
+然后照上面那样用 **+ Add Skill** 注册一次即可。从此你的 Skills 侧边栏会**自己慢慢长出来**，从你真实进行的对话里长出来。Cockpit 内置的 \`/qa\`、\`/fx\`、\`/cg\` 是有主见的默认值——但**一年后你侧边栏里最好用的那些 skill，多半不是你手写的。**
 
 ## 背后的原则
 

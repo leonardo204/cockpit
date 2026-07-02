@@ -24,6 +24,12 @@ import {
   NEW_BRANCH_PROMPT_ZH,
 } from './newBranchPrompt';
 import { QA_PROMPT_EN, QA_PROMPT_ZH } from './qaPrompt';
+import {
+  SKILLIFY_LABEL_EN,
+  SKILLIFY_LABEL_ZH,
+  SKILLIFY_PROMPT_EN,
+  SKILLIFY_PROMPT_ZH,
+} from './skillifyPrompt';
 
 interface CommandEntry {
   /** Prompt content for each language — a COMPLETE SKILL.md (YAML frontmatter +
@@ -49,6 +55,12 @@ export const COMMAND_CONTENT: Record<string, CommandEntry> = {
     en: NEW_BRANCH_PROMPT_EN,
     labelZh: NEW_BRANCH_LABEL_ZH,
     labelEn: NEW_BRANCH_LABEL_EN,
+  },
+  skillify: {
+    zh: SKILLIFY_PROMPT_ZH,
+    en: SKILLIFY_PROMPT_EN,
+    labelZh: SKILLIFY_LABEL_ZH,
+    labelEn: SKILLIFY_LABEL_EN,
   },
 };
 
