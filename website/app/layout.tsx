@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
+import { PostHogAnalytics } from '@/components/PostHogAnalytics';
 
 const SITE_URL = 'https://opencockpit.dev';
 const DEFAULT_TITLE = 'OpenCockpit — The Open Claude Code GUI for Any Agent';
@@ -190,6 +191,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         ) : null}
       </head>
       <body className="min-h-screen bg-background text-foreground antialiased">
+        <PostHogAnalytics />
         {children}
       </body>
     </html>
