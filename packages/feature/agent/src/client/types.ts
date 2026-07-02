@@ -36,6 +36,12 @@ export interface ChatMessage {
   // `detail` is the full raw text (e.g. the complete <task-notification> block) —
   // shown in a modal when the one-line bar is clicked. `content` stays the summary.
   systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
+  // #bg ephemeral ownership: which run created this LIVE `auto-*` bubble. The snapshot
+  // replay is scoped to the current run, so the reconnect filter must only drop the current
+  // run's own live bubbles — matching on this stops it from wiping a PRIOR run's continuation
+  // bubbles (which the new run's snapshot will never rebuild). Absent on persisted/reloaded
+  // messages (they carry real UUIDs and must never be filtered).
+  runKey?: string;
 }
 
 export interface ChatSession {

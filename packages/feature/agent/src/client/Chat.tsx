@@ -131,6 +131,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     }
   }, [initialCwd, onTitleChange]);
 
+  // Reconcile-on-run-end: useChatStream is constructed before useChatHistory / liveSessionId
+  // exist, so the actual disk-reload closure is injected into this ref below (effect) and
+  // invoked via a stable thunk. Lets the originator converge its live bubbles to canonical
+  // UUIDs when a run ends — symmetric with the viewer's onComplete reconcile.
+  const reconcileFromDiskRef = useRef<(() => void) | null>(null);
+
   // Stream hook
   const {
     isLoading,
@@ -151,6 +157,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     onSessionId: setSessionId,
     onFetchTitle: fetchSessionTitle,
     onPtyOutput: handlePtyOutput,
+    onRunComplete: () => reconcileFromDiskRef.current?.(),
   });
 
   // ! prefix: first line is command, subsequent lines are user notes, supports images
@@ -267,6 +274,15 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
   useEffect(() => {
     if (!liveViewerEnabled) setLiveRunning(false);
   }, [liveViewerEnabled]);
+
+  // Keep the originator's reconcile-on-run-end closure current (same disk reload the viewer's
+  // onComplete uses). Injected into useChatStream via reconcileFromDiskRef so a finished run
+  // converges its live bubbles to canonical UUIDs.
+  useEffect(() => {
+    reconcileFromDiskRef.current = () => {
+      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true);
+    };
+  }, [initialCwd, liveSessionId, loadHistoryByCwdAndSessionId]);
 
   // Incrementally fetch messages when becoming active (handles external writes like scheduled tasks)
   // With limit to fetch only the last N rounds + fingerprint check + time throttle (inside useChatHistory)

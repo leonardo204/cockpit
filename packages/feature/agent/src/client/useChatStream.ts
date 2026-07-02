@@ -47,6 +47,14 @@ interface UseChatStreamOptions {
   onFetchTitle: (sid: string) => void;
   /** PTY mode: raw terminal output (forwarded to the floating-window xterm) */
   onPtyOutput?: (data: string) => void;
+  /**
+   * A run (launch turn + any #bg follow-up turns) just ended. The originator should reconcile
+   * from disk here so its live `user-*` / `assistant-*` / `auto-*` bubbles converge to the
+   * canonical persisted UUID messages — mirroring what the viewer path already does on
+   * completion, and what a page reload produces. Kept symmetric so in-session state never
+   * lingers as ephemeral ids until the next refresh.
+   */
+  onRunComplete?: () => void;
 }
 
 interface UseChatStreamReturn {
@@ -71,7 +79,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, chatMode, planMode, ollamaModel, deepseekModel, onSessionId, onFetchTitle, onPtyOutput }: UseChatStreamOptions
+  { sessionId, cwd, engine, chatMode, planMode, ollamaModel, deepseekModel, onSessionId, onFetchTitle, onPtyOutput, onRunComplete }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -86,6 +94,12 @@ export function useChatStream(
   const [activeRun, setActiveRun] = useState<{ runKey: string; assistantId: string } | null>(null);
   const activeRunRef = useRef(activeRun);
   activeRunRef.current = activeRun;
+
+  // Latest onRunComplete via ref so endRun can fire it without taking it as a dependency
+  // (the callback identity changes each render; threading it through endRun's deps would churn
+  // handleSend too). endRun runs long after mount, so the ref is always populated by then.
+  const onRunCompleteRef = useRef(onRunComplete);
+  onRunCompleteRef.current = onRunComplete;
 
   // #10 R5/#7: connection watchdog. The detached run is driven entirely by /ws/session-stream;
   // if that socket never connects (ws server down, upgrade rejected), no event ever arrives and
@@ -151,6 +165,11 @@ export function useChatStream(
       );
     }
     setActiveRun(null);
+    // Converge the just-finished run's live bubbles to canonical persisted UUIDs (incremental +
+    // fingerprint-guarded on the callee, so a no-op when disk is unchanged / the viewer already
+    // reconciled). This closes the ephemeral-id lifecycle within the run and keeps in-session
+    // state identical to a page reload.
+    onRunCompleteRef.current?.();
   }, [flushStreamBuffer, setMessages]);
 
   // Stop generation: the run is detached server-side, so closing a socket won't stop it —
@@ -207,7 +226,7 @@ export function useChatStream(
         curAsstIdRef.current = autoId;
         setMessages((prev) => [
           ...prev,
-          { id: autoId, role: 'assistant', content: '', toolCalls: [], isStreaming: true } as ChatMessage,
+          { id: autoId, role: 'assistant', content: '', toolCalls: [], isStreaming: true, runKey: activeRunRef.current?.runKey } as ChatMessage,
         ]);
       }
       turnActiveRef.current = true;
@@ -237,6 +256,7 @@ export function useChatStream(
             role: 'system',
             content: summary,
             systemEvent: { kind: 'task-notification', ...(status ? { status } : {}), detail },
+            runKey: activeRunRef.current?.runKey,
           } as ChatMessage,
         ]);
       }
@@ -419,13 +439,16 @@ export function useChatStream(
         }
         streamBufferRef.current = null;
         // #bg: reset per-run turn tracking and drop any live-created follow-up bubbles / event
-        // bars (id `auto-*`) so this authoritative replay rebuilds them cleanly.
+        // bars (id `auto-*`) so this authoritative replay rebuilds them cleanly. Scope the drop
+        // to THIS run's own bubbles (runKey === ar.runKey): the snapshot replays only the current
+        // run's turns, so wiping a PRIOR run's `auto-*` bubbles here would delete continuation
+        // bubbles the replay never rebuilds — they'd vanish until a page reload restored them.
         curAsstIdRef.current = ar.assistantId;
         sawResultRef.current = false;
         turnActiveRef.current = false;
         setMessages((prev) =>
           prev
-            .filter((m) => !(typeof m.id === 'string' && m.id.startsWith('auto-')))
+            .filter((m) => !(typeof m.id === 'string' && m.id.startsWith('auto-') && m.runKey === ar.runKey))
             .map((m) => (m.id === ar.assistantId ? { ...m, content: '', toolCalls: [] } : m))
         );
         for (const ev of msg.events) handleStreamEvent(ev as Record<string, unknown>, curAsstIdRef.current ?? ar.assistantId);
