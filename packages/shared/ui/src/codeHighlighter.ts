@@ -1,4 +1,4 @@
-import { createHighlighter, type Highlighter, type BundledLanguage, type ThemedToken } from 'shiki';
+import type { Highlighter, BundledLanguage, ThemedToken } from 'shiki';
 
 export type { BundledLanguage };
 
@@ -28,10 +28,16 @@ const SUPPORTED_LANGS = [
 
 export function getHighlighter(): Promise<Highlighter> {
   if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
-      themes: ['github-dark', 'github-light'],
-      langs: [...SUPPORTED_LANGS],
-    });
+    // Dynamic import keeps shiki (+ grammars, ~480KB gzip — a third of the
+    // first-load JS) out of the initial bundle; it loads as an async chunk the
+    // first time anything actually highlights. Consumers already treat
+    // highlighting as async, so nothing upstream changes.
+    highlighterPromise = import('shiki').then(({ createHighlighter }) =>
+      createHighlighter({
+        themes: ['github-dark', 'github-light'],
+        langs: [...SUPPORTED_LANGS],
+      })
+    );
   }
   return highlighterPromise;
 }
