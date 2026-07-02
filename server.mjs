@@ -1,4 +1,5 @@
 import { createServer } from 'http';
+import { createGzip, constants as zlibConstants } from 'zlib';
 import { exec, execSync } from 'child_process';
 import { networkInterfaces, homedir } from 'os';
 import { writeFileSync, mkdirSync, readFileSync, realpathSync } from 'fs';
@@ -187,8 +188,89 @@ app.prepare().then(async () => {
     if (req.url?.startsWith('/api/terminal/') && req.method === 'POST') {
       const handled = await handleTerminalApi(req, res);
       if (handled) return;
+  // ============================================
+  // /api/* JSON gzip — Next's built-in compression only runs under
+  // `next start`; with this custom server, API JSON goes out uncompressed
+  // (fine locally at <10ms, but behind a tunnel like ngrok a 200KB+
+  // session-by-path response means seconds of latency). Transparently wrap
+  // application/json responses in gzip; SSE / HTML / static assets (which
+  // Next already compresses) are untouched.
+  // ============================================
+  const gzipJsonResponse = (req, res) => {
+    if (!/\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''))) return;
+    const origWriteHead = res.writeHead.bind(res);
+    const origWrite = res.write.bind(res);
+    const origEnd = res.end.bind(res);
+    let gzip = null;
+    let decided = false;
+
+    // Decide at first output (writeHead/write/end): only compress JSON that
+    // isn't already encoded.
+    const decide = () => {
+      if (decided) return;
+      decided = true;
+      const ct = String(res.getHeader('content-type') || '');
+      if (!ct.includes('application/json') || res.getHeader('content-encoding')) return;
+      res.removeHeader('content-length');
+      res.setHeader('content-encoding', 'gzip');
+      const vary = String(res.getHeader('vary') || '');
+      if (!/\baccept-encoding\b/i.test(vary)) {
+        res.setHeader('vary', vary ? `${vary}, Accept-Encoding` : 'Accept-Encoding');
+      }
+      gzip = createGzip({ flush: zlibConstants.Z_SYNC_FLUSH });
+      gzip.on('data', (chunk) => origWrite(chunk));
+      gzip.on('end', () => origEnd());
+      gzip.on('error', () => { try { origEnd(); } catch {} });
+    };
+
+    // writeHead accepts headers in three shapes: object, flat array
+    // [k1,v1,k2,v2,...] (what Next uses internally), and nested array
+    // [[k,v],...]. Normalize all of them through setHeader before deciding
+    // on compression.
+    const applyHeaders = (h) => {
+      if (!h) return;
+      if (Array.isArray(h)) {
+        const pairs = Array.isArray(h[0])
+          ? h
+          : Array.from({ length: h.length >> 1 }, (_, i) => [h[i * 2], h[i * 2 + 1]]);
+        for (const [k, v] of pairs) {
+          if (k === undefined || v === undefined) continue;
+          const key = String(k);
+          const prev = res.getHeader(key);
+          // Merge duplicate headers (e.g. set-cookie) into an array instead of overwriting
+          res.setHeader(key, prev === undefined ? v : [].concat(prev, v));
+        }
+      } else {
+        for (const [k, v] of Object.entries(h)) {
+          if (v !== undefined) res.setHeader(k, v);
+        }
+      }
+    };
+
+    res.writeHead = (status, arg2, arg3) => {
+      applyHeaders(typeof arg2 === 'object' ? arg2 : arg3);
+      decide();
+      return typeof arg2 === 'string' ? origWriteHead(status, arg2) : origWriteHead(status);
+    };
+    res.write = (chunk, ...args) => {
+      decide();
+      if (gzip) { gzip.write(chunk); return true; }
+      return origWrite(chunk, ...args);
+    };
+    res.end = (chunk, ...args) => {
+      decide();
+      if (gzip) {
+        if (chunk && typeof chunk !== 'function') gzip.write(chunk);
+        gzip.end();
+        return res;
+      }
+      return origEnd(chunk, ...args);
+    };
+  };
+
     }
     if (req.url?.startsWith('/api/connection/') && req.method === 'POST') {
+    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
       const handled = await handleConnectionApi(req, res);
       if (handled) return;
     }
@@ -273,6 +355,7 @@ app.prepare().then(async () => {
 
   shareServer.listen(sharePort, '0.0.0.0', () => {
     const lanIPs = getLanIPs();
+    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
     if (lanIPs.length > 0) {
       lanIPs.forEach(ip => console.log(`> Share on http://${ip}:${sharePort}`));
     } else {
