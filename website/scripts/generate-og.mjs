@@ -103,10 +103,10 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
     Cockpit
   </text>
   <text x="80" y="320" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif" font-size="42" font-weight="700" fill="#e6edf3" letter-spacing="-0.6">
-    A Claude Code GUI for
+    The open-source Claude Code GUI,
   </text>
   <text x="80" y="372" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', system-ui, sans-serif" font-size="42" font-weight="700" fill="url(#accent)" letter-spacing="-0.6">
-    parallel AI coding.
+    built like an IDE.
   </text>
 
   <!-- tagline -->
@@ -123,7 +123,8 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
     <text x="320" y="525">▶ Terminal</text>
     <text x="500" y="525">▶ Browser</text>
     <text x="680" y="525">▶ DBs</text>
-    <text x="800" y="525">▶ /qa /fx /cg</text>
+    <text x="800" y="525">▶ Team seats</text>
+    <text x="985" y="525">▶ /qa /fx /cg</text>
   </g>
 
   <!-- bottom row: install + url -->

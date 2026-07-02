@@ -32,6 +32,232 @@ export interface Post {
 
 export const posts: Post[] = [
   {
+    slug: 'self-host-claude-code-gui-for-your-team',
+    date: '2026-07-02',
+    keywords: [
+      'self-host Claude Code',
+      'Claude Code for teams',
+      'shared dev box AI coding',
+      'team Claude Code GUI',
+      'self-hosted AI coding server',
+      'Claude Code remote access',
+      'run Claude Code on a server',
+      'Tailscale Claude Code',
+      'AI coding shared server',
+      '自托管 Claude Code',
+      '共享开发机',
+      '团队 AI 编程',
+      'Claude Code GUI',
+      'OpenCockpit',
+    ],
+    content: {
+      en: {
+        title: 'Self-Host a Claude Code GUI for Your Whole Team (One Dev Box, Zero Installs)',
+        description:
+          'OpenCockpit is web client–server: install it once on a shared dev box, and every teammate opens a browser and gets a seat — each coding with AI in their own project or worktree. Setup takes 5 minutes.',
+        readingTime: '6 min read',
+        body: `Most Claude Code GUIs are desktop apps: one install per laptop, one config per person, one machine per seat. OpenCockpit is a **web client–server** — which unlocks a deployment model the desktop apps can't do:
+
+> Install it **once** on the machine where the code lives. Every teammate opens a browser and gets a seat.
+
+No per-laptop installs. No "works on my machine". One box, the whole team flying together.
+
+## Why a shared dev box?
+
+- **The code already lives there.** Many teams keep a beefy dev box (or cloud VM) where repos are cloned, databases run, and services are wired up. Cockpit sits next to the code instead of dragging the code to each laptop.
+- **One environment, zero drift.** Node version, \`claude\` CLI login, Ollama models, DB credentials — configured once, shared by everyone.
+- **Shared horsepower.** A single GPU box serves everyone's local **Ollama** tabs. Laptops stay cool.
+- **Any device is a seat.** A browser is the only client — that includes your phone on the same VPN.
+
+## Setup (5 minutes)
+
+On the dev box:
+
+\`\`\`bash
+# 1. Install (Node ≥ 20)
+npm install -g @surething/cockpit
+
+# 2. Expose on the network + require a token for remote clients
+COCKPIT_HOST=0.0.0.0 cockpit --token your-shared-secret
+\`\`\`
+
+That's it. Two knobs worth knowing:
+
+| Knob | Meaning |
+|---|---|
+| \`COCKPIT_HOST\` | Defaults to \`127.0.0.1\` (local-only). Set \`0.0.0.0\` to accept LAN / VPN clients. |
+| \`--token\` (or \`COCKPIT_TOKEN\`) | Remote clients must present this token; **loopback stays exempt**, so local CLI use keeps working untouched. See [the access-token post](/en/blog/cockpit-access-token/). |
+
+To keep it running, wrap it in your process manager of choice — a minimal systemd unit:
+
+\`\`\`ini
+[Unit]
+Description=OpenCockpit
+After=network.target
+
+[Service]
+User=dev
+Environment=COCKPIT_HOST=0.0.0.0
+Environment=COCKPIT_TOKEN=your-shared-secret
+ExecStart=/usr/local/bin/cockpit
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+\`\`\`
+
+## Give every teammate a seat
+
+Each dev opens:
+
+\`\`\`
+http://<dev-box>:3457/?token=your-shared-secret
+\`\`\`
+
+Cockpit sets a cookie and cleans the URL — the token doesn't linger in the address bar. From there, everyone:
+
+- opens **their own project** as a tab (multi-project tabs are independent sessions),
+- or, when two people work the **same repo**, each takes a **git worktree** — Cockpit manages worktrees from the Explorer, so parallel agents never trample each other's checkout,
+- picks their engine per tab: Claude by default, or **Codex / DeepSeek / Kimi / Ollama** with their own key.
+
+Every seat gets the full cockpit: agent chat, xterm.js terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review pages, scheduled tasks.
+
+## The honest part: what this is and isn't
+
+OpenCockpit's multi-seat model is **trust-based**, like SSH access to a shared box:
+
+- The token gates *entry*; it is **not per-user accounts**. Anyone with the token sees the same projects and sessions.
+- Treat it like you treat shell access: fine for a team that already shares the dev box, wrong for strangers.
+- Keep it on a **LAN or VPN** (Tailscale / WireGuard work great). Don't put the port naked on the public internet.
+
+If your team already SSHes into the same machine, Cockpit adds seats to that machine — it doesn't change your security model.
+
+## FAQ
+
+**Can two devs use it at the same time?**
+Yes — that's the point. Each browser is an independent client; sessions run server-side in parallel.
+
+**Same repo, two agents?**
+Use git worktrees (managed in the Explorer). Each agent gets its own checkout; branches merge like normal git.
+
+**Does it work over Tailscale / WireGuard?**
+Yes. It's plain HTTP + WebSocket on one port (default \`3457\`, \`--port\` to change).
+
+**Can I use it from a phone?**
+Yes — the UI is a three-panel swipe layout designed for it. Same URL, same token.
+
+**What about Ollama — fully offline?**
+Install Ollama on the dev box and every seat can pick any pulled model. No keys, no cloud, air-gapped if you want.
+
+---
+
+One \`npm i -g\` on one box, and the whole team flies together. If you try it, [tell us how it went](https://github.com/Surething-io/cockpit/issues) — and if something in this guide drifts out of date, PRs welcome.`,
+      },
+      zh: {
+        title: '把 Claude Code GUI 自托管到共享开发机：一台机器，全队一起飞',
+        description:
+          'OpenCockpit 是 Web client-server 架构：在共享开发机上装一次，每个队友打开浏览器就有一个席位 —— 各自在自己的项目 / worktree 上 AI coding。部署只要 5 分钟。',
+        readingTime: '6 分钟',
+        body: `大多数 Claude Code GUI 是桌面应用：一台笔记本装一份、一个人配一套、一台机器一个座位。OpenCockpit 是 **Web client-server** 架构 —— 这解锁了桌面应用做不到的部署方式：
+
+> 在代码所在的机器上**装一次**。每个队友打开浏览器，就有一个席位。
+
+不用每台笔记本都装，没有"在我机器上是好的"。一台机器，全队一起飞。
+
+## 为什么是共享开发机？
+
+- **代码本来就在那**。很多团队有一台配置好的开发机（或云上 VM）：仓库克隆好了、数据库跑着、服务连着。Cockpit 装在代码旁边，而不是把代码拖到每台笔记本上。
+- **一套环境，零漂移**。Node 版本、\`claude\` CLI 登录、Ollama 模型、数据库凭据 —— 配一次，全队共享。
+- **算力共享**。一台 GPU 机器承载所有人的 **Ollama** tab，笔记本保持凉快。
+- **任何设备都是一个席位**。客户端只需要浏览器 —— 包括同一 VPN 里的手机。
+
+## 部署（5 分钟）
+
+在开发机上：
+
+\`\`\`bash
+# 1. 安装（Node ≥ 20）
+npm install -g @surething/cockpit
+
+# 2. 暴露到网络 + 远程客户端要求令牌
+COCKPIT_HOST=0.0.0.0 cockpit --token your-shared-secret
+\`\`\`
+
+就这样。两个开关值得了解：
+
+| 开关 | 含义 |
+|---|---|
+| \`COCKPIT_HOST\` | 默认 \`127.0.0.1\`（仅本机）。设为 \`0.0.0.0\` 接受局域网 / VPN 客户端。 |
+| \`--token\`（或 \`COCKPIT_TOKEN\`） | 远程客户端必须出示令牌；**loopback 豁免**，本机 CLI 使用完全不受影响。详见[访问令牌一文](/zh/blog/cockpit-access-token/)。 |
+
+想常驻运行，交给你惯用的进程管理器 —— 最小 systemd unit：
+
+\`\`\`ini
+[Unit]
+Description=OpenCockpit
+After=network.target
+
+[Service]
+User=dev
+Environment=COCKPIT_HOST=0.0.0.0
+Environment=COCKPIT_TOKEN=your-shared-secret
+ExecStart=/usr/local/bin/cockpit
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+\`\`\`
+
+## 给每个队友一个席位
+
+每人打开：
+
+\`\`\`
+http://<dev-box>:3457/?token=your-shared-secret
+\`\`\`
+
+Cockpit 会写入 cookie 并清理 URL —— 令牌不会留在地址栏里。接下来，每个人：
+
+- 把**自己的项目**开成一个 tab（多项目 tab 是相互独立的会话）；
+- 两个人改**同一个仓库**时，各占一个 **git worktree** —— Cockpit 在 Explorer 里直接管理 worktree，并行的 Agent 不会互踩检出；
+- 每个 tab 自选引擎：默认 Claude，也可以带自己的 Key 用 **Codex / DeepSeek / Kimi / Ollama**。
+
+每个席位都是完整驾驶舱：Agent 对话、xterm.js 终端、Chrome 控制、PostgreSQL / MySQL / Redis 气泡、代码评审页、定时任务。
+
+## 实话实说：它是什么，不是什么
+
+OpenCockpit 的多席位模型是**基于信任的**，就像共享机器的 SSH 权限：
+
+- 令牌管的是*进门*，**不是按用户隔离的账号体系**。持有令牌的人看到同样的项目和会话。
+- 把它当 shell 权限对待：适合本来就共用开发机的团队，不适合陌生人。
+- 保持在**局域网或 VPN** 内（Tailscale / WireGuard 都很合适）。不要把端口裸暴露在公网。
+
+如果你的团队本来就 SSH 到同一台机器，Cockpit 只是给这台机器加了席位 —— 不改变你的安全模型。
+
+## FAQ
+
+**两个人能同时用吗？**
+能 —— 这正是设计目标。每个浏览器是独立客户端，会话在服务端并行运行。
+
+**同一个仓库、两个 Agent？**
+用 git worktree（Explorer 里可视化管理）。每个 Agent 有自己的检出，分支按正常 git 流程合并。
+
+**过 Tailscale / WireGuard 能用吗？**
+能。就是单端口的 HTTP + WebSocket（默认 \`3457\`，\`--port\` 可改）。
+
+**手机能用吗？**
+能 —— 三面板滑动布局就是为此设计的。同一个 URL、同一个令牌。
+
+**Ollama 全离线？**
+在开发机上装 Ollama，每个席位都能选任意已拉取的模型。无 Key、无云端，想断网就断网。
+
+---
+
+一台机器上一句 \`npm i -g\`，全队一起飞。试过之后[告诉我们体验如何](https://github.com/Surething-io/cockpit/issues)；如果文中步骤过时了，欢迎 PR 指正。`,
+      },
+    },
+  },
+  {
     slug: 'cockpit-access-token',
     date: '2026-07-02',
     keywords: [

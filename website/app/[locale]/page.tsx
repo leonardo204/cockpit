@@ -12,6 +12,7 @@ import { CodeGraph } from '@/components/sections/CodeGraph';
 import { Modes } from '@/components/sections/Modes';
 import { Extras } from '@/components/sections/Extras';
 import { BuiltOn } from '@/components/sections/BuiltOn';
+import { Compare } from '@/components/sections/Compare';
 import { FinalCTA } from '@/components/sections/FinalCTA';
 import { Reveal } from '@/components/Reveal';
 
@@ -124,6 +125,7 @@ export default async function HomePage({
     featureList: [
       'Multi-engine chat: Claude (default) / Codex / Kimi / DeepSeek / Ollama — each tab a separate session',
       'Multi-project parallel agent sessions',
+      'Web client–server architecture: self-host on a shared dev box — every teammate gets a seat, each in their own project / worktree',
       'Built-in xterm.js terminal',
       'Chrome browser automation',
       'PostgreSQL / MySQL / Redis bubbles',
@@ -218,6 +220,9 @@ export default async function HomePage({
       </Reveal>
       <Reveal>
         <Extras t={t} />
+      </Reveal>
+      <Reveal>
+        <Compare t={t} />
       </Reveal>
       <Reveal>
         <BuiltOn t={t} />

@@ -14,13 +14,13 @@ export const messages = {
       // Short, punchy lead shown in the Hero. `description` below stays long for
       // JSON-LD / structured data — don't merge them.
       lead:
-        'The open-source Claude Code GUI — and one canvas for whatever agent you bring next. Multi-project sessions, built-in terminal, browser & DB control. All local.',
+        'The open-source Claude Code GUI, built like an IDE for the whole dev loop — code, terminal, browser & DB in one workbench. Runs on your laptop, or on a shared dev box where every teammate gets a seat.',
       pronounce: '/ˈkɒkpɪt/ — like an aircraft cockpit',
       description:
-        'OpenCockpit is the open-source Claude Code GUI — and a single canvas for whatever agent you bring next. Multi-project Claude sessions out of the box; pop open a tab for Codex, DeepSeek, Kimi, or local Ollama whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.',
+        'OpenCockpit is the open-source Claude Code GUI — an IDE-like workbench for the whole dev loop, and a single canvas for whatever agent you bring next. Multi-project Claude sessions out of the box; pop open a tab for Codex, DeepSeek, Kimi, or local Ollama whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local. Web client–server under the hood: self-host it on a shared dev box and every teammate gets a seat, each coding with AI in their own project or worktree.',
       // SEO ≤160 chars — used by metadata only, not visible on the page. Don't merge with description.
       metaDescription:
-        'Open-source Claude Code GUI — parallel AI coding across projects. Codex/DeepSeek/Kimi/Ollama tabs, terminal, Chrome & DB bubbles, code graph. Local, MIT.',
+        'Open-source Claude Code GUI — an IDE-like workbench for parallel AI coding. Codex/DeepSeek/Kimi/Ollama, terminal, browser & DB. Self-host for your team. MIT.',
       installLabel: 'Install',
       tryOnline: 'Try Online',
       githubStar: 'Star on GitHub',
@@ -223,8 +223,116 @@ export const messages = {
       headline: 'Ready to fly?',
       desc: 'Install once, then `cockpit` from any directory. (Or `cock` if you prefer the short alias.)',
     },
+    compare: {
+      headline: 'How OpenCockpit compares',
+      sub: 'An honest snapshot as of July 2026 — each tool wins somewhere. Spotted an error? PRs welcome.',
+      columns: ['OpenCockpit', 'Claude Code Desktop (official)', 'Opcode'],
+      rows: [
+        {
+          dim: 'Positioning',
+          us: 'IDE-like workbench for the whole dev loop',
+          official: 'Agent session companion',
+          opcode: 'Session manager for Claude Code',
+        },
+        {
+          dim: 'Architecture',
+          us: '✅ Web client–server — self-host on a shared dev box, a seat for every teammate',
+          official: 'Single-user desktop app',
+          opcode: 'Single-user desktop app',
+        },
+        {
+          dim: 'Open source',
+          us: '✅ MIT',
+          official: '❌ Closed source',
+          opcode: '✅ AGPL-3.0',
+        },
+        {
+          dim: 'Engines',
+          us: '✅ Claude + Codex / DeepSeek / Kimi / Ollama (BYOK)',
+          official: 'Claude only',
+          opcode: 'Claude only',
+        },
+        {
+          dim: 'Parallel multi-project sessions',
+          us: '✅',
+          official: '✅',
+          opcode: '✅',
+        },
+        {
+          dim: 'Agent-drivable browser & DB',
+          us: '✅ Smart Bubbles: Chrome / Postgres / MySQL / Redis',
+          official: '❌ Preview pane only',
+          opcode: '❌',
+        },
+        {
+          dim: 'LAN-shared code review pages',
+          us: '✅',
+          official: '❌',
+          opcode: '❌',
+        },
+        {
+          dim: 'Fully offline / air-gapped',
+          us: '✅ via Ollama',
+          official: '❌',
+          opcode: '❌',
+        },
+        {
+          dim: 'Phone / tablet access',
+          us: '✅ Any LAN browser — code runs on your machine',
+          official: '✅ Via cloud sandbox (Claude Code on the web)',
+          opcode: '❌ Desktop only',
+        },
+        {
+          dim: 'Native desktop app',
+          us: '❌ Local web app (needs Node ≥ 20)',
+          official: '✅',
+          opcode: '✅ Tauri',
+        },
+        {
+          dim: 'Newest Claude Code features on day one',
+          us: '⏳ Tracks Agent SDK releases with a lag',
+          official: '✅ First party',
+          opcode: '❌',
+        },
+        {
+          dim: 'Automation triggers',
+          us: 'One-time / interval / cron',
+          official: '✅ Routines: cron + API + GitHub events',
+          opcode: 'Background agents',
+        },
+        {
+          dim: 'Session checkpoints / rewind',
+          us: 'Pinning & forking only',
+          official: '✅',
+          opcode: '✅ Checkpoint timeline',
+        },
+        {
+          dim: 'Usage / cost analytics',
+          us: 'Basic token counts',
+          official: 'n/a (plan-based)',
+          opcode: '✅ Full dashboard',
+        },
+        {
+          dim: 'Cost',
+          us: 'GUI free (MIT); AI billed by whichever engine you bring — $0 with local Ollama',
+          official: 'App free; needs a paid Claude plan or API billing',
+          opcode: 'GUI free (AGPL); needs a paid Claude plan or API billing',
+        },
+        {
+          dim: 'Actively maintained',
+          us: '✅',
+          official: '✅',
+          opcode: '⚠️ Last release Aug 2025',
+        },
+      ],
+      picks: [
+        'Pick Claude Code Desktop if you live inside the Anthropic ecosystem and want first-party polish.',
+        'Pick Opcode if you want a native desktop feel with checkpoints and cost analytics.',
+        'Pick OpenCockpit if you want more than a chat window — an open-source, IDE-like cockpit for the whole dev loop, with any engine you bring, even from your phone.',
+      ],
+    },
     footer: {
-      tagline: 'A Claude Code GUI for parallel AI coding.',
+      tagline: 'The open-source, IDE-like Claude Code GUI — solo on your laptop, or a seat for every teammate.',
       product: 'Product',
       resources: 'Resources',
       community: 'Community',
@@ -322,13 +430,13 @@ export const messages = {
       subheadline: 'One seat. One AI. Everything under control.',
       // 页面展示用的精简 lead；下方 description 保持长文本供 JSON-LD 使用，勿合并。
       lead:
-        '开源的 Claude Code GUI —— 也是你接入任何 Agent 的统一画布。多项目会话、内置终端、浏览器与数据库控制，全部本地运行。',
+        '开源的 Claude Code GUI —— 贴合研发全流程的 IDE 式工作台：读码、终端、浏览器与数据库一体。跑在本机，或部署到共享开发机，全队一起飞。',
       pronounce: '/ˈkɒkpɪt/ —— 像飞机驾驶舱',
       description:
-        'OpenCockpit 是开源的 Claude Code GUI —— 也是你想接入的任何 Agent 的统一画布。多项目 Claude 会话开箱即用；想用 Codex、DeepSeek、Kimi 或本地 Ollama？直接新开一个 tab。内置终端、Chrome 自动化、PostgreSQL / MySQL / Redis 气泡、代码评审与斜杠模式 —— 全部本地。',
+        'OpenCockpit 是开源的 Claude Code GUI —— 贴合研发全流程的 IDE 式工作台，也是你想接入的任何 Agent 的统一画布。多项目 Claude 会话开箱即用；想用 Codex、DeepSeek、Kimi 或本地 Ollama？直接新开一个 tab。内置终端、Chrome 自动化、PostgreSQL / MySQL / Redis 气泡、代码评审与斜杠模式 —— 全部本地。Web client-server 架构：可自托管到共享开发机，全队一起飞，在各自项目 / worktree 上并行 AI coding。',
       // SEO ≤160 字符（CJK 计为 1.5×）—— 仅用于 metadata，不在页面展示。勿与 description 合并。
       metaDescription:
-        '开源 Claude Code GUI —— 多项目并行 AI 编程。Codex/DeepSeek/Kimi/Ollama 多引擎切换，内置终端、Chrome 自动化、PostgreSQL/MySQL/Redis 气泡、代码图谱。全本地、MIT 协议。',
+        '开源 Claude Code GUI —— IDE 式工作台，多项目并行 AI 编程。Codex/DeepSeek/Kimi/Ollama 多引擎，内置终端、浏览器与数据库气泡。可自托管供全队使用。MIT 协议。',
       badge: 'Claude · Codex · DeepSeek · Kimi · Ollama',
       installLabel: '安装',
       tryOnline: '在线体验',
@@ -531,8 +639,116 @@ export const messages = {
       headline: '起飞吧',
       desc: '一次安装，任意目录 `cockpit` 一键启动。（短别名 `cock` 同样可用。）',
     },
+    compare: {
+      headline: 'OpenCockpit 横向对比',
+      sub: '截至 2026 年 7 月的实事求是快照 —— 每个工具都有赢的地方。发现错误？欢迎 PR 指正。',
+      columns: ['OpenCockpit', 'Claude Code Desktop（官方）', 'Opcode'],
+      rows: [
+        {
+          dim: '定位',
+          us: '贴合研发全流程的 IDE 式工作台',
+          official: 'Agent 会话伴侣',
+          opcode: 'Claude Code 会话管理器',
+        },
+        {
+          dim: '架构',
+          us: '✅ Web client-server —— 自托管到共享开发机，全队一起飞',
+          official: '单机桌面应用',
+          opcode: '单机桌面应用',
+        },
+        {
+          dim: '开源',
+          us: '✅ MIT',
+          official: '❌ 闭源',
+          opcode: '✅ AGPL-3.0',
+        },
+        {
+          dim: '引擎',
+          us: '✅ Claude + Codex / DeepSeek / Kimi / Ollama（BYOK）',
+          official: '仅 Claude',
+          opcode: '仅 Claude',
+        },
+        {
+          dim: '多项目并行会话',
+          us: '✅',
+          official: '✅',
+          opcode: '✅',
+        },
+        {
+          dim: 'Agent 可驱动浏览器 & 数据库',
+          us: '✅ 智能气泡：Chrome / Postgres / MySQL / Redis',
+          official: '❌ 仅只读预览面板',
+          opcode: '❌',
+        },
+        {
+          dim: '局域网共享评审页',
+          us: '✅',
+          official: '❌',
+          opcode: '❌',
+        },
+        {
+          dim: '全离线 / 内网隔离',
+          us: '✅ 走 Ollama',
+          official: '❌',
+          opcode: '❌',
+        },
+        {
+          dim: '手机 / 平板可用',
+          us: '✅ 局域网任意浏览器 —— 代码跑在你自己的机器上',
+          official: '✅ 走云端沙箱（Claude Code on the web）',
+          opcode: '❌ 仅桌面',
+        },
+        {
+          dim: '原生桌面应用',
+          us: '❌ 本地 Web 应用（需 Node ≥ 20）',
+          official: '✅',
+          opcode: '✅ Tauri',
+        },
+        {
+          dim: '第一时间跟进 Claude Code 新特性',
+          us: '⏳ 跟随 Agent SDK 发版，有滞后',
+          official: '✅ 官方第一方',
+          opcode: '❌',
+        },
+        {
+          dim: '自动化触发',
+          us: '一次性 / 间隔 / cron',
+          official: '✅ Routines：cron + API + GitHub 事件',
+          opcode: '后台 Agent',
+        },
+        {
+          dim: '会话检查点 / 回滚',
+          us: '仅固定 & 分叉',
+          official: '✅',
+          opcode: '✅ 检查点时间线',
+        },
+        {
+          dim: '用量 / 成本分析',
+          us: '仅基础 token 计数',
+          official: '不适用（订阅制）',
+          opcode: '✅ 完整仪表盘',
+        },
+        {
+          dim: '费用',
+          us: 'GUI 免费（MIT）；AI 按所带引擎计费 —— 本地 Ollama 可 ¥0',
+          official: '应用免费；需付费 Claude 订阅或 API 计费',
+          opcode: 'GUI 免费（AGPL）；需付费 Claude 订阅或 API 计费',
+        },
+        {
+          dim: '持续维护',
+          us: '✅',
+          official: '✅',
+          opcode: '⚠️ 最后发版 2025-08',
+        },
+      ],
+      picks: [
+        '选官方 Desktop：深度绑定 Anthropic 生态、要第一方打磨体验。',
+        '选 Opcode：要原生桌面手感 + 检查点 + 成本分析。',
+        '选 OpenCockpit：你要的不只是一个聊天窗 —— 开源、IDE 式、贴合研发全流程的驾驶舱，引擎随你带，手机也能开。',
+      ],
+    },
     footer: {
-      tagline: '为并行 AI 编程而生的 Claude Code GUI。',
+      tagline: '开源、IDE 式的 Claude Code GUI —— 单人本机，或全队一起飞。',
       product: '产品',
       resources: '资源',
       community: '社区',

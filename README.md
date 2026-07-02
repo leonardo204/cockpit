@@ -26,7 +26,7 @@
 
 ---
 
-> **OpenCockpit is the open-source Claude Code GUI** — and a single canvas for whatever agent you bring next. Run multi-project Claude sessions out of the box; pop open a tab for **Codex, DeepSeek, Kimi, or local Ollama** whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local.
+> **OpenCockpit is the open-source Claude Code GUI** — an IDE-like workbench for the whole dev loop, and a single canvas for whatever agent you bring next. Run multi-project Claude sessions out of the box; pop open a tab for **Codex, DeepSeek, Kimi, or local Ollama** whenever you need. Built-in terminal, Chrome control, PostgreSQL / MySQL / Redis bubbles, code review, and slash modes — all local. And it's web client–server: **self-host it on a shared dev box and every teammate gets a seat.**
 
 https://github.com/user-attachments/assets/18f1a5dc-64f3-4ff6-b9fc-9cd08181fbb8
 
@@ -52,6 +52,31 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 | Same "do X but don't change code" prompt every day | **Slash modes** `/qa /fx /ex /go /cg /cc /cr` + custom `SKILL.md` via the Skills sidebar |
 | No automation hooks | One-time / interval / cron-based **scheduled tasks** |
 | "Cloud relay" trust concerns | **Fully local**. No telemetry. Keys (Codex / DeepSeek / Kimi) stay in `~/.cockpit/settings.json` on your laptop. |
+
+### How it compares
+
+An honest snapshot as of July 2026 — each tool wins somewhere. Spotted an error? PRs welcome.
+
+|  | **OpenCockpit** | Claude Code Desktop (official) | Opcode |
+|---|---|---|---|
+| Positioning | **IDE-like workbench for the whole dev loop** | agent session companion | session manager for Claude Code |
+| Architecture | ✅ **web client–server** — deploy on a shared dev box; the whole team codes with AI in parallel, each on their own project / worktree | single-user desktop app | single-user desktop app |
+| Open source | ✅ MIT | ❌ closed source | ✅ AGPL-3.0 |
+| Engines | ✅ **Claude + Codex / DeepSeek / Kimi / Ollama** (BYOK) | Claude only | Claude only |
+| Parallel multi-project sessions | ✅ | ✅ | ✅ |
+| Agent-drivable browser & DB (Chrome / Postgres / MySQL / Redis) | ✅ Smart Bubbles | ❌ preview pane only | ❌ |
+| LAN-shared code review pages | ✅ | ❌ | ❌ |
+| Fully offline / air-gapped | ✅ via Ollama | ❌ | ❌ |
+| Phone / tablet access | ✅ any LAN browser — code runs on **your** machine | ✅ via Claude Code on the web (cloud sandbox) | ❌ desktop only |
+| Native desktop app | ❌ local web app (needs Node ≥ 20) | ✅ | ✅ Tauri |
+| Newest Claude Code features on day one | ⏳ tracks Agent SDK releases with a lag | ✅ first party | ❌ |
+| Automation triggers | one-time / interval / cron | ✅ Routines: cron + API + GitHub events | background agents |
+| Session checkpoints / rewind | pinning & forking only | ✅ | ✅ checkpoint timeline |
+| Usage / cost analytics | basic token counts | n/a (plan-based) | ✅ full dashboard |
+| Cost | GUI free (MIT); AI billed by whichever engine you bring — can be $0 with local Ollama | app free; needs a paid Claude plan or API billing | GUI free (AGPL); needs a paid Claude plan or API billing |
+| Actively maintained | ✅ | ✅ | ⚠️ last release Aug 2025 |
+
+**Pick Claude Code Desktop** if you live inside the Anthropic ecosystem and want first-party polish. **Pick Opcode** if you want a native desktop feel with checkpoints and cost analytics. **Pick OpenCockpit** if you want more than a chat window — an open-source, IDE-like cockpit that covers the whole dev loop (read code, drive your browser and databases, review, automate) with any engine you bring, even from your phone.
 
 ## Features
 
@@ -126,6 +151,7 @@ Cockpit is the instrument panel. It does **not** replace Claude Code; it stands 
 - **Solo dev, multi-repo:** "I have a refactor running in API, tests writing in Web, and a bug investigation in Pipeline — all at once, all visible."
 - **Day one in an unfamiliar repo:** Open it in Code Map, click through caller/callee pins, walk the auth flow in five clicks instead of a 90-minute file-tree scavenger hunt.
 - **Two-person team:** Senior reviews via LAN-shared review page, no GitHub PR round-trip needed for in-progress work.
+- **Team on a shared dev box:** self-host one Cockpit where the code lives — every teammate opens a browser, takes a seat, and runs their own AI sessions in their own project / worktree.
 - **Reviewing AI-generated PRs:** Switch the changed files into Code Map — changed functions are highlighted with their callers / callees still drawn around them, so blast-radius is one click away.
 - **Full-stack chore mode:** `/fx` in one tab on a backend bug, `/ex` in another to plan the frontend refactor, `/go` to land it — three slash modes, three different agent postures.
 - **Cheap second opinion:** Same prompt in two tabs — Claude in one, **DeepSeek v4-pro** in the other — compare answers before you trust either.
