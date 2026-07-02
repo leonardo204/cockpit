@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { MobileSessionList, type OpenableSession } from './MobileSessionList';
 import { MobileChat } from './MobileChat';
+import type { GlobalSession } from '../GlobalSessionMonitor';
 
 // Root of the mobile experience (/m). Two screens — recent-session list and a
 // single chat — laid out SIDE BY SIDE in a 2-page track. We own the horizontal
@@ -17,6 +18,8 @@ interface MobileAppProps {
   // Optional deep-link from the redirect (preserved query params).
   initialCwd?: string;
   initialSessionId?: string;
+  // SSR-provided session-list snapshot (see MobileSessionList.initialSessions).
+  initialSessions?: GlobalSession[];
 }
 
 interface OpenSession {
@@ -31,7 +34,7 @@ const CHAT_MARKER = 'cockpitMobileChat';
 // Fraction of page width a drag must pass to commit the page switch on release.
 const COMMIT_FRACTION = 0.25;
 
-export function MobileApp({ initialCwd, initialSessionId }: MobileAppProps) {
+export function MobileApp({ initialCwd, initialSessionId, initialSessions }: MobileAppProps) {
   // The session loaded into the chat page. Both pages stay mounted, so swiping
   // back to the list never re-fetches the chat's history. Replaced only when a
   // different session is opened (key change → genuine remount).
@@ -230,7 +233,7 @@ export function MobileApp({ initialCwd, initialSessionId }: MobileAppProps) {
         }}
       >
         <div className="h-full w-1/2 overflow-hidden">
-          <MobileSessionList onOpen={handleOpen} onUseDesktop={handleUseDesktop} />
+          <MobileSessionList onOpen={handleOpen} onUseDesktop={handleUseDesktop} initialSessions={initialSessions} />
         </div>
         <div className="h-full w-1/2 overflow-hidden">
           {active && (

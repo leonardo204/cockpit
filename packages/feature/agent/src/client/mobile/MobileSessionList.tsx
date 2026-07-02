@@ -22,14 +22,18 @@ export interface OpenableSession {
 interface MobileSessionListProps {
   onOpen: (session: OpenableSession) => void;
   onUseDesktop: () => void;
+  // SSR snapshot from /m page.tsx — paints the list with the HTML instead of
+  // waiting for JS + hydration + the WS handshake. The first /ws/global-state
+  // frame replaces it.
+  initialSessions?: GlobalSession[];
 }
 
 type Tab = 'recent' | 'pinned';
 
-export function MobileSessionList({ onOpen, onUseDesktop }: MobileSessionListProps) {
+export function MobileSessionList({ onOpen, onUseDesktop, initialSessions }: MobileSessionListProps) {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('recent');
-  const [sessions, setSessions] = useState<GlobalSession[]>([]);
+  const [sessions, setSessions] = useState<GlobalSession[]>(() => initialSessions ?? []);
   const [now, setNow] = useState(() => Date.now());
   const { pinnedSessions } = usePinnedSessions();
   const { supported: pushSupported, isSubscribed, busy: pushBusy, subscribe, unsubscribe } = usePushSubscription();

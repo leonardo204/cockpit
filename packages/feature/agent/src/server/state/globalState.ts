@@ -286,6 +286,52 @@ export async function getSessionPreview(cwd: string, sessionId: string): Promise
   };
 }
 
+/** GlobalSession enriched with the preview fields the session list renders. */
+export interface GlobalSessionSnapshot extends GlobalSession {
+  firstMessages?: string[];
+  lastMessages?: string[];
+}
+
+/**
+ * Build the recent-sessions snapshot (top `limit`, previews attached) — the
+ * exact shape the /ws/global-state channel pushes. Shared by:
+ *   - the WS handler (src/lib/effect/globalStateHandler.ts), and
+ *   - the /m server page, which SSRs the list so first paint doesn't wait for
+ *     JS download + hydration + WS handshake (a ~2s tax on tunneled links).
+ */
+export async function getGlobalSessionsSnapshot(limit = 15): Promise<GlobalSessionSnapshot[]> {
+  const state = await readJsonFile<GlobalState>(GLOBAL_STATE_FILE, { sessions: [] });
+
+  // backward-compat: isLoading → status
+  for (const s of state.sessions) {
+    if (!s.status) {
+      const legacy = s as GlobalSession & { isLoading?: boolean };
+      s.status = legacy.isLoading ? 'loading' : 'normal';
+    }
+  }
+
+  state.sessions.sort((a, b) => b.lastActive - a.lastActive);
+  const recent = state.sessions.slice(0, limit);
+
+  return Promise.all(
+    recent.map(async (session): Promise<GlobalSessionSnapshot> => {
+      // Actively-loading sessions already carry a fresh lastUserMessage.
+      if (session.status === 'loading' && session.lastUserMessage) return session;
+      try {
+        const preview = await getSessionPreview(session.cwd, session.sessionId);
+        return {
+          ...session,
+          lastUserMessage: preview.lastUserMessage ?? session.lastUserMessage,
+          firstMessages: preview.firstMessages,
+          lastMessages: preview.lastMessages,
+        };
+      } catch {
+        return session; // preview is best-effort — never block the snapshot
+      }
+    })
+  );
+}
+
 /**
  * Strip command and system tags from a message.
  */

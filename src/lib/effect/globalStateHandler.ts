@@ -13,72 +13,24 @@ import type { WebSocket } from "ws"
 import { FSError, WSError } from "@cockpit/effect-core"
 import type { WSConnection } from "@cockpit/effect-services"
 import { fromWebSocket } from "@cockpit/effect-runtime/server"
-import {
-  GLOBAL_STATE_FILE,
-  readJsonFile,
-} from "@cockpit/shared-utils"
-import { getSessionPreview } from "@cockpit/feature-agent/server/state/globalState"
-
-interface GlobalSession {
-  cwd: string
-  sessionId: string
-  lastActive: number
-  status: string
-  title?: string
-  lastUserMessage?: string
-  firstMessages?: string[]
-  lastMessages?: string[]
-}
-
-interface GlobalState {
-  sessions: GlobalSession[]
-}
+import { GLOBAL_STATE_FILE } from "@cockpit/shared-utils"
+import { getGlobalSessionsSnapshot } from "@cockpit/feature-agent/server/state/globalState"
 
 const HEARTBEAT_INTERVAL = Schedule.spaced("30 seconds")
 
 /**
- * Read state, sort sessions, attach lastUserMessage, then send via the connection.
+ * Build the snapshot (read state.json, sort, attach previews — shared with the
+ * /m SSR page via getGlobalSessionsSnapshot) and send it via the connection.
  */
 const sendGlobalState = (
   conn: WSConnection
 ): Effect.Effect<void, WSError | FSError> =>
   Effect.gen(function* () {
-    const state = yield* Effect.tryPromise({
-      try: () => readJsonFile<GlobalState>(GLOBAL_STATE_FILE, { sessions: [] }),
+    const sessions = yield* Effect.tryPromise({
+      try: () => getGlobalSessionsSnapshot(),
       catch: (cause) =>
         new FSError({ path: GLOBAL_STATE_FILE, op: "read", cause }),
     })
-
-    // backward-compat: isLoading → status
-    for (const s of state.sessions) {
-      if (!s.status) {
-        const legacy = s as GlobalSession & { isLoading?: boolean }
-        s.status = legacy.isLoading ? "loading" : "normal"
-      }
-    }
-
-    state.sessions.sort((a, b) => b.lastActive - a.lastActive)
-    const recent = state.sessions.slice(0, 15)
-
-    const sessions = yield* Effect.forEach(
-      recent,
-      (session) =>
-        session.status === "loading" && session.lastUserMessage
-          ? Effect.succeed(session)
-          : Effect.tryPromise({
-              try: () => getSessionPreview(session.cwd, session.sessionId),
-              catch: () => undefined as never,
-            }).pipe(
-              Effect.map((preview) => ({
-                ...session,
-                lastUserMessage: preview.lastUserMessage ?? session.lastUserMessage,
-                firstMessages: preview.firstMessages,
-                lastMessages: preview.lastMessages,
-              })),
-              Effect.orElseSucceed(() => session)
-            ),
-      { concurrency: "unbounded" }
-    )
 
     yield* conn.send({ type: "global-state", data: { sessions } })
   })

@@ -6,11 +6,15 @@
 // reaches feature code through the client <Workspace>. Importing the barrel
 // directly from the server page pulls client hooks into the server graph and
 // fails the production build.
+import type { ComponentProps } from 'react';
 import { MobileApp } from '@cockpit/feature-agent';
 
 interface MobileClientProps {
   initialCwd?: string;
   initialSessionId?: string;
+  // SSR session-list snapshot from page.tsx (typed via MobileApp so the server
+  // page never needs to reach into client-only modules for the type).
+  initialSessions?: ComponentProps<typeof MobileApp>['initialSessions'];
 }
 
 export default function MobileClient(props: MobileClientProps) {
