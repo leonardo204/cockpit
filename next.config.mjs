@@ -12,8 +12,9 @@ const nextConfig = {
   // dev 和 prod 使用不同输出目录，避免 Turbopack 热更新影响 prod
   distDir: dev ? '.next' : '.next-prod',
   // Allow loading dev resources (HMR, /_next/*) through tunnels — needed to test
-  // the mobile /m route on a real phone via ngrok. Dev-only; wildcards cover the
-  // rotating ngrok hostnames so we don't have to edit this each session.
+  // the mobile /m route on a real phone via ngrok / Cloudflare quick tunnels.
+  // Dev-only; wildcards cover the rotating tunnel hostnames so we don't have to
+  // edit this each session.
   ...(dev
     ? {
         allowedDevOrigins: [
@@ -21,6 +22,7 @@ const nextConfig = {
           '*.ngrok-free.app',
           '*.ngrok.app',
           '*.ngrok.io',
+          '*.trycloudflare.com',
         ],
       }
     : {}),
