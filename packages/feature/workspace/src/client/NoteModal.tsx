@@ -22,6 +22,7 @@ import { Effect } from 'effect';
 import { loadNote, saveNote as saveNoteEff } from './effect/workspaceClient';
 import { normalizeNoteMarkdown } from './noteMarkdown';
 import { MarkdownTaskListFix } from './markdownTaskListFix';
+import { DropShellCleanup } from './dropShellCleanup';
 
 // ============================================
 // NoteModal main component
@@ -104,6 +105,9 @@ export function NoteModal({ isOpen, onClose, projectCwd, projectName }: NoteModa
       // Split markdown-it's merged plain-bullet + task-list <ul> before it
       // reaches the schema, so no phantom empty checkbox is generated on load.
       MarkdownTaskListFix,
+      // Remove the empty item shell a text-selection drag-move leaves behind
+      // at the source (todo & plain list items). See dropShellCleanup.ts.
+      DropShellCleanup,
       Markdown.configure({
         html: true,
         transformCopiedText: true,
