@@ -24,6 +24,8 @@ interface ChatPanelProps {
   planMode?: boolean;
   onPlanModeChange?: (tabId: string, planMode: boolean) => void;
   isActive?: boolean;
+  // Forwarded to Chat: forced history refresh on explicit session jump (see ChatProps.refreshSignal)
+  refreshSignal?: { sessionId: string; nonce: number } | null;
   onStateChange: (tabId: string, updates: { isLoading?: boolean; sessionId?: string; title?: string }) => void;
   onShowGitStatus?: () => void;
   onOpenNote?: () => void;
@@ -45,7 +47,7 @@ interface ChatPanelProps {
   onContentSearch?: (query: string) => void;
 }
 
-export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode, onChatModeChange, planMode, onPlanModeChange, isActive, onStateChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch }: ChatPanelProps) {
+export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode, onChatModeChange, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch }: ChatPanelProps) {
   const handleLoadingChange = useCallback((isLoading: boolean) => {
     onStateChange(tabId, { isLoading });
   }, [tabId, onStateChange]);
@@ -91,6 +93,7 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllama
       hideHeader
       hideSidebar
       isActive={isActive}
+      refreshSignal={refreshSignal}
       onLoadingChange={handleLoadingChange}
       onSessionIdChange={handleSessionIdChange}
       onTitleChange={handleTitleChange}

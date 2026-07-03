@@ -96,6 +96,11 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   const [tabSwitchTrigger, setTabSwitchTrigger] = useState(0);
   const [fileBrowserSearchQuery, setFileBrowserSearchQuery] = useState<string | null>(null);
   const [searchQueryTrigger, setSearchQueryTrigger] = useState(0);
+  // Forced chat refresh signal: bumped when a SWITCH_SESSION jump targets a session whose
+  // tab already exists. Activating an already-active tab produces no isActive rising edge
+  // in Chat, so without this a jump from the scheduled-tasks / recent / pinned panels would
+  // never re-fetch messages appended externally (e.g. a scheduled-task run).
+  const [sessionRefresh, setSessionRefresh] = useState<{ sessionId: string; nonce: number } | null>(null);
 
   // Restore activeView from project-settings
   useEffect(() => {
@@ -229,6 +234,11 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
           }
           // User viewed this session → write state.json as normal (skip sessions still loading to avoid clearing the unread indicator prematurely)
           const targetTab = tabs.find(t => t.sessionId === sessionId);
+          // Existing tab (possibly already active → no rising edge): force Chat to
+          // re-fetch the latest messages from disk. New tabs load history in full anyway.
+          if (targetTab) {
+            setSessionRefresh(prev => ({ sessionId, nonce: (prev?.nonce ?? 0) + 1 }));
+          }
           if (initialCwd && !targetTab?.isLoading) {
             BrowserRuntime.runFork(
               updateSessionStatus(initialCwd, sessionId, 'normal').pipe(
@@ -350,6 +360,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                           planMode={tab.planMode}
                           onPlanModeChange={updateTabPlanMode}
                           isActive={tab.id === activeTabId && activeView === 'agent'}
+                          refreshSignal={sessionRefresh}
                           onStateChange={updateTabState}
                           onShowGitStatus={handleShowGitStatus}
                           onContentSearch={handleContentSearch}
@@ -428,6 +439,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                     planMode={tab.planMode}
                     onPlanModeChange={updateTabPlanMode}
                     isActive={tab.id === activeTabId}
+                    refreshSignal={sessionRefresh}
                     onStateChange={updateTabState}
                     onCreateScheduledTask={createScheduledTask}
                     onOpenSession={handleOpenSession}

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { ChatMessage, TokenUsage, ChatEngine } from './types';
+import { mergeIncrementalMessages } from './mergeIncrementalMessages';
 import { Effect } from 'effect';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { AppError } from '@cockpit/effect-core';
@@ -92,7 +93,11 @@ interface UseChatHistoryReturn {
     sid: string,
     incremental?: boolean,
     limit?: number,
-    beforeTurnIndex?: number
+    beforeTurnIndex?: number,
+    // Bypass the incremental throttle — used by explicit user jumps
+    // (scheduled-tasks panel / recent / pinned sessions), which must always
+    // see the latest disk state even if another incremental fetch just ran.
+    force?: boolean
   ) => Promise<void>;
   // The sessionId of the JSONL file whose contents are currently
   // displayed in `messages`. Differs from the live `sessionId` (which
@@ -144,12 +149,15 @@ export function useChatHistory(
     sid: string,
     incremental = false,
     limit?: number,
-    beforeTurnIndex?: number
+    beforeTurnIndex?: number,
+    force = false
   ) => {
-    // Direction 2: incremental time throttle — skip if less than N seconds since last fetch
+    // Direction 2: incremental time throttle — skip if less than N seconds since last fetch.
+    // `force` (explicit user jump) bypasses the throttle but still stamps the clock, so the
+    // jump can never be silently swallowed by an unrelated fetch that ran moments earlier.
     if (incremental) {
       const now = Date.now();
-      if (now - lastIncrementalFetchRef.current < INCREMENTAL_THROTTLE_MS) {
+      if (!force && now - lastIncrementalFetchRef.current < INCREMENTAL_THROTTLE_MS) {
         return;
       }
       lastIncrementalFetchRef.current = now;
@@ -173,36 +181,12 @@ export function useChatHistory(
 
         if (data.messages && data.messages.length > 0) {
           if (viaIncremental) {
-            // Incremental update mode: only update changed messages
-            setMessages((prevMessages) => {
-              const newMessages = data.messages as ChatMessage[];
-              // If message count is the same and last message is unchanged, skip update
-              if (
-                prevMessages.length === newMessages.length &&
-                prevMessages.length > 0 &&
-                prevMessages[prevMessages.length - 1].content === newMessages[newMessages.length - 1].content
-              ) {
-                return prevMessages;
-              }
-              // Find the first differing message index
-              let diffIndex = 0;
-              for (let i = 0; i < Math.min(prevMessages.length, newMessages.length); i++) {
-                if (
-                  prevMessages[i].id !== newMessages[i].id ||
-                  prevMessages[i].content !== newMessages[i].content
-                ) {
-                  break;
-                }
-                diffIndex = i + 1;
-              }
-              // Keep identical prefix, replace the rest
-              if (diffIndex === prevMessages.length && diffIndex < newMessages.length) {
-                // Only new messages added, append them
-                return [...prevMessages, ...newMessages.slice(diffIndex)];
-              }
-              // Has updates or deletions, need to replace
-              return newMessages;
-            });
+            // Incremental update mode: only update changed messages. The response may
+            // be a suffix WINDOW (limit=N turns) of the session — mergeIncrementalMessages
+            // aligns it by id so pre-window history is never truncated.
+            setMessages((prevMessages) =>
+              mergeIncrementalMessages(prevMessages, data.messages as ChatMessage[])
+            );
           } else if (!liveRunningRef?.current) {
             // #10: full (initial) load — but if the live stream is already rendering this
             // run (viewer joined mid-run), don't overwrite its bubbles. loadedSessionId is

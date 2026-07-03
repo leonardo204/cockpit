@@ -47,6 +47,11 @@ interface ChatProps {
   hideHeader?: boolean;
   hideSidebar?: boolean;
   isActive?: boolean; // Whether the tab is active (used to handle scroll issues for hidden tabs)
+  // Forced history refresh: the host bumps `nonce` when the user explicitly jumps to
+  // `sessionId` (scheduled-tasks panel / recent / pinned sessions). Needed because jumping
+  // to a tab that is ALREADY active produces no isActive rising edge, so messages appended
+  // externally (e.g. a scheduled-task run) would otherwise never be fetched.
+  refreshSignal?: { sessionId: string; nonce: number } | null;
   onLoadingChange?: (isLoading: boolean) => void;
   onSessionIdChange?: (sessionId: string) => void;
   onTitleChange?: (title: string) => void;
@@ -72,7 +77,7 @@ interface ChatProps {
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, onLoadingChange, onSessionIdChange, onTitleChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -295,6 +300,24 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     }
     prevActiveRef.current = isActive;
   }, [isActive, sessionId, initialCwd, isLoading, liveRunning, loadHistoryByCwdAndSessionId]);
+
+  // Forced refresh on explicit jump (SWITCH_SESSION → scheduled tasks / recent / pinned).
+  // The rising-edge fetch above never fires when the target tab is ALREADY active on the
+  // agent view — the common case for a scheduled-task session — so the host bumps
+  // `refreshSignal` and we fetch unconditionally, bypassing the incremental throttle.
+  const refreshNonceRef = useRef(0);
+  useEffect(() => {
+    if (!refreshSignal || refreshSignal.nonce === refreshNonceRef.current) return;
+    // Record the nonce even when this tab doesn't match, so a later unrelated
+    // dependency change can't replay a stale signal.
+    refreshNonceRef.current = refreshSignal.nonce;
+    const sid = sessionId || loadedSessionId;
+    if (!initialCwd || !sid) return;
+    if (refreshSignal.sessionId !== sessionId && refreshSignal.sessionId !== loadedSessionId) return;
+    // A live-streaming or in-flight run owns the tail; onComplete reconciles from disk.
+    if (isLoading || liveRunning) return;
+    loadHistoryByCwdAndSessionId(initialCwd, sid, true, 10, undefined, true);
+  }, [refreshSignal, sessionId, loadedSessionId, initialCwd, isLoading, liveRunning, loadHistoryByCwdAndSessionId]);
 
   // PTY floating window: clear the screen at the start of a new turn (isLoading rising edge)
   useEffect(() => {
