@@ -462,7 +462,7 @@ code[class*="language-"] .token {
 .tiptap-editor {
   outline: none;
   font-size: 0.9375rem;
-  line-height: 1.7;
+  line-height: 1.6;
   color: hsl(var(--foreground));
 }
 
@@ -475,7 +475,7 @@ code[class*="language-"] .token {
 }
 
 .tiptap-editor h1 {
-  font-size: 1.5rem;
+  font-size: 1.625rem;
   font-weight: 700;
   line-height: 1.3;
   margin-top: 1.5rem;
@@ -483,19 +483,62 @@ code[class*="language-"] .token {
 }
 
 .tiptap-editor h2 {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.375rem;
+  font-weight: 700;
   line-height: 1.3;
   margin-top: 1.25rem;
   margin-bottom: 0.5rem;
 }
 
 .tiptap-editor h3 {
-  font-size: 1.1rem;
+  font-size: 1.125rem;
   font-weight: 600;
   line-height: 1.3;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
+}
+
+/* Heading fold (outline collapse) */
+.tiptap-editor h1,
+.tiptap-editor h2,
+.tiptap-editor h3 {
+  position: relative;
+}
+
+.tiptap-editor .note-fold-toggle {
+  position: absolute;
+  left: -1.35rem;
+  top: 0;
+  width: 1.2rem;
+  height: 1.3em; /* matches the heading's first line-box (line-height: 1.3) */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: hsl(var(--slate-8));
+  user-select: none;
+  transition: color 0.12s ease;
+}
+
+.tiptap-editor h1:hover .note-fold-toggle,
+.tiptap-editor h2:hover .note-fold-toggle,
+.tiptap-editor h3:hover .note-fold-toggle,
+.tiptap-editor .note-fold-toggle[data-collapsed='true'] {
+  color: hsl(var(--foreground));
+}
+
+.tiptap-editor .note-fold-toggle::before {
+  content: '▾';
+  font-size: 0.72em;
+  line-height: 1;
+}
+
+.tiptap-editor .note-fold-toggle[data-collapsed='true']::before {
+  content: '▸';
+}
+
+.tiptap-editor .note-folded-hidden {
+  display: none;
 }
 
 .tiptap-editor p {
