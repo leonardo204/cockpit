@@ -14,6 +14,7 @@ import { TaskList } from '@tiptap/extension-task-list';
 import { TaskItem } from '@tiptap/extension-task-item';
 import Link from '@tiptap/extension-link';
 import { Markdown } from 'tiptap-markdown';
+import { CollapsibleHeading } from './CollapsibleHeading';
 import { getMarkdown } from '@cockpit/feature-agent';
 import { SlashCommandMenu } from '@cockpit/feature-agent';
 import { NoteToolbar } from './NoteToolbar';
@@ -81,7 +82,11 @@ export function NoteModal({ isOpen, onClose, projectCwd, projectName }: NoteModa
     immediatelyRender: false,
     extensions: [
       StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
+        // Heading is provided by CollapsibleHeading below (adds fold support).
+        heading: false,
+      }),
+      CollapsibleHeading.configure({
+        levels: [1, 2, 3],
       }),
       Placeholder.configure({
         placeholder: () => i18n.t('editor.placeholder'),
