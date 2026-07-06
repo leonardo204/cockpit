@@ -87,7 +87,18 @@ export const loadExtensionVersion = (): Effect.Effect<
 
 export interface NoteResponse {
   content?: string
+  /** File mtime (ms) at load — the optimistic-concurrency token for saves. */
+  mtime?: number
 }
+
+/**
+ * Result of a save attempt. A `conflict` means the note changed on disk since
+ * `baseMtime` (another tab / external editor); it carries the latest content
+ * so the caller can reload instead of clobbering.
+ */
+export type SaveNoteResult =
+  | { conflict: false; mtime?: number }
+  | { conflict: true; content: string; mtime?: number }
 
 /**
  * Global note uses `/api/note`; project note uses `/api/note?cwd=...`.
@@ -99,11 +110,44 @@ export const loadNote = (
   cwd?: string | null
 ): Effect.Effect<NoteResponse, AppError> => httpJson(noteUrl(cwd))
 
+/**
+ * Saves the note with an optimistic-concurrency check. Unlike the generic
+ * `httpPostJson` helper, a 409 here is a normal outcome (a detected conflict),
+ * not a transport failure — so it is surfaced as a `SaveNoteResult` value
+ * rather than an `AppError`. Genuine network/HTTP failures still fail the
+ * Effect.
+ */
 export const saveNote = (
   cwd: string | null | undefined,
-  content: string
-): Effect.Effect<unknown, AppError> =>
-  httpPostJson(noteUrl(cwd), { content })
+  content: string,
+  baseMtime?: number
+): Effect.Effect<SaveNoteResult, AppError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const url = noteUrl(cwd)
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, baseMtime }),
+      })
+      if (res.status === 409) {
+        const data = (await res.json()) as {
+          content?: string
+          mtime?: number
+        }
+        return {
+          conflict: true as const,
+          content: data.content ?? "",
+          mtime: data.mtime,
+        }
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as { mtime?: number }
+      return { conflict: false as const, mtime: data.mtime }
+    },
+    catch: (cause) =>
+      new AppError({ message: `POST ${noteUrl(cwd)} failed`, cause }),
+  })
 
 // ─────────────────────────────────────────────────────────
 // /api/sessions/projects

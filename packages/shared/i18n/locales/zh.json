@@ -736,6 +736,7 @@
     "noteTitle": "{{name}} - 笔记",
     "noteUntitled": "笔记",
     "saving": "保存中...",
+    "conflictReloaded": "笔记已被其他地方修改，已加载最新版本，刚才未保存的编辑已丢弃",
     "linkPlaceholder": "输入链接地址...",
     "confirmLink": "确认",
     "removeLink": "移除链接",
