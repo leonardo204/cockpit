@@ -20,6 +20,7 @@ import { SlashCommandMenu } from '@cockpit/feature-agent';
 import { NoteToolbar } from './NoteToolbar';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { Effect } from 'effect';
+import { toast } from '@cockpit/shared-ui';
 import { loadNote, saveNote as saveNoteEff } from './effect/workspaceClient';
 import { normalizeNoteMarkdown } from './noteMarkdown';
 import { MarkdownTaskListFix } from './markdownTaskListFix';
@@ -42,6 +43,9 @@ export function NoteModal({ isOpen, onClose, projectCwd, projectName }: NoteModa
   const [isSaving, setIsSaving] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasUnsavedChanges = useRef(false);
+  // mtime of the note as we last loaded/saved it — the optimistic-concurrency
+  // token sent with every save so the server can detect an out-of-band edit.
+  const baseMtimeRef = useRef<number | undefined>(undefined);
 
   // Slash command state
   const [slashMenu, setSlashMenu] = useState<{ query: string; position: { top: number; left: number } } | null>(null);
@@ -54,17 +58,30 @@ export function NoteModal({ isOpen, onClose, projectCwd, projectName }: NoteModa
     const normalized = normalizeNoteMarkdown(content);
     setIsSaving(true);
     const exit = await BrowserRuntime.runPromiseExit(
-      saveNoteEff(projectCwd, normalized).pipe(
+      saveNoteEff(projectCwd, normalized, baseMtimeRef.current).pipe(
         Effect.tapError((err) =>
           Effect.sync(() => console.error('Failed to save note:', err))
         )
       )
     );
     if (exit._tag === 'Success') {
-      hasUnsavedChanges.current = false;
+      const result = exit.value;
+      if (result.conflict) {
+        // The note changed on disk since we loaded it (another tab / external
+        // editor). Discard this ~5s batch of unsaved local edits and reload
+        // the latest, rather than silently clobbering the other writer.
+        // emitUpdate:false so the reload itself never schedules a fresh save.
+        editorRef.current?.commands.setContent(result.content, { emitUpdate: false });
+        baseMtimeRef.current = result.mtime;
+        hasUnsavedChanges.current = false;
+        toast(t('editor.conflictReloaded'), 'info');
+      } else {
+        baseMtimeRef.current = result.mtime;
+        hasUnsavedChanges.current = false;
+      }
     }
     setIsSaving(false);
-  }, [projectCwd]);
+  }, [projectCwd, t]);
 
   // Debounced save with 5-second delay
   const debouncedSave = useCallback((content: string) => {
@@ -209,6 +226,8 @@ export function NoteModal({ isOpen, onClose, projectCwd, projectName }: NoteModa
         // emitUpdate:false so merely opening the note never fires onUpdate /
         // schedules a save (which would otherwise persist a re-serialized doc).
         editor.commands.setContent(exit.value.content || '', { emitUpdate: false });
+        // Record the load-time mtime as the concurrency baseline for saves.
+        baseMtimeRef.current = exit.value.mtime;
         // Belt-and-suspenders: clear any save the load might have scheduled.
         if (saveTimerRef.current) {
           clearTimeout(saveTimerRef.current);

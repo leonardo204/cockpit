@@ -736,6 +736,7 @@
     "noteTitle": "{{name}} - Notes",
     "noteUntitled": "Notes",
     "saving": "Saving...",
+    "conflictReloaded": "This note was changed elsewhere. Loaded the latest version; your recent unsaved edits were discarded.",
     "linkPlaceholder": "Enter URL...",
     "confirmLink": "Confirm",
     "removeLink": "Remove link",
