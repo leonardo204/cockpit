@@ -109,4 +109,4 @@ The `v*` tag push triggers `.github/workflows/publish.yml` which:
 - **Minimize screenshots**: Only take screenshots when visual confirmation is truly needed
 - **MCP tools**: Do not use MCP tools unless the user explicitly requests it (e.g., "use xxx")
 - **Git commits**: Do not auto-commit code; only commit when the user explicitly says "commit"
-- **Commit messages in English**: Write commit messages (subject and body) entirely in English; Chinese may appear only in quoted literals (e.g. UI copy, example prompts)
+- **English everywhere in code**: Write commit messages (subject and body), code comments, and CLI/console log output entirely in English; Chinese may appear only in quoted literals (e.g. UI copy, example prompts). Conversation replies stay in Chinese
