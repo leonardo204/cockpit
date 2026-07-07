@@ -40,9 +40,10 @@ const eslintConfig = defineConfig([
   // See CLAUDE.md / MODULES.md for the full architecture doc.
   {
     files: ["packages/shared/*/src/**/*.{ts,tsx}"],
-    // v2 P8 例外:effect-runtime/server/runtime.ts 是 AppLayer 装配中心,
-    // 需要 import 所有 feature 的 Live 才能 merge。这是 IoC 反转的合理实现位置。
-    // 后续 phase 可改为 server.mjs 收集 layers 注入 (BACKLOG)。
+    // v2 P8 exception: effect-runtime/server/runtime.ts is the AppLayer
+    // assembly hub and must import every feature's Live layer to merge them —
+    // the proper place to implement the IoC inversion. A later phase could
+    // switch to server.mjs collecting and injecting the layers (BACKLOG).
     ignores: ["packages/shared/effect-runtime/src/server/runtime.ts"],
     rules: {
       "no-restricted-imports": ["error", {
@@ -74,8 +75,9 @@ const eslintConfig = defineConfig([
     },
   },
   // ============================================================
-  // v2 Effect 范式约束 (P8 启用,警告级别 — 不阻塞合并,推动 P8+ 持续清理)
-  // 详见 EFFECT.md §10
+  // v2 Effect paradigm constraints (enabled in P8 at warning level — they
+  // don't block merges, but drive continuous cleanup through P8+)
+  // See EFFECT.md §10 for details
   // ============================================================
   {
     files: [

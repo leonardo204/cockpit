@@ -1,17 +1,17 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
-/* 阻止跨 frame 的 compositor 级滚动链传播到父 frame */
+/* Stop compositor-level scroll chaining from propagating across frames to the parent frame */
 html, body {
   overscroll-behavior: none;
 }
 
 /* ============================================
-   Design System - 参考 ai-assistant 项目风格
+   Design System - styled after the ai-assistant project
    ============================================ */
 
 :root {
-  /* ---- Radix Teal 色阶 (品牌色) ---- */
+  /* ---- Radix Teal scale (brand color) ---- */
   --teal-1: 180 50% 99.2%;
   --teal-2: 180 44% 97%;
   --teal-3: 180 43% 93.8%;
@@ -25,7 +25,7 @@ html, body {
   --teal-11: 180 50% 22%;
   --teal-12: 186 100% 7%;
 
-  /* ---- Radix Slate 色阶 (UI 灰色) ---- */
+  /* ---- Radix Slate scale (UI grays) ---- */
   --slate-1: 240 20% 99%;
   --slate-2: 240 17% 97%;
   --slate-3: 240 14% 94.5%;
@@ -39,37 +39,37 @@ html, body {
   --slate-11: 225 6% 40%;
   --slate-12: 210 14% 13%;
 
-  /* ---- Radix Red 色阶 (错误状态) ---- */
+  /* ---- Radix Red scale (error state) ---- */
   --red-9: 358 75% 59%;
   --red-10: 358 69% 55%;
   --red-11: 358 65% 49%;
 
-  /* ---- Radix Green 色阶 (成功状态) ---- */
+  /* ---- Radix Green scale (success state) ---- */
   --green-9: 151 55% 42%;
   --green-10: 152 57% 39%;
   --green-11: 153 67% 28%;
 
-  /* ---- Radix Amber 色阶 (警告状态) ---- */
+  /* ---- Radix Amber scale (warning state) ---- */
   --amber-9: 39 100% 57%;
   --amber-10: 36 100% 50%;
   --amber-11: 24 100% 37%;
 
-  /* ---- Radix Orange 色阶 (运行状态) ---- */
+  /* ---- Radix Orange scale (running state) ---- */
   --orange-9: 24 94% 50%;
   --orange-10: 21 90% 45%;
   --orange-11: 16 80% 35%;
 
-  /* ---- Radix Violet 色阶 (符号: function/method 图标) ---- */
+  /* ---- Radix Violet scale (symbols: function/method icons) ---- */
   --violet-9: 252 56% 57%;
   --violet-10: 251 48% 53%;
   --violet-11: 250 43% 48%;
 
-  /* ---- Radix Blue 色阶 (符号: interface 图标) ---- */
+  /* ---- Radix Blue scale (symbols: interface icons) ---- */
   --blue-9: 206 100% 50%;
   --blue-10: 207 96% 43%;
   --blue-11: 208 88% 43%;
 
-  /* ---- 语义颜色 (shadcn 风格) ---- */
+  /* ---- Semantic colors (shadcn style) ---- */
   --background: 0 0% 98%;
   --foreground: var(--slate-12);
   --card: 0 0% 100%;
@@ -92,11 +92,11 @@ html, body {
   --brand: var(--teal-9);
   --brand-foreground: var(--teal-11);
 
-  /* ---- 圆角 ---- */
+  /* ---- Border radius ---- */
   --radius: 0.5rem;
 }
 
-/* ---- 暗色主题 ---- */
+/* ---- Dark theme ---- */
 .dark {
   /* Radix Teal Dark */
   --teal-1: 183 30% 7%;
@@ -157,7 +157,7 @@ html, body {
   --blue-10: 209 100% 60%;
   --blue-11: 210 100% 72%;
 
-  /* 语义颜色 Dark */
+  /* Semantic colors, dark */
   --background: var(--slate-1);
   --foreground: var(--slate-12);
   --card: 0 0% 12%;
@@ -181,19 +181,19 @@ html, body {
   --brand-foreground: var(--teal-11);
 }
 
-/* ---- Tailwind v4 主题注册 ---- */
+/* ---- Tailwind v4 theme registration ---- */
 @theme inline {
-  /* 字体 */
+  /* Fonts */
   --font-sans: var(--font-inter), "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-serif: var(--font-lora), "PingFang SC", "Microsoft YaHei", serif;
   /*
-   * 等宽字体：优先使用 Maple Mono CN（中英文 2:1 完美对齐）
-   * 安装方式：brew install --cask font-maple-mono-nf-cn
-   * 备选：Sarasa Mono SC (brew install --cask font-sarasa-gothic)
+   * Monospace: prefer Maple Mono CN (perfect 2:1 CJK/Latin alignment)
+   * Install: brew install --cask font-maple-mono-nf-cn
+   * Fallback: Sarasa Mono SC (brew install --cask font-sarasa-gothic)
    */
   --font-mono: "Maple Mono CN", "Maple Mono NF CN", "Sarasa Mono SC", var(--font-jetbrains-mono), "Menlo", "Consolas", monospace;
 
-  /* 颜色 */
+  /* Colors */
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
   --color-card: hsl(var(--card));
@@ -216,7 +216,7 @@ html, body {
   --color-brand: hsl(var(--brand));
   --color-brand-foreground: hsl(var(--brand-foreground));
 
-  /* Teal 色阶 */
+  /* Teal scale */
   --color-teal-1: hsl(var(--teal-1));
   --color-teal-2: hsl(var(--teal-2));
   --color-teal-3: hsl(var(--teal-3));
@@ -230,7 +230,7 @@ html, body {
   --color-teal-11: hsl(var(--teal-11));
   --color-teal-12: hsl(var(--teal-12));
 
-  /* Slate 色阶 */
+  /* Slate scale */
   --color-slate-1: hsl(var(--slate-1));
   --color-slate-2: hsl(var(--slate-2));
   --color-slate-3: hsl(var(--slate-3));
@@ -244,7 +244,7 @@ html, body {
   --color-slate-11: hsl(var(--slate-11));
   --color-slate-12: hsl(var(--slate-12));
 
-  /* 状态色 */
+  /* Status colors */
   --color-red-9: hsl(var(--red-9));
   --color-red-10: hsl(var(--red-10));
   --color-red-11: hsl(var(--red-11));
@@ -264,28 +264,28 @@ html, body {
   --color-blue-10: hsl(var(--blue-10));
   --color-blue-11: hsl(var(--blue-11));
 
-  /* 圆角 */
+  /* Border radius */
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* ---- 基础样式 ---- */
+/* ---- Base styles ---- */
 html {
-  font-size: 14px; /* 基础字体大小调小 */
+  font-size: 14px; /* Reduced base font size */
 }
 
 body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  /* 直接使用 --font-inter 变量（由 Next.js font 在 body 上定义）*/
+  /* Use the --font-inter variable directly (defined on body by Next.js font) */
   font-family: var(--font-inter), "PingFang SC", "Microsoft YaHei", sans-serif;
-  /* 禁用浏览器默认的双指滑动前进后退 */
+  /* Disable the browser's default two-finger swipe back/forward navigation */
   overscroll-behavior-x: none;
 }
 
-/* ---- 滚动条样式 ---- */
+/* ---- Scrollbar styles ---- */
 * {
   scrollbar-width: thin;
   scrollbar-color: hsl(var(--slate-6)) transparent;
@@ -309,7 +309,7 @@ body {
   background-color: hsl(var(--slate-7));
 }
 
-/* 隐藏滚动条的工具类 */
+/* Utility class to hide scrollbars */
 .scrollbar-hide {
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -319,7 +319,7 @@ body {
   display: none;
 }
 
-/* Toast 动画 */
+/* Toast animations */
 @keyframes slideIn {
   from {
     transform: translateY(-100%);
@@ -342,7 +342,7 @@ body {
   }
 }
 
-/* Session 完成通知动画（左下角） */
+/* Session-finished notification animation (bottom-left corner) */
 @keyframes slideInLeft {
   from {
     transform: translateX(-100%);
@@ -354,7 +354,7 @@ body {
   }
 }
 
-/* ---- Confirm Dialog 动画 ---- */
+/* ---- Confirm Dialog animations ---- */
 @keyframes confirmFadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -398,7 +398,7 @@ body {
   animation: line-flash 1.5s ease-in-out;
 }
 
-/* ---- Shiki 代码高亮样式 ---- */
+/* ---- Shiki code-highlighting styles ---- */
 .shiki-wrapper pre {
   margin: 0;
   padding: 1rem;
@@ -407,15 +407,15 @@ body {
 }
 
 .shiki-wrapper code {
-  /* 使用 flexbox 避免换行符文本节点造成的额外间距 */
+  /* Use flexbox to avoid extra spacing from newline text nodes */
   display: flex;
   flex-direction: column;
 }
 
 .shiki-wrapper .line {
-  /* flexbox 子项自动占满一行，不需要 display: block */
+  /* Flexbox children fill the full row on their own; no display: block needed */
   line-height: 1.5;
-  white-space: pre; /* 行内保留空白 */
+  white-space: pre; /* Preserve whitespace within the line */
 }
 
 .shiki-wrapper .line-number {
@@ -435,21 +435,22 @@ body {
   border-right-color: #374151;
 }
 
-/* ---- Prism (react-syntax-highlighter) token 隔离 ----
+/* ---- Prism (react-syntax-highlighter) token isolation ----
  *
- * Prism 的 markdown grammar 把 token 类型直接当 className 使用
- * （e.g. <span class="token table table-header-row">），其中 `table`
- * 与 Tailwind 的 display utility `.table { display: table }` 同名，
- * 会让表格行里每个 token 都被强制成 block-level table 元素，
- * 视觉上变成每个 `|`、每个单元格独占一行。
+ * Prism's markdown grammar uses token types directly as classNames
+ * (e.g. <span class="token table table-header-row">), where `table`
+ * collides with Tailwind's display utility `.table { display: table }`.
+ * That forces every token in a table row into a block-level table
+ * element, so visually each `|` and each cell ends up on its own line.
  *
- * 同名风险的 token 还包括 `code`、`url`、`list`、`title` 等——
- * 这里用一条 selector 把 Prism 高亮里所有 token 的 display 复位成
- * inline，从源头隔绝 Prism 命名空间与 Tailwind utility 命名空间的冲突。
+ * Other collision-prone tokens include `code`, `url`, `list`, `title`,
+ * etc. — this single selector resets the display of every token inside
+ * Prism highlights back to inline, isolating the Prism namespace from
+ * the Tailwind utility namespace at the source.
  *
- * 作用域限制：只命中 react-syntax-highlighter 渲染出的
- * `<code class="language-xxx">` 内部，不影响其他地方的 .table / .code
- * 等 Tailwind 工具类。
+ * Scope: only matches inside the `<code class="language-xxx">` rendered
+ * by react-syntax-highlighter; Tailwind utilities like .table / .code
+ * elsewhere are unaffected.
  */
 code[class*="language-"] .token {
   display: inline;
@@ -680,7 +681,7 @@ code[class*="language-"] .token {
 
 /* Self-drawn tri-state marker (todo / doing / done). Colors come from the
    Radix CSS variables in :root / .dark, so both themes work with no dark:
-   overrides. doing uses --orange-9 (the design system's "运行状态" color, the
+   overrides. doing uses --orange-9 (the design system's running-state color, the
    same one ProjectItem/TabBar use for an active session); done uses the brand
    teal. Both are step-9 colors that pair with white glyphs per Radix. */
 .tiptap-editor ul[data-type='taskList'] li > label.task-marker .task-marker-box {
@@ -836,7 +837,7 @@ mark.chat-search-current { background: rgba(217, 119, 6, 0.6); color: inherit; b
 :root .ansi-bright-black-fg { color: #4b5563; }
 :root .ansi-bright-white-fg { color: #374151; }
 
-/* xterm.js 嵌入气泡样式 */
+/* xterm.js embedded-bubble styles */
 .xterm-renderer .xterm {
   padding: 0;
 }
