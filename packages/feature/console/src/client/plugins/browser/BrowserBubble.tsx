@@ -30,8 +30,25 @@ function getHostFromUrl(url: string): string {
     const urlObj = new URL(url);
     return urlObj.port ? `${urlObj.hostname}:${urlObj.port}` : urlObj.hostname;
   } catch {
-    return url;
+    // Not a URL — treat as a local file path and show its basename
+    return url.split('/').pop() || url;
   }
+}
+
+/** True for http(s) URLs; anything else the bubble treats as a local file path */
+function isHttpUrl(url: string): boolean {
+  const t = url.trim().toLowerCase();
+  return t.startsWith('http://') || t.startsWith('https://');
+}
+
+/**
+ * Local file path → /api/preview URL served by the local server.
+ * Relative paths resolve against the project cwd.
+ */
+function toPreviewUrl(filePath: string, projectCwd?: string): string {
+  let abs = filePath.trim();
+  if (!abs.startsWith('/')) abs = `${(projectCwd ?? '').replace(/\/$/, '')}/${abs}`;
+  return '/api/preview' + abs.split('/').map(encodeURIComponent).join('/');
 }
 
 /** Append _cockpit=1 param to the URL so background webNavigation can track it and the DNR network layer can strip it */
@@ -244,17 +261,28 @@ export function BrowserBubble({
     setIsSleeping(false);
     onWake?.(id);
     // Reload the iframe
+    if (!isHttpUrl(url)) {
+      // Local file path → served by /api/preview, no cookie prep needed
+      setReadyUrl(toPreviewUrl(url, projectCwd));
+      return;
+    }
     const cockpitUrl = addCockpitParam(url);
     if (isLocalUrl(url)) {
       setReadyUrl(cockpitUrl);
     } else {
       prepareCookies(url).then(() => setReadyUrl(cockpitUrl));
     }
-  }, [url, id, onWake]);
+  }, [url, id, onWake, projectCwd]);
 
   // Cookie pre-injection: connect directly to background via externally_connectable, then set iframe src after awaiting
   useEffect(() => {
     if (!url || isSleeping) { if (!url) setReadyUrl(null); return; }
+
+    // Local file path → served by /api/preview, no cookie prep needed
+    if (!isHttpUrl(url)) {
+      setReadyUrl(toPreviewUrl(url, projectCwd));
+      return;
+    }
 
     const cockpitUrl = addCockpitParam(url);
 
@@ -270,7 +298,7 @@ export function BrowserBubble({
     });
 
     return () => { cancelled = true; };
-  }, [url, isSleeping]);
+  }, [url, isSleeping, projectCwd]);
 
   const handleIframeLoad = useCallback(() => setIsLoading(false), []);
 
@@ -379,8 +407,10 @@ export function BrowserBubble({
 
   // Open in a new window
   const handleOpenExternal = useCallback(() => {
-    if (currentUrl) window.open(currentUrl, '_blank');
-  }, [currentUrl]);
+    if (!currentUrl) return;
+    // File paths can't open directly in a browser tab — route through /api/preview
+    window.open(isHttpUrl(currentUrl) ? currentUrl : toPreviewUrl(currentUrl, projectCwd), '_blank');
+  }, [currentUrl, projectCwd]);
 
   // ESC to exit maximize / Cmd+M to toggle maximize
   useEffect(() => {
@@ -621,7 +651,10 @@ export function BrowserBubble({
                   <iframe
                     ref={iframeRef}
                     src={readyUrl}
-                    className="border-0"
+                    // White fallback canvas: mimic a real browser tab so documents
+                    // that paint no background (e.g. local HTML previews) don't show
+                    // the dark bubble background through the transparent iframe canvas
+                    className="border-0 bg-white"
                     allow="clipboard-write; clipboard-read"
                     style={maximized
                       ? { width: '100%', height: '100%' }

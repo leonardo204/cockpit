@@ -37,7 +37,9 @@ registerBubble({
 
   match(input: string) {
     const t = input.trim().toLowerCase();
-    return t.startsWith('http://') || t.startsWith('https://');
+    if (t.startsWith('http://') || t.startsWith('https://')) return true;
+    // Local HTML file path → rendered in the bubble iframe via /api/preview
+    return t.endsWith('.html') || t.endsWith('.htm');
   },
 
   parse(input: string) {
