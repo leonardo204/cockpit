@@ -682,17 +682,17 @@
     "aiReply": "AI 回复",
     "noContent": "（无内容）",
     "linesCount": "({{count}} 行)",
-    "codeRef": "代码引用:",
+    "codeRef": "以下是我标注的评论和引用:",
     "note": "备注: {{content}}",
     "submitting": "提交中...",
     "enterSubmit": "Enter 提交 · Shift+Enter 换行",
+    "submitComment": "提交评论",
     "askAI": "提问 AI",
     "inputQuestion": "输入你的问题...",
     "aiGenerating": "正在生成中，请稍候...",
     "enterSend": "Enter 发送 · Shift+Enter 换行",
-    "sendToAI": "发送到 AI",
-    "aiResponding": "AI 正在响应中...",
-    "question": "问题: {{question}}"
+    "sendToAI": "发送 AI",
+    "aiResponding": "AI 正在响应中..."
   },
   "fileContextMenu": {
     "createFile": "新建文件",

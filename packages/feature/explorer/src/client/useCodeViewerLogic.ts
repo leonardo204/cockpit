@@ -84,8 +84,8 @@ export interface InputCardData {
    *  the SendToAI "exact phrase the user picked" reference. */
   selectedText: string;
   /** Whole-line / source-block expansion of the selection — drives the
-   *  preview block inside AddCommentInput / SendToAIInput, and feeds
-   *  SendToAI's `CodeReference.codeContent` for richer AI context. */
+   *  preview block inside AddCommentInput, and feeds the card's SendToAI
+   *  action's `CodeReference.codeContent` for richer AI context. */
   lineSnapshot: string;
 }
 
@@ -181,7 +181,7 @@ export function useCodeViewerLogic({
   // Comment UI state
   const [viewingComment, setViewingComment] = useState<ViewingCommentData | null>(null);
 
-  // Suppress hover and cmd+click when float layer (toolbar / addComment / sendToAI) is active
+  // Suppress hover and cmd+click when float layer (toolbar / addComment) is active
   const suppressHoverRef = useRef(false);
 
   // Selection logical coordinates: used to restore selection when DOM nodes are replaced after re-render
@@ -634,11 +634,13 @@ export function useCodeViewerLogic({
     setAddCommentInput(null);
   }, [addCommentInput, addComment]);
 
-  // Submit question to AI — `lineSnapshot` is what flows into the
-  // CodeReference so the AI sees full lines of context, not a truncated
-  // mid-line slice.
-  const handleSendToAISubmit = useCallback(async (question: string) => {
-    if (!sendToAIInput || !aiBridge || !cwd) return;
+  // Shared send-to-AI orchestration for both entries (standalone SendToAI
+  // card / comment card button): bundle all historical comments plus the
+  // given selection into one message, send, then clear the comment stack.
+  // `lineSnapshot` is what flows into the CodeReference so the AI sees
+  // full lines of context, not a truncated mid-line slice.
+  const sendSelectionToAI = useCallback(async (selection: InputCardData, question: string) => {
+    if (!aiBridge || !cwd) return;
 
     try {
       const allComments = await fetchAllCommentsWithCode(cwd);
@@ -656,9 +658,9 @@ export function useCodeViewerLogic({
 
       references.push({
         filePath,
-        startLine: sendToAIInput.range.start,
-        endLine: sendToAIInput.range.end,
-        codeContent: sendToAIInput.lineSnapshot,
+        startLine: selection.range.start,
+        endLine: selection.range.end,
+        codeContent: selection.lineSnapshot,
       });
 
       const message = buildAIMessage(references, question);
@@ -666,11 +668,24 @@ export function useCodeViewerLogic({
 
       await clearAllComments(cwd);
       refreshComments();
-      setSendToAIInput(null);
     } catch (err) {
       console.error('Failed to send to AI:', err);
     }
-  }, [sendToAIInput, aiBridge, filePath, cwd, refreshComments]);
+  }, [aiBridge, filePath, cwd, refreshComments]);
+
+  // From the standalone SendToAI card. The card closes itself on submit —
+  // deliberately NO trailing state reset after the async send: a late
+  // set(null) could clobber a card the user opened in the meantime.
+  const handleSendToAISubmit = useCallback((question: string) => {
+    if (!sendToAIInput) return;
+    void sendSelectionToAI(sendToAIInput, question);
+  }, [sendToAIInput, sendSelectionToAI]);
+
+  // From the comment card's "Send to AI" button (card closes itself too).
+  const handleCommentSendToAI = useCallback((question: string) => {
+    if (!addCommentInput) return;
+    void sendSelectionToAI(addCommentInput, question);
+  }, [addCommentInput, sendSelectionToAI]);
 
   // Highlight match in line — splice by plain text position to avoid exponential growth from regex on HTML
   const getHighlightedLineHtml = useCallback((lineIndex: number, html: string, highlightKeyword: string | null | undefined): string => {
@@ -808,6 +823,7 @@ export function useCodeViewerLogic({
     handleToolbarSearch,
     handleCommentSubmit,
     handleSendToAISubmit,
+    handleCommentSendToAI,
     getHighlightedLineHtml,
 
     // Inline blame

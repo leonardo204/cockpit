@@ -85,20 +85,43 @@ function MdPreviewModal({ filePath, content, cwd, onClose }: {
 
 // HTML preview modal — single-file self-contained, rendered in a sandboxed iframe.
 // Mirrors MdPreviewModal's chrome; only the rendered content differs.
-function HtmlPreviewModal({ filePath, content, onClose }: {
-  filePath: string; content: string;
+function HtmlPreviewModal({ filePath, content, cwd, onClose, onContentSearch }: {
+  filePath: string; content: string; cwd?: string;
   onClose: () => void;
+  onContentSearch?: (query: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-0 md:p-4" onClick={onClose}>
       <div className="bg-card shadow-xl w-full h-full rounded-none md:max-w-[90%] md:h-[90vh] md:rounded-lg flex flex-col relative overflow-hidden" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
-          <span className="text-sm text-muted-foreground truncate">{filePath.split('/').pop()}</span>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors">✕</button>
+        <div className="flex items-center justify-between gap-3 px-4 py-2 border-b border-border flex-shrink-0">
+          {/* Full absolute path. `direction: rtl` keeps the tail (file name)
+              visible when the path is too long — the leading LRM mark pins
+              the LTR text run so path segments don't reorder. Hover shows
+              the full path; click copies it. */}
+          <span
+            className="text-sm text-muted-foreground truncate min-w-0 flex-1 cursor-pointer hover:text-foreground transition-colors"
+            style={{ direction: 'rtl', textAlign: 'left' }}
+            title={filePath}
+            onClick={() => {
+              navigator.clipboard.writeText(filePath);
+              toast(t('common.copiedPath'));
+            }}
+          >
+            {'\u200E'}{filePath}
+          </span>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors flex-shrink-0">✕</button>
         </div>
         <div className="flex-1 overflow-hidden">
-          <HtmlPreview content={content} filePath={filePath} />
+          <HtmlPreview
+            content={content}
+            filePath={filePath}
+            cwd={cwd}
+            // Search jumps to the explorer panel — close the modal so the
+            // results aren't hidden underneath it.
+            onContentSearch={onContentSearch ? (query) => { onContentSearch(query); onClose(); } : undefined}
+          />
         </div>
       </div>
     </div>
@@ -115,6 +138,8 @@ interface MessageBubbleProps {
   onApprovePlan?: () => void;
   /** Disable the approve button while a run is streaming (no concurrent send) */
   isLoading?: boolean;
+  /** Selected text → project-wide search (threads into the HTML preview toolbar) */
+  onContentSearch?: (query: string) => void;
 }
 
 // Threshold for collapsing tool calls — any tool call (≥1) renders inside a collapsible header,
@@ -122,7 +147,7 @@ interface MessageBubbleProps {
 const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading, onContentSearch }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
@@ -657,7 +682,9 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
           <HtmlPreviewModal
             filePath={previewFile}
             content={previewContent}
+            cwd={cwd}
             onClose={() => setPreviewFile(null)}
+            onContentSearch={onContentSearch}
           />
         ) : (
           <MdPreviewModal

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
-import { useMenuContainer } from '@cockpit/shared-ui';
+import { useMenuContainer, toast } from '@cockpit/shared-ui';
 import { ToolbarRenderer } from '@cockpit/shared-ui';
 import { AddCommentInput, SendToAIInput } from '@cockpit/shared-ui';
 import { ViewCommentCard } from './index';
@@ -55,7 +55,7 @@ interface InputCardData {
   /** Slice of the raw markdown SOURCE covering the selected
    *  data-source-line range — used by AI references (so the AI sees
    *  the original markdown, not the rendered DOM text) and by the
-   *  preview block inside AddCommentInput / SendToAIInput. */
+   *  preview block inside AddCommentInput. */
   lineSnapshot: string;
 }
 
@@ -211,11 +211,12 @@ export function InteractiveMarkdownPreview({
     setAddCommentInput(null);
   }, [addCommentInput, addComment]);
 
-  // Submit to AI — use the markdown SOURCE snapshot (lineSnapshot)
-  // rather than the rendered selection so the AI sees the original
-  // markdown syntax.
-  const handleSendToAISubmit = useCallback(async (question: string) => {
-    if (!sendToAIInput || !aiBridge) return;
+  // Shared send-to-AI orchestration for both entries (standalone SendToAI
+  // card / comment card button) — uses the markdown SOURCE snapshot
+  // (lineSnapshot) rather than the rendered selection so the AI sees the
+  // original markdown syntax.
+  const sendSelectionToAI = useCallback(async (selection: InputCardData, question: string) => {
+    if (!aiBridge) return;
 
     try {
       const allComments = await fetchAllCommentsWithCode(cwd);
@@ -233,9 +234,9 @@ export function InteractiveMarkdownPreview({
 
       references.push({
         filePath,
-        startLine: sendToAIInput.range.start,
-        endLine: sendToAIInput.range.end,
-        codeContent: sendToAIInput.lineSnapshot,
+        startLine: selection.range.start,
+        endLine: selection.range.end,
+        codeContent: selection.lineSnapshot,
       });
 
       const message = buildAIMessage(references, question);
@@ -243,11 +244,23 @@ export function InteractiveMarkdownPreview({
 
       await clearAllComments(cwd);
       refreshComments();
-      setSendToAIInput(null);
     } catch (err) {
       console.error('Failed to send to AI:', err);
     }
-  }, [sendToAIInput, aiBridge, filePath, cwd, refreshComments]);
+  }, [aiBridge, filePath, cwd, refreshComments]);
+
+  // Both cards close themselves on submit — deliberately NO trailing state
+  // reset after the async send (a late set(null) could clobber a card the
+  // user opened in the meantime).
+  const handleSendToAISubmit = useCallback((question: string) => {
+    if (!sendToAIInput) return;
+    void sendSelectionToAI(sendToAIInput, question);
+  }, [sendToAIInput, sendSelectionToAI]);
+
+  const handleCommentSendToAI = useCallback((question: string) => {
+    if (!addCommentInput) return;
+    void sendSelectionToAI(addCommentInput, question);
+  }, [addCommentInput, sendSelectionToAI]);
 
   // ============================================
   // Existing comment indicator positioning
@@ -346,8 +359,21 @@ export function InteractiveMarkdownPreview({
       {/* Header — hidden in embedded mode (host toolbar owns filePath + ShareReviewToggle
           + the on/off toggle, so an inner header would be redundant). */}
       {!embedded && (
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between flex-shrink-0">
-          <span className="text-sm font-medium text-foreground truncate">{filePath}</span>
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 flex-shrink-0">
+          {/* Full path, tail-preserving truncation (rtl + leading LRM), hover
+              shows the full path, click copies it — same treatment as the
+              HTML preview modal's title bar. */}
+          <span
+            className="text-sm font-medium text-foreground truncate min-w-0 flex-1 cursor-pointer hover:text-brand transition-colors"
+            style={{ direction: 'rtl', textAlign: 'left' }}
+            title={filePath}
+            onClick={() => {
+              navigator.clipboard.writeText(filePath);
+              toast(t('common.copiedPath'));
+            }}
+          >
+            {'\u200E'}{filePath}
+          </span>
           <div className="flex items-center gap-3">
             <ShareReviewToggle content={content} sourceFile={sourceFile} />
             <button
@@ -416,10 +442,13 @@ export function InteractiveMarkdownPreview({
               x={addCommentInput.x}
               y={addCommentInput.y}
               range={addCommentInput.range}
+              filePath={filePath}
               lineSnapshot={addCommentInput.lineSnapshot}
               container={menuContainer}
               onSubmit={handleCommentSubmit}
+              onSendToAI={aiBridge ? handleCommentSendToAI : undefined}
               onClose={() => setAddCommentInput(null)}
+              isChatLoading={aiBridge?.isLoading}
             />
           )}
           {sendToAIInput && (

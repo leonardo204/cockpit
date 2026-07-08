@@ -1322,7 +1322,7 @@ export function BlockViewer({
     refresh: refreshComments,
   } = useComments({ cwd, filePath: focalFile ?? '' });
 
-  // Anchor element for FloatingToolbar / AddCommentInput / SendToAIInput
+  // Anchor element for FloatingToolbar / AddCommentInput
   // / ViewCommentCard. Must be a NON-scrolling box so absolute coords
   // computed from `clientX/Y - container.left` stay valid even after
   // the user scrolls — the inner overflow-auto would invalidate them
@@ -1363,10 +1363,7 @@ export function BlockViewer({
     },
   });
 
-  // Three popover states — at most one is shown at a time, but we
-  // model them independently so opening AddComment doesn't clobber a
-  // half-open SendToAI input mid-typing (the user can still click
-  // outside to dismiss).
+  // Three popover states — at most one is shown at a time.
   const [addCommentInput, setAddCommentInput] = useState<{
     x: number;
     y: number;
@@ -1439,13 +1436,14 @@ export function BlockViewer({
     [addCommentInput, addComment],
   );
 
-  // Send-to-AI bundles every existing comment's code + the current
-  // selection into one prompt, then wipes the comments — this matches
-  // CodeViewer/DiffView's "review session" pattern: jot a bunch of
-  // comments, then "send the whole stack to the AI" as one transaction.
-  const handleSendToAISubmit = useCallback(
-    async (question: string) => {
-      if (!sendToAIInput || !aiBridge || !cwd || !focalFile) return;
+  // Shared send-to-AI orchestration for both entries (standalone SendToAI
+  // card / comment card button): bundles every existing comment's code +
+  // the given selection into one prompt, then wipes the comments — this
+  // matches CodeViewer/DiffView's "review session" pattern: jot a bunch
+  // of comments, then "send the whole stack to the AI" as one transaction.
+  const sendSelectionToAI = useCallback(
+    async (selection: { range: { start: number; end: number }; lineSnapshot: string }, question: string) => {
+      if (!aiBridge || !cwd || !focalFile) return;
       try {
         const allComments = await fetchAllCommentsWithCode(cwd);
         const references: CodeReference[] = allComments.map((c) => ({
@@ -1457,20 +1455,38 @@ export function BlockViewer({
         }));
         references.push({
           filePath: focalFile,
-          startLine: sendToAIInput.range.start,
-          endLine: sendToAIInput.range.end,
-          codeContent: sendToAIInput.lineSnapshot,
+          startLine: selection.range.start,
+          endLine: selection.range.end,
+          codeContent: selection.lineSnapshot,
         });
         const message = buildAIMessage(references, question);
         aiBridge.sendMessage(message);
         await clearAllComments(cwd);
         refreshComments();
-        setSendToAIInput(null);
       } catch (err) {
         console.error('[BlockViewer] send to AI failed:', err);
       }
     },
-    [sendToAIInput, aiBridge, cwd, focalFile, refreshComments],
+    [aiBridge, cwd, focalFile, refreshComments],
+  );
+
+  // Both cards close themselves on submit — deliberately NO trailing state
+  // reset after the async send (a late set(null) could clobber a card the
+  // user opened in the meantime).
+  const handleSendToAISubmit = useCallback(
+    (question: string) => {
+      if (!sendToAIInput) return;
+      void sendSelectionToAI(sendToAIInput, question);
+    },
+    [sendToAIInput, sendSelectionToAI],
+  );
+
+  const handleCommentSendToAI = useCallback(
+    (question: string) => {
+      if (!addCommentInput) return;
+      void sendSelectionToAI(addCommentInput, question);
+    },
+    [addCommentInput, sendSelectionToAI],
   );
 
   const handleCommentBubbleClick = useCallback(
@@ -1952,10 +1968,13 @@ export function BlockViewer({
             x={addCommentInput.x}
             y={addCommentInput.y}
             range={addCommentInput.range}
+            filePath={focalFile ?? undefined}
             lineSnapshot={addCommentInput.lineSnapshot}
             container={reviewAnchor}
             onSubmit={handleCommentSubmit}
+            onSendToAI={aiBridge && focalFile ? handleCommentSendToAI : undefined}
             onClose={() => setAddCommentInput(null)}
+            isChatLoading={aiBridge?.isLoading}
           />
         )}
         {commentsEnabled && sendToAIInput && focalFile && (

@@ -682,17 +682,17 @@
     "aiReply": "AI Reply",
     "noContent": "(no content)",
     "linesCount": "({{count}} lines)",
-    "codeRef": "Code reference:",
+    "codeRef": "Here are my annotated comments and references:",
     "note": "Note: {{content}}",
     "submitting": "Submitting...",
     "enterSubmit": "Enter to submit · Shift+Enter for new line",
+    "submitComment": "Submit Comment",
     "askAI": "Ask AI",
     "inputQuestion": "Enter your question...",
     "aiGenerating": "Generating, please wait...",
     "enterSend": "Enter to send · Shift+Enter for new line",
     "sendToAI": "Send to AI",
-    "aiResponding": "AI is responding...",
-    "question": "Question: {{question}}"
+    "aiResponding": "AI is responding..."
   },
   "fileContextMenu": {
     "createFile": "New File",

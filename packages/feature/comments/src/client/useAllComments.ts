@@ -127,8 +127,10 @@ export async function clearAllComments(cwd: string): Promise<boolean> {
 
 /**
  * Build the message to send to AI
- * @param references All code references (historical comments + current selection)
- * @param question User question
+ * @param references All references (historical comments + current selection —
+ *                   code, AI replies, markdown, ...)
+ * @param question User question — appended verbatim (no prefix); may be
+ *                 empty, in which case the references go out as-is
  */
 /** Virtual filePath prefix used for comments in AI message bubbles */
 export const CHAT_COMMENT_FILE = '__chat__';
@@ -142,7 +144,10 @@ export function buildAIMessage(references: CodeReference[], question: string): s
   if (fileRefs.length > 0) {
     parts.push(`${i18n.t('comments.codeRef')}`, '');
     fileRefs.forEach((ref, index) => {
-      parts.push(`[${index + 1}] ${ref.filePath}:${ref.startLine}-${ref.endLine}`);
+      // Snapshot-anchored references (e.g. HTML preview selections) carry
+      // no line range — omit the meaningless ":0-0".
+      const loc = ref.startLine > 0 || ref.endLine > 0 ? `:${ref.startLine}-${ref.endLine}` : '';
+      parts.push(`[${index + 1}] ${ref.filePath}${loc}`);
       parts.push('```');
       parts.push(ref.codeContent);
       parts.push('```');
@@ -163,7 +168,9 @@ export function buildAIMessage(references: CodeReference[], question: string): s
     parts.push('');
   }
 
-  parts.push(i18n.t('comments.question', { question }));
+  if (question.trim()) {
+    parts.push(question.trim());
+  }
 
-  return parts.join('\n');
+  return parts.join('\n').trim();
 }

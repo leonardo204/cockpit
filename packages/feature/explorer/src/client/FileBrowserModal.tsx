@@ -1760,6 +1760,12 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                           <HtmlPreview
                             content={fileTree.fileContent.content}
                             filePath={fileTree.selectedPath}
+                            cwd={cwd}
+                            onContentSearch={(query) => {
+                              setActiveTab('search');
+                              contentSearch.setContentSearchQuery(query);
+                              contentSearch.performContentSearch(query);
+                            }}
                           />
                         ) : (
                           <CodeViewer

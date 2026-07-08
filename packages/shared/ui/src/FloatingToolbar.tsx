@@ -84,9 +84,9 @@ export interface ToolbarData {
    *  - Code views: `lines.slice(start-1, end).join('\n')`
    *  - Diff views: matching `diffLines[i].content` joined
    *  - Markdown preview: `sourceLines.slice(start-1, end).join('\n')`
-   *  Used by AddCommentInput / SendToAIInput preview cards and by
-   *  SendToAI as `CodeReference.codeContent` (where "full lines" gives AI
-   *  better context than the truncated literal selection). */
+   *  Used by the AddCommentInput preview card and by its SendToAI action
+   *  as `CodeReference.codeContent` (where "full lines" gives AI better
+   *  context than the truncated literal selection). */
   lineSnapshot: string;
 }
 

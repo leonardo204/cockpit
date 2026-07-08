@@ -271,8 +271,11 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
     if (query) onContentSearch(query);
   }, [onContentSearch, clearToolbar, floatingToolbarRef]);
 
-  const handleSendToAISubmit = useCallback(async (question: string) => {
-    if (!sendToAIInput || !aiBridge || !cwd) return;
+  // Shared send-to-AI orchestration for both entries (standalone SendToAI
+  // card / comment card button): all historical comments + the given
+  // selection go out as one message, then the comment stack is cleared.
+  const sendSelectionToAI = useCallback(async (selection: { range: { start: number; end: number }; lineSnapshot: string }, question: string) => {
+    if (!aiBridge || !cwd) return;
 
     try {
       const allComments = await fetchAllCommentsWithCode(cwd);
@@ -290,9 +293,9 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
 
       references.push({
         filePath,
-        startLine: sendToAIInput.range.start,
-        endLine: sendToAIInput.range.end,
-        codeContent: sendToAIInput.lineSnapshot,
+        startLine: selection.range.start,
+        endLine: selection.range.end,
+        codeContent: selection.lineSnapshot,
       });
 
       const message = buildAIMessage(references, question);
@@ -300,11 +303,23 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
 
       await clearAllComments(cwd);
       refreshComments();
-      setSendToAIInput(null);
     } catch (err) {
       console.error('Failed to send to AI:', err);
     }
-  }, [sendToAIInput, aiBridge, filePath, cwd, refreshComments]);
+  }, [aiBridge, filePath, cwd, refreshComments]);
+
+  // Both cards close themselves on submit — deliberately NO trailing state
+  // reset after the async send (a late set(null) could clobber a card the
+  // user opened in the meantime).
+  const handleSendToAISubmit = useCallback((question: string) => {
+    if (!sendToAIInput) return;
+    void sendSelectionToAI(sendToAIInput, question);
+  }, [sendToAIInput, sendSelectionToAI]);
+
+  const handleCommentSendToAI = useCallback((question: string) => {
+    if (!addCommentInput) return;
+    void sendSelectionToAI(addCommentInput, question);
+  }, [addCommentInput, sendSelectionToAI]);
 
   const handleCommentSubmit = useCallback(async (content: string) => {
     if (!addCommentInput) return;
@@ -1002,10 +1017,13 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
               x={addCommentInput.x}
               y={addCommentInput.y}
               range={addCommentInput.range}
+              filePath={filePath}
               lineSnapshot={addCommentInput.lineSnapshot}
               container={menuContainer}
               onSubmit={handleCommentSubmit}
+              onSendToAI={aiBridge ? handleCommentSendToAI : undefined}
               onClose={() => setAddCommentInput(null)}
+              isChatLoading={aiBridge?.isLoading}
             />
           )}
           {sendToAIInput && (

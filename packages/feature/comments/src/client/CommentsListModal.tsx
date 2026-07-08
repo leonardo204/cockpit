@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '@cockpit/shared-i18n';
-import { clearAllComments, emitCommentsChange, fetchAllCommentsWithCode, CHAT_COMMENT_FILE } from '@cockpit/feature-comments';
-import { Portal } from '@cockpit/shared-ui';
+import { clearAllComments, emitCommentsChange, fetchAllCommentsWithCode, buildAIMessage, CHAT_COMMENT_FILE, type CodeReference } from '@cockpit/feature-comments';
+import { Portal, useAIBridge } from '@cockpit/shared-ui';
 import { toast } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadAllProjectComments, deleteComment as deleteCommentEff } from './effect/commentsClient';
@@ -48,7 +48,10 @@ function formatCommentsForCopy(comments: CopyableComment[]): string {
 
   if (fileComments.length > 0) {
     fileComments.forEach((comment, index) => {
-      parts.push(`[${index + 1}] ${comment.filePath}:${comment.startLine}-${comment.endLine}`);
+      // Snapshot-anchored comments (e.g. HTML preview selections) carry
+      // no line range — omit the meaningless ":0-0".
+      const loc = comment.startLine > 0 || comment.endLine > 0 ? `:${comment.startLine}-${comment.endLine}` : '';
+      parts.push(`[${index + 1}] ${comment.filePath}${loc}`);
       parts.push('```');
       parts.push(comment.codeContent);
       parts.push('```');
@@ -73,10 +76,12 @@ function formatCommentsForCopy(comments: CopyableComment[]): string {
 
 export function CommentsListModal({ isOpen, onClose, cwd, onNavigateToComment }: CommentsListModalProps) {
   const { t } = useTranslation();
+  const aiBridge = useAIBridge();
   const [comments, setComments] = useState<CodeComment[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [copyingId, setCopyingId] = useState<string | null>(null); // ID of the comment being copied
   const [copyingAll, setCopyingAll] = useState(false); // Whether copying all comments
+  const [isSendingToAI, setIsSendingToAI] = useState(false); // Whether sending all comments to AI
 
   // Load all comments for the project
   const loadComments = useCallback(async () => {
@@ -160,6 +165,33 @@ export function CommentsListModal({ isOpen, onClose, cwd, onNavigateToComment }:
       console.error('Failed to copy all comments:', err);
     } finally {
       setCopyingAll(false);
+    }
+  };
+
+  // Send all comments to AI — references only, no extra question text
+  // (the comments' own notes ARE the user's words). Mirrors the comment
+  // card's send flow: build message → send → clear all comments → close.
+  const handleSendAllToAI = async () => {
+    if (comments.length === 0 || !aiBridge || aiBridge.isLoading || isSendingToAI) return;
+    setIsSendingToAI(true);
+    try {
+      const commentsWithCode = await fetchAllCommentsWithCode(cwd);
+      const references: CodeReference[] = commentsWithCode.map(c => ({
+        filePath: c.filePath,
+        startLine: c.startLine,
+        endLine: c.endLine,
+        codeContent: c.codeContent,
+        note: c.content || undefined,
+      }));
+      const message = buildAIMessage(references, '');
+      aiBridge.sendMessage(message);
+      await clearAllComments(cwd);
+      setComments([]);
+      onClose();
+    } catch (err) {
+      console.error('Failed to send comments to AI:', err);
+    } finally {
+      setIsSendingToAI(false);
     }
   };
 
@@ -330,19 +362,31 @@ export function CommentsListModal({ isOpen, onClose, cwd, onNavigateToComment }:
           <span className="text-sm text-muted-foreground">
             {t('comments.totalComments', { count: comments.length })}
           </span>
-          <button
-            onClick={async () => {
-              if (comments.length === 0) return;
-              const success = await clearAllComments(cwd);
-              if (success) {
-                setComments([]);
-              }
-            }}
-            disabled={comments.length === 0}
-            className="px-3 py-1.5 text-sm bg-red-9 text-white rounded hover:bg-red-10 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {t('comments.clearAll')}
-          </button>
+          <div className="flex items-center gap-2">
+            {aiBridge && (
+              <button
+                onClick={handleSendAllToAI}
+                disabled={comments.length === 0 || aiBridge.isLoading || isSendingToAI}
+                className="px-3 py-1.5 text-sm bg-brand text-brand-foreground rounded hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={aiBridge.isLoading ? t('comments.aiResponding') : t('comments.sendToAI')}
+              >
+                {isSendingToAI ? t('comments.submitting') : t('comments.sendToAI')}
+              </button>
+            )}
+            <button
+              onClick={async () => {
+                if (comments.length === 0) return;
+                const success = await clearAllComments(cwd);
+                if (success) {
+                  setComments([]);
+                }
+              }}
+              disabled={comments.length === 0}
+              className="px-3 py-1.5 text-sm bg-red-9 text-white rounded hover:bg-red-10 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {t('comments.clearAll')}
+            </button>
+          </div>
         </div>
       </div>
     </div>

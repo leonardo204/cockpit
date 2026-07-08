@@ -200,6 +200,7 @@ export const CodeViewer = forwardRef<FileEditorHandle, CodeViewerProps>(function
     handleToolbarSearch,
     handleCommentSubmit,
     handleSendToAISubmit,
+    handleCommentSendToAI,
     getHighlightedLineHtml,
 
     // Search scroll suppression
@@ -1190,20 +1191,23 @@ export const CodeViewer = forwardRef<FileEditorHandle, CodeViewerProps>(function
             />
           )}
 
-          {/* Add Comment Input */}
+          {/* Add Comment Input (also hosts a Send-to-AI action) */}
           {!editable && addCommentInput && (
             <AddCommentInput
               x={addCommentInput.x}
               y={addCommentInput.y}
               range={addCommentInput.range}
+              filePath={filePath}
               lineSnapshot={addCommentInput.lineSnapshot}
               container={menuContainer}
               onSubmit={handleCommentSubmit}
+              onSendToAI={aiBridge ? handleCommentSendToAI : undefined}
               onClose={() => setAddCommentInput(null)}
+              isChatLoading={aiBridge?.isLoading}
             />
           )}
 
-          {/* Send to AI Input */}
+          {/* Send to AI Input (standalone, from toolbar) */}
           {!editable && sendToAIInput && (
             <SendToAIInput
               x={sendToAIInput.x}

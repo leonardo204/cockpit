@@ -165,9 +165,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     setCommentInput(null);
   }, [commentInput, addComment]);
 
-  // Send to AI submit — reuse fetchAllCommentsWithCode + buildAIMessage + clearAllComments
-  const handleSendAISubmit = useCallback(async (question: string) => {
-    if (!sendAIInput || !chatCtx || !cwd) return;
+  // Shared send-to-AI orchestration for both entries (standalone SendToAI
+  // card / comment card button) — reuse fetchAllCommentsWithCode +
+  // buildAIMessage + clearAllComments.
+  const sendSelectionToAI = useCallback(async (selectedText: string, question: string) => {
+    if (!chatCtx || !cwd) return;
     try {
       const allComments = await fetchAllCommentsWithCode(cwd);
       const references: CodeReference[] = allComments.map(c => ({
@@ -182,17 +184,29 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         filePath: CHAT_COMMENT_FILE,
         startLine: 0,
         endLine: 0,
-        codeContent: sendAIInput.text,
+        codeContent: selectedText,
       });
       const message = buildAIMessage(references, question);
       chatCtx.sendMessage(message);
       await clearAllComments(cwd);
       refreshComments();
-      setSendAIInput(null);
     } catch (err) {
       console.error('Failed to send to AI:', err);
     }
-  }, [sendAIInput, chatCtx, cwd, refreshComments]);
+  }, [chatCtx, cwd, refreshComments]);
+
+  // Both cards close themselves on submit — deliberately NO trailing state
+  // reset after the async send (a late set(null) could clobber a card the
+  // user opened in the meantime).
+  const handleSendAISubmit = useCallback((question: string) => {
+    if (!sendAIInput) return;
+    void sendSelectionToAI(sendAIInput.text, question);
+  }, [sendAIInput, sendSelectionToAI]);
+
+  const handleCommentSendToAI = useCallback((question: string) => {
+    if (!commentInput) return;
+    void sendSelectionToAI(commentInput.text, question);
+  }, [commentInput, sendSelectionToAI]);
 
   // Deduplicate messages (prevent duplicate key warnings)
   const uniqueMessages = useMemo(() => {
@@ -418,6 +432,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   onFork={onFork}
                   onApprovePlan={onApprovePlan}
                   isLoading={isLoading}
+                  onContentSearch={onContentSearch}
                 />
               </div>
             ))}
@@ -505,7 +520,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         />
       )}
 
-      {/* Add comment card */}
+      {/* Add comment card (also hosts a Send-to-AI action) */}
       {commentInput && outerEl && (
         <AddCommentInput
           x={commentInput.x}
@@ -514,11 +529,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           lineSnapshot={commentInput.text}
           container={outerEl}
           onSubmit={handleCommentSubmit}
+          onSendToAI={chatCtx ? handleCommentSendToAI : undefined}
           onClose={() => setCommentInput(null)}
+          isChatLoading={chatCtx?.isLoading}
         />
       )}
 
-      {/* Send to AI card */}
+      {/* Send to AI card (standalone, from toolbar) */}
       {sendAIInput && outerEl && (
         <SendToAIInput
           x={sendAIInput.x}
