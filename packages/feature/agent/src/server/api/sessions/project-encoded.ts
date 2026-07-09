@@ -5,6 +5,7 @@ import { Effect } from 'effect';
 import { CLAUDE_PROJECTS_DIR, CLAUDE2_PROJECTS_DIR, COCKPIT_DIR, COCKPIT_PROJECTS_DIR, findCodexSessionPath, findKimiSessionPath } from '@cockpit/shared-utils';
 import { dynamicHandler } from '@cockpit/effect-runtime/server';
 import { AppError, ValidationError } from '@cockpit/effect-core';
+import { generateTitle } from '../../sessionTitle';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,6 +29,7 @@ interface SessionInfo {
 interface TranscriptLine {
   type?: string;
   summary?: string;
+  aiTitle?: string;
   isMeta?: boolean;
   message?: {
     role?: string;
@@ -39,57 +41,6 @@ interface TranscriptLine {
 function truncateMessage(msg: string, maxLength: number = 50): string {
   if (msg.length <= maxLength) return msg;
   return msg.slice(0, maxLength) + '...';
-}
-
-// Filter command tags and extract plain text content
-function filterCommandTags(text: string): string {
-  // Extract the content of <command-args> (the user's actual input)
-  const argsMatch = text.match(/<command-args>([^<]*)<\/command-args>/);
-  if (argsMatch && argsMatch[1].trim()) {
-    return argsMatch[1].trim();
-  }
-  // If there are no args or args is empty, extract the command name (e.g. /qa)
-  const nameMatch = text.match(/<command-name>([^<]*)<\/command-name>/);
-  if (nameMatch && nameMatch[1].trim()) {
-    return nameMatch[1].trim();
-  }
-  // Remove all command and system tags
-  let filtered = text.replace(/<command-message>[^<]*<\/command-message>/g, '');
-  filtered = filtered.replace(/<command-name>[^<]*<\/command-name>/g, '');
-  filtered = filtered.replace(/<command-args>[^<]*<\/command-args>/g, '');
-  filtered = filtered.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
-  filtered = filtered.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '');
-  // Remove extra whitespace
-  return filtered.trim();
-}
-
-// Generate a title: prefer summary; otherwise iterate userMessages for the first valid content
-// If the first entry is a bare command (e.g. /qa), append the next valid content
-function generateTitle(summary: string, userMessages: string[]): string {
-  if (summary) return summary;
-
-  let commandName = '';
-  for (const msg of userMessages) {
-    const filtered = filterCommandTags(msg);
-    if (!filtered) continue;
-
-    // If it is a bare command (starts with /), record it and keep looking
-    if (filtered.startsWith('/') && !commandName) {
-      commandName = filtered;
-      continue;
-    }
-
-    // Found actual content (no truncation, preserve full content)
-    if (commandName) {
-      // Append command name and actual content
-      return `${commandName} ${filtered}`;
-    }
-    return filtered;
-  }
-
-  // If there is only a command with no subsequent content
-  if (commandName) return commandName;
-  return 'Untitled Session';
 }
 
 // Build the untruncated, lowercased search corpus: the display title (summary
@@ -123,23 +74,28 @@ function extractUserMessageContent(line: TranscriptLine): string | null {
 }
 
 // Parse a single session file
-async function parseSessionFile(filePath: string): Promise<{ title: string; userMessages: string[] }> {
+async function parseSessionFile(filePath: string): Promise<{ aiTitle: string; summary: string; userMessages: string[] }> {
   const fileStream = fs.createReadStream(filePath);
   const rl = readline.createInterface({
     input: fileStream,
     crlfDelay: Infinity,
   });
 
-  let title = '';
+  let aiTitle = '';
+  let summary = '';
   const userMessages: string[] = [];
 
   for await (const line of rl) {
     try {
       const obj = JSON.parse(line) as TranscriptLine;
 
-      // Extract title (summary)
+      // Extract aiTitle (cockpit/SDK runtime; stable single value, last wins)
+      if (obj.type === 'ai-title' && obj.aiTitle) {
+        aiTitle = obj.aiTitle;
+      }
+      // Extract summary (standard Claude Code CLI)
       if (obj.type === 'summary' && obj.summary) {
-        title = obj.summary;
+        summary = obj.summary;
       }
 
       // Extract user messages
@@ -152,7 +108,7 @@ async function parseSessionFile(filePath: string): Promise<{ title: string; user
     }
   }
 
-  return { title, userMessages };
+  return { aiTitle, summary, userMessages };
 }
 
 // Get the file modification time
@@ -310,7 +266,7 @@ async function loadSessions(encodedPath: string) {
     // Parse Claude/Ollama session files (both use Claude-style transcript format)
     for (const sessionFile of sessionFiles) {
       try {
-        const { title, userMessages } = await parseSessionFile(sessionFile.path);
+        const { aiTitle, summary, userMessages } = await parseSessionFile(sessionFile.path);
 
         // Filter out empty sessions with no user messages (only queue-operation)
         if (userMessages.length === 0) {
@@ -329,7 +285,7 @@ async function loadSessions(encodedPath: string) {
           lastMessages = userMessages.slice(-5).map(m => truncateMessage(m));
         }
 
-        const displayTitle = generateTitle(title, userMessages);
+        const displayTitle = generateTitle(aiTitle, summary, userMessages);
         sessions.push({
           path: sessionFile.path,
           title: displayTitle,
@@ -383,7 +339,7 @@ async function loadSessions(encodedPath: string) {
           lastMessages = userMessages.slice(-5).map(m => truncateMessage(m));
         }
 
-        const displayTitle = generateTitle('', userMessages);
+        const displayTitle = generateTitle('', '', userMessages);
         sessions.push({
           path: filePath,
           title: displayTitle,

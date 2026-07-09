@@ -9,6 +9,7 @@ import {
   NotFoundError,
   ValidationError,
 } from '@cockpit/effect-core';
+import { generateTitle } from '../sessionTitle';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -409,57 +410,6 @@ function resolveSessionPath(
   return null;
 }
 
-// Filter command tags and extract meaningful content
-function filterCommandTags(text: string): string {
-  // First try to extract command-args
-  const argsMatch = text.match(/<command-args>([^<]*)<\/command-args>/);
-  if (argsMatch && argsMatch[1].trim()) {
-    return argsMatch[1].trim();
-  }
-  // If no args, try to extract command-name
-  const nameMatch = text.match(/<command-name>([^<]*)<\/command-name>/);
-  if (nameMatch && nameMatch[1].trim()) {
-    return nameMatch[1].trim();
-  }
-  // Filter all command tags
-  let filtered = text.replace(/<command-message>[^<]*<\/command-message>/g, '');
-  filtered = filtered.replace(/<command-name>[^<]*<\/command-name>/g, '');
-  filtered = filtered.replace(/<command-args>[^<]*<\/command-args>/g, '');
-  filtered = filtered.replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '');
-  filtered = filtered.replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '');
-  return filtered.trim();
-}
-
-// Generate a title (no truncation, preserve full content)
-function generateTitle(summary: string, userMessages: string[]): string {
-  if (summary) return summary;
-
-  let commandName = '';
-  for (const msg of userMessages) {
-    const filtered = filterCommandTags(msg);
-    if (!filtered) continue;
-
-    // If it's a command (starts with /), save the command name and continue to the next message
-    if (filtered.startsWith('/') && !commandName) {
-      commandName = filtered;
-      continue;
-    }
-
-    // If a command name was saved before, combine them
-    if (commandName) {
-      return `${commandName} ${filtered}`;
-    }
-
-    // Regular message used directly as the title
-    return filtered;
-  }
-
-  // If there is only a command name with no subsequent messages, show the command name
-  if (commandName) return commandName;
-
-  return 'Untitled Session';
-}
-
 async function parseTranscriptFile(
   filePath: string,
   limit?: number,
@@ -472,13 +422,14 @@ async function parseTranscriptFile(
   });
 
   const rawMessages: TranscriptMessage[] = [];
+  let aiTitle = '';
   let summary = '';
   const userTextMessages: string[] = [];
   let lastUsage: TokenUsage | undefined;
 
   for await (const line of rl) {
     try {
-      const obj = JSON.parse(line) as TranscriptMessage & { summary?: string; isMeta?: boolean };
+      const obj = JSON.parse(line) as TranscriptMessage & { summary?: string; aiTitle?: string; isMeta?: boolean };
       if (obj.type === 'user' || obj.type === 'assistant') {
         // Deduplicate: skip user messages with identical content within 1s of the previous one
         // (SDK resume + prompt may write duplicate user entries)
@@ -521,6 +472,10 @@ async function parseTranscriptFile(
           }
         }
       }
+      // Collect the aiTitle line (cockpit/SDK runtime; stable single value, last wins)
+      if (obj.type === 'ai-title' && obj.aiTitle) {
+        aiTitle = obj.aiTitle;
+      }
       // Collect summary
       if (obj.type === 'summary' && obj.summary) {
         summary = obj.summary;
@@ -532,7 +487,7 @@ async function parseTranscriptFile(
 
   // Convert message format (full set)
   const allMessages = convertToChatMessages(rawMessages);
-  const title = generateTitle(summary, userTextMessages);
+  const title = generateTitle(aiTitle, summary, userTextMessages);
 
   // Count turns: one turn = one user message + the corresponding assistant message
   // Simplified here: each user message starts a new turn

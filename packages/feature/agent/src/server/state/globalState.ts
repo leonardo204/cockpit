@@ -13,6 +13,7 @@ import { createReadStream, existsSync } from 'fs';
 import { createInterface } from 'readline';
 import { basename } from 'path';
 import { sendPushNotification } from '../push/push';
+import { generateTitle } from '../sessionTitle';
 
 export type SessionStatus = 'normal' | 'loading' | 'unread';
 
@@ -227,8 +228,9 @@ export interface SessionPreview {
   searchText: string;
 }
 
-/** Session content read in a single pass: the summary line + all user messages. */
+/** Session content read in a single pass: aiTitle + summary line + all user messages. */
 interface SessionContent {
+  aiTitle: string;
   summary: string;
   messages: string[];
 }
@@ -250,15 +252,15 @@ async function getSessionContent(cwd: string, sessionId: string): Promise<Sessio
 
   const codexPath = findCodexSessionPath(sessionId);
   if (codexPath && existsSync(codexPath)) {
-    return { summary: '', messages: await getCodexUserMessages(codexPath) };
+    return { aiTitle: '', summary: '', messages: await getCodexUserMessages(codexPath) };
   }
 
   const kimiPath = findKimiSessionPath(sessionId);
   if (kimiPath && existsSync(kimiPath)) {
-    return { summary: '', messages: await getKimiUserMessages(kimiPath) };
+    return { aiTitle: '', summary: '', messages: await getKimiUserMessages(kimiPath) };
   }
 
-  return { summary: '', messages: [] };
+  return { aiTitle: '', summary: '', messages: [] };
 }
 
 /**
@@ -268,8 +270,8 @@ async function getSessionContent(cwd: string, sessionId: string): Promise<Sessio
  * MAX_TEXT_LEN), and an untruncated `searchText` corpus for the search panel.
  */
 export async function getSessionPreview(cwd: string, sessionId: string): Promise<SessionPreview> {
-  const { summary, messages } = await getSessionContent(cwd, sessionId);
-  const title = generateTitle(summary, messages);
+  const { aiTitle, summary, messages } = await getSessionContent(cwd, sessionId);
+  const title = generateTitle(aiTitle, summary, messages);
   const lastUserMessage = messages[messages.length - 1];
   // Untruncated, unsampled corpus — keeps long messages and mid-conversation
   // messages searchable even though the display fields below drop them.
@@ -366,6 +368,7 @@ async function getClaudeStyleTitle(filePath: string): Promise<string> {
     const fileStream = createReadStream(filePath);
     const rl = createInterface({ input: fileStream, crlfDelay: Infinity });
 
+    let aiTitle = '';
     let summary = '';
     const userMessages: string[] = [];
 
@@ -373,6 +376,9 @@ async function getClaudeStyleTitle(filePath: string): Promise<string> {
       if (!line.trim()) continue;
       try {
         const entry = JSON.parse(line);
+        if (entry.type === 'ai-title' && entry.aiTitle) {
+          aiTitle = entry.aiTitle;
+        }
         if (entry.type === 'summary' && entry.summary) {
           summary = entry.summary;
         }
@@ -392,7 +398,7 @@ async function getClaudeStyleTitle(filePath: string): Promise<string> {
       }
     }
 
-    return generateTitle(summary, userMessages);
+    return generateTitle(aiTitle, summary, userMessages);
   } catch {
     return 'Untitled Session';
   }
@@ -446,6 +452,7 @@ async function getClaudeStyleUserMessages(filePath: string): Promise<string[]> {
  * getSessionPreview build title + preview + search corpus from one file read.
  */
 async function getClaudeStyleContent(filePath: string): Promise<SessionContent> {
+  let aiTitle = '';
   let summary = '';
   const messages: string[] = [];
   try {
@@ -456,6 +463,10 @@ async function getClaudeStyleContent(filePath: string): Promise<SessionContent> 
       if (!line.trim()) continue;
       try {
         const entry = JSON.parse(line);
+        if (entry.type === 'ai-title' && entry.aiTitle) {
+          aiTitle = entry.aiTitle;
+          continue;
+        }
         if (entry.type === 'summary' && entry.summary) {
           summary = entry.summary;
           continue;
@@ -489,7 +500,7 @@ async function getClaudeStyleContent(filePath: string): Promise<SessionContent> 
   } catch {
     // ignore
   }
-  return { summary, messages };
+  return { aiTitle, summary, messages };
 }
 
 async function getCodexUserMessages(filePath: string): Promise<string[]> {
@@ -657,34 +668,3 @@ async function getKimiTitle(filePath: string): Promise<string | undefined> {
   }
 }
 
-/**
- * Generate a session title.
- */
-function generateTitle(summary: string, userMessages: string[]): string {
-  if (summary) return summary;
-
-  let commandName = '';
-  for (const msg of userMessages) {
-    const filtered = filterCommandTags(msg);
-    if (!filtered) continue;
-
-    // If this is a command (starts with /), save the name and look for the next message
-    if (filtered.startsWith('/') && !commandName) {
-      commandName = filtered;
-      continue;
-    }
-
-    // If a command name was already found, combine them
-    if (commandName) {
-      return `${commandName} ${filtered}`;
-    }
-
-    // Use a plain message directly as the title
-    return filtered;
-  }
-
-  // If only a command name was found with no follow-up message, use it as the title
-  if (commandName) return commandName;
-
-  return 'Untitled Session';
-}
