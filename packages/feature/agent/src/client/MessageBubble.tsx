@@ -7,6 +7,7 @@ import { ToolCallModal } from './ToolCallModal';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
 import { DiffViewerModal } from './DiffViewerModal';
 import type { ChatMessage, MessageImage } from './types';
+import { isMutatingToolName } from '../shared/toolMutation';
 // Tech debt: cross-package imports into the main shell.
 //   - InteractiveMarkdownPreview, FileContextMenu: chat-adjacent code that
 //     hasn't migrated yet.
@@ -162,9 +163,12 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   const shouldCollapseToolCalls = toolCallsCount > TOOL_CALLS_COLLAPSE_THRESHOLD;
   const canFork = !!sessionId && !!cwd && !!onFork;
 
-  // Whether there are Edit/Write tool calls
+  // Whether this message contains tool calls that may have touched files.
+  // Shares the READ_ONLY deny-list with the server-side snapshot hook (single
+  // source of truth) — Task subagents, MCP tools and Bash all snapshot server-
+  // side, so they all get the diff entry here too.
   const hasFileChanges = useMemo(() => {
-    return message.toolCalls?.some(tc => tc.name === 'Edit' || tc.name === 'Write') || false;
+    return message.toolCalls?.some(tc => isMutatingToolName(tc.name)) || false;
   }, [message.toolCalls]);
 
   // Last TodoWrite call

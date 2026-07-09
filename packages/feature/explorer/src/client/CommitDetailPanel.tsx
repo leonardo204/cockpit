@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DiffView } from '@cockpit/feature-explorer';
+import { DiffDensityToggle } from './DiffDensityToggle';
 import { GitFileTree, buildGitFileTree, collectGitTreeDirPaths, type GitFileNode } from './GitFileTree';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { fetchCommitDiff } from './effect/gitClient';
@@ -76,6 +77,8 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isLoadingDiff, setIsLoadingDiff] = useState(false);
   const [jsonPreview, setJsonPreview] = useState<{ content: string; filePath: string } | null>(null);
+  // 精简/全文 — pane-local, defaults to compact (same as StatusDiffPane).
+  const [density, setDensity] = useState<'compact' | 'full'>('compact');
   const commitPreRef = useRef<HTMLPreElement>(null);
   const commitJsonSearch = useJsonSearch(commitPreRef);
 
@@ -229,6 +232,7 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
             <span className="text-slate-9">{t('commitDetail.files')}</span>
             <span>{t('commitDetail.nChanges', { count: files.length })}</span>
           </div>
+          <DiffDensityToggle value={density} onChange={setDensity} className="ml-auto" />
         </div>
       </div>
 
@@ -266,6 +270,7 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
               isDeleted={fileDiff.isDeleted}
               cwd={cwd}
               enableComments={true}
+              compact={density === 'compact'}
               onPreview={
                 !fileDiff.isDeleted && fileDiff.filePath.endsWith('.json')
                   ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })

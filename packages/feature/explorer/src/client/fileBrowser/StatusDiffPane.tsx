@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 
 import { DiffView } from '@cockpit/feature-explorer';
+import { DiffDensityToggle } from '../DiffDensityToggle';
 import { InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
 import { isMarkdownFile, formatAsHumanReadable } from '../toolCallUtils';
 import { type useJsonSearch, JsonSearchBar } from '@cockpit/shared-ui';
@@ -326,24 +327,7 @@ export function StatusDiffPane({
                 "compact-by-design" so a duplicate toggle would just
                 confuse. */}
             {!isImage && diffViewerMode === 'file' && (
-              <div className="flex items-center gap-0.5 rounded border border-border overflow-hidden">
-                {(['compact', 'full'] as const).map((density) => (
-                  <button
-                    key={density}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFileDensity(density);
-                    }}
-                    className={`px-2 py-0.5 text-xs transition-colors ${
-                      fileDensity === density
-                        ? 'bg-brand text-white'
-                        : 'text-muted-foreground hover:bg-accent'
-                    }`}
-                  >
-                    {t(density === 'compact' ? 'diffViewer.compact' : 'diffViewer.full')}
-                  </button>
-                ))}
-              </div>
+              <DiffDensityToggle value={fileDensity} onChange={setFileDensity} />
             )}
             {!isImage && (
               <div className="flex items-center gap-0.5 rounded border border-border overflow-hidden">

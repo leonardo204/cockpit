@@ -23,6 +23,7 @@ import {
 import {
   SchedulerLive,
   AgentServiceLive,
+  SnapshotServiceLive,
 } from "@cockpit/feature-agent/effect"
 
 const isDev = process.env.COCKPIT_ENV === "dev"
@@ -47,7 +48,9 @@ export const AppLayer = Layer.mergeAll(
   // Scheduler
   SchedulerLive,
   // Agent
-  AgentServiceLive
+  AgentServiceLive,
+  // Tool-call snapshots (shadow git)
+  SnapshotServiceLive
 )
 
 export type AppContext = Layer.Layer.Success<typeof AppLayer>

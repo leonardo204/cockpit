@@ -1,5 +1,6 @@
 import { updateGlobalState, getSessionTitle } from '../state/globalState';
 import { startRun, appendRun, rekeyRun, markRunIdle, isRunActive, setRunAbort } from '../sessionRunHub';
+import { snapshotOnRunStart, snapshotOnRunEvent } from '../snapshot/hook';
 import { resolveCommandPrompt } from '../lib/slashCommands';
 import { randomUUID } from 'crypto';
 import type { DispatchParams, DispatchOutcome, RunCtx, RunEvent, EngineSpec } from './types';
@@ -74,6 +75,9 @@ export async function dispatchChat(
   if (cwd && sessionId) {
     updateGlobalState(cwd, sessionId, 'loading', undefined, promptText).catch(() => {});
   }
+  // Tool-call snapshots: baseline commit of any pending external changes so the
+  // first tool commit of this run diffs against the true pre-run state.
+  snapshotOnRunStart(cwd || '', currentKey, spec.name);
 
   const ctx: RunCtx = {
     prompt: promptText,
@@ -85,6 +89,9 @@ export async function dispatchChat(
     emit(event: RunEvent) {
       if (isClosed) return;
       appendRun(currentKey, event);
+      // Tool-call snapshots: observe every engine's tool_use/tool_result here —
+      // the single choke point all providers flow through. Fire-and-forget.
+      snapshotOnRunEvent(cwd || '', currentKey, spec.name, event);
     },
     rekey(realSessionId: string) {
       if (!realSessionId) return;

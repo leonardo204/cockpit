@@ -964,7 +964,14 @@
       "more": "··· 更多 +{{count}} ···",
       "expandUp": "向上展开 {{count}} 行",
       "expandDown": "向下展开 {{count}} 行"
-    }
+    },
+    "loadingSnapshots": "正在加载快照…",
+    "noChanges": "本轮未检测到文件变更",
+    "notViewable": "二进制或超大文件，无法展示 diff",
+    "externalChange": "同期其他会话/外部进程的变更",
+    "reconstructed": "参数重建",
+    "reconstructedHint": "由工具调用参数重建，非磁盘快照",
+    "truncated": "文件过多，仅显示部分"
   },
   "commitDetail": {
     "title": "提交详情",

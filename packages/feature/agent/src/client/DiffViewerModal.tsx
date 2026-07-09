@@ -1,37 +1,66 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Effect } from 'effect';
+import { useEffectQuery } from '@cockpit/effect-react';
 import { Portal } from '@cockpit/shared-ui';
-import { X, ChevronRight, ChevronDown, FileText, PanelLeft } from 'lucide-react';
-// Tech debt: DiffView is a generic diff renderer used by both file-browser
-// and chat domains. Allowed by MODULES.md as transitional reverse import.
-// Clean up: extract DiffView to packages/shared/ui/ when we want a formal
-// cross-domain diff component.
-import { DiffView, DiffUnifiedView } from '@cockpit/feature-explorer';
+import { X, PanelLeft, Wrench } from 'lucide-react';
+// Tech debt: DiffView / GitFileTree are generic renderers used by both
+// file-browser and chat domains. Allowed by MODULES.md as transitional
+// reverse import (agent → explorer is a declared supporting subdomain).
+import {
+  DiffView,
+  DiffDensityToggle,
+  GitFileTree,
+  buildGitFileTree,
+  collectGitTreeDirPaths,
+  type GitFileNode,
+} from '@cockpit/feature-explorer';
+import { loadSnapshotDiffsForToolIds, type SnapshotDiffDto } from './effect/snapshotClient';
 import type { ToolCallInfo } from './types';
 
-// Migrated from src/components/project/DiffViewerModal.tsx.
+// Layout mirrors the Explorer "History" tab: a commit list on the left
+// (one entry per tool call = one shadow-git snapshot commit), and a
+// CommitDetailPanel-style right side (meta bar + GitFileTree + DiffView).
+//
+// Data source: shadow-git tool-call snapshots (/api/snapshots) — the REAL
+// on-disk diff of each tool call, covering Bash & co. When no snapshot
+// exists for the message (feature freshly enabled / history beyond
+// retention), falls back to reconstructing pseudo-calls from Edit/Write
+// tool parameters so the layout stays identical.
 
 // ============================================
 // Types
 // ============================================
 
-interface FileChange {
-  filePath: string;
-  /** Unique identifier to distinguish multiple changes to the same file */
-  uid: string;
-  type: 'edit' | 'write';
+interface CallFile {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  additions?: number;
+  deletions?: number;
   old_string: string;
   new_string: string;
+  /** Binary or over-cap file — contents not viewable. */
+  unviewable?: boolean;
+  /** Changed in the same commit but NOT declared by the tool — likely another
+   *  concurrent session / external process (best-effort attribution). */
+  external?: boolean;
 }
 
-interface TreeNode {
-  name: string;
-  fullPath: string;
-  isFile: boolean;
-  children: TreeNode[];
-  change?: FileChange;
+/** One tool call = one snapshot commit (or one legacy pseudo-call). */
+interface CallEntry {
+  key: string;
+  shortHash?: string;
+  toolName: string;
+  subject: string;
+  /** Unix epoch seconds; absent for legacy pseudo-calls. */
+  timestamp?: number;
+  files: CallFile[];
+  /** Reconstructed from tool parameters (fallback) — NOT a disk snapshot. */
+  legacy?: boolean;
+  /** Server capped the file list for this commit. */
+  truncated?: boolean;
 }
 
 interface DiffViewerModalProps {
@@ -41,8 +70,35 @@ interface DiffViewerModalProps {
 }
 
 // ============================================
-// Extract Edit/Write changes from toolCalls
+// Data adapters
 // ============================================
+
+/** Snapshot commits → call entries (one per commit, files carry real diffs). */
+function callsFromSnapshots(diffs: SnapshotDiffDto[]): CallEntry[] {
+  return diffs.map((d) => {
+    const declared = new Set(d.commit.toolFiles);
+    return {
+      key: d.commit.hash,
+      shortHash: d.commit.hash.slice(0, 7),
+      toolName: d.commit.toolName ?? 'tool',
+      subject: d.commit.subject,
+      timestamp: d.commit.timestamp,
+      truncated: d.truncated === true,
+      files: d.files.map((f) => ({
+        path: f.path,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        old_string: f.oldContent ?? '',
+        new_string: f.newContent ?? '',
+        unviewable: f.binary || (f.oldContent === null && f.newContent === null),
+        // Attribution is best-effort: only meaningful when the tool declared
+        // target files (Edit/Write); Bash declares nothing → no marking.
+        external: declared.size > 0 && !declared.has(f.path),
+      })),
+    };
+  });
+}
 
 function toRelativePath(filePath: string, cwd?: string): string {
   if (cwd && filePath.startsWith(cwd)) {
@@ -52,154 +108,49 @@ function toRelativePath(filePath: string, cwd?: string): string {
   return filePath;
 }
 
-function extractFileChanges(toolCalls: ToolCallInfo[], cwd?: string): FileChange[] {
-  const changes: FileChange[] = [];
-  let idx = 0;
-
+/** Legacy fallback: one pseudo-call per Edit/Write, diff rebuilt from params. */
+function callsFromToolParams(toolCalls: ToolCallInfo[], cwd?: string): CallEntry[] {
+  const calls: CallEntry[] = [];
   for (const tc of toolCalls) {
     if (tc.name === 'Edit') {
       const input = tc.input as { file_path?: string; old_string?: string; new_string?: string };
       if (input.file_path && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
-        changes.push({
-          filePath: toRelativePath(input.file_path, cwd),
-          uid: `change-${idx++}`,
-          type: 'edit',
-          old_string: input.old_string,
-          new_string: input.new_string,
+        const path = toRelativePath(input.file_path, cwd);
+        calls.push({
+          key: `local-${tc.id}-${calls.length}`,
+          toolName: 'Edit',
+          subject: `[Edit] ${path}`,
+          legacy: true,
+          files: [{ path, status: 'modified', old_string: input.old_string, new_string: input.new_string }],
         });
       }
     } else if (tc.name === 'Write') {
       const input = tc.input as { file_path?: string; content?: string };
       if (input.file_path && typeof input.content === 'string') {
-        changes.push({
-          filePath: toRelativePath(input.file_path, cwd),
-          uid: `change-${idx++}`,
-          type: 'write',
-          old_string: '',
-          new_string: input.content,
+        const path = toRelativePath(input.file_path, cwd);
+        calls.push({
+          key: `local-${tc.id}-${calls.length}`,
+          toolName: 'Write',
+          subject: `[Write] ${path}`,
+          legacy: true,
+          files: [{ path, status: 'added', old_string: '', new_string: input.content }],
         });
       }
     }
   }
-
-  return changes;
+  return calls;
 }
 
-// ============================================
-// Build directory tree
-// ============================================
-
-function buildTree(changes: FileChange[]): TreeNode[] {
-  const root: TreeNode[] = [];
-
-  for (const change of changes) {
-    const parts = change.filePath.split('/').filter(Boolean);
-    let current = root;
-
-    for (let i = 0; i < parts.length; i++) {
-      const name = parts[i];
-      const isFile = i === parts.length - 1;
-      const fullPath = parts.slice(0, i + 1).join('/');
-
-      if (isFile) {
-        // File nodes are not deduplicated; create a new node for each change
-        const node: TreeNode = { name, fullPath, isFile: true, children: [], change };
-        current.push(node);
-      } else {
-        // Reuse directory nodes
-        let node = current.find(n => n.name === name && !n.isFile);
-        if (!node) {
-          node = { name, fullPath, isFile: false, children: [] };
-          current.push(node);
-        }
-        current = node.children;
-      }
-    }
-  }
-
-  return root;
-}
-
-// Find common prefix depth, skip levels with only a single subdirectory
-function collapseTree(nodes: TreeNode[]): TreeNode[] {
-  return nodes.map(node => {
-    if (!node.isFile && node.children.length === 1 && !node.children[0].isFile) {
-      // Merge single-child directory
-      const child = node.children[0];
-      const merged: TreeNode = {
-        ...child,
-        name: node.name + '/' + child.name,
-        children: collapseTree(child.children),
-      };
-      return merged;
-    }
-    return { ...node, children: collapseTree(node.children) };
-  });
-}
-
-// ============================================
-// Directory tree node component
-// ============================================
-
-function TreeNodeItem({
-  node,
-  selectedUid,
-  onSelect,
-  depth = 0,
-}: {
-  node: TreeNode;
-  selectedUid: string;
-  onSelect: (change: FileChange) => void;
-  depth?: number;
-}) {
-  const [expanded, setExpanded] = useState(true);
-
-  if (node.isFile && node.change) {
-    const isSelected = selectedUid === node.change.uid;
-    return (
-      <button
-        onClick={() => onSelect(node.change!)}
-        className={`w-full flex items-center gap-1.5 px-2 py-1 text-xs text-left rounded transition-colors ${
-          isSelected
-            ? 'bg-brand/15 text-brand'
-            : 'text-foreground hover:bg-accent'
-        }`}
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
-        data-tooltip={node.fullPath}
-      >
-        <FileText className="w-3.5 h-3.5 flex-shrink-0 opacity-60" />
-        <span className="truncate">{node.name}</span>
-        <span className={`ml-auto text-[10px] flex-shrink-0 ${
-          node.change.type === 'write' ? 'text-green-500' : 'text-yellow-500'
-        }`}>
-          {node.change.type === 'write' ? 'new' : 'edit'}
-        </span>
-      </button>
-    );
-  }
-
-  // Directory
-  return (
-    <div>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-        style={{ paddingLeft: `${depth * 12 + 8}px` }}
-      >
-        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <span className="truncate">{node.name}</span>
-      </button>
-      {expanded && node.children.map((child, i) => (
-        <TreeNodeItem
-          key={child.isFile && child.change ? child.change.uid : `${child.fullPath}-${i}`}
-          node={child}
-          selectedUid={selectedUid}
-          onSelect={onSelect}
-          depth={depth + 1}
-        />
-      ))}
-    </div>
-  );
+/** e.g. "07-09 01:24" (year prefixed when not this year) — mirrors history tab. */
+function formatCallTime(epochSeconds: number): string {
+  const date = new Date(epochSeconds * 1000);
+  const now = new Date();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+  const base = `${mm}-${dd} ${hh}:${mi}`;
+  return date.getFullYear() === now.getFullYear() ? base : `${date.getFullYear()}-${base}`;
 }
 
 // ============================================
@@ -208,32 +159,111 @@ function TreeNodeItem({
 
 export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProps) {
   const { t } = useTranslation();
-  const changes = useMemo(() => extractFileChanges(toolCalls, cwd), [toolCalls, cwd]);
-  const tree = useMemo(() => collapseTree(buildTree(changes)), [changes]);
 
-  const [selected, setSelected] = useState<FileChange | null>(changes[0] || null);
-  const [viewMode, setViewMode] = useState<'unified' | 'split'>('unified');
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  // Collapsible file tree — defaults open on desktop, collapsed on narrow
-  // screens (the 224px tree would otherwise crowd out the diff on a phone).
-  const [showSidebar, setShowSidebar] = useState(
+  // Real on-disk diffs from the shadow-git snapshots, keyed by this message's
+  // tool_use ids. cwd missing → skip straight to the legacy fallback.
+  const toolIds = useMemo(() => toolCalls.map((tc) => tc.id).filter(Boolean), [toolCalls]);
+  const toolIdsKey = toolIds.join(',');
+  // Snapshots are written fire-and-forget after each tool_result — a modal
+  // opened right after a tool finished can observe a PARTIALLY landed set.
+  // When commits are missing for tools that almost certainly changed files
+  // (Edit/Write family), refetch up to twice before settling.
+  const [retryTick, setRetryTick] = useState(0);
+  const snapshotsQ = useEffectQuery(
+    cwd && toolIds.length > 0
+      ? loadSnapshotDiffsForToolIds(cwd, toolIds)
+      : Effect.succeed([] as SnapshotDiffDto[]),
+    [cwd, toolIdsKey, retryTick],
+  );
+  const declaredWriteIds = useMemo(
+    () =>
+      toolCalls
+        .filter((tc) => ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tc.name))
+        .map((tc) => tc.id),
+    [toolCalls],
+  );
+  useEffect(() => {
+    if (snapshotsQ.status !== 'success' || retryTick >= 2) return;
+    const landed = new Set(snapshotsQ.data.map((d) => d.commit.toolId));
+    if (declaredWriteIds.some((id) => !landed.has(id))) {
+      const t = setTimeout(() => setRetryTick((v) => v + 1), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [snapshotsQ, retryTick, declaredWriteIds]);
+
+  // Keep the last non-empty result while a refetch is in flight — the retry
+  // must not flash the whole modal back to the loading state.
+  const lastGoodRef = useRef<CallEntry[]>([]);
+  const loading = snapshotsQ.status === 'loading' && lastGoodRef.current.length === 0;
+  const calls = useMemo<CallEntry[]>(() => {
+    if (snapshotsQ.status === 'success') {
+      const fromSnapshots = callsFromSnapshots(snapshotsQ.data);
+      if (fromSnapshots.length > 0) {
+        lastGoodRef.current = fromSnapshots;
+        return fromSnapshots;
+      }
+    }
+    if (snapshotsQ.status === 'loading' && lastGoodRef.current.length > 0) {
+      return lastGoodRef.current;
+    }
+    if (snapshotsQ.status === 'loading') return [];
+    // No snapshots (or query failed) → legacy parameter-based reconstruction.
+    return callsFromToolParams(toolCalls, cwd);
+  }, [snapshotsQ, toolCalls, cwd]);
+
+  const [selectedCallKey, setSelectedCallKey] = useState<string | null>(null);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  // Collapsible left side (commit list + file tree) — defaults open on
+  // desktop, collapsed on narrow screens.
+  const [showLeft, setShowLeft] = useState(
     () => typeof window === 'undefined' || window.innerWidth >= 768,
   );
+  // 精简/全文 — pane-local, defaults to compact (same as StatusDiffPane).
+  const [density, setDensity] = useState<'compact' | 'full'>('compact');
 
-  // Tooltips for `data-tooltip` are rendered globally by <TooltipProvider />.
+  const selectedCall = useMemo(
+    () => calls.find((c) => c.key === selectedCallKey) ?? null,
+    [calls, selectedCallKey],
+  );
+  const tree = useMemo<GitFileNode<CallFile>[]>(
+    () => (selectedCall ? buildGitFileTree(selectedCall.files) : []),
+    [selectedCall],
+  );
+  const selectedFile = useMemo(
+    () => selectedCall?.files.find((f) => f.path === selectedFilePath) ?? null,
+    [selectedCall, selectedFilePath],
+  );
+
+  const selectCall = useCallback((call: CallEntry) => {
+    setSelectedCallKey(call.key);
+    setSelectedFilePath(call.files[0]?.path ?? null);
+    setExpandedPaths(new Set(collectGitTreeDirPaths(buildGitFileTree(call.files))));
+  }, []);
+
+  // Auto-select the first call + its first file once the (async) list arrives.
+  useEffect(() => {
+    if (calls.length > 0 && !calls.some((c) => c.key === selectedCallKey)) {
+      selectCall(calls[0]);
+    }
+  }, [calls, selectedCallKey, selectCall]);
 
   // ESC to close
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
+      if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  if (changes.length === 0) return null;
+  const totalFiles = useMemo(() => calls.reduce((n, c) => n + c.files.length, 0), [calls]);
+
+  const centered = (text: string) => (
+    <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+      {text}
+    </div>
+  );
 
   const modalContent = (
     <div
@@ -247,94 +277,156 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">
-            {/* Toggle the file tree — useful on narrow screens to give the diff full width */}
             <button
-              onClick={() => setShowSidebar((s) => !s)}
+              onClick={() => setShowLeft((s) => !s)}
               aria-label={t('diffViewer.toggleFileTree')}
               className={`p-1 rounded transition-colors ${
-                showSidebar ? 'text-foreground bg-accent' : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                showLeft ? 'text-foreground bg-accent' : 'text-muted-foreground hover:text-foreground hover:bg-accent'
               }`}
             >
               <PanelLeft className="w-4 h-4" />
             </button>
             <h3 className="text-sm font-medium text-foreground">
-              {t('diffViewer.fileChanges', { count: changes.length })}
+              {t('diffViewer.fileChanges', { count: totalFiles })}
             </h3>
           </div>
-          <div className="flex items-center gap-3">
-            {/* View mode toggle */}
-            <div className="flex items-center gap-1 bg-accent rounded p-0.5">
-              <button
-                onClick={() => setViewMode('unified')}
-                className={`px-2 py-1 text-xs rounded transition-colors ${
-                  viewMode === 'unified'
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Unified
-              </button>
-              <button
-                onClick={() => setViewMode('split')}
-                className={`px-2 py-1 text-xs rounded transition-colors ${
-                  viewMode === 'split'
-                    ? 'bg-card text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Split
-              </button>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Body: sidebar + diff */}
+        {/* Body: call list | meta + file tree + diff (mirrors history tab) */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left file tree — collapsible */}
-          {showSidebar && (
-            <div ref={sidebarRef} className="w-56 flex-shrink-0 border-r border-border overflow-y-auto py-2">
-              {tree.map((node, i) => (
-                <TreeNodeItem
-                  key={node.isFile && node.change ? node.change.uid : `${node.fullPath}-${i}`}
-                  node={node}
-                  selectedUid={selected?.uid || ''}
-                  onSelect={(c) => {
-                    setSelected(c);
-                    // On narrow screens, auto-collapse after picking a file so the diff gets full width.
-                    if (typeof window !== 'undefined' && window.innerWidth < 768) setShowSidebar(false);
-                  }}
-                />
+          {/* Left: one entry per tool call (= one snapshot commit) */}
+          {showLeft && (
+            <div className="w-60 flex-shrink-0 border-r border-border overflow-y-auto">
+              {calls.map((call) => (
+                <div
+                  key={call.key}
+                  onClick={() => selectCall(call)}
+                  className={`px-3 py-2 border-b border-border cursor-pointer hover:bg-accent ${
+                    selectedCallKey === call.key ? 'bg-brand/10' : ''
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {call.shortHash && (
+                      <span className="font-mono text-xs text-brand">{call.shortHash}</span>
+                    )}
+                    {call.timestamp !== undefined && (
+                      <span className="text-xs text-slate-9">{formatCallTime(call.timestamp)}</span>
+                    )}
+                  </div>
+                  <div className="text-sm text-foreground truncate mt-0.5" data-tooltip={call.subject}>
+                    {call.subject}
+                  </div>
+                </div>
               ))}
             </div>
           )}
 
-          {/* Right Diff */}
-          <div className="flex-1 overflow-auto">
-            {selected ? (
-              viewMode === 'unified' ? (
-                <DiffUnifiedView
-                  oldContent={selected.old_string}
-                  newContent={selected.new_string}
-                  filePath={selected.filePath}
-                />
-              ) : (
-                <DiffView
-                  oldContent={selected.old_string}
-                  newContent={selected.new_string}
-                  filePath={selected.filePath}
-                  isNew={selected.type === 'write'}
-                />
-              )
+          {/* Right: meta bar + file tree + diff */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {loading ? (
+              centered(t('diffViewer.loadingSnapshots'))
+            ) : calls.length === 0 ? (
+              centered(t('diffViewer.noChanges'))
+            ) : selectedCall ? (
+              <>
+                {/* Meta bar */}
+                <div className="flex items-center gap-3 px-4 py-2 border-b border-border text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1 text-foreground">
+                    <Wrench className="w-3.5 h-3.5" />
+                    {selectedCall.toolName}
+                  </span>
+                  {selectedCall.shortHash && (
+                    <span className="font-mono text-brand">{selectedCall.shortHash}</span>
+                  )}
+                  {selectedCall.timestamp !== undefined && (
+                    <span>{formatCallTime(selectedCall.timestamp)}</span>
+                  )}
+                  <span>{t('commitDetail.nChanges', { count: selectedCall.files.length })}</span>
+                  {selectedCall.truncated && (
+                    <span className="text-amber-500">{t('diffViewer.truncated')}</span>
+                  )}
+                  {selectedCall.legacy && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                      data-tooltip={t('diffViewer.reconstructedHint')}
+                    >
+                      {t('diffViewer.reconstructed')}
+                    </span>
+                  )}
+                  <DiffDensityToggle value={density} onChange={setDensity} className="ml-auto" />
+                </div>
+
+                <div className="flex-1 flex overflow-hidden">
+                  {/* File tree (reuses explorer's GitFileTree) */}
+                  {showLeft && (
+                    <div className="w-72 flex-shrink-0 border-r border-border overflow-y-auto overflow-x-hidden">
+                      <GitFileTree
+                        files={tree as GitFileNode<unknown>[]}
+                        selectedPath={selectedFilePath}
+                        expandedPaths={expandedPaths}
+                        onToggle={(path) =>
+                          setExpandedPaths((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(path)) next.delete(path);
+                            else next.add(path);
+                            return next;
+                          })
+                        }
+                        onSelect={(node) => {
+                          if (!node.isDirectory && node.file) {
+                            setSelectedFilePath((node.file as CallFile).path);
+                            // On narrow screens, collapse after picking so the diff gets full width.
+                            if (typeof window !== 'undefined' && window.innerWidth < 768) setShowLeft(false);
+                          }
+                        }}
+                        cwd={cwd || ''}
+                        showChanges={true}
+                        renderActions={(node) =>
+                          !node.isDirectory && (node.file as CallFile | undefined)?.external ? (
+                            <span
+                              className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0"
+                              data-tooltip={t('diffViewer.externalChange')}
+                            />
+                          ) : null
+                        }
+                      />
+                    </div>
+                  )}
+
+                  {/* Diff (split view, aligned with the history tab) */}
+                  <div className="flex-1 overflow-hidden">
+                    {selectedFile ? (
+                      selectedFile.unviewable ? (
+                        <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                          {t('diffViewer.notViewable')}
+                        </div>
+                      ) : (
+                        <DiffView
+                          oldContent={selectedFile.old_string}
+                          newContent={selectedFile.new_string}
+                          filePath={selectedFile.path}
+                          isNew={selectedFile.status === 'added'}
+                          isDeleted={selectedFile.status === 'deleted'}
+                          cwd={cwd}
+                          compact={density === 'compact'}
+                        />
+                      )
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
+                        {t('diffViewer.selectFileToView')}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
             ) : (
-              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-                {t('diffViewer.selectFileToView')}
-              </div>
+              centered(t('diffViewer.selectFileToView'))
             )}
           </div>
         </div>
@@ -342,9 +434,5 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
     </div>
   );
 
-  return (
-    <>
-      <Portal>{modalContent}</Portal>
-    </>
-  );
+  return <Portal>{modalContent}</Portal>;
 }

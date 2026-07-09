@@ -1,0 +1,113 @@
+/**
+ * SnapshotService — per-project shadow-git snapshots of AI tool calls.
+ *
+ * Every mutating tool call an agent performs is captured as a commit in a
+ * shadow git repository (`<cockpitDir>/snapshots/<basename>-<hash12>/`,
+ * GIT_DIR only — the project's own .git is never touched). Commits carry
+ * structured trailers (session key / tool_use_id / tool name / declared
+ * files / provider) so the chat UI can show a real on-disk diff per tool
+ * call, git-history style.
+ *
+ * Live implementation: packages/feature/agent/src/effect/snapshotLive.ts.
+ */
+import { Context, Effect } from "effect"
+import type { AppError, ValidationError, NotFoundError } from "@cockpit/effect-core"
+
+// ─────────────────────────────────────────────────────────
+// Data types
+// ─────────────────────────────────────────────────────────
+
+/** What triggered a snapshot: a finished tool call, or a run-start baseline. */
+export interface SnapshotTrigger {
+  readonly cwd: string
+  /** Run-registry key at trigger time (real sessionId once revealed). */
+  readonly sessionKey: string
+  /** Engine name (claude / codex / kimi / ollama / deepseek). */
+  readonly provider: string
+  /** tool_use id — absent for baseline snapshots. */
+  readonly toolId?: string
+  /** Tool name (Edit / Write / Bash / ...) — absent for baseline snapshots. */
+  readonly toolName?: string
+  /** Files the tool declared it would touch (absolute or cwd-relative). */
+  readonly toolFiles?: ReadonlyArray<string>
+}
+
+export interface SnapshotCommit {
+  readonly hash: string
+  readonly parent: string | null
+  /** Unix epoch seconds (committer time). */
+  readonly timestamp: number
+  readonly subject: string
+  readonly sessionKey: string | null
+  readonly toolId: string | null
+  readonly toolName: string | null
+  /** cwd-relative files the tool declared it would touch. */
+  readonly toolFiles: ReadonlyArray<string>
+  readonly provider: string | null
+  /** True for run-start / day-rollover baseline commits. */
+  readonly baseline: boolean
+}
+
+export type SnapshotFileStatus = "added" | "modified" | "deleted"
+
+export interface SnapshotFileDiff {
+  /** cwd-relative path. */
+  readonly path: string
+  readonly status: SnapshotFileStatus
+  readonly binary: boolean
+  /** Added/deleted line counts (numstat); 0 for binary files. */
+  readonly additions: number
+  readonly deletions: number
+  /** Content omitted when binary or over the size cap. */
+  readonly oldContent: string | null
+  readonly newContent: string | null
+}
+
+export interface SnapshotDiff {
+  readonly commit: SnapshotCommit
+  readonly files: ReadonlyArray<SnapshotFileDiff>
+  /** True when the commit changed more files than the response cap. */
+  readonly truncated: boolean
+}
+
+export interface SnapshotRecordResult {
+  readonly committed: boolean
+  readonly hash?: string
+}
+
+// ─────────────────────────────────────────────────────────
+// Service Tag
+// ─────────────────────────────────────────────────────────
+
+export interface SnapshotService {
+  /** Snapshot the project after a tool call; no-op when the tree is unchanged. */
+  readonly record: (
+    trigger: SnapshotTrigger
+  ) => Effect.Effect<SnapshotRecordResult, AppError>
+  /**
+   * Run-start baseline: commit any pending (external / prior) changes so the
+   * next tool commit's parent is exactly the pre-tool state. Also opens the
+   * day branch on first use of a day.
+   */
+  readonly baseline: (
+    cwd: string,
+    sessionKey: string,
+    provider: string
+  ) => Effect.Effect<SnapshotRecordResult, AppError>
+  /** Commits whose Cockpit-Tool-Id is in `toolIds`, oldest first. */
+  readonly listByToolIds: (
+    cwd: string,
+    toolIds: ReadonlyArray<string>
+  ) => Effect.Effect<ReadonlyArray<SnapshotCommit>, AppError>
+  /** Full file-level diff of one snapshot commit vs its parent. */
+  readonly diff: (
+    cwd: string,
+    commitHash: string
+  ) => Effect.Effect<SnapshotDiff, AppError | ValidationError | NotFoundError>
+  /** Retention pass: drop day branches beyond keepDays, gc, remove dead repos. */
+  readonly cleanup: Effect.Effect<void, AppError>
+}
+
+export const SnapshotService = Context.GenericTag<SnapshotService>(
+  "@cockpit/SnapshotService"
+)

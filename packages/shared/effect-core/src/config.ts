@@ -43,6 +43,12 @@ export interface CockpitConfigData {
   readonly logLevel: string
   /** Log file path (derived from cockpitDir) */
   readonly logFile: string
+  /** Days of tool-call snapshot history to keep (COCKPIT_SNAPSHOT_KEEP_DAYS) */
+  readonly snapshotKeepDays: number
+  /** Days of repo inactivity before the whole shadow repo is removed (COCKPIT_SNAPSHOT_REPO_TTL_DAYS) */
+  readonly snapshotRepoTtlDays: number
+  /** Per-file size cap for snapshot tracking, in KB (COCKPIT_SNAPSHOT_MAX_FILE_KB) */
+  readonly snapshotMaxFileKb: number
 }
 
 const envConfig = Config.literal("dev", "prod")("COCKPIT_ENV").pipe(
@@ -75,6 +81,18 @@ const logLevelConfig = Config.string("COCKPIT_LOG_LEVEL").pipe(
   Config.withDefault("info")
 )
 
+const snapshotKeepDaysConfig = Config.integer("COCKPIT_SNAPSHOT_KEEP_DAYS").pipe(
+  Config.withDefault(7)
+)
+
+const snapshotRepoTtlDaysConfig = Config.integer(
+  "COCKPIT_SNAPSHOT_REPO_TTL_DAYS"
+).pipe(Config.withDefault(30))
+
+const snapshotMaxFileKbConfig = Config.integer(
+  "COCKPIT_SNAPSHOT_MAX_FILE_KB"
+).pipe(Config.withDefault(2048))
+
 
 // ─────────────────────────────────────────────────────────
 // Composition
@@ -88,6 +106,9 @@ export const CockpitConfig: Effect.Effect<CockpitConfigData> = Effect.gen(
     const openProject = yield* openProjectConfig
     const noOpen = yield* noOpenConfig
     const logLevel = yield* logLevelConfig
+    const snapshotKeepDays = yield* snapshotKeepDaysConfig
+    const snapshotRepoTtlDays = yield* snapshotRepoTtlDaysConfig
+    const snapshotMaxFileKb = yield* snapshotMaxFileKbConfig
 
     // cockpitDir: lazy resolution to avoid Node-only os.homedir at module eval.
     // Use process.env.HOME / USERPROFILE instead of os.homedir() — zero
@@ -121,6 +142,9 @@ export const CockpitConfig: Effect.Effect<CockpitConfigData> = Effect.gen(
       openBrowser: !noOpen,
       logLevel,
       logFile,
+      snapshotKeepDays,
+      snapshotRepoTtlDays,
+      snapshotMaxFileKb,
     } satisfies CockpitConfigData
   }
 ).pipe(Effect.orDie) // Treat Config validation failures as defects (exit at startup)

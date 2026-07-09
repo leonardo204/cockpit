@@ -964,7 +964,14 @@
       "more": "··· more +{{count}} ···",
       "expandUp": "Expand {{count}} lines up",
       "expandDown": "Expand {{count}} lines down"
-    }
+    },
+    "loadingSnapshots": "Loading snapshots…",
+    "noChanges": "No file changes detected in this turn",
+    "notViewable": "Binary or oversized file — diff not viewable",
+    "externalChange": "Concurrent change from another session/process",
+    "reconstructed": "reconstructed",
+    "reconstructedHint": "Rebuilt from tool-call parameters — not a disk snapshot",
+    "truncated": "Too many files — list truncated"
   },
   "commitDetail": {
     "title": "Commit Details",
