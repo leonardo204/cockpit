@@ -169,6 +169,12 @@ export function buildAIMessage(references: CodeReference[], question: string): s
   }
 
   if (question.trim()) {
+    // Drop the trailing blank separator so the question sits right below the
+    // last reference (no empty line between quote/code and user input).
+    // Blank lines *between* multiple references are kept intact.
+    while (parts.length > 0 && parts[parts.length - 1] === '') {
+      parts.pop();
+    }
     parts.push(question.trim());
   }
 
