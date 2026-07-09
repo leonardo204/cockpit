@@ -29,6 +29,8 @@ interface ToolMeta {
   name: string;
   files: string[];
   provider: string;
+  /** Human-readable detail (Bash/Task `description`, else raw `command`). */
+  detail?: string;
 }
 
 // Pinned to globalThis: a second Next.js module realm must not lose the
@@ -49,6 +51,19 @@ function declaredFiles(input: Record<string, unknown> | undefined): string[] {
   if (typeof input.file_path === 'string' && input.file_path) out.push(input.file_path);
   if (typeof input.notebook_path === 'string' && input.notebook_path) out.push(input.notebook_path);
   return out;
+}
+
+/**
+ * Human-readable detail for tools that declare no files — used as the commit
+ * subject so the timeline says what a `[Bash]` call did. Prefers the tool's
+ * `description` field (Claude's Bash/Task carry one); falls back to the raw
+ * `command` (Codex/Kimi shell calls). Sanitized + truncated service-side.
+ */
+function toolDetail(input: Record<string, unknown> | undefined): string | undefined {
+  if (!input) return undefined;
+  if (typeof input.description === 'string' && input.description) return input.description;
+  if (typeof input.command === 'string' && input.command) return input.command;
+  return undefined;
 }
 
 function pruneToolIndex(): void {
@@ -107,7 +122,12 @@ export function snapshotOnRunEvent(
   if (event.type === 'assistant') {
     for (const b of contentBlocks(event)) {
       if (b.id && b.name) {
-        toolIndex.set(b.id, { name: b.name, files: declaredFiles(b.input), provider });
+        toolIndex.set(b.id, {
+          name: b.name,
+          files: declaredFiles(b.input),
+          provider,
+          detail: toolDetail(b.input),
+        });
       }
     }
     pruneToolIndex();
@@ -134,6 +154,7 @@ export function snapshotOnRunEvent(
             toolId,
             toolName: meta?.name ?? 'tool',
             toolFiles: meta?.files ?? [],
+            toolDetail: meta?.detail,
           })
         ).pipe(Effect.ensuring(Effect.sync(() => settlePendingRecord(cwd))))
       );

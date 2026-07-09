@@ -226,6 +226,40 @@ describe('SnapshotServiceLive', () => {
     expect(existsSync(repoDir)).toBe(false);
   });
 
+  it('uses the tool description as the commit subject when no files are declared', async () => {
+    await writeFile(join(work, 'src', 'detail.txt'), 'd1\n');
+    const r = await svc((s) =>
+      s.record({
+        cwd: work,
+        sessionKey: 'session-1',
+        provider: 'claude',
+        toolId: 'toolu_detail',
+        toolName: 'Bash',
+        toolDetail: 'Install project\ndependencies', // newline must be stripped
+      })
+    );
+    expect(r.committed).toBe(true);
+    const commits = await svc((s) => s.listByToolIds(work, ['toolu_detail']));
+    expect(commits[0].subject).toBe('[Bash] Install project dependencies');
+
+    // Long raw command falls back truncated to 80 chars.
+    await writeFile(join(work, 'src', 'detail.txt'), 'd2\n');
+    const long = 'x'.repeat(200);
+    await svc((s) =>
+      s.record({
+        cwd: work,
+        sessionKey: 'session-1',
+        provider: 'claude',
+        toolId: 'toolu_detail2',
+        toolName: 'Bash',
+        toolDetail: long,
+      })
+    );
+    const c2 = await svc((s) => s.listByToolIds(work, ['toolu_detail2']));
+    expect(c2[0].subject.length).toBeLessThanOrEqual(80);
+    expect(c2[0].subject.startsWith('[Bash] xxx')).toBe(true);
+  });
+
   it('baseline yields to a pending tool record for the same cwd', async () => {
     await writeFile(join(work, 'src', 'yield.ts'), 'export const y = 1;\n');
     notePendingRecord(work);

@@ -18,6 +18,7 @@ import {
   type GitFileNode,
 } from '@cockpit/feature-explorer';
 import { loadSnapshotDiffsForToolIds, type SnapshotDiffDto } from './effect/snapshotClient';
+import { classifyPath, classifyFiles, type ChangeClass } from './changeClass';
 import type { ToolCallInfo } from './types';
 
 // Layout mirrors the Explorer "History" tab: a commit list on the left
@@ -46,6 +47,8 @@ interface CallFile {
   /** Changed in the same commit but NOT declared by the tool — likely another
    *  concurrent session / external process (best-effort attribution). */
   external?: boolean;
+  /** Heuristic: this file is a test / docs file (null = regular code). */
+  fileClass?: ChangeClass | null;
 }
 
 /** One tool call = one snapshot commit (or one legacy pseudo-call). */
@@ -61,6 +64,8 @@ interface CallEntry {
   legacy?: boolean;
   /** Server capped the file list for this commit. */
   truncated?: boolean;
+  /** Non-critical marker: EVERY file in this call is a test / docs file. */
+  changeClass?: ChangeClass | null;
 }
 
 interface DiffViewerModalProps {
@@ -84,6 +89,7 @@ function callsFromSnapshots(diffs: SnapshotDiffDto[]): CallEntry[] {
       subject: d.commit.subject,
       timestamp: d.commit.timestamp,
       truncated: d.truncated === true,
+      changeClass: classifyFiles(d.files.map((f) => f.path)),
       files: d.files.map((f) => ({
         path: f.path,
         status: f.status,
@@ -95,6 +101,7 @@ function callsFromSnapshots(diffs: SnapshotDiffDto[]): CallEntry[] {
         // Attribution is best-effort: only meaningful when the tool declared
         // target files (Edit/Write); Bash declares nothing → no marking.
         external: declared.size > 0 && !declared.has(f.path),
+        fileClass: classifyPath(f.path),
       })),
     };
   });
@@ -121,7 +128,8 @@ function callsFromToolParams(toolCalls: ToolCallInfo[], cwd?: string): CallEntry
           toolName: 'Edit',
           subject: `[Edit] ${path}`,
           legacy: true,
-          files: [{ path, status: 'modified', old_string: input.old_string, new_string: input.new_string }],
+          changeClass: classifyPath(path),
+          files: [{ path, status: 'modified', old_string: input.old_string, new_string: input.new_string, fileClass: classifyPath(path) }],
         });
       }
     } else if (tc.name === 'Write') {
@@ -133,12 +141,28 @@ function callsFromToolParams(toolCalls: ToolCallInfo[], cwd?: string): CallEntry
           toolName: 'Write',
           subject: `[Write] ${path}`,
           legacy: true,
-          files: [{ path, status: 'added', old_string: '', new_string: input.content }],
+          changeClass: classifyPath(path),
+          files: [{ path, status: 'added', old_string: '', new_string: input.content, fileClass: classifyPath(path) }],
         });
       }
     }
   }
   return calls;
+}
+
+/** Subdued chip marking a non-critical (test-only / docs-only) change. */
+function ChangeClassChip({ cls }: { cls: ChangeClass }) {
+  return (
+    <span
+      className={`text-[10px] px-1 py-px rounded flex-shrink-0 ${
+        cls === 'test'
+          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400/80'
+          : 'bg-sky-500/15 text-sky-600 dark:text-sky-400/80'
+      }`}
+    >
+      {cls}
+    </span>
+  );
 }
 
 /** e.g. "07-09 01:24" (year prefixed when not this year) — mirrors history tab. */
@@ -318,6 +342,11 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
                     {call.timestamp !== undefined && (
                       <span className="text-xs text-slate-9">{formatCallTime(call.timestamp)}</span>
                     )}
+                    {call.changeClass && (
+                      <span className="ml-auto">
+                        <ChangeClassChip cls={call.changeClass} />
+                      </span>
+                    )}
                   </div>
                   <div className="text-sm text-foreground truncate mt-0.5" data-tooltip={call.subject}>
                     {call.subject}
@@ -387,14 +416,22 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
                         }}
                         cwd={cwd || ''}
                         showChanges={true}
-                        renderActions={(node) =>
-                          !node.isDirectory && (node.file as CallFile | undefined)?.external ? (
-                            <span
-                              className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0"
-                              data-tooltip={t('diffViewer.externalChange')}
-                            />
-                          ) : null
-                        }
+                        renderActions={(node) => {
+                          if (node.isDirectory) return null;
+                          const file = node.file as CallFile | undefined;
+                          if (!file) return null;
+                          return (
+                            <>
+                              {file.fileClass && <ChangeClassChip cls={file.fileClass} />}
+                              {file.external && (
+                                <span
+                                  className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0"
+                                  data-tooltip={t('diffViewer.externalChange')}
+                                />
+                              )}
+                            </>
+                          );
+                        }}
                       />
                     </div>
                   )}

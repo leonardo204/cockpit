@@ -438,17 +438,25 @@ const ensureDayBranch = (
     yield* runGitOk(repoDir, cwd, ["symbolic-ref", "HEAD", branch])
   })
 
+/** One display-safe subject line: control chars stripped, whitespace
+ *  collapsed, capped — also blocks newline-based trailer injection via
+ *  tool input (file names / descriptions are external input). */
+const sanitizeSubject = (s: string): string =>
+  s.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80)
+
 const buildCommitMessage = (trigger: SnapshotTrigger, relFiles: string[], kind: "tool" | "baseline"): string => {
+  // Subject detail: declared files when present; otherwise the tool's
+  // human-readable detail (Bash/Task description, or the raw command).
+  const detail =
+    relFiles.length > 0
+      ? relFiles.length === 1
+        ? relFiles[0]
+        : `${relFiles[0]} +${relFiles.length - 1}`
+      : (trigger.toolDetail ?? "")
   const subject =
     kind === "baseline"
       ? "baseline"
-      : `[${trigger.toolName ?? "tool"}] ${
-          relFiles.length === 0
-            ? ""
-            : relFiles.length === 1
-              ? relFiles[0]
-              : `${relFiles[0]} +${relFiles.length - 1}`
-        }`.trim()
+      : sanitizeSubject(`[${trigger.toolName ?? "tool"}] ${detail}`)
   const trailers = [
     `Cockpit-Kind: ${kind}`,
     `Cockpit-Session: ${trigger.sessionKey}`,

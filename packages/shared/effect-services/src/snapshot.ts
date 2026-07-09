@@ -30,6 +30,11 @@ export interface SnapshotTrigger {
   readonly toolName?: string
   /** Files the tool declared it would touch (absolute or cwd-relative). */
   readonly toolFiles?: ReadonlyArray<string>
+  /** Human-readable detail for tools that declare no files: the Bash/Task
+   *  `description` field, or the raw command as a fallback. Used (sanitized
+   *  + truncated) as the commit subject so the timeline entry says WHAT the
+   *  call did instead of a bare `[Bash]`. */
+  readonly toolDetail?: string
 }
 
 export interface SnapshotCommit {
