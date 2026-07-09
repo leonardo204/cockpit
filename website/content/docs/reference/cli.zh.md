@@ -119,6 +119,9 @@ cockpit update
 | `COCKPIT_NO_OPEN` | 启动后不自动开浏览器(同 `--no-open`)。 |
 | `COCKPIT_LOG_LEVEL` | 服务日志级别。 |
 | `COCKPIT_FORCE` | 跳过单实例保护(见下)。 |
+| `COCKPIT_SNAPSHOT_KEEP_DAYS` | [工具快照](/zh/docs/agent/snapshots/)保留天数。默认 `7`。 |
+| `COCKPIT_SNAPSHOT_REPO_TTL_DAYS` | 项目多少天不活跃后整个快照仓库被移除。默认 `30`。 |
+| `COCKPIT_SNAPSHOT_MAX_FILE_KB` | 快照跟踪的单文件大小上限(KB)。默认 `2048`(2 MB)。 |
 
 #### 数据目录与起第二个实例
 

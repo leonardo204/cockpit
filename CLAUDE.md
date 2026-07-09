@@ -43,7 +43,8 @@ framework boot. See `MODULES.md` for the dependency rules.
   `fileWatcher.ts` (fs watcher)
 - `/packages/feature/` - Self-contained domain features:
   - `agent/` - Chat domain (Claude/Ollama/Codex/Kimi/DeepSeek), scheduled
-    tasks, slash commands, sidebar panels
+    tasks, slash commands, sidebar panels, tool-call snapshots (shadow git
+    per project under `~/.cockpit/snapshots/`, per-call diff viewer)
   - `comments/` - Code annotation API + hooks
   - `console/` - Terminal + browser bubbles + DB bubbles (Postgres / MySQL
     / Redis / Neo4j / MongoDB / Bash / Jupyter)
@@ -66,6 +67,9 @@ framework boot. See `MODULES.md` for the dependency rules.
 
 - File browser with virtual scrolling and syntax highlighting (Shiki)
 - Git status and history integration
+- Per-tool-call project snapshots (shadow git per cwd, one commit per
+  mutating tool call, 7-day retention; message FileDiff icon opens the
+  per-call diff viewer)
 - Git blame view
 - Code search with Cmd+F (case sensitive / whole word matching)
 - ESC key exits blame view first, then closes modal (3s debounce)

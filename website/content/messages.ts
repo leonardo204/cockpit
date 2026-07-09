@@ -53,6 +53,7 @@ export const messages = {
           'Claude out of the box via the official Agent SDK; Codex / DeepSeek / Kimi / Ollama via per-tab BYOK',
           'Multi-project concurrent sessions with desktop notifications',
           'Session pinning, forking, cross-project session browser',
+          'Per-tool-call snapshots — review each reply as git history, real disk diffs incl. Bash',
           '!command runs shell from chat, output piped back as context',
         ],
       },
@@ -307,6 +308,12 @@ export const messages = {
           opcode: '✅ Checkpoint timeline',
         },
         {
+          dim: 'Per-tool-call change snapshots (real disk diff incl. Bash)',
+          us: '✅ 7-day local shadow-git history',
+          official: '❌',
+          opcode: '❌ Per-prompt checkpoints only',
+        },
+        {
           dim: 'Usage / cost analytics',
           us: 'Basic token counts',
           official: 'n/a (plan-based)',
@@ -373,6 +380,7 @@ export const messages = {
           // Agent panel (chat)
           messageInput: 'Message Input',
           sessions: 'Sessions',
+          snapshots: 'Tool Snapshots',
           skills: 'Skills',
           workflows: 'Workflows',
           engines: 'AI Engines',
@@ -469,6 +477,7 @@ export const messages = {
           '默认走官方 Claude Agent SDK；Codex / DeepSeek / Kimi / Ollama 各 tab 独立 BYOK',
           '多项目并发会话，桌面通知提醒',
           '会话固定、分叉、跨项目浏览',
+          '工具调用级快照 —— 像读 git 历史一样审每条回复的真实磁盘 diff，含 Bash',
           '!command 前缀直接执行 shell，输出回流为对话上下文',
         ],
       },
@@ -723,6 +732,12 @@ export const messages = {
           opcode: '✅ 检查点时间线',
         },
         {
+          dim: '工具调用级变更快照（真实磁盘 diff，含 Bash）',
+          us: '✅ 影子 git 本地保留 7 天',
+          official: '❌',
+          opcode: '❌ 仅按轮次检查点',
+        },
+        {
           dim: '用量 / 成本分析',
           us: '仅基础 token 计数',
           official: '不适用（订阅制）',
@@ -786,6 +801,7 @@ export const messages = {
           // Agent 面板（对话）
           messageInput: '消息输入',
           sessions: '会话管理',
+          snapshots: '工具快照',
           skills: 'Skills',
           workflows: '工作流',
           engines: 'AI 引擎',

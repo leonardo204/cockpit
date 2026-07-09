@@ -18,7 +18,7 @@ Each row carries:
 - Date (with "2h ago" style relative time)
 - Commit subject (first line)
 
-Click a commit and the right side of Explorer expands the **Commit Detail panel** — full message, file tree of what changed, and per-file diff. Click any file in that tree to scroll its diff into view.
+Click a commit and the right side of Explorer expands the **Commit Detail panel** — full message, file tree of what changed, and per-file diff. Click any file in that tree to scroll its diff into view. A **compact / full** toggle in the panel header collapses unchanged stretches into expandable bars (GitHub-style, the default) or renders every line; the branch-compare view has the same toggle.
 
 To switch which branch the History tab is reading, use the top-of-tab branch selector; see [Branches](/en/docs/explorer/history/#branches).
 

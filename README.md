@@ -72,6 +72,7 @@ An honest snapshot as of July 2026 — each tool wins somewhere. Spotted an erro
 | Newest Claude Code features on day one | ⏳ tracks Agent SDK releases with a lag | ✅ first party | ❌ |
 | Automation triggers | one-time / interval / cron | ✅ Routines: cron + API + GitHub events | background agents |
 | Session checkpoints / rewind | pinning & forking only | ✅ | ✅ checkpoint timeline |
+| Per-tool-call change snapshots (real disk diff for every Edit / Write / **Bash** / MCP call, 7-day local history) | ✅ | ❌ | ❌ per-prompt checkpoints only |
 | Usage / cost analytics | basic token counts | n/a (plan-based) | ✅ full dashboard |
 | Cost | GUI free (MIT); AI billed by whichever engine you bring — can be $0 with local Ollama | app free; needs a paid Claude plan or API billing | GUI free (AGPL); needs a paid Claude plan or API billing |
 | Actively maintained | ✅ | ✅ | ⚠️ last release Aug 2025 |
@@ -95,6 +96,7 @@ An honest snapshot as of July 2026 — each tool wins somewhere. Spotted an erro
 - Default engine powered by the **official Claude Agent SDK** — zero extra setup
 - **Multi-project concurrent sessions** with desktop notifications and red-dot badges
 - Session **pinning, forking**, cross-project session browser (Cmd+K)
+- **Per-tool-call snapshots** — every file-touching tool call is snapshotted (shadow git, fully local); review each reply's changes as a git-history-style timeline, including what `Bash` did
 - `!command` prefix to run shell from chat — output piped back as context
 - Image attachments, code references, token usage tracking
 

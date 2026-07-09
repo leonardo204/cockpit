@@ -119,6 +119,9 @@ Equivalent to `npm install -g @surething/cockpit@latest`. See [`cockpit update`]
 | `COCKPIT_NO_OPEN` | Don't auto-open the browser on start (same as `--no-open`). |
 | `COCKPIT_LOG_LEVEL` | Server log level. |
 | `COCKPIT_FORCE` | Bypass the single-instance guard (see below). |
+| `COCKPIT_SNAPSHOT_KEEP_DAYS` | How many days of [tool-call snapshots](/en/docs/agent/snapshots/) to keep. Default `7`. |
+| `COCKPIT_SNAPSHOT_REPO_TTL_DAYS` | Days of inactivity before a project's whole snapshot repo is removed. Default `30`. |
+| `COCKPIT_SNAPSHOT_MAX_FILE_KB` | Per-file size cap for snapshot tracking, in KB. Default `2048` (2 MB). |
 
 #### Data directory & running a second instance
 

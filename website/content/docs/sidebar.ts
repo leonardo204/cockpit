@@ -67,6 +67,10 @@ export const docsSidebar: DocSection[] = [
       // Skills → pick an engine → automate → take side notes.
       { slug: 'agent/message-input', labelKey: 'messageInput', available: true },
       { slug: 'agent/sessions', labelKey: 'sessions', available: true },
+      // Per-tool-call project snapshots — the reply-level "what did this
+      // actually change on disk" viewer. Sits right after sessions because
+      // it's the first thing people reach for when reviewing a reply.
+      { slug: 'agent/snapshots', labelKey: 'snapshots', available: true },
       // "Slash Commands" and "Skills" are unified — both are Skills now.
       // Five are built in (the AI modes /qa /fx /ex /go /cg); users add more
       // by installing SKILL.md files. Same `/` menu, same docs page.
