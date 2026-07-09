@@ -7,7 +7,7 @@ import { ToolCallModal } from './ToolCallModal';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
 import { DiffViewerModal, resolveDiffCalls } from './DiffViewerModal';
 import { loadSnapshotsByToolIds } from './effect/snapshotClient';
-import type { ChatMessage, MessageImage } from './types';
+import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
 import { isMutatingToolName } from '../shared/toolMutation';
 // Tech debt: cross-package imports into the main shell.
 //   - InteractiveMarkdownPreview, FileContextMenu: chat-adjacent code that
@@ -142,6 +142,12 @@ interface MessageBubbleProps {
   isLoading?: boolean;
   /** Selected text → project-wide search (threads into the HTML preview toolbar) */
   onContentSearch?: (query: string) => void;
+  /**
+   * Show all file changes for this message in the Explorer panel (panel 2) and
+   * auto-swipe there. When omitted (e.g. inside SubagentTranscriptModal, which
+   * has no second panel), the button falls back to a local full-screen modal.
+   */
+  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void;
 }
 
 // Threshold for collapsing tool calls — any tool call (≥1) renders inside a collapsible header,
@@ -149,7 +155,7 @@ interface MessageBubbleProps {
 const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading, onContentSearch }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading, onContentSearch, onShowFileDiff }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
@@ -659,7 +665,16 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                     )}
                     {showFileDiff && (
                       <button
-                        onClick={() => setShowDiffViewer(true)}
+                        onClick={() => {
+                          // Prefer showing the diff in the Explorer panel (panel 2)
+                          // with an auto-swipe; fall back to a local modal when no
+                          // panel host is available (e.g. subagent transcript).
+                          if (onShowFileDiff && message.toolCalls) {
+                            onShowFileDiff(message.toolCalls, cwd);
+                          } else {
+                            setShowDiffViewer(true);
+                          }
+                        }}
                         className="px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors border-l border-border"
                         title={t('chat.viewAllFileChanges')}
                       >

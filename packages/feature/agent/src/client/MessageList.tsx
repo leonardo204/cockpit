@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { useChatContextOptional } from './ChatContext';
-import type { ChatMessage, ApiRetryInfo, ChatEngine } from './types';
+import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './types';
 import { MessageBubble } from './MessageBubble';
 // Tech debt: cross-package imports into the main shell.
 //   - useChatSearch / useComments / useAllComments: hooks living in
@@ -34,6 +34,8 @@ interface MessageListProps {
   onFork?: (messageId: string) => void;
   isActive?: boolean; // Whether the tab is active (handles scroll issues for hidden tabs)
   onContentSearch?: (query: string) => void; // Selected text → project-wide search
+  /** Show a message's file changes in the Explorer panel (panel 2) + auto-swipe */
+  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void;
   /** Plan mode: approve the presented plan → turn off plan mode and resend to execute */
   onApprovePlan?: () => void;
 }
@@ -44,7 +46,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, engine, apiRetryInfo, ptyNotice, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onContentSearch, onApprovePlan },
+  { messages, isLoading, cwd, sessionId, engine, apiRetryInfo, ptyNotice, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onContentSearch, onShowFileDiff, onApprovePlan },
   ref
 ) {
   const { t } = useTranslation();
@@ -433,6 +435,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   onApprovePlan={onApprovePlan}
                   isLoading={isLoading}
                   onContentSearch={onContentSearch}
+                  onShowFileDiff={onShowFileDiff}
                 />
               </div>
             ))}

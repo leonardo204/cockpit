@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import { Chat } from './Chat';
-import type { ChatEngine, DeepseekModel, ChatMode } from './types';
+import type { ChatEngine, DeepseekModel, ChatMode, ToolCallInfo } from './types';
 
 // Migrated from src/components/project/ChatPanel.tsx.
 
@@ -45,9 +45,10 @@ interface ChatPanelProps {
   }) => void;
   onOpenSession?: (sessionId: string, title?: string) => void;
   onContentSearch?: (query: string) => void;
+  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void;
 }
 
-export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode, onChatModeChange, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch }: ChatPanelProps) {
+export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode, onChatModeChange, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch, onShowFileDiff }: ChatPanelProps) {
   const handleLoadingChange = useCallback((isLoading: boolean) => {
     onStateChange(tabId, { isLoading });
   }, [tabId, onStateChange]);
@@ -102,6 +103,7 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllama
       onCreateScheduledTask={onCreateScheduledTask}
       onOpenSession={onOpenSession}
       onContentSearch={onContentSearch}
+      onShowFileDiff={onShowFileDiff}
     />
   );
 }

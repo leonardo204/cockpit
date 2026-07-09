@@ -6,7 +6,8 @@ import { ProjectSessionsModal } from '@cockpit/feature-agent';
 import { FileBrowserModal } from '@cockpit/feature-explorer';
 import { GitWorktreeModal } from '@cockpit/feature-explorer';
 import { ConsoleView, AliasManager } from '@cockpit/feature-console';
-import { ChatProvider } from '@cockpit/feature-agent';
+import { ChatProvider, FileDiffViewer } from '@cockpit/feature-agent';
+import type { ToolCallInfo } from '@cockpit/feature-agent';
 import { SwipeableViewContainer, SwipeableContent, type ViewType } from '@cockpit/shared-ui';
 import { PanelPortalProvider } from '@cockpit/shared-ui';
 import { useTabState } from './useTabState';
@@ -96,6 +97,10 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   const [tabSwitchTrigger, setTabSwitchTrigger] = useState(0);
   const [fileBrowserSearchQuery, setFileBrowserSearchQuery] = useState<string | null>(null);
   const [searchQueryTrigger, setSearchQueryTrigger] = useState(0);
+  // Message-level "view all file changes": hosted in the Explorer panel (panel 2)
+  // as an overlay above the FileBrowser, instead of a full-screen modal. Null =
+  // not showing. Setting it also swipes to Explorer (see handleShowFileDiff).
+  const [fileDiffRequest, setFileDiffRequest] = useState<{ toolCalls: ToolCallInfo[]; cwd?: string } | null>(null);
   // Forced chat refresh signal: bumped when a SWITCH_SESSION jump targets a session whose
   // tab already exists. Activating an already-active tab produces no isActive rising edge
   // in Chat, so without this a jump from the scheduled-tasks / recent / pinned panels would
@@ -276,6 +281,23 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     handleViewChange('explorer');
   }, [handleViewChange]);
 
+  // Message "view all file changes": show the diff in the Explorer panel and
+  // swipe there. Re-firing with a new message replaces the content and (re)asserts
+  // the Explorer panel — no extra bookkeeping needed for the "already on panel 2,
+  // click a new entry" case.
+  const handleShowFileDiff = useCallback((toolCalls: ToolCallInfo[], cwd?: string) => {
+    setFileDiffRequest({ toolCalls, cwd });
+    handleViewChange('explorer');
+  }, [handleViewChange]);
+
+  // Any command that drives the FileBrowser (git status, content search, and any
+  // future file-oriented entry) dismisses the diff overlay in one place — so we
+  // never have to clear it per entry point. Contract: file-oriented entries bump
+  // a trigger counter; handleShowFileDiff deliberately does not, so it survives.
+  useEffect(() => {
+    setFileDiffRequest(null);
+  }, [tabSwitchTrigger, searchQueryTrigger]);
+
   // Open note
   const handleOpenNote = useCallback(() => {
     if (!initialCwd) return;
@@ -364,6 +386,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                           onStateChange={updateTabState}
                           onShowGitStatus={handleShowGitStatus}
                           onContentSearch={handleContentSearch}
+                          onShowFileDiff={handleShowFileDiff}
                           onOpenNote={handleOpenNote}
                           onCreateScheduledTask={createScheduledTask}
                           onOpenSession={handleOpenSession}
@@ -375,8 +398,8 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
               </PanelPortalProvider>
             </div>
 
-            {/* EXPLORER view: FileBrowser */}
-            <div className="w-1/3 h-full overflow-hidden">
+            {/* EXPLORER view: FileBrowser (+ optional message file-diff overlay) */}
+            <div className="w-1/3 h-full overflow-hidden relative">
               <PanelPortalProvider>
                 <FileBrowserModal
                   onClose={() => handleViewChange('agent')}
@@ -386,6 +409,17 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                   initialSearchQuery={fileBrowserSearchQuery}
                   searchQueryTrigger={searchQueryTrigger}
                 />
+                {/* Message "view all file changes": overlays the FileBrowser (kept
+                    mounted underneath). Close stays on this panel — no swipe back. */}
+                {fileDiffRequest && (
+                  <div className="absolute inset-0 z-20">
+                    <FileDiffViewer
+                      toolCalls={fileDiffRequest.toolCalls}
+                      cwd={fileDiffRequest.cwd}
+                      onClose={() => setFileDiffRequest(null)}
+                    />
+                  </div>
+                )}
               </PanelPortalProvider>
             </div>
 

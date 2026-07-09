@@ -21,7 +21,7 @@ import { useChatStream } from './useChatStream';
 import { MessageList, MessageListHandle } from './MessageList';
 import { ChatInput } from './ChatInput';
 import { XtermFloatingWindow, XtermFloatingHandle } from './XtermFloatingWindow';
-import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, ChatMode } from './types';
+import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, ChatMode, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { OllamaModelPicker } from './OllamaModelPicker';
@@ -73,11 +73,12 @@ interface ChatProps {
   }) => void;
   onOpenSession?: (sessionId: string, title?: string) => void; // Open a new session (used for Fork)
   onContentSearch?: (query: string) => void; // Selected text → project-wide search
+  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void; // Message file changes → Explorer panel + auto-swipe
   onOpenSessionBrowser?: () => void; // Host-handled: open the cross-engine session browser
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch, onShowFileDiff, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -576,6 +577,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
             onFork={handleFork}
             isActive={isActive}
             onContentSearch={onContentSearch}
+            onShowFileDiff={onShowFileDiff}
             onApprovePlan={handleApprovePlan}
           />
         )}

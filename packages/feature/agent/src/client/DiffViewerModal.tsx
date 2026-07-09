@@ -232,7 +232,7 @@ function formatCallTime(epochSeconds: number): string {
 // DiffViewerModal
 // ============================================
 
-export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProps) {
+export function FileDiffViewer({ toolCalls, cwd, onClose }: DiffViewerModalProps) {
   const { t } = useTranslation();
 
   // Real on-disk diffs from the shadow-git snapshots, keyed by this message's
@@ -368,14 +368,14 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
     </div>
   );
 
-  const modalContent = (
-    // Full-bleed: the three-pane layout (call list + file tree + diff) needs
-    // every pixel — no floating-window margins on desktop either.
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div
-        className="relative bg-card shadow-xl w-full h-full flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+  return (
+    // Full-bleed panel: fills its host container (Explorer panel 2, or the
+    // DiffViewerModal backdrop). The three-pane layout (call list + file tree +
+    // diff) needs every pixel.
+    <div
+      className="relative bg-card shadow-xl w-full h-full flex flex-col"
+      onClick={(e) => e.stopPropagation()}
+    >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-2">
@@ -632,9 +632,22 @@ export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProp
             </div>
           </div>
         )}
-      </div>
     </div>
   );
+}
 
-  return <Portal>{modalContent}</Portal>;
+// Backward-compatible full-screen modal wrapper. Used where there is no second
+// panel to host the diff — e.g. SubagentTranscriptModal, which is itself a
+// Portal modal and cannot swipe to the Explorer panel.
+export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProps) {
+  return (
+    <Portal>
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        onClick={onClose}
+      >
+        <FileDiffViewer toolCalls={toolCalls} cwd={cwd} onClose={onClose} />
+      </div>
+    </Portal>
+  );
 }
