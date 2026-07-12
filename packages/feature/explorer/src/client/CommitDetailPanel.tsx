@@ -8,7 +8,7 @@ import { GitFileTree, buildGitFileTree, collectGitTreeDirPaths, type GitFileNode
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { fetchCommitDiff } from './effect/gitClient';
 import { formatAsHumanReadable } from './toolCallUtils';
-import { useJsonSearch, JsonSearchBar } from '@cockpit/shared-ui';
+import { useJsonSearch, JsonSearchBar, blurActiveElement } from '@cockpit/shared-ui';
 
 // Types
 export interface CommitInfo {
@@ -99,6 +99,8 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
           setJsonPreview(null);
           return;
         }
+        // Blur the trigger so it doesn't keep a stuck focus ring after ESC.
+        blurActiveElement();
         onClose();
       }
     };

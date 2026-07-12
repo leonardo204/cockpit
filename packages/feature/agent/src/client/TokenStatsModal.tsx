@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
+import { useEscToClose } from '@cockpit/shared-ui';
 import { loadClaudeStats } from './effect/agentClient';
 
 interface TokenStatsModalProps {
@@ -527,13 +528,8 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
     return { activityChart, tokenChart, costChart };
   }, [stats, timeRange, allModelIds, costPerToken, t]);
 
-  // ESC to close
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isOpen, onClose]);
+  // ESC to close (blurs the trigger so it doesn't keep a stuck focus ring)
+  useEscToClose(onClose, isOpen);
 
   if (!isOpen) return null;
 

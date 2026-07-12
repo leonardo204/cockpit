@@ -55,6 +55,7 @@ export { TocSidebar, extractToc, type TocItem } from './TocSidebar';
 export { useWebSocket } from './useWebSocket';
 export { useViMode } from './useViMode';
 export { usePageVisible } from './usePageVisible';
+export { useEscToClose, blurActiveElement } from './useEscToClose';
 
 // Swipeable layout primitives (translateX-based 3-panel layout)
 export {

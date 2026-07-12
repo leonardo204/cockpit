@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Portal } from '@cockpit/shared-ui';
+import { Portal, useEscToClose } from '@cockpit/shared-ui';
 import { X, Circle, Loader, CheckCircle2 } from 'lucide-react';
 import type { ToolCallInfo } from './types';
 
@@ -35,14 +34,8 @@ export function TodoViewerModal({ toolCall, onClose }: TodoViewerModalProps) {
   const { t } = useTranslation();
   const todos = (toolCall.input?.todos as TodoItem[]) || [];
 
-  // ESC to close
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  // ESC to close (blurs the trigger so it doesn't keep a stuck focus ring)
+  useEscToClose(onClose);
 
   const completed = todos.filter(t => t.status === 'completed').length;
   const total = todos.length;

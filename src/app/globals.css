@@ -285,6 +285,22 @@ body {
   overscroll-behavior-x: none;
 }
 
+/* ---- Focus indicators ----
+ * App-wide keyboard-focus ring using the theme --ring token (teal) instead of
+ * the browser default (blue). Only paints on :focus-visible (keyboard / a11y),
+ * so mouse clicks never leave a lingering outline. Elements that opt out with
+ * Tailwind `focus:outline-none` / `focus-visible:*` win on specificity, so
+ * inputs/editors that already manage their own focus ring are untouched (no
+ * double ring). Mouse `:focus` without focus-visible is explicitly cleared. */
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
 /* ---- Scrollbar styles ---- */
 * {
   scrollbar-width: thin;

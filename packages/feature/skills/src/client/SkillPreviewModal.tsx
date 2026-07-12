@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { SimpleCodeBlock, InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
-import { toast } from '@cockpit/shared-ui';
+import { toast, blurActiveElement } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSkillContent } from './effect/skillsClient';
 
@@ -49,6 +49,8 @@ export function SkillPreviewModal({ skillId, onClose }: SkillPreviewModalProps) 
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation();
+        // Blur the trigger so it doesn't keep a stuck focus ring after ESC.
+        blurActiveElement();
         onClose();
       }
     };

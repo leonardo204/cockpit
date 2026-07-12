@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Portal, toast } from '@cockpit/shared-ui';
+import { Portal, toast, useEscToClose } from '@cockpit/shared-ui';
 import { X, CircleDot, CheckSquare, Square, Copy, PenLine, Send } from 'lucide-react';
 import { useChatContextOptional } from './ChatContext';
 import type { ToolCallInfo } from './types';
@@ -84,14 +84,8 @@ export function AskQuestionViewerModal({ toolCalls, onClose }: AskQuestionViewer
     queueMicrotask(() => setSelections(initial));
   }, [toolCalls]);
 
-  // ESC to close
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  // ESC to close (blurs the trigger so it doesn't keep a stuck focus ring)
+  useEscToClose(onClose);
 
   // Counts
   const totalQuestions = toolCalls.reduce((sum, tc) => {

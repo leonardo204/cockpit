@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Effect } from 'effect';
 import { useEffectQuery } from '@cockpit/effect-react';
-import { Portal } from '@cockpit/shared-ui';
+import { Portal, blurActiveElement } from '@cockpit/shared-ui';
 import { X, PanelLeft, Wrench } from 'lucide-react';
 // Tech debt: DiffView / GitFileTree are generic renderers used by both
 // file-browser and chat domains. Allowed by MODULES.md as transitional
@@ -354,6 +354,8 @@ export function FileDiffViewer({ toolCalls, cwd, onClose }: DiffViewerModalProps
         setJsonPreview(null);
         return;
       }
+      // Blur the trigger so it doesn't keep a stuck focus ring after ESC.
+      blurActiveElement();
       onClose();
     };
     document.addEventListener('keydown', handleKeyDown);

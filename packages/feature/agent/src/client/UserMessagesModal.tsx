@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Portal } from '@cockpit/shared-ui';
+import { Portal, useEscToClose } from '@cockpit/shared-ui';
 import type { ChatMessage } from './types';
 
 // Migrated from src/components/project/UserMessagesModal.tsx.
@@ -56,19 +55,8 @@ function truncateContent(content: string, maxLength: number = 50): string {
 export function UserMessagesModal({ isOpen, onClose, messages, onSelectMessage }: UserMessagesModalProps) {
   const { t } = useTranslation();
 
-  // ESC key to close
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  // ESC key to close (blurs the trigger so it doesn't keep a stuck focus ring)
+  useEscToClose(onClose, isOpen);
 
   if (!isOpen) return null;
 
