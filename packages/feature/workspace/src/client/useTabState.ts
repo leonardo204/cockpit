@@ -53,11 +53,16 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   const pageVisibleRef = useRef(pageVisible);
   useEffect(() => { pageVisibleRef.current = pageVisible; }, [pageVisible]);
 
-  // Initialize tabs (first create a temporary tab, later overwritten by server data)
+  // Initialize tabs (first create a temporary tab, later overwritten by server data).
+  // Seed it with initialSessionId (from the URL) so that a project with no state.json yet
+  // still opens the requested session: loadSessions' null-data branch keeps this default tab
+  // as-is, and its data branch merges/activates initialSessionId anyway. This removes the
+  // dependency on a post-onLoad SWITCH_SESSION message and its race with the restore.
   const [tabs, setTabs] = useState<TabInfo[]>(() => [{
     id: `tab-${Date.now()}`,
     cwd: initialCwd,
-    title: 'New Chat',
+    sessionId: initialSessionId,
+    title: initialSessionId ? `Session ${initialSessionId.slice(0, 6)}...` : 'New Chat',
   }]);
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0]?.id ?? '');
 

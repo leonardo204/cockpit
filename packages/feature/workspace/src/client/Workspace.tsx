@@ -39,8 +39,12 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   // Lazy load: only render project iframes that have been activated before (ever-growing set)
   const [loadedCwds, setLoadedCwds] = useState<Set<string>>(new Set());
   const iframeRefs = useRef<Map<string, HTMLIFrameElement>>(new Map());
-  // Pending sessionId + switchToAgent flag to send to iframe after load
-  const pendingSessionIdsRef = useRef<Map<string, { sessionId: string; switchToAgent?: boolean }>>(new Map());
+  // Initial session (and view intent) for a project, frozen at the moment the project
+  // is first added. Read by getProjectUrl to build the iframe src, so the selected
+  // sessionId reaches useTabState deterministically via the URL instead of a racy
+  // post-onLoad postMessage. Never mutated after birth (mutating it would change the
+  // iframe src and force a full reload), so later in-iframe session switches don't touch it.
+  const initialSessionIdsRef = useRef<Map<string, { sessionId: string; switchToAgent?: boolean }>>(new Map());
   // Track the current sessionId per project (used for URL updates, not iframe src)
   const projectSessionIdsRef = useRef<Map<string, string>>(new Map());
   // Project index saved before screenshot; restored when screenshot completes
@@ -130,9 +134,9 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
     if (!isLoaded || hasHandledInitialRef.current || !initialCwd) return;
     hasHandledInitialRef.current = true;
 
-    // If initialSessionId is provided, record it in the pending send list and tracking map
+    // If initialSessionId is provided, freeze it for the iframe URL and track it
     if (initialSessionId) {
-      pendingSessionIdsRef.current.set(initialCwd, { sessionId: initialSessionId });
+      initialSessionIdsRef.current.set(initialCwd, { sessionId: initialSessionId });
       projectSessionIdsRef.current.set(initialCwd, initialSessionId);
     }
 
@@ -240,7 +244,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
           setActiveIndex(newActiveIndex);
           saveProjects(newProjects, newActiveIndex, collapsed);
           if (targetSessionId) {
-            pendingSessionIdsRef.current.set(cwd, { sessionId: targetSessionId });
+            initialSessionIdsRef.current.set(cwd, { sessionId: targetSessionId });
           }
         }
         updateUrl(cwd, targetSessionId);
@@ -353,8 +357,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       setProjects(newProjects);
       setActiveIndex(newActiveIndex);
       saveProjects(newProjects, newActiveIndex, collapsed);
-      // Record pending sessionId to send after iframe loads
-      pendingSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
+      // Freeze the selected sessionId (+ agent view intent) for the iframe URL
+      initialSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
     }
 
     // Update URL
@@ -392,34 +396,30 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       setProjects(newProjects);
       setActiveIndex(newActiveIndex);
       saveProjects(newProjects, newActiveIndex, collapsed);
-      // Record pending sessionId to send after iframe loads
-      pendingSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
+      // Freeze the selected sessionId (+ agent view intent) for the iframe URL
+      initialSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
     }
 
     // Update URL
     updateUrl(cwd, sessionId);
   }, [projects, activeIndex, collapsed, saveProjects, updateUrl]);
 
-  // Build iframe URL (contains only cwd; sessionId is managed inside the iframe)
+  // Build iframe URL. For a project opened with a specific session, carry the sessionId
+  // (and, when the open intent was "jump into a session", view=agent) in the URL so that
+  // useTabState inside the iframe activates it deterministically on mount. The value is
+  // read from initialSessionIdsRef, which is frozen at project birth, so the src string is
+  // stable across re-renders (in-iframe session switches never change it → no iframe reload).
   const getProjectUrl = (project: ProjectInfo) => {
-    return `/project?cwd=${encodeURIComponent(project.cwd)}`;
-  };
-
-  // After iframe finishes loading, send the pending sessionId
-  const handleIframeLoad = useCallback((cwd: string) => {
-    const pending = pendingSessionIdsRef.current.get(cwd);
-    if (pending) {
-      const iframe = iframeRefs.current.get(cwd);
-      if (iframe?.contentWindow) {
-        iframe.contentWindow.postMessage({
-          type: 'SWITCH_SESSION',
-          sessionId: pending.sessionId,
-          switchToAgent: pending.switchToAgent,
-        }, '*');
+    let url = `/project?cwd=${encodeURIComponent(project.cwd)}`;
+    const initial = initialSessionIdsRef.current.get(project.cwd);
+    if (initial?.sessionId) {
+      url += `&sessionId=${encodeURIComponent(initial.sessionId)}`;
+      if (initial.switchToAgent) {
+        url += `&view=agent`;
       }
-      pendingSessionIdsRef.current.delete(cwd);
     }
-  }, []);
+    return url;
+  };
 
   // Wait for initial load to complete
   if (!isLoaded) {
@@ -488,7 +488,6 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
                     }
                   }}
                   src={getProjectUrl(project)}
-                  onLoad={() => handleIframeLoad(project.cwd)}
                   className={`absolute inset-0 w-full h-full border-0 ${
                     index === activeIndex ? 'block' : 'hidden'
                   }`}

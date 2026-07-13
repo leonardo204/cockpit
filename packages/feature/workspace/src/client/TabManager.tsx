@@ -30,12 +30,14 @@ import { updateSessionStatus, markScheduledTasksReadBySession } from './effect/s
 interface TabManagerProps {
   initialCwd?: string;
   initialSessionId?: string;
+  /** View to force on mount (from the URL). When set, it overrides the saved project view. */
+  initialView?: ViewType;
 }
 
-export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
+export function TabManager({ initialCwd, initialSessionId, initialView }: TabManagerProps) {
   const { t } = useTranslation();
   // activeView must be declared before useTabState, as useTabState needs it to determine unread state
-  const [activeView, setActiveView] = useState<ViewType>('agent');
+  const [activeView, setActiveView] = useState<ViewType>(initialView ?? 'agent');
 
   // Tab state management
   const {
@@ -107,16 +109,18 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   // never re-fetch messages appended externally (e.g. a scheduled-task run).
   const [sessionRefresh, setSessionRefresh] = useState<{ sessionId: string; nonce: number } | null>(null);
 
-  // Restore activeView from project-settings
+  // Restore activeView from project-settings. Skip when the URL forced a view
+  // (initialView): a "jump into a session" open must land on the requested view
+  // rather than whatever view this project was last left on.
   useEffect(() => {
-    if (!initialCwd) return;
+    if (!initialCwd || initialView) return;
     BrowserRuntime.runPromiseExit(loadProjectSettings(initialCwd)).then((exit) => {
       if (exit._tag === 'Success') {
         const settings = exit.value.settings as { activeView?: ViewType } | undefined;
         if (settings?.activeView) setActiveView(settings.activeView);
       }
     });
-  }, [initialCwd]);
+  }, [initialCwd, initialView]);
 
   // Screenshot state: auto-switch to console view + top banner + restore after screenshot completes
   const [screenshotActive, setScreenshotActive] = useState(false);
