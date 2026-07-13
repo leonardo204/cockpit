@@ -234,6 +234,56 @@ const runGitOk = (
     )
   )
 
+/**
+ * git's refusal to touch a literal pathspec whose leading component resolves
+ * through a symbolic link. `status` classifies a symlink-shadowed tracked file
+ * as a worktree-side delete, so it is routed to `rm --cached` upstream; this
+ * matcher only backstops XY combinations that routing did not catch.
+ *
+ * Relies on `runGit` forcing LC_ALL=C (git i18n off → stable English stderr) —
+ * the same contract the "nothing to commit" match depends on. If it ever fails
+ * to match, the `add` simply fails and the snapshot degrades to a warning
+ * rather than mis-recording, so this stays a best-effort backstop, not a
+ * correctness dependency.
+ */
+const SYMLINK_PATHSPEC_RE = /beyond a symbolic link/
+
+/**
+ * `git add` a set of literal pathspecs in one batch. If git aborts the batch
+ * with "beyond a symbolic link" — a path whose leading component became a
+ * symlink after `status` classified it as add-able — the batch stages nothing,
+ * so fall back to per-file: add each path, and convert any offender to an
+ * index-only `rm --cached` deletion (the same reconciliation the D-routing
+ * performs). Any other git failure propagates so the outer retry can react.
+ */
+const stageAdds = (
+  repoDir: string,
+  cwd: string,
+  paths: ReadonlyArray<string>
+): Effect.Effect<void, AppError> =>
+  Effect.gen(function* () {
+    const addArgs = ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]
+    const batch = yield* runGit(repoDir, cwd, addArgs, paths.map((p) => `:(literal)${p}`).join("\0"))
+    if (batch.code === 0) return
+    if (!SYMLINK_PATHSPEC_RE.test(batch.stderr)) {
+      return yield* Effect.fail(
+        new AppError({ message: `git add exited ${batch.code}: ${batch.stderr.slice(0, 400)}` })
+      )
+    }
+    for (const p of paths) {
+      const one = yield* runGit(repoDir, cwd, addArgs, `:(literal)${p}`)
+      if (one.code === 0) continue
+      if (!SYMLINK_PATHSPEC_RE.test(one.stderr)) {
+        return yield* Effect.fail(
+          new AppError({ message: `git add ${p} exited ${one.code}: ${one.stderr.slice(0, 400)}` })
+        )
+      }
+      // Symlink-shadowed tracked file → record its removal; --ignore-unmatch
+      // no-ops if it is not in the index.
+      yield* runGitOk(repoDir, cwd, ["rm", "--cached", "--quiet", "--ignore-unmatch", "--", `:(literal)${p}`])
+    }
+  })
+
 // ─────────────────────────────────────────────────────────
 // Per-repo serialization — semaphore map pinned to globalThis
 // ─────────────────────────────────────────────────────────
@@ -497,14 +547,19 @@ const snapshotOnce = (
         return skip
       })
 
-    // Stage exactly the files listed by `status`, as LITERAL pathspecs.
-    // This is the single point that upholds the invariant "everything that
-    // enters a commit passed the size guards": `add -A -- .` would rescan
-    // the tree and sweep in files that appeared AFTER the status/stat pass
-    // (bypassing the caps), and `:(exclude)` treats []*? as glob magic.
-    // Retried once as a whole: a file vanishing between status and add
-    // (concurrent session / build process) fails the add — the retry
-    // recomputes status so the vanished path drops out of the list.
+    // Stage exactly what `status` listed, as LITERAL pathspecs, split by the
+    // worktree status column so beyond-symlink paths never reach `git add`:
+    //   • worktree column 'D' (tracked file with no readable worktree copy —
+    //     a plain delete, OR a file whose parent dir just became a symlink) →
+    //     `git rm --cached`. Feeding such a path to `git add` fails with
+    //     "beyond a symbolic link" and aborts the WHOLE batch, staging nothing.
+    //   • everything else → `git add`, size-capped.
+    // This is also the single point upholding "everything committed passed the
+    // size guards": `add -A -- .` would rescan the tree and sweep in files that
+    // appeared AFTER the status/stat pass (bypassing the caps), and `:(exclude)`
+    // treats []*? as glob magic. Retried once as a whole: a file vanishing
+    // between status and add (concurrent session / build) fails the add — the
+    // retry recomputes status so the vanished path drops out of the list.
     const stageOnce: Effect.Effect<
       { staged: false } | { staged: true },
       AppError
@@ -519,38 +574,59 @@ const snapshotOnce = (
         return { staged: false as const }
       }
 
-      const changedPaths = entries.map((e) => e.slice(3)).filter(Boolean)
+      // XY = entry[0..1], path = entry[3..] (single space separator; renames
+      // are off, so an entry never carries a second NUL-joined path).
+      const addPaths: string[] = []
+      const rmPaths: string[] = []
+      for (const e of entries) {
+        const path = e.slice(3)
+        if (!path) continue
+        if (e[1] === "D") rmPaths.push(path)
+        else addPaths.push(path)
+      }
+
+      // Size caps apply only to the add set. Deletions cost 0 bytes and are
+      // always kept; measuring them here would be wrong anyway, since `stat`
+      // follows symlinks and would resolve a symlink-shadowed path to its live
+      // target (the very mismatch that made `git add` blow up before).
       const sizes = yield* Effect.all(
-        changedPaths.map((p) =>
+        addPaths.map((p) =>
           fsTry("stat", () => stat(join(cwd, p)).then((s) => (s.isFile() ? s.size : 0))).pipe(
-            // Deleted files fail the stat → size 0 (they must stay included).
+            // Untracked path vanishing between status and stat → size 0.
             Effect.orElseSucceed(() => 0)
           )
         ),
         { concurrency: 16 }
       )
-      const included: string[] = []
+      const includedAdds: string[] = []
       let totalBytes = 0
-      for (let i = 0; i < changedPaths.length; i++) {
+      for (let i = 0; i < addPaths.length; i++) {
         if (sizes[i] > maxFileBytes) continue // oversize → excluded
-        included.push(changedPaths[i])
+        includedAdds.push(addPaths[i])
         totalBytes += sizes[i]
       }
       if (totalBytes > MAX_TOTAL_BYTES) {
         yield* tripGuard(`${Math.round(totalBytes / 1048576)}MB of changes exceeds ${Math.round(MAX_TOTAL_BYTES / 1048576)}MB`)
         return { staged: false as const }
       }
-      // Everything changed is oversize (e.g. a resident excluded file keeps
-      // showing as untracked) → nothing to stage; skip the add/commit.
-      if (included.length === 0) return { staged: false as const }
+      // Nothing left to record (e.g. every change was an oversize untracked
+      // file that keeps reappearing) → skip the add/commit.
+      if (includedAdds.length === 0 && rmPaths.length === 0) return { staged: false as const }
 
-      const pathspec = included.map((p) => `:(literal)${p}`).join("\0")
-      yield* runGitOk(
-        repoDir,
-        cwd,
-        ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
-        pathspec
-      )
+      // Deletions first: `rm --cached` only touches the index, so it is immune
+      // to the beyond-symlink check and clears any stale entry a following `add`
+      // of a symlink at the same path would otherwise D/F-conflict with.
+      if (rmPaths.length > 0) {
+        yield* runGitOk(
+          repoDir,
+          cwd,
+          ["rm", "--cached", "--quiet", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"],
+          rmPaths.map((p) => `:(literal)${p}`).join("\0")
+        )
+      }
+      if (includedAdds.length > 0) {
+        yield* stageAdds(repoDir, cwd, includedAdds)
+      }
       return { staged: true as const }
     })
 
