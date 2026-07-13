@@ -31,7 +31,7 @@ The global note carries things that follow you everywhere; the project note carr
 Tiptap-based rich-text editor with Markdown sensibility:
 
 - Headings (H1 / H2 / H3) — type `# title` or use the slash menu.
-- Bullet lists, numbered lists, task lists (checkboxes).
+- Bullet lists, numbered lists, task lists (checkboxes, with a todo / doing / done tri-state).
 - Blockquotes, code blocks, tables, horizontal rules.
 - Links.
 - Built-in undo / redo (the StarterKit ships with History).
@@ -53,6 +53,17 @@ Type `/` and a menu appears with formatting commands — **11 built-in actions**
 | `/link` | Link insertion |
 
 These are **only** in the Notes editor — they don't appear in the chat input. The chat input has [its own different slash menu](/en/docs/agent/skills/) for Skills.
+
+### Keyboard shortcuts
+
+The editor also carries a set of org-mode-style structural shortcuts (**only** active in the Notes editor):
+
+| Shortcut | Action |
+|---|---|
+| `Tab` | Fold / unfold the heading at the cursor. Binary toggle (expanded ↔ folded) when it has no sub-headings; a three-way cycle expanded → folded → titles-only (every descendant shows as a title) when it does. Clicking the gutter arrow toggles that one heading only. |
+| `Alt+↑` / `Alt+↓` | Move the current line up / down. A heading moves its whole subtree; a list / task item reorders within its list, hopping out to an adjacent paragraph at the list edge. Headings, code blocks, tables, and quotes are hard boundaries. |
+| `Alt+←` / `Alt+→` | Cycle a heading / paragraph's rank on the ring H1 → H2 → H3 → paragraph (wraps); a list item outdents / indents. |
+| `Shift+←` / `Shift+→` | Cycle task state on the ring paragraph → todo → doing → done (wraps), converting between a plain line and a task item across the "paragraph" boundary. Only fires with an empty selection inside a text line, so `Shift+arrow` selection keeps working elsewhere. |
 
 ## Auto-save
 
