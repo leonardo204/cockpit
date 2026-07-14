@@ -121,8 +121,18 @@ export function InteractiveMarkdownPreview({
 
   // Intercept markdown links → open local .md targets in-place (explorer only).
   // Returns true when consumed so MarkdownRenderer prevents browser navigation.
-  const handleLinkClick = useCallback((href: string): boolean => {
-    if (!onLocalMdLink) return false;
+  //
+  // Identity-stable: `onLocalMdLink` from the caller (FileBrowserModal) churns on
+  // every render (its useCallback depends on the file-tree hook object), which
+  // would break MarkdownRenderer's memo and re-parse the *entire* previewed
+  // document on every unrelated re-render (e.g. a chat-tab session switch — a
+  // multi-second freeze on large docs). A ref indirection keeps this callback's
+  // identity constant while still calling the latest onLocalMdLink / sourceFile.
+  const linkClickDepsRef = useRef({ onLocalMdLink, sourceFile });
+  linkClickDepsRef.current = { onLocalMdLink, sourceFile };
+  const handleLinkClick = useRef((href: string): boolean => {
+    const { onLocalMdLink: onLink, sourceFile: src } = linkClickDepsRef.current;
+    if (!onLink) return false;
     // External schemes (http(s):, mailto:, tel:, ...) → leave to the browser.
     if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
     const hashIdx = href.indexOf('#');
@@ -132,9 +142,9 @@ export function InteractiveMarkdownPreview({
     let decoded = pathPart;
     try { decoded = decodeURIComponent(pathPart); } catch { /* keep raw */ }
     if (!isMarkdownFile(decoded)) return false; // only .md is in scope
-    onLocalMdLink(resolveRelativePath(sourceFile, decoded), anchor);
+    onLink(resolveRelativePath(src, decoded), anchor);
     return true;
-  }, [onLocalMdLink, sourceFile]);
+  }).current;
 
   // After a cross-file link navigation, scroll to the requested heading once
   // the new content has rendered. Keyed on content so it fires post-switch.

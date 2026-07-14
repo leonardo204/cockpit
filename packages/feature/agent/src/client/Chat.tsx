@@ -420,7 +420,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
   // that uuid may not exist, causing fork.ts to silently degrade to a
   // full-file copy. Fall back to `sessionId` only when no file has been
   // loaded yet (fresh tab with no history).
-  const handleFork = useCallback(async (messageId: string) => {
+  const handleForkImpl = useCallback(async (messageId: string) => {
     const forkSid = loadedSessionId ?? sessionId;
     if (!initialCwd || !forkSid) return;
 
@@ -444,6 +444,16 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
       console.error('Fork failed:', exit.cause);
     }
   }, [initialCwd, loadedSessionId, sessionId, onOpenSession]);
+
+  // Stabilize the fork callback passed down to every (memoized) MessageBubble.
+  // handleForkImpl's identity changes whenever loadedSessionId / sessionId churn
+  // (each of the many re-renders a session switch fans out), which would break
+  // MessageBubble's React.memo and re-parse react-markdown for the whole list on
+  // every switch. A ref indirection keeps the passed-down identity constant while
+  // still calling the latest implementation.
+  const handleForkRef = useRef(handleForkImpl);
+  handleForkRef.current = handleForkImpl;
+  const handleFork = useRef((messageId: string) => handleForkRef.current(messageId)).current;
 
   // Stabilize ChatInput callback props, combined with React.memo to avoid unnecessary re-renders
   const handleShowComments = useCallback(() => {

@@ -289,6 +289,10 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
   // swipe there. Re-firing with a new message replaces the content and (re)asserts
   // the Explorer panel — no extra bookkeeping needed for the "already on panel 2,
   // click a new entry" case.
+  // Stable onClose for the (memoized) Explorer panel so a chat-tab/session switch
+  // — which re-renders TabManager — doesn't re-render the whole FileBrowser subtree.
+  const handleExplorerClose = useCallback(() => handleViewChange('agent'), [handleViewChange]);
+
   const handleShowFileDiff = useCallback((toolCalls: ToolCallInfo[], cwd?: string) => {
     setFileDiffRequest({ toolCalls, cwd });
     handleViewChange('explorer');
@@ -406,7 +410,7 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
             <div className="w-1/3 h-full overflow-hidden relative">
               <PanelPortalProvider>
                 <FileBrowserModal
-                  onClose={() => handleViewChange('agent')}
+                  onClose={handleExplorerClose}
                   cwd={initialCwd}
                   initialTab={fileBrowserInitialTab}
                   tabSwitchTrigger={tabSwitchTrigger}

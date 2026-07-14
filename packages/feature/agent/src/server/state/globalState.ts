@@ -9,7 +9,7 @@ import {
   findCodexSessionPath,
   findKimiSessionPath,
 } from '@cockpit/shared-utils';
-import { createReadStream, existsSync } from 'fs';
+import { createReadStream, existsSync, statSync } from 'fs';
 import { createInterface } from 'readline';
 import { basename } from 'path';
 import { sendPushNotification } from '../push/push';
@@ -224,6 +224,8 @@ export interface SessionPreview {
    * Full, UNTRUNCATED, lowercased corpus for the search panel: summary + every
    * user message in order. Display fields (first/last) stay truncated+sampled;
    * matching must not inherit that lossiness, so search reads this instead.
+   * Only populated when the caller passes `{ includeSearchText: true }` (the
+   * search-panel GET); the WS snapshot leaves it empty to skip the join cost.
    */
   searchText: string;
 }
@@ -236,31 +238,96 @@ interface SessionContent {
 }
 
 /**
- * Collect the summary line plus every user message in a single file pass,
- * dispatching by engine. Codex/Kimi transcripts have no summary line (their
- * title is the first user message, already covered by `messages`).
+ * Resolve the on-disk transcript path for a session plus the reader that parses
+ * it into SessionContent, dispatching by engine. Codex/Kimi transcripts have no
+ * summary line (their title is the first user message, already in `messages`).
+ * Returns null when no transcript exists on any known path.
  */
-async function getSessionContent(cwd: string, sessionId: string): Promise<SessionContent> {
+function resolveSessionFile(
+  cwd: string,
+  sessionId: string
+): { path: string; read: (p: string) => Promise<SessionContent> } | null {
   const claudePath = getClaudeSessionPath(cwd, sessionId);
-  if (existsSync(claudePath)) return getClaudeStyleContent(claudePath);
+  if (existsSync(claudePath)) return { path: claudePath, read: getClaudeStyleContent };
 
   const claude2Path = getClaude2SessionPath(cwd, sessionId);
-  if (existsSync(claude2Path)) return getClaudeStyleContent(claude2Path);
+  if (existsSync(claude2Path)) return { path: claude2Path, read: getClaudeStyleContent };
 
   const ollamaPath = getOllamaSessionPath(cwd, sessionId);
-  if (existsSync(ollamaPath)) return getClaudeStyleContent(ollamaPath);
+  if (existsSync(ollamaPath)) return { path: ollamaPath, read: getClaudeStyleContent };
 
   const codexPath = findCodexSessionPath(sessionId);
   if (codexPath && existsSync(codexPath)) {
-    return { aiTitle: '', summary: '', messages: await getCodexUserMessages(codexPath) };
+    return {
+      path: codexPath,
+      read: async (p) => ({ aiTitle: '', summary: '', messages: await getCodexUserMessages(p) }),
+    };
   }
 
   const kimiPath = findKimiSessionPath(sessionId);
   if (kimiPath && existsSync(kimiPath)) {
-    return { aiTitle: '', summary: '', messages: await getKimiUserMessages(kimiPath) };
+    return {
+      path: kimiPath,
+      read: async (p) => ({ aiTitle: '', summary: '', messages: await getKimiUserMessages(p) }),
+    };
   }
 
-  return { aiTitle: '', summary: '', messages: [] };
+  return null;
+}
+
+// ── Parsed-content cache keyed by file fingerprint (mtime+size) ──────────────
+// getSessionContent streams and JSON.parses an entire transcript. The WS
+// snapshot re-runs it for the top-15 sessions on every state.json write — i.e.
+// on every chat-tab session switch — even though a switch never mutates any
+// transcript. Cache the *parsed* SessionContent (small: only user messages +
+// title lines, never the multi-MB assistant/tool bytes) per resolved path,
+// invalidated by an mtime+size fingerprint. A switch then costs one statSync per
+// session instead of a full read+parse; an active run or an external `claude -r`
+// append changes the fingerprint and re-reads naturally. Bounded LRU.
+const CONTENT_CACHE_MAX = 40;
+const contentCache = new Map<string, { fingerprint: string; content: SessionContent }>();
+
+/** Cheap change token — mtime + size, same idea as session-by-path's getFileFingerprint. */
+function fileFingerprint(filePath: string): string {
+  const st = statSync(filePath);
+  return `${st.mtimeMs}-${st.size}`;
+}
+
+/**
+ * Collect the summary line plus every user message in a single file pass,
+ * dispatching by engine. Result is cached by file fingerprint so repeated reads
+ * of an unchanged transcript (the snapshot recompute on every tab switch) skip
+ * the read+parse entirely.
+ */
+async function getSessionContent(cwd: string, sessionId: string): Promise<SessionContent> {
+  const resolved = resolveSessionFile(cwd, sessionId);
+  if (!resolved) return { aiTitle: '', summary: '', messages: [] };
+
+  let fingerprint = '';
+  try {
+    fingerprint = fileFingerprint(resolved.path);
+    const cached = contentCache.get(resolved.path);
+    if (cached && cached.fingerprint === fingerprint) {
+      // LRU touch: re-insert so it counts as most-recently-used.
+      contentCache.delete(resolved.path);
+      contentCache.set(resolved.path, cached);
+      return cached.content;
+    }
+  } catch {
+    // stat failed (race with deletion, etc.) — fall through to a fresh read.
+  }
+
+  const content = await resolved.read(resolved.path);
+
+  if (fingerprint) {
+    contentCache.delete(resolved.path);
+    contentCache.set(resolved.path, { fingerprint, content });
+    if (contentCache.size > CONTENT_CACHE_MAX) {
+      const oldest = contentCache.keys().next().value;
+      if (oldest !== undefined) contentCache.delete(oldest);
+    }
+  }
+  return content;
 }
 
 /**
@@ -269,13 +336,19 @@ async function getSessionContent(cwd: string, sessionId: string): Promise<Sessio
  * messages → all in firstMessages; otherwise first 5 + last 5, each truncated to
  * MAX_TEXT_LEN), and an untruncated `searchText` corpus for the search panel.
  */
-export async function getSessionPreview(cwd: string, sessionId: string): Promise<SessionPreview> {
+export async function getSessionPreview(
+  cwd: string,
+  sessionId: string,
+  opts?: { includeSearchText?: boolean }
+): Promise<SessionPreview> {
   const { aiTitle, summary, messages } = await getSessionContent(cwd, sessionId);
   const title = generateTitle(aiTitle, summary, messages);
   const lastUserMessage = messages[messages.length - 1];
   // Untruncated, unsampled corpus — keeps long messages and mid-conversation
-  // messages searchable even though the display fields below drop them.
-  const searchText = [summary, ...messages].join('\n').toLowerCase();
+  // messages searchable even though the display fields below drop them. Only the
+  // search panel (/api/global-state GET) needs it; the WS snapshot never reads
+  // searchText, so skip the multi-MB join+toLowerCase there.
+  const searchText = opts?.includeSearchText ? [summary, ...messages].join('\n').toLowerCase() : '';
   if (messages.length <= SUMMARY_THRESHOLD) {
     return { title, lastUserMessage, firstMessages: messages.map((m) => truncate(m)!), lastMessages: [], searchText };
   }
@@ -373,6 +446,32 @@ function isValidUserMessage(text: string): boolean {
 // Transcript readers (Claude-style, Codex, Kimi)
 // ============================================
 
+// Snapshot readers only consume `user`, `summary`, and `ai-title` lines — all
+// small. The bulk of a transcript's bytes are large `assistant` / tool_result
+// lines we discard, and JSON.parse-ing those (big string alloc + object graph +
+// GC) is the dominant cost on a cold read. A cheap byte scan for the wanted
+// type markers lets us skip parsing any line that can't be one of the three,
+// cutting parse volume by ~1-2 orders of magnitude on big transcripts.
+//
+// Compact machine-written JSONL guarantees the `"type":"x"` form (no spaces); a
+// space-padded variant is tolerated defensively. A false positive only wastes
+// one parse; a false negative only yields a slightly stale preview title (this
+// is best-effort code wrapped in try/catch), never a crash.
+const SNAPSHOT_TYPE_MARKERS = [
+  '"type":"user"',
+  '"type": "user"',
+  '"type":"summary"',
+  '"type": "summary"',
+  '"type":"ai-title"',
+  '"type": "ai-title"',
+];
+function isSnapshotRelevantLine(line: string): boolean {
+  for (const marker of SNAPSHOT_TYPE_MARKERS) {
+    if (line.includes(marker)) return true;
+  }
+  return false;
+}
+
 async function getClaudeStyleTitle(filePath: string): Promise<string> {
   try {
     const fileStream = createReadStream(filePath);
@@ -384,6 +483,8 @@ async function getClaudeStyleTitle(filePath: string): Promise<string> {
 
     for await (const line of rl) {
       if (!line.trim()) continue;
+      // Skip lines that can't be a wanted type before the expensive JSON.parse.
+      if (!isSnapshotRelevantLine(line)) continue;
       try {
         const entry = JSON.parse(line);
         if (entry.type === 'ai-title' && entry.aiTitle) {
@@ -422,6 +523,8 @@ async function getClaudeStyleUserMessages(filePath: string): Promise<string[]> {
 
     for await (const line of rl) {
       if (!line.trim()) continue;
+      // Skip lines that can't be a wanted type before the expensive JSON.parse.
+      if (!isSnapshotRelevantLine(line)) continue;
       try {
         const entry = JSON.parse(line);
         if (entry.type !== 'user') continue;
@@ -471,6 +574,8 @@ async function getClaudeStyleContent(filePath: string): Promise<SessionContent> 
 
     for await (const line of rl) {
       if (!line.trim()) continue;
+      // Skip lines that can't be a wanted type before the expensive JSON.parse.
+      if (!isSnapshotRelevantLine(line)) continue;
       try {
         const entry = JSON.parse(line);
         if (entry.type === 'ai-title' && entry.aiTitle) {

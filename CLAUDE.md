@@ -17,6 +17,20 @@
   - z-index levels must be managed consistently
   - Prevent components from overflowing into adjacent panels
 
+## React Performance Conventions
+
+All three panels + every open chat tab stay mounted, so one state change (session
+switch, WS push, terminal tick) re-renders large sibling subtrees. Props to a
+`memo`'d heavy renderer (chat `MessageBubble`, Explorer previews, Console bubbles)
+must be **referentially stable** — one unstable prop silently defeats the `memo`:
+
+- Callbacks → `useCallback`; if a dep churns every render (`fileTree`, live
+  `sessionId`), use a ref indirection so the passed-down identity never changes.
+- Objects/arrays (e.g. `extra={{…}}`) → `useMemo`. Inside `.map()` extract a
+  `memo`'d row (see `ConsoleBubbleRow`) fed stable callbacks + per-item booleans.
+- Expensive per-render work → `useMemo([content])`; never parse/format an
+  O(document) blob inline in JSX.
+
 ## Effect Conventions
 
 All IO / side-effects / dependencies / errors go through the

@@ -48,7 +48,8 @@ export const GET = handler(() =>
     const sessions = yield* Effect.all(
       state.sessions.map((session) =>
         Effect.promise(() =>
-          getSessionPreview(session.cwd, session.sessionId)
+          // Search panel needs the full-text corpus; the WS snapshot omits it.
+          getSessionPreview(session.cwd, session.sessionId, { includeSearchText: true })
         ).pipe(
           Effect.map((preview) => {
             // Live title (summary line preferred). The persisted title is a

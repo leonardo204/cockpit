@@ -1,15 +1,13 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CommandBubble } from './CommandBubble';
+import { ConsoleBubbleRow } from './ConsoleBubbleRow';
 import { EnvManager } from './EnvManager';
 import { AliasManager } from './AliasManager';
 import { ConsoleInputBar } from './ConsoleInputBar';
 import { ConsoleScrollButtons } from './ConsoleScrollButtons';
 import { useConsoleState, type ConsoleItem } from './useConsoleState';
-import { interruptCommand as interruptCmd } from './TerminalWsManager';
-import { getPlugin } from './pluginRegistry';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { Effect } from 'effect';
 import {
@@ -37,7 +35,7 @@ const BUBBLE_GUIDE: { key: string; label: string; triggers: string[]; notes?: st
   { key: 'notebook', label: 'console.bubbleNotebook', triggers: ['*.ipynb'] },
 ];
 
-export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNote }: ConsoleViewProps) {
+function ConsoleViewImpl({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNote }: ConsoleViewProps) {
   const { t } = useTranslation();
   const state = useConsoleState({ cwd, initialShellCwd, tabId, onCwdChange });
   const {
@@ -186,6 +184,12 @@ export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNo
     setMaximizedId(prev => prev === id ? null : id);
   }, []);
 
+  // Stable wrapper so ConsoleBubbleRow's `extra` doesn't churn each render.
+  const addBrowserItem = useCallback(
+    (url: string, afterId: string) => addPluginItem('browser', url, afterId),
+    [addPluginItem],
+  );
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'm' && !e.shiftKey && !e.altKey) {
@@ -311,87 +315,41 @@ export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNo
               </div>
             )}
             <div className={maximizedId ? 'flex flex-col gap-3' : gridLayout ? 'grid grid-cols-2 gap-3' : 'flex flex-col gap-3'}>
-            {consoleItems.map((item) => {
-              const dragProps = {
-                draggable: true,
-                onDragStart: (e: React.DragEvent) => handleDragStart(e, item.data.id),
-                onDragOver: (e: React.DragEvent) => handleDragOver(e, item.data.id),
-                onDragEnter: handleDragEnter,
-                onDragLeave: handleDragLeave,
-                onDrop: handleDrop,
-                onDragEnd: handleDragEnd,
-              };
-
-              if (item.type === 'command') {
-                const cmd = item.data as import('./useConsoleState').Command;
-                return (
-                  <div key={cmd.id} data-bubble-id={cmd.id} className="group/cmd rounded-lg transition-shadow" {...dragProps}>
-                    <CommandBubble
-                      commandId={cmd.id}
-                      tabId={tabId}
-                      projectCwd={cwd}
-                      command={cmd.command}
-                      output={cmd.output}
-                      exitCode={cmd.exitCode}
-                      isRunning={cmd.isRunning}
-                      selected={selectedCommandId === cmd.id}
-                      onSelect={() => { setSelectedCommandId(cmd.id); }}
-                      onInterrupt={cmd.isRunning ? () => interruptCommand(cmd.id) : undefined}
-                      onStdin={cmd.isRunning ? (data: string) => sendStdin(cmd.id, data) : undefined}
-                      onDelete={() => {
-                        if (cmd.isRunning && cmd.pid) interruptCmd(cmd.pid);
-                        deleteCommand(cmd.id);
-                      }}
-                      onRerun={() => rerunCommand(cmd.id)}
-                      timestamp={cmd.timestamp}
-                      usePty={cmd.usePty}
-                      subscribePtyOutput={cmd.usePty ? subscribePtyOutput : undefined}
-                      subscribePtyReset={cmd.usePty ? subscribePtyReset : undefined}
-                      subscribePtyRefresh={cmd.usePty ? subscribePtyRefresh : undefined}
-                      onPtyResize={(cols, rows) => { ptySizeRef.current.set(cmd.id, { cols, rows }); resizePty(cmd.id, cols, rows); }}
-                      onToggleMaximize={() => toggleMaximize(cmd.id)}
-                      maximized={maximizedId === cmd.id}
-                      expandedHeight={consoleHeight}
-                      bubbleContentHeight={bubbleContentHeight}
-                      onTitleMouseDown={handleTitleMouseDown}
-                    />
-                  </div>
-                );
-              }
-
-              // Plugin bubble: find Component from registry
-              const plugin = getPlugin(item.type);
-              if (!plugin) return null;
-              const Comp = plugin.Component;
-              const pluginData = item.data as import('./bubblePlugins').PluginItemBase;
-              return (
-                <div key={pluginData.id} data-bubble-id={pluginData.id} className="rounded-lg transition-shadow" {...dragProps}>
-                  <Comp
-                    item={pluginData}
-                    selected={selectedCommandId === pluginData.id}
-                    maximized={maximizedId === pluginData.id}
-                    expandedHeight={consoleHeight}
-                    bubbleContentHeight={bubbleContentHeight}
-                    timestamp={pluginData.timestamp}
-                    onSelect={() => { setSelectedCommandId(pluginData.id); }}
-                    onClose={() => closePluginItem(pluginData.id)}
-                    onToggleMaximize={() => toggleMaximize(pluginData.id)}
-                    onTitleMouseDown={handleTitleMouseDown}
-                    extra={{
-                      addBrowserItem: (url: string, afterId: string) => addPluginItem('browser', url, afterId),
-                      initialSleeping: sleepingBubbles.has(pluginData.id),
-                      onSleep: handleBubbleSleep,
-                      onWake: handleBubbleWake,
-                      // Forwarded to plugin bubbles (e.g. BrowserBubble) so they can scope
-                      // their bridge registration to the right project / tab — used by
-                      // /api/connection/list filtering and per-tab bubble-titles JSON lookup.
-                      projectCwd: cwd,
-                      tabId,
-                    }}
-                  />
-                </div>
-              );
-            })}
+            {consoleItems.map((item) => (
+              <ConsoleBubbleRow
+                key={item.data.id}
+                item={item}
+                selected={selectedCommandId === item.data.id}
+                maximized={maximizedId === item.data.id}
+                initialSleeping={sleepingBubbles.has(item.data.id)}
+                tabId={tabId}
+                projectCwd={cwd}
+                expandedHeight={consoleHeight}
+                bubbleContentHeight={bubbleContentHeight}
+                onDragStart={handleDragStart}
+                onDragOver={handleDragOver}
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onDragEnd={handleDragEnd}
+                onSelectId={setSelectedCommandId}
+                onInterruptId={interruptCommand}
+                onStdin={sendStdin}
+                onDeleteCommand={deleteCommand}
+                onRerun={rerunCommand}
+                subscribePtyOutput={subscribePtyOutput}
+                subscribePtyReset={subscribePtyReset}
+                subscribePtyRefresh={subscribePtyRefresh}
+                ptySizeRef={ptySizeRef}
+                resizePty={resizePty}
+                onToggleMaximizeId={toggleMaximize}
+                onTitleMouseDown={handleTitleMouseDown}
+                onClosePlugin={closePluginItem}
+                addBrowserItem={addBrowserItem}
+                onSleep={handleBubbleSleep}
+                onWake={handleBubbleWake}
+              />
+            ))}
             </div>
             <div ref={bottomRef} />
           </>
@@ -440,3 +398,8 @@ export function ConsoleView({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNo
     </div>
   );
 }
+
+// Memoized: always mounted next to Chat/Explorer, so a chat switch re-renders
+// TabManager. Props (cwd, tabId, stable onOpenNote) don't change on a switch,
+// so memo keeps the terminal/browser-bubble subtree from re-rendering.
+export const ConsoleView = memo(ConsoleViewImpl);

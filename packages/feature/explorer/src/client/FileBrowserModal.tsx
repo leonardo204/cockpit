@@ -63,7 +63,7 @@ import { SearchResultsPanel } from './SearchResultsPanel';
 import type { Location } from '@cockpit/feature-explorer/server/lsp/types';
 import { useSwipeContext } from '@cockpit/shared-ui';
 
-export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchTrigger, initialSearchQuery, searchQueryTrigger }: FileBrowserModalProps) {
+function FileBrowserModalImpl({ onClose, cwd, initialTab = 'tree', tabSwitchTrigger, initialSearchQuery, searchQueryTrigger }: FileBrowserModalProps) {
   const { t } = useTranslation();
   const { activeView, onViewChange } = useSwipeContext();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
@@ -108,6 +108,17 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
   const pageVisible = usePageVisible();
   const fileTree = useFileTree({ cwd });
   useLSPWarmup(cwd, fileTree.selectedPath);
+
+  // Memoized JSON in-place preview text. formatAsHumanReadable is O(document
+  // size); FileBrowserModal re-renders on unrelated events (e.g. a chat-tab
+  // session switch re-renders the whole panel), so compute it only when the
+  // JSON content actually changes rather than on every render.
+  const jsonPreviewFormatted = useMemo(() => {
+    const fc = fileTree.fileContent;
+    const path = fileTree.selectedPath;
+    if (!fc || fc.type !== 'text' || typeof fc.content !== 'string' || !path || !isJsonFile(path)) return null;
+    return formatAsHumanReadable(fc.content, THEME_JSON_COLORS);
+  }, [fileTree.fileContent, fileTree.selectedPath]);
   const contentSearch = useContentSearch({ cwd, onSearchComplete: () => setShowSearchPanel(true) });
   const gitStatus = useGitStatus({ cwd, addToRecentFiles: fileTree.addToRecentFiles });
 
@@ -1745,7 +1756,7 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
                             <JsonSearchBar search={jsonSearch} />
                             <div className="flex-1 overflow-auto px-6 py-4">
                               <pre ref={jsonPreRef} className="whitespace-pre-wrap break-words font-mono" style={{ fontSize: '0.8125rem', lineHeight: '1.5' }}>
-                                {formatAsHumanReadable(fileTree.fileContent.content, THEME_JSON_COLORS)}
+                                {jsonPreviewFormatted}
                               </pre>
                             </div>
                           </div>
@@ -2105,3 +2116,9 @@ export function FileBrowserModal({ onClose, cwd, initialTab = 'tree', tabSwitchT
     </MenuContainerProvider>
   );
 }
+
+// Memoized: the Explorer panel is always mounted alongside Chat/Console, so a
+// chat-tab/session switch re-renders TabManager. With stable props (cwd + the
+// trigger counters, and a stabilized onClose) memo keeps that switch from
+// re-rendering the entire file browser + preview subtree.
+export const FileBrowserModal = React.memo(FileBrowserModalImpl);
