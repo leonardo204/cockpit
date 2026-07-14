@@ -740,7 +740,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
 
       {/* Diff viewer */}
       {showDiffViewer && message.toolCalls && (
-        <DiffViewerModal toolCalls={message.toolCalls} cwd={cwd} onClose={() => setShowDiffViewer(false)} />
+        <DiffViewerModal toolCalls={message.toolCalls} cwd={cwd} onClose={() => setShowDiffViewer(false)} onContentSearch={onContentSearch} />
       )}
 
       {/* AskQuestion viewer */}

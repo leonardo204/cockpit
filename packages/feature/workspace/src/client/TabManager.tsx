@@ -285,6 +285,14 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
     handleViewChange('explorer');
   }, [handleViewChange]);
 
+  // Same as above but for a search fired from the file-diff overlay: the
+  // overlay sits above the FileBrowser (z-20), so it must be dismissed first
+  // or the search results stay hidden behind it.
+  const handleDiffContentSearch = useCallback((query: string) => {
+    setFileDiffRequest(null);
+    handleContentSearch(query);
+  }, [handleContentSearch]);
+
   // Message "view all file changes": show the diff in the Explorer panel and
   // swipe there. Re-firing with a new message replaces the content and (re)asserts
   // the Explorer panel — no extra bookkeeping needed for the "already on panel 2,
@@ -425,6 +433,7 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
                       toolCalls={fileDiffRequest.toolCalls}
                       cwd={fileDiffRequest.cwd}
                       onClose={() => setFileDiffRequest(null)}
+                      onContentSearch={handleDiffContentSearch}
                     />
                   </div>
                 )}

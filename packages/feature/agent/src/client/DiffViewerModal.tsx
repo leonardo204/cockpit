@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Effect } from 'effect';
 import { useEffectQuery } from '@cockpit/effect-react';
-import { Portal, blurActiveElement } from '@cockpit/shared-ui';
+import { Portal, blurActiveElement, MenuContainerProvider } from '@cockpit/shared-ui';
 import { X, PanelLeft, Wrench } from 'lucide-react';
 // Tech debt: DiffView / GitFileTree are generic renderers used by both
 // file-browser and chat domains. Allowed by MODULES.md as transitional
@@ -77,6 +77,10 @@ interface DiffViewerModalProps {
   toolCalls: ToolCallInfo[];
   cwd?: string;
   onClose: () => void;
+  /** Selected text → project-wide search. When provided, the diff's
+   *  selection toolbar renders the "Search" button (comment / send-to-AI
+   *  are always available once `cwd` is present). */
+  onContentSearch?: (query: string) => void;
 }
 
 // ============================================
@@ -232,8 +236,19 @@ function formatCallTime(epochSeconds: number): string {
 // DiffViewerModal
 // ============================================
 
-export function FileDiffViewer({ toolCalls, cwd, onClose }: DiffViewerModalProps) {
+export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: DiffViewerModalProps) {
   const { t } = useTranslation();
+
+  // Portal target for DiffView's floating selection toolbar (comment /
+  // send-to-AI / search). DiffView reads it via `useMenuContainer()`, so
+  // without our own provider the hook resolves to null and the toolbar
+  // never mounts — this viewer is a SIBLING of FileBrowserModal (the only
+  // other MenuContainerProvider in this panel), not a child of it.
+  const menuContainerRef = useRef<HTMLDivElement>(null);
+  const [menuContainer, setMenuContainer] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setMenuContainer(menuContainerRef.current);
+  }, []);
 
   // Real on-disk diffs from the shadow-git snapshots, keyed by this message's
   // tool_use ids. cwd missing → skip straight to the legacy fallback.
@@ -374,7 +389,13 @@ export function FileDiffViewer({ toolCalls, cwd, onClose }: DiffViewerModalProps
     // Full-bleed panel: fills its host container (Explorer panel 2, or the
     // DiffViewerModal backdrop). The three-pane layout (call list + file tree +
     // diff) needs every pixel.
+    //
+    // The root is `relative` and doubles as the floating-toolbar portal target
+    // (see MenuContainerProvider above): FloatingToolbar positions itself
+    // container-relative, so the container must span this whole panel.
+    <MenuContainerProvider container={menuContainer}>
     <div
+      ref={menuContainerRef}
       className="relative bg-card shadow-xl w-full h-full flex flex-col"
       onClick={(e) => e.stopPropagation()}
     >
@@ -557,6 +578,12 @@ export function FileDiffViewer({ toolCalls, cwd, onClose }: DiffViewerModalProps
                           isNew={selectedFile.status === 'added'}
                           isDeleted={selectedFile.status === 'deleted'}
                           cwd={cwd}
+                          // Enable the selection toolbar (comment / send-to-AI /
+                          // search). `commentsEnabled` inside DiffView still
+                          // requires a truthy cwd, so this is a no-op when the
+                          // message has no project context.
+                          enableComments
+                          onContentSearch={onContentSearch}
                           compact={density === 'compact'}
                           onPreview={
                             selectedFile.status === 'deleted'
@@ -635,20 +662,29 @@ export function FileDiffViewer({ toolCalls, cwd, onClose }: DiffViewerModalProps
           </div>
         )}
     </div>
+    </MenuContainerProvider>
   );
 }
 
 // Backward-compatible full-screen modal wrapper. Used where there is no second
 // panel to host the diff — e.g. SubagentTranscriptModal, which is itself a
 // Portal modal and cannot swipe to the Explorer panel.
-export function DiffViewerModal({ toolCalls, cwd, onClose }: DiffViewerModalProps) {
+export function DiffViewerModal({ toolCalls, cwd, onClose, onContentSearch }: DiffViewerModalProps) {
   return (
     <Portal>
       <div
         className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         onClick={onClose}
       >
-        <FileDiffViewer toolCalls={toolCalls} cwd={cwd} onClose={onClose} />
+        <FileDiffViewer
+          toolCalls={toolCalls}
+          cwd={cwd}
+          onClose={onClose}
+          // Searching leaves this fullscreen modal — close it first so the
+          // Explorer search results aren't hidden behind the backdrop
+          // (mirrors HtmlPreviewModal's close-then-search handoff).
+          onContentSearch={onContentSearch ? (query) => { onClose(); onContentSearch(query); } : undefined}
+        />
       </div>
     </Portal>
   );
