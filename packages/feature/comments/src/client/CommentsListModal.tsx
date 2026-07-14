@@ -367,7 +367,7 @@ export function CommentsListModal({ isOpen, onClose, cwd, onNavigateToComment }:
               <button
                 onClick={handleSendAllToAI}
                 disabled={comments.length === 0 || aiBridge.isLoading || isSendingToAI}
-                className="px-3 py-1.5 text-sm bg-brand text-brand-foreground rounded hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-3 py-1.5 text-sm bg-brand text-white rounded hover:bg-brand/90 disabled:opacity-50 disabled:cursor-not-allowed"
                 title={aiBridge.isLoading ? t('comments.aiResponding') : t('comments.sendToAI')}
               >
                 {isSendingToAI ? t('comments.submitting') : t('comments.sendToAI')}
