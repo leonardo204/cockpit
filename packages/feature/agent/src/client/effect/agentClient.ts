@@ -66,6 +66,27 @@ export const saveAgentSettings = (
 ): Effect.Effect<unknown, AppError> => httpPutJson("/api/settings", body)
 
 // ─────────────────────────────────────────────────────────
+// /api/deepseek/credentials — DeepSeek API key, stored outside settings.json.
+// GET returns only { hasKey, maskedKey } (never the raw key); PUT persists it
+// (empty string clears).
+// ─────────────────────────────────────────────────────────
+
+export interface DeepseekCredentialsInfo {
+  hasKey: boolean
+  maskedKey: string
+}
+
+export const loadDeepseekCredentials = (): Effect.Effect<
+  DeepseekCredentialsInfo,
+  AppError
+> => httpJson<DeepseekCredentialsInfo>("/api/deepseek/credentials")
+
+export const saveDeepseekApiKey = (
+  apiKey: string
+): Effect.Effect<DeepseekCredentialsInfo, AppError> =>
+  httpPutJson<DeepseekCredentialsInfo>("/api/deepseek/credentials", { apiKey })
+
+// ─────────────────────────────────────────────────────────
 // /api/commands — builtin slash commands list.
 // (Previously also merged project/global `.claude/commands/*.md` entries;
 //  that convention is retired so the endpoint is now builtin-only and takes

@@ -44,6 +44,10 @@ export const CLAUDE2_PROJECTS_DIR = join(CLAUDE2_DIR, 'projects');
 // to keep its credentials/sessions isolated from the user's real ~/.claude
 export const DEEPSEEK_DIR = join(COCKPIT_DIR, 'deepseek');
 export const DEEPSEEK_PROJECTS_DIR = join(DEEPSEEK_DIR, 'projects');
+// DeepSeek API key lives in its own credential file, intentionally NOT in
+// settings.json — so it is never returned by GET /api/settings (which is sent
+// to the browser). Read/written only via /api/deepseek/credentials.
+export const DEEPSEEK_CREDENTIALS_FILE = join(DEEPSEEK_DIR, 'credentials.json');
 
 // ============================================
 // Path Encoding

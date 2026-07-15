@@ -1,4 +1,5 @@
 import { DEEPSEEK_DIR, SETTINGS_FILE, readJsonFile } from '@cockpit/shared-utils';
+import { readDeepseekApiKey } from './deepseekCredentials';
 import { getSessionTitle } from '../state/globalState';
 import { runSdkLoop, type BuildSdkOptions } from './shared/sdkLoop';
 import type { DispatchParams, EngineSpec, RunCtx } from './types';
@@ -10,8 +11,10 @@ const DEFAULT_MODEL = 'deepseek-v4-pro';
 const SMALL_FAST_MODEL = 'deepseek-v4-flash';
 const ALLOWED_MODELS = new Set(['deepseek-v4-flash', 'deepseek-v4-pro']);
 
+// Only `model` lives in settings.json now; the API key is stored separately
+// in the DeepSeek credential file (see deepseekCredentials.ts).
 interface CockpitSettings {
-  engines?: { deepseek?: { apiKey?: string; model?: string } };
+  engines?: { deepseek?: { model?: string } };
   [key: string]: unknown;
 }
 
@@ -62,7 +65,7 @@ export const deepseekSpec: EngineSpec = {
   // Pre-check BEFORE startRun: API key must exist; resolve model into params (no registry pollution).
   async preflight(params: DispatchParams) {
     const settings = await readSettings();
-    const apiKey = settings.engines?.deepseek?.apiKey?.trim();
+    const apiKey = await readDeepseekApiKey();
     if (!apiKey) {
       return {
         ok: false as const,
@@ -75,8 +78,7 @@ export const deepseekSpec: EngineSpec = {
   },
   runner: {
     async run(ctx) {
-      const settings = await readSettings();
-      const apiKey = settings.engines?.deepseek?.apiKey?.trim() ?? ''; // preflight guaranteed non-empty
+      const apiKey = await readDeepseekApiKey(); // preflight guaranteed non-empty
       const model = typeof ctx.params.model === 'string' ? ctx.params.model : DEFAULT_MODEL;
       const env = buildDeepseekEnv(apiKey, model);
       await runSdkLoop(ctx, buildDeepseekOptions(ctx, env));

@@ -4,7 +4,12 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Portal, usePanelPortalTarget } from '@cockpit/shared-ui';
 import type { DeepseekModel } from './types';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { loadAgentSettings, saveAgentSettings } from './effect/agentClient';
+import {
+  loadAgentSettings,
+  saveAgentSettings,
+  loadDeepseekCredentials,
+  saveDeepseekApiKey,
+} from './effect/agentClient';
 
 // Migrated from src/components/project/DeepseekConfigPicker.tsx.
 
@@ -18,16 +23,10 @@ interface DeepseekConfigPickerProps {
   onModelChange: (model: DeepseekModel) => void;
 }
 
-/** Mask all but last 4 chars of an api key, e.g. sk-1234abcd → sk-•••••bcd */
-function maskKey(key: string): string {
-  if (!key) return '';
-  if (key.length <= 8) return key.replace(/./g, '•');
-  return `${key.slice(0, 3)}${'•'.repeat(Math.max(4, key.length - 7))}${key.slice(-4)}`;
-}
-
 export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekConfigPickerProps) {
   const [open, setOpen] = useState(false);
-  const [savedKey, setSavedKey] = useState<string>(''); // last persisted key
+  const [hasKey, setHasKey] = useState(false); // whether a key is persisted
+  const [maskedKey, setMaskedKey] = useState<string>(''); // server-masked display
   const [keyInput, setKeyInput] = useState<string>(''); // editable buffer
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -52,35 +51,37 @@ export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekCo
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Load settings on first open
+  // Load settings on first open. The API key comes from its own credential
+  // endpoint (masked, never raw); only the model lives in /api/settings.
   const loadSettings = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const exit = await BrowserRuntime.runPromiseExit(
-      loadAgentSettings<{
-        engines?: { deepseek?: { apiKey?: string; model?: DeepseekModel } };
-      }>()
-    );
-    if (exit._tag === 'Failure') {
+    const [credExit, settingsExit] = await Promise.all([
+      BrowserRuntime.runPromiseExit(loadDeepseekCredentials()),
+      BrowserRuntime.runPromiseExit(
+        loadAgentSettings<{ engines?: { deepseek?: { model?: DeepseekModel } } }>()
+      ),
+    ]);
+    if (credExit._tag === 'Failure') {
       setError('Failed to load settings');
       setLoading(false);
       return;
     }
-    const data = exit.value;
-    const key: string = data?.engines?.deepseek?.apiKey || '';
-    setSavedKey(key);
+    setHasKey(credExit.value.hasKey);
+    setMaskedKey(credExit.value.maskedKey);
     setKeyInput('');
     setEditing(false);
     // If parent didn't pass a model and settings has one, sync upward
-    const savedModel = data?.engines?.deepseek?.model;
+    const savedModel =
+      settingsExit._tag === 'Success' ? settingsExit.value?.engines?.deepseek?.model : undefined;
     if (!currentModel && savedModel && MODELS.some(m => m.value === savedModel)) {
       onModelChange(savedModel);
     }
     setLoading(false);
   }, [currentModel, onModelChange]);
 
-  const persistSettings = useCallback(async (patch: { apiKey?: string; model?: DeepseekModel }) => {
-    // PUT /api/settings is a shallow merge — we only need to send the engines diff.
+  // Persist the model into /api/settings (shallow merge — send only the engines diff).
+  const persistModel = useCallback(async (model: DeepseekModel) => {
     const curExit = await BrowserRuntime.runPromiseExit(
       loadAgentSettings<{ engines?: Record<string, Record<string, unknown>> }>()
     );
@@ -88,7 +89,7 @@ export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekCo
     const curEngines = cur.engines || {};
     const engines = {
       ...curEngines,
-      deepseek: { ...(curEngines.deepseek || {}), ...patch },
+      deepseek: { ...(curEngines.deepseek || {}), model },
     };
     const saveExit = await BrowserRuntime.runPromiseExit(saveAgentSettings({ engines }));
     if (saveExit._tag === 'Failure') throw new Error('Failed to save settings');
@@ -113,37 +114,37 @@ export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekCo
     if (!trimmed) return;
     setSaving(true);
     setError(null);
-    try {
-      await persistSettings({ apiKey: trimmed });
-      setSavedKey(trimmed);
+    const exit = await BrowserRuntime.runPromiseExit(saveDeepseekApiKey(trimmed));
+    if (exit._tag === 'Failure') {
+      setError('Save failed');
+    } else {
+      setHasKey(exit.value.hasKey);
+      setMaskedKey(exit.value.maskedKey);
       setKeyInput('');
       setEditing(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   const handleClearKey = async () => {
     setSaving(true);
     setError(null);
-    try {
-      await persistSettings({ apiKey: '' });
-      setSavedKey('');
+    const exit = await BrowserRuntime.runPromiseExit(saveDeepseekApiKey(''));
+    if (exit._tag === 'Failure') {
+      setError('Clear failed');
+    } else {
+      setHasKey(exit.value.hasKey);
+      setMaskedKey(exit.value.maskedKey);
       setKeyInput('');
       setEditing(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Clear failed');
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   const handleSelectModel = async (model: DeepseekModel) => {
     onModelChange(model);
     try {
-      await persistSettings({ model });
+      await persistModel(model);
     } catch {
       // non-fatal — tab state already updated
     }
@@ -156,7 +157,6 @@ export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekCo
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
-  const hasKey = !!savedKey;
   const displayLabel = !hasKey
     ? 'Set API key'
     : (currentModel || 'deepseek-v4-flash');
@@ -182,7 +182,7 @@ export function DeepseekConfigPicker({ currentModel, onModelChange }: DeepseekCo
               {hasKey && !editing ? (
                 <div className="flex items-center gap-2">
                   <code className="flex-1 min-w-0 truncate text-xs px-2 py-1 rounded bg-secondary text-foreground font-mono">
-                    {maskKey(savedKey)}
+                    {maskedKey}
                   </code>
                   <button
                     onClick={beginEdit}
