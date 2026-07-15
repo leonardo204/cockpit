@@ -611,7 +611,7 @@ code[class*="language-"] .token {
 }
 
 .tiptap-editor code {
-  background: hsl(var(--muted));
+  background: hsl(var(--slate-4));
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
@@ -619,7 +619,7 @@ code[class*="language-"] .token {
 }
 
 .tiptap-editor pre {
-  background: hsl(var(--muted));
+  background: hsl(var(--slate-4));
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   margin-bottom: 0.5rem;
