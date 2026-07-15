@@ -211,7 +211,7 @@ export function TabBar({
     <div className="border-b border-border bg-card shrink-0">
       <div className="flex items-center px-2 gap-1 overflow-x-auto">
         {tabs.map((tab, index) => (
-          <Tooltip key={tab.id} content={tab.title} delay={200} className="flex-1 min-w-16 max-w-32">
+          <Tooltip key={tab.id} content={tab.title} delay={200} className="flex-1 min-w-16 max-w-[260px]">
             <div
               draggable
               onDragStart={() => onDragStart(index)}
