@@ -14,7 +14,7 @@ import { isMutatingToolName } from '../shared/toolMutation';
 //     hasn't migrated yet.
 //   - MarkdownRenderer: a generic markdown renderer; candidate for shared-ui.
 // Allowed by MODULES.md as transitional reverse imports.
-import { InteractiveMarkdownPreview, HtmlPreview, isMarkdownFile, isHtmlFile } from '@cockpit/feature-explorer';
+import { InteractiveMarkdownPreview, HtmlPreview, isMarkdownFile, isHtmlFile, isImageFile } from '@cockpit/feature-explorer';
 import { MenuContainerProvider } from '@cockpit/shared-ui';
 import { MarkdownRenderer } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
@@ -57,6 +57,31 @@ function ImageModal({ image, onClose }: ImageModalProps) {
   );
 
   return <Portal>{modalContent}</Portal>;
+}
+
+// Image file preview modal — serves raw bytes via <img src> pointing at
+// /api/file?raw=true (absolute path). No content is pulled into the JS heap.
+function ImageFilePreviewModal({ filePath, onClose }: { filePath: string; onClose: () => void }) {
+  return (
+    <Portal>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={onClose}>
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/80 hover:text-white bg-black/40 hover:bg-black/60 rounded-full transition-colors"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <img
+          src={`/api/file?path=${encodeURIComponent(filePath)}&raw=true`}
+          alt={filePath.split('/').pop()}
+          className="max-w-[90vw] max-h-[90vh] object-contain"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    </Portal>
+  );
 }
 
 // MD preview modal — provides MenuContainerProvider so FloatingToolbar works correctly
@@ -266,7 +291,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     [message.toolCalls]
   );
 
-  // Extract deduplicated previewable doc paths (.md / .html / .htm) from
+  // Extract deduplicated previewable paths (.md / .html / .htm / images) from
   // Read/Edit/Write tool calls. Single-click opens an in-modal preview.
   const docFiles = useMemo(() => {
     if (!message.toolCalls) return [];
@@ -275,7 +300,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     for (const tc of message.toolCalls) {
       if (tc.name === 'Read' || tc.name === 'Edit' || tc.name === 'Write') {
         const fp = (tc.input as { file_path?: string }).file_path;
-        if (fp && (isMarkdownFile(fp) || isHtmlFile(fp)) && !seen.has(fp)) {
+        if (fp && (isMarkdownFile(fp) || isHtmlFile(fp) || isImageFile(fp)) && !seen.has(fp)) {
           seen.add(fp);
           result.push(fp);
         }
@@ -306,9 +331,10 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
 
-  // Fetch content when a doc file (md / html) is selected
+  // Fetch content when a doc file (md / html) is selected. Images are served
+  // as raw bytes via <img src>, so they skip this text-content fetch.
   useEffect(() => {
-    if (!previewFile) { queueMicrotask(() => setPreviewContent(null)); return; }
+    if (!previewFile || isImageFile(previewFile)) { queueMicrotask(() => setPreviewContent(null)); return; }
     let cancelled = false;
     BrowserRuntime.runPromiseExit(readFileForPreview(previewFile)).then((exit) => {
       if (cancelled) return;
@@ -587,7 +613,14 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                     onClick={() => setPreviewFile(fp)}
                     className="flex items-center gap-1.5 w-full text-left hover:bg-accent rounded px-1 py-0.5 transition-colors group/md"
                   >
-                    {isHtmlFile(fp) ? (
+                    {isImageFile(fp) ? (
+                      // Image — picture glyph
+                      <svg className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z" />
+                        <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4-4 3 3 4-4 5 5" />
+                      </svg>
+                    ) : isHtmlFile(fp) ? (
                       // HTML — code/`</>` glyph to distinguish from markdown docs
                       <svg className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
@@ -748,8 +781,11 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
         <AskQuestionViewerModal toolCalls={askQuestionCalls} onClose={() => setShowAskQuestionViewer(false)} />
       )}
 
-      {/* Doc interactive preview — html in a sandboxed iframe, md via the rich preview */}
-      {previewFile && previewContent !== null && (
+      {/* File preview — image via raw <img src>, html in a sandboxed iframe, md via the rich preview */}
+      {previewFile && isImageFile(previewFile) && (
+        <ImageFilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} />
+      )}
+      {previewFile && !isImageFile(previewFile) && previewContent !== null && (
         isHtmlFile(previewFile) ? (
           <HtmlPreviewModal
             filePath={previewFile}
