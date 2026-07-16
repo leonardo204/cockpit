@@ -262,7 +262,15 @@ const stageAdds = (
   paths: ReadonlyArray<string>
 ): Effect.Effect<void, AppError> =>
   Effect.gen(function* () {
-    const addArgs = ["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]
+    // `--force`: the add set is exactly what `git status` already selected, so
+    // git must not second-guess it with ignore rules. status(-uall) excludes
+    // UNTRACKED ignored files, so the only ignored paths that can reach here are
+    // TRACKED files living under a gitignored dir (e.g. a tracked file under an
+    // ignored `data/`). Without -f, `git add` fatals the WHOLE batch on such a
+    // path ("paths are ignored, use -f") and the snapshot is lost forever. -f
+    // touches only these explicitly-enumerated, size-capped pathspecs — it can
+    // never sweep in untracked ignored junk, which was never in the list.
+    const addArgs = ["add", "-A", "--force", "--pathspec-from-file=-", "--pathspec-file-nul"]
     const batch = yield* runGit(repoDir, cwd, addArgs, paths.map((p) => `:(literal)${p}`).join("\0"))
     if (batch.code === 0) return
     if (!SYMLINK_PATHSPEC_RE.test(batch.stderr)) {
@@ -564,6 +572,19 @@ const snapshotOnce = (
       { staged: false } | { staged: true },
       AppError
     > = Effect.gen(function* () {
+      // Reconcile the persistent index to HEAD before scanning. A prior run
+      // that mutated the index (`rm --cached` / `add`) but failed before
+      // committing leaves the index desynced from HEAD. That stale state makes
+      // an already-removed path surface as a staged deletion ("D " — index
+      // column D, worktree column blank), which the D-routing below would
+      // otherwise mis-send to `git add`, aborting every future batch and never
+      // self-healing. `read-tree` only rewrites the index, never the worktree.
+      // Guarded on an existing HEAD so a repo with no commits (unborn branch)
+      // is left untouched. Re-runs on retry, so each attempt stages from clean.
+      const headOk = yield* runGit(repoDir, cwd, ["rev-parse", "--quiet", "--verify", "HEAD"])
+      if (headOk.code === 0) {
+        yield* runGitOk(repoDir, cwd, ["read-tree", "HEAD"])
+      }
       const status = yield* runGitOk(repoDir, cwd, [
         "status", "--porcelain", "-z", "-uall", "--no-renames",
       ])
@@ -581,7 +602,13 @@ const snapshotOnce = (
       for (const e of entries) {
         const path = e.slice(3)
         if (!path) continue
-        if (e[1] === "D") rmPaths.push(path)
+        // A deletion in EITHER porcelain column must go to `rm --cached`, never
+        // `git add`: worktree column 'D' (` D`, a plain/symlink-shadowed delete)
+        // AND index column 'D' (`D `, a staged-but-uncommitted removal, e.g. a
+        // reconcile hole from an interrupted run). Both have no readable worktree
+        // copy, so `git add` would fatal the whole batch with "pathspec did not
+        // match any files".
+        if (e[0] === "D" || e[1] === "D") rmPaths.push(path)
         else addPaths.push(path)
       }
 
@@ -592,8 +619,11 @@ const snapshotOnce = (
       const sizes = yield* Effect.all(
         addPaths.map((p) =>
           fsTry("stat", () => stat(join(cwd, p)).then((s) => (s.isFile() ? s.size : 0))).pipe(
-            // Untracked path vanishing between status and stat → size 0.
-            Effect.orElseSucceed(() => 0)
+            // Path gone between status and stat (concurrent session/build) or
+            // unreadable → -1, excluded below so a vanished path never reaches
+            // `git add`, which would abort the whole batch with "pathspec did
+            // not match any files".
+            Effect.orElseSucceed(() => -1)
           )
         ),
         { concurrency: 16 }
@@ -601,6 +631,7 @@ const snapshotOnce = (
       const includedAdds: string[] = []
       let totalBytes = 0
       for (let i = 0; i < addPaths.length; i++) {
+        if (sizes[i] < 0) continue // vanished / unreadable → not addable
         if (sizes[i] > maxFileBytes) continue // oversize → excluded
         includedAdds.push(addPaths[i])
         totalBytes += sizes[i]
