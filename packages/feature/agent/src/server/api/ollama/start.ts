@@ -3,17 +3,20 @@
  */
 import { spawn, execSync } from "child_process"
 import { Effect } from "effect"
+import { resolveOllamaBaseURL } from "@cockpit/shared-utils"
 import { handler, ok } from "@cockpit/effect-runtime/server"
 import { AppError, NotFoundError } from "@cockpit/effect-core"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const OLLAMA_BASE = "http://localhost:11434"
-
 async function isOllamaRunning(): Promise<boolean> {
   try {
-    const res = await fetch(`${OLLAMA_BASE}/api/tags`, {
+    // Health-check the configured server (config file > env > default). Note the
+    // spawned fallback is always the LOCAL `ollama serve`; a remote baseUrl that
+    // is down won't be helped by spawning locally — that boundary is unchanged.
+    const base = await resolveOllamaBaseURL()
+    const res = await fetch(`${base}/api/tags`, {
       signal: AbortSignal.timeout(2000),
     })
     return res.ok

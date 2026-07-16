@@ -87,6 +87,32 @@ export const saveDeepseekApiKey = (
   httpPutJson<DeepseekCredentialsInfo>("/api/deepseek/credentials", { apiKey })
 
 // ─────────────────────────────────────────────────────────
+// /api/ollama/config — Ollama connection config (baseUrl + apiKey), stored
+// outside settings.json. GET returns the effective config (resolved values,
+// masked key, per-field source); PUT { baseUrl?, apiKey? } merges — '' clears a
+// field, omitted leaves it untouched.
+// ─────────────────────────────────────────────────────────
+
+export interface OllamaConfigInfo {
+  baseUrl: string
+  baseUrlSource: "file" | "env" | "default"
+  hasKey: boolean
+  maskedKey: string
+  keySource: "file" | "env" | "default"
+}
+
+export const loadOllamaConfig = (): Effect.Effect<
+  OllamaConfigInfo,
+  AppError
+> => httpJson<OllamaConfigInfo>("/api/ollama/config")
+
+export const saveOllamaConfig = (patch: {
+  baseUrl?: string
+  apiKey?: string
+}): Effect.Effect<OllamaConfigInfo, AppError> =>
+  httpPutJson<OllamaConfigInfo>("/api/ollama/config", patch)
+
+// ─────────────────────────────────────────────────────────
 // /api/commands — builtin slash commands list.
 // (Previously also merged project/global `.claude/commands/*.md` entries;
 //  that convention is retired so the endpoint is now builtin-only and takes

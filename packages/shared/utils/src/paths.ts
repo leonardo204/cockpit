@@ -48,6 +48,13 @@ export const DEEPSEEK_PROJECTS_DIR = join(DEEPSEEK_DIR, 'projects');
 // settings.json — so it is never returned by GET /api/settings (which is sent
 // to the browser). Read/written only via /api/deepseek/credentials.
 export const DEEPSEEK_CREDENTIALS_FILE = join(DEEPSEEK_DIR, 'credentials.json');
+// Ollama connection config (baseUrl + apiKey) lives in its own file, NOT in
+// settings.json — the apiKey must never be returned by GET /api/settings (which
+// ships to the browser). baseUrl and apiKey are kept together because a given
+// server URL pairs with its own key. Read/written only via /api/ollama/config
+// and the resolvers in ollamaEnv.ts.
+export const OLLAMA_DIR = join(COCKPIT_DIR, 'ollama');
+export const OLLAMA_CONFIG_FILE = join(OLLAMA_DIR, 'config.json');
 
 // ============================================
 // Path Encoding

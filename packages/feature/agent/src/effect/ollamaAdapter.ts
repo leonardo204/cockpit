@@ -58,7 +58,7 @@ export const ollamaStream = (
 
     void (async () => {
       try {
-        const ollamaModel = createOllamaModel(req.model)
+        const ollamaModel = await createOllamaModel(req.model)
         const result = streamText({
           model: ollamaModel,
           messages: toModelMessages(req.messages),

@@ -1,6 +1,6 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type { LanguageModelV3 } from '@ai-sdk/provider';
-import { getOllamaOpenAIBaseURL } from '@cockpit/shared-utils';
+import { resolveOllamaConnection } from '@cockpit/shared-utils';
 
 /**
  * Ollama's OpenAI-compatible endpoint rejects assistant messages with
@@ -32,13 +32,16 @@ const ollamaFetch: typeof fetch = async (input, init) => {
   return fetch(input, init);
 };
 
-export function createOllamaModel(modelName: string): LanguageModelV3 {
+export async function createOllamaModel(modelName: string): Promise<LanguageModelV3> {
+  // baseUrl + apiKey resolved by priority: config file (set via the chat-header
+  // picker) > env (OLLAMA_BASE_URL / OLLAMA_API_KEY) > default. The apiKey is an
+  // EFFECT.md §0 exemption (third-party plugin key, same category as
+  // OPENAI_API_KEY / ANTHROPIC_API_KEY), so it is resolved here rather than via
+  // CockpitConfig.
+  const { baseUrl, apiKey } = await resolveOllamaConnection();
   const provider = createOpenAI({
-    // EFFECT.md §0 exemption: third-party plugin API key in the same category as
-    // OPENAI_API_KEY / ANTHROPIC_API_KEY; not pulled into CockpitConfig (would over-couple
-    // cockpit configuration with third-party authentication).
-    apiKey: process.env.OLLAMA_API_KEY || 'ollama',
-    baseURL: getOllamaOpenAIBaseURL(),
+    apiKey,
+    baseURL: `${baseUrl}/v1/`,
     fetch: ollamaFetch,
   });
   return provider.chat(modelName);

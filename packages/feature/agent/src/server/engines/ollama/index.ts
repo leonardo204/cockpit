@@ -101,8 +101,9 @@ export const ollamaSpec: EngineSpec = {
       emit(`data: ${JSON.stringify({ type: 'system', subtype: 'init', session_id: sid })}\n\n`);
 
       const context: AgentContext = { cwd, todos: [] };
+      const languageModel = await createOllamaModel(model);
       const result = streamText({
-        model: createOllamaModel(model),
+        model: languageModel,
         system: buildSystemPrompt(cwd),
         messages,
         tools: createTools(context),

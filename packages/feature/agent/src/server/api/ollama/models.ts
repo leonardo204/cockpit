@@ -4,7 +4,7 @@
  * Ollama: prefer /api/tags, fall back to OpenAI-compatible /v1/models on failure.
  */
 import { Effect } from "effect"
-import { getOllamaBaseURL } from "@cockpit/shared-utils"
+import { resolveOllamaBaseURL } from "@cockpit/shared-utils"
 import { handler, ok } from "@cockpit/effect-runtime/server"
 import { AgentError } from "@cockpit/effect-core"
 
@@ -25,7 +25,7 @@ interface OpenAIModel {
 }
 
 async function fetchModels() {
-  const base = getOllamaBaseURL()
+  const base = await resolveOllamaBaseURL()
 
   // Try Ollama /api/tags
   try {
