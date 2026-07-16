@@ -49,6 +49,8 @@ export interface CockpitConfigData {
   readonly snapshotRepoTtlDays: number
   /** Per-file size cap for snapshot tracking, in KB (COCKPIT_SNAPSHOT_MAX_FILE_KB) */
   readonly snapshotMaxFileKb: number
+  /** Days of Ollama chat session history to keep before auto-cleanup (COCKPIT_SESSION_KEEP_DAYS) */
+  readonly sessionKeepDays: number
 }
 
 const envConfig = Config.literal("dev", "prod")("COCKPIT_ENV").pipe(
@@ -93,6 +95,13 @@ const snapshotMaxFileKbConfig = Config.integer(
   "COCKPIT_SNAPSHOT_MAX_FILE_KB"
 ).pipe(Config.withDefault(2048))
 
+// Ollama session transcript retention. Mirrors Claude Code's cleanupPeriodDays
+// (default 30). Only governs ~/.cockpit/ollama-sessions/ — other engines'
+// sessions are cleaned by their own external CLI / SDK.
+const sessionKeepDaysConfig = Config.integer("COCKPIT_SESSION_KEEP_DAYS").pipe(
+  Config.withDefault(30)
+)
+
 
 // ─────────────────────────────────────────────────────────
 // Composition
@@ -109,6 +118,7 @@ export const CockpitConfig: Effect.Effect<CockpitConfigData> = Effect.gen(
     const snapshotKeepDays = yield* snapshotKeepDaysConfig
     const snapshotRepoTtlDays = yield* snapshotRepoTtlDaysConfig
     const snapshotMaxFileKb = yield* snapshotMaxFileKbConfig
+    const sessionKeepDays = yield* sessionKeepDaysConfig
 
     // cockpitDir: lazy resolution to avoid Node-only os.homedir at module eval.
     // Use process.env.HOME / USERPROFILE instead of os.homedir() — zero
@@ -145,6 +155,7 @@ export const CockpitConfig: Effect.Effect<CockpitConfigData> = Effect.gen(
       snapshotKeepDays,
       snapshotRepoTtlDays,
       snapshotMaxFileKb,
+      sessionKeepDays,
     } satisfies CockpitConfigData
   }
 ).pipe(Effect.orDie) // Treat Config validation failures as defects (exit at startup)

@@ -24,6 +24,7 @@ import {
   SchedulerLive,
   AgentServiceLive,
   SnapshotServiceLive,
+  SessionCleanupLive,
 } from "@cockpit/feature-agent/effect"
 
 const isDev = process.env.COCKPIT_ENV === "dev"
@@ -50,7 +51,9 @@ export const AppLayer = Layer.mergeAll(
   // Agent
   AgentServiceLive,
   // Tool-call snapshots (shadow git)
-  SnapshotServiceLive
+  SnapshotServiceLive,
+  // Ollama session transcript retention (daily sweep)
+  SessionCleanupLive
 )
 
 export type AppContext = Layer.Layer.Success<typeof AppLayer>
