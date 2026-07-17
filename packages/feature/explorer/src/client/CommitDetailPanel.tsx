@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { DiffView } from '@cockpit/feature-explorer';
+import { DiffView, DiffUnifiedView } from '@cockpit/feature-explorer';
 import { DiffDensityToggle } from './DiffDensityToggle';
+import { DiffViewModeToggle } from './DiffViewModeToggle';
 import { GitFileTree, buildGitFileTree, collectGitTreeDirPaths, type GitFileNode } from './GitFileTree';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { fetchCommitDiff } from './effect/gitClient';
@@ -79,6 +80,9 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
   const [jsonPreview, setJsonPreview] = useState<{ content: string; filePath: string } | null>(null);
   // 精简/全文 — pane-local, defaults to compact (same as StatusDiffPane).
   const [density, setDensity] = useState<'compact' | 'full'>('compact');
+  // split/unified — pane-local, defaults to split; not persisted (same policy
+  // as density and the tool-call diff viewer).
+  const [viewMode, setViewMode] = useState<'split' | 'unified'>('split');
   const commitPreRef = useRef<HTMLPreElement>(null);
   const commitJsonSearch = useJsonSearch(commitPreRef);
 
@@ -234,7 +238,10 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
             <span className="text-slate-9">{t('commitDetail.files')}</span>
             <span>{t('commitDetail.nChanges', { count: files.length })}</span>
           </div>
-          <DiffDensityToggle value={density} onChange={setDensity} className="ml-auto" />
+          <div className="ml-auto flex items-center gap-2">
+            <DiffDensityToggle value={density} onChange={setDensity} />
+            <DiffViewModeToggle value={viewMode} onChange={setViewMode} />
+          </div>
         </div>
       </div>
 
@@ -264,23 +271,41 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
           {isLoadingDiff ? (
             <div className="h-full flex items-center justify-center text-muted-foreground text-sm">{t('commitDetail.loadingDiff')}</div>
           ) : fileDiff ? (
-            <DiffView
-              oldContent={fileDiff.oldContent}
-              newContent={fileDiff.newContent}
-              filePath={fileDiff.filePath}
-              isNew={fileDiff.isNew}
-              isDeleted={fileDiff.isDeleted}
-              cwd={cwd}
-              enableComments={true}
-              compact={density === 'compact'}
-              onPreview={
-                !fileDiff.isDeleted && fileDiff.filePath.endsWith('.json')
-                  ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
-                  : undefined
-              }
-              previewLabel={t('common.readable')}
-              onContentSearch={onContentSearch}
-            />
+            viewMode === 'unified' ? (
+              <DiffUnifiedView
+                oldContent={fileDiff.oldContent}
+                newContent={fileDiff.newContent}
+                filePath={fileDiff.filePath}
+                cwd={cwd}
+                enableComments={true}
+                compact={density === 'compact'}
+                onPreview={
+                  !fileDiff.isDeleted && fileDiff.filePath.endsWith('.json')
+                    ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
+                    : undefined
+                }
+                previewLabel={t('common.readable')}
+                onContentSearch={onContentSearch}
+              />
+            ) : (
+              <DiffView
+                oldContent={fileDiff.oldContent}
+                newContent={fileDiff.newContent}
+                filePath={fileDiff.filePath}
+                isNew={fileDiff.isNew}
+                isDeleted={fileDiff.isDeleted}
+                cwd={cwd}
+                enableComments={true}
+                compact={density === 'compact'}
+                onPreview={
+                  !fileDiff.isDeleted && fileDiff.filePath.endsWith('.json')
+                    ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
+                    : undefined
+                }
+                previewLabel={t('common.readable')}
+                onContentSearch={onContentSearch}
+              />
+            )
           ) : (
             <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
               {t('commitDetail.selectFileToView')}

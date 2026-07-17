@@ -1,14 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useComments, type CodeComment } from '@cockpit/feature-comments';
-import { fetchAllCommentsWithCode, clearAllComments, buildAIMessage, type CodeReference } from '@cockpit/feature-comments';
-import { useMenuContainer } from '@cockpit/shared-ui';
-import { useAIBridge } from '@cockpit/shared-ui';
-import { AddCommentInput, SendToAIInput, ToolbarRenderer } from '@cockpit/shared-ui';
 import { computeLineDiff } from './index';
 import {
   buildCompactRows,
@@ -24,8 +18,7 @@ import { toast } from '@cockpit/shared-ui';
 import { useLineHighlight } from './index';
 import { escapeHtml } from '@cockpit/shared-ui';
 import { DiffMinimap } from './index';
-import { ViewCommentCard } from './index';
-import { useSelectionToolbar } from './useSelectionToolbar';
+import { useDiffComments } from './useDiffComments';
 
 // computeLineDiff / DiffLine moved to @cockpit/feature-explorer; callers
 // should import them directly from there. (Previously re-exported here for
@@ -124,215 +117,33 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
   const leftPanelRef = useRef<HTMLDivElement>(null);
   const rightPanelRef = useRef<HTMLDivElement>(null);
   const isSyncingHScrollRef = useRef(false);
-  const [isMounted, setIsMounted] = useState(false);
 
-  // Menu container for portal mounting (keeps floating elements within second screen)
-  const menuContainer = useMenuContainer();
-
-  // Chat context for "Send to AI" feature
-  const aiBridge = useAIBridge();
-
-  // Comment state
-  const commentsEnabled = enableComments && !!cwd;
-  const { comments, addComment, updateComment, deleteComment, refresh: refreshComments } = useComments({
-    cwd: cwd || '',
-    filePath,
-  });
-
-  const [viewingComment, setViewingComment] = useState<{
-    comment: CodeComment;
-    x: number;
-    y: number;
-  } | null>(null);
-
-  // Floating toolbar plumbing — owned by the shared selection hook.
-  // Storing in a ref (rather than state) is what keeps DiffView's virtual
-  // list from re-reconciling on every selection change and losing the
-  // browser selection out from under the user.
-  //
-  // The `rightPanelEl` state mirror exists because passing rightPanelRef
-  // alone to the hook wouldn't re-trigger its effect when the element
-  // first mounts — state changes do.
+  // Comment / selection-toolbar / send-to-AI / search machinery — shared with
+  // the unified view via `useDiffComments` so both stay at feature parity. The
+  // `rightPanelEl` state mirror is the selection container: only new-file
+  // (right column) rows carry `data-new-line`, so left-column selections never
+  // open the toolbar. State (not just the ref) so the hook's effect re-runs
+  // when the element first mounts.
   const [rightPanelEl, setRightPanelEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     if (rightPanelRef.current !== rightPanelEl) setRightPanelEl(rightPanelRef.current);
   });
-  const { toolbarRef: floatingToolbarRef, bumpRef: bumpToolbarRef, clearToolbar } = useSelectionToolbar({
-    enabled: commentsEnabled,
-    container: rightPanelEl,
-    resolveLineRange: (node) => {
-      if (!document.contains(node)) return null;
-      const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
-      const lineRow = el?.closest('[data-new-line]');
-      if (!lineRow) return null;
-      const n = parseInt(lineRow.getAttribute('data-new-line') || '0', 10);
-      if (!Number.isFinite(n) || n <= 0) return null;
-      return { start: n, end: n };
-    },
-    // Walk diffLines and pull `content` for rows that appear in the new
-    // file (unchanged + added). `diffLines` is captured by closure; the
-    // hook re-reads this callback via a ref so it never gets stale.
-    buildLineSnapshot: ({ start, end }) => {
-      const out: string[] = [];
-      let n = 0;
-      for (const dl of diffLines) {
-        if (dl.type === 'unchanged' || dl.type === 'added') {
-          n++;
-          if (n >= start && n <= end) out.push(dl.content);
-        }
-      }
-      return out.join('\n');
-    },
+  const {
+    commentsEnabled,
+    linesWithComments,
+    commentsByEndLine,
+    handleCommentBubbleClick,
+    addCommentRange,
+    sendToAIRange,
+    commentPortal,
+  } = useDiffComments({
+    cwd,
+    enableComments,
+    filePath,
+    diffLines,
+    containerEl: rightPanelEl,
+    onContentSearch,
   });
-
-  const [addCommentInput, setAddCommentInput] = useState<{
-    x: number;
-    y: number;
-    range: { start: number; end: number };
-    selectedText: string;
-    lineSnapshot: string;
-  } | null>(null);
-
-  const [sendToAIInput, setSendToAIInput] = useState<{
-    x: number;
-    y: number;
-    range: { start: number; end: number };
-    selectedText: string;
-    lineSnapshot: string;
-  } | null>(null);
-
-  // Track mount state for Portal
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-
-  // Lines with comments (based on new file line numbers)
-  const linesWithComments = useMemo(() => {
-    const set = new Set<number>();
-    for (const comment of comments) {
-      for (let i = comment.startLine; i <= comment.endLine; i++) {
-        set.add(i);
-      }
-    }
-    return set;
-  }, [comments]);
-
-  // Comments grouped by end line
-  const commentsByEndLine = useMemo(() => {
-    const map = new Map<number, CodeComment[]>();
-    for (const comment of comments) {
-      const line = comment.endLine;
-      if (!map.has(line)) map.set(line, []);
-      map.get(line)!.push(comment);
-    }
-    return map;
-  }, [comments]);
-
-  const handleCommentBubbleClick = useCallback((comment: CodeComment, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setViewingComment({ comment, x: e.clientX, y: e.clientY });
-    clearToolbar();
-    setAddCommentInput(null);
-    setSendToAIInput(null);
-  }, [clearToolbar]);
-
-  const handleToolbarAddComment = useCallback(() => {
-    const toolbar = floatingToolbarRef.current;
-    if (!toolbar) return;
-    setAddCommentInput({
-      x: toolbar.x,
-      y: toolbar.y,
-      range: toolbar.range,
-      selectedText: toolbar.selectedText,
-      lineSnapshot: toolbar.lineSnapshot,
-    });
-    clearToolbar();
-  }, [clearToolbar, floatingToolbarRef]);
-
-  const handleToolbarSendToAI = useCallback(() => {
-    const toolbar = floatingToolbarRef.current;
-    if (!toolbar) return;
-    setSendToAIInput({
-      x: toolbar.x,
-      y: toolbar.y,
-      range: toolbar.range,
-      selectedText: toolbar.selectedText,
-      lineSnapshot: toolbar.lineSnapshot,
-    });
-    clearToolbar();
-  }, [clearToolbar, floatingToolbarRef]);
-
-  // Search the LITERAL selection — not the line-expanded snapshot. Using
-  // the snapshot was the source of the long-standing "DiffView search
-  // mysteriously expands to the whole line" bug.
-  const handleToolbarSearch = useCallback(() => {
-    const toolbar = floatingToolbarRef.current;
-    if (!toolbar || !onContentSearch) return;
-    const query = toolbar.selectedText.trim();
-    clearToolbar();
-    if (query) onContentSearch(query);
-  }, [onContentSearch, clearToolbar, floatingToolbarRef]);
-
-  // Shared send-to-AI orchestration for both entries (standalone SendToAI
-  // card / comment card button): all historical comments + the given
-  // selection go out as one message, then the comment stack is cleared.
-  const sendSelectionToAI = useCallback(async (selection: { range: { start: number; end: number }; lineSnapshot: string }, question: string) => {
-    if (!aiBridge || !cwd) return;
-
-    try {
-      const allComments = await fetchAllCommentsWithCode(cwd);
-      const references: CodeReference[] = [];
-
-      for (const comment of allComments) {
-        references.push({
-          filePath: comment.filePath,
-          startLine: comment.startLine,
-          endLine: comment.endLine,
-          codeContent: comment.codeContent,
-          note: comment.content || undefined,
-        });
-      }
-
-      references.push({
-        filePath,
-        startLine: selection.range.start,
-        endLine: selection.range.end,
-        codeContent: selection.lineSnapshot,
-      });
-
-      const message = buildAIMessage(references, question);
-      aiBridge.sendMessage(message);
-
-      await clearAllComments(cwd);
-      refreshComments();
-    } catch (err) {
-      console.error('Failed to send to AI:', err);
-    }
-  }, [aiBridge, filePath, cwd, refreshComments]);
-
-  // Both cards close themselves on submit — deliberately NO trailing state
-  // reset after the async send (a late set(null) could clobber a card the
-  // user opened in the meantime).
-  const handleSendToAISubmit = useCallback((question: string) => {
-    if (!sendToAIInput) return;
-    void sendSelectionToAI(sendToAIInput, question);
-  }, [sendToAIInput, sendSelectionToAI]);
-
-  const handleCommentSendToAI = useCallback((question: string) => {
-    if (!addCommentInput) return;
-    void sendSelectionToAI(addCommentInput, question);
-  }, [addCommentInput, sendSelectionToAI]);
-
-  const handleCommentSubmit = useCallback(async (content: string) => {
-    if (!addCommentInput) return;
-    await addComment(
-      addCommentInput.range.start,
-      addCommentInput.range.end,
-      content,
-      addCommentInput.selectedText,
-    );
-    setAddCommentInput(null);
-  }, [addCommentInput, addComment]);
 
   // Sync horizontal scroll between left and right panels
   useEffect(() => {
@@ -940,8 +751,8 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
                   const hasComments = lineNum > 0 && linesWithComments.has(lineNum);
                   const lineComments = commentsByEndLine.get(lineNum);
                   const firstComment = lineComments?.[0];
-                  const isInCommentRange = addCommentInput && lineNum >= addCommentInput.range.start && lineNum <= addCommentInput.range.end;
-                  const isInAIRange = sendToAIInput && lineNum >= sendToAIInput.range.start && lineNum <= sendToAIInput.range.end;
+                  const isInCommentRange = addCommentRange && lineNum >= addCommentRange.start && lineNum <= addCommentRange.end;
+                  const isInAIRange = sendToAIRange && lineNum >= sendToAIRange.start && lineNum <= sendToAIRange.end;
                   const isInRange = isInCommentRange || isInAIRange;
 
                   return (
@@ -1002,59 +813,8 @@ export function DiffView({ oldContent, newContent, filePath, isNew = false, isDe
         />
       </div>
 
-      {/* Floating elements via Portal to menu container (keeps within second screen) */}
-      {isMounted && menuContainer && createPortal(
-        <>
-          <ToolbarRenderer
-            floatingToolbarRef={floatingToolbarRef}
-            bumpRef={bumpToolbarRef}
-            container={menuContainer}
-            onAddComment={handleToolbarAddComment}
-            onSendToAI={handleToolbarSendToAI}
-            onSearch={onContentSearch ? handleToolbarSearch : undefined}
-            isChatLoading={aiBridge?.isLoading ?? false}
-          />
-          {addCommentInput && (
-            <AddCommentInput
-              x={addCommentInput.x}
-              y={addCommentInput.y}
-              range={addCommentInput.range}
-              filePath={filePath}
-              lineSnapshot={addCommentInput.lineSnapshot}
-              container={menuContainer}
-              onSubmit={handleCommentSubmit}
-              onSendToAI={aiBridge ? handleCommentSendToAI : undefined}
-              onClose={() => setAddCommentInput(null)}
-              isChatLoading={aiBridge?.isLoading}
-            />
-          )}
-          {sendToAIInput && (
-            <SendToAIInput
-              x={sendToAIInput.x}
-              y={sendToAIInput.y}
-              range={sendToAIInput.range}
-              filePath={filePath}
-              lineSnapshot={sendToAIInput.lineSnapshot}
-              container={menuContainer}
-              onSubmit={handleSendToAISubmit}
-              onClose={() => setSendToAIInput(null)}
-              isChatLoading={aiBridge?.isLoading}
-            />
-          )}
-          {viewingComment && (
-            <ViewCommentCard
-              x={viewingComment.x}
-              y={viewingComment.y}
-              comment={viewingComment.comment}
-              container={menuContainer}
-              onClose={() => setViewingComment(null)}
-              onUpdateComment={updateComment}
-              onDeleteComment={deleteComment}
-            />
-          )}
-        </>,
-        menuContainer
-      )}
+      {/* Floating toolbar / comment cards — portaled by the shared hook. */}
+      {commentPortal}
     </div>
   );
 }
@@ -1109,13 +869,41 @@ function buildUnifiedCompactRows(diffLines: DiffLine[], expandedGaps: Set<number
   return rows;
 }
 
-export function DiffUnifiedView({ oldContent, newContent, filePath, compact = false }: Omit<DiffViewProps, 'isNew' | 'isDeleted'>) {
+export function DiffUnifiedView({ oldContent, newContent, filePath, cwd, enableComments = false, onPreview, previewLabel, onContentSearch, compact = false }: Omit<DiffViewProps, 'isNew' | 'isDeleted'>) {
   const { t } = useTranslation();
+  const resolvedPreviewLabel = previewLabel ?? t('common.preview');
   const diffLines = useMemo(() => computeLineDiff(oldContent, newContent), [oldContent, newContent]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const allLines = useMemo(() => diffLines.map(line => line.content), [diffLines]);
   const highlightedLines = useLineHighlight(allLines, filePath);
+
+  // Comment / selection-toolbar / search machinery — SAME hook the split view
+  // uses, so unified is at full feature parity. The single scroll container is
+  // the selection container (all rows live inside it); only added / unchanged
+  // rows carry `data-new-line`, so removed-line selections never open the
+  // toolbar — matching the split view's new-file-side anchoring. State (not the
+  // ref) so the hook's effect re-runs once the container mounts.
+  const [containerEl, setContainerEl] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (scrollContainerRef.current !== containerEl) setContainerEl(scrollContainerRef.current);
+  });
+  const {
+    commentsEnabled,
+    linesWithComments,
+    commentsByEndLine,
+    handleCommentBubbleClick,
+    addCommentRange,
+    sendToAIRange,
+    commentPortal,
+  } = useDiffComments({
+    cwd,
+    enableComments,
+    filePath,
+    diffLines,
+    containerEl,
+    onContentSearch,
+  });
 
   // Expanded gaps — reset when the underlying file/diff changes so a gap id
   // from file A can't persist into file B (its positional id would refer to a
@@ -1151,77 +939,132 @@ export function DiffUnifiedView({ oldContent, newContent, filePath, compact = fa
   });
 
   return (
-    <div ref={scrollContainerRef} className="font-mono text-sm overflow-auto h-full">
-      <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
-        {virtualizer.getVirtualItems().map((virtualItem) => {
-          const row = rows[virtualItem.index];
-          if (!row) return null;
-          const style = {
-            position: 'absolute' as const,
-            top: 0,
-            left: 0,
-            minWidth: '100%',
-            width: 'max-content' as const,
-            height: `${virtualItem.size}px`,
-            transform: `translateY(${virtualItem.start}px)`,
-          };
+    <div className="font-mono flex flex-col h-full text-sm">
+      {/* Action bar — hosts the preview trigger (the callback has no other home
+          in the single-column layout) and a copy-all button. Only rendered when
+          there's actually an action, so a plain diff isn't padded with an empty
+          bar. Mirrors the split view's header actions. */}
+      {(onPreview || newContent) && (
+        <div className="flex-shrink-0 flex items-center justify-end gap-2 px-2 py-1 border-b border-border bg-accent text-xs">
+          {onPreview && (
+            <button
+              onClick={onPreview}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {resolvedPreviewLabel}
+            </button>
+          )}
+          {newContent && (
+            <button
+              onClick={() => { navigator.clipboard.writeText(newContent); toast(t('diffViewer.copiedAll')); }}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {t('common.copy')}
+            </button>
+          )}
+        </div>
+      )}
+      <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-auto">
+        <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+          {virtualizer.getVirtualItems().map((virtualItem) => {
+            const row = rows[virtualItem.index];
+            if (!row) return null;
+            const style = {
+              position: 'absolute' as const,
+              top: 0,
+              left: 0,
+              minWidth: '100%',
+              width: 'max-content' as const,
+              height: `${virtualItem.size}px`,
+              transform: `translateY(${virtualItem.start}px)`,
+            };
 
-          if (row.kind === 'gap') {
-            const label = t('diffViewer.gap.hidden', { count: row.count });
+            if (row.kind === 'gap') {
+              const label = t('diffViewer.gap.hidden', { count: row.count });
+              return (
+                <div
+                  key={virtualItem.key}
+                  style={style}
+                  onClick={() => setExpandedGaps((prev) => new Set(prev).add(row.id))}
+                  className="flex items-center cursor-pointer bg-slate-2 hover:bg-accent border-y border-border text-xs text-slate-9 select-none"
+                  title={label}
+                >
+                  <span className="w-full text-center">{label}</span>
+                </div>
+              );
+            }
+
+            const line = row.line;
+            // New-file line number = the comment anchor. Removed rows have no
+            // new-side line, so they get no bubble / `data-new-line` — matching
+            // the split view's left (old) column.
+            const lineNum = line.type !== 'removed' ? (line.newLineNum ?? 0) : 0;
+            const hasComments = lineNum > 0 && linesWithComments.has(lineNum);
+            const lineComments = commentsByEndLine.get(lineNum);
+            const firstComment = lineComments?.[0];
+            const isInCommentRange = addCommentRange && lineNum >= addCommentRange.start && lineNum <= addCommentRange.end;
+            const isInAIRange = sendToAIRange && lineNum >= sendToAIRange.start && lineNum <= sendToAIRange.end;
+            const isInRange = isInCommentRange || isInAIRange;
             return (
               <div
                 key={virtualItem.key}
                 style={style}
-                onClick={() => setExpandedGaps((prev) => new Set(prev).add(row.id))}
-                className="flex items-center cursor-pointer bg-slate-2 hover:bg-accent border-y border-border text-xs text-slate-9 select-none"
-                title={label}
-              >
-                <span className="w-full text-center">{label}</span>
-              </div>
-            );
-          }
-
-          const line = row.line;
-          return (
-            <div
-              key={virtualItem.key}
-              style={style}
-              className={`flex ${
-                line.type === 'removed'
-                  ? 'bg-red-9/15 dark:bg-red-9/25'
-                  : line.type === 'added'
-                  ? 'bg-green-9/15 dark:bg-green-9/25'
-                  : ''
-              }`}
-            >
-              {/* Line numbers */}
-              <span className="w-10 flex-shrink-0 text-right pr-2 text-slate-9 select-none border-r border-border">
-                {line.type !== 'added' ? line.oldLineNum : ''}
-              </span>
-              <span className="w-10 flex-shrink-0 text-right pr-2 text-slate-9 select-none border-r border-border">
-                {line.type !== 'removed' ? line.newLineNum : ''}
-              </span>
-              {/* Symbol */}
-              <span
-                className={`w-6 flex-shrink-0 text-center select-none ${
-                  line.type === 'removed'
-                    ? 'text-red-11'
-                    : line.type === 'added'
-                    ? 'text-green-11'
-                    : 'text-slate-9'
+                data-new-line={lineNum || undefined}
+                className={`flex ${
+                  isInRange ? 'bg-blue-9/20' :
+                  hasComments ? 'bg-amber-9/10' :
+                  line.type === 'removed' ? 'bg-red-9/15 dark:bg-red-9/25' :
+                  line.type === 'added' ? 'bg-green-9/15 dark:bg-green-9/25' : ''
                 }`}
               >
-                {line.type === 'removed' ? '-' : line.type === 'added' ? '+' : ' '}
-              </span>
-              {/* Content with syntax highlighting */}
-              <span
-                className="flex-1 whitespace-pre pl-1"
-                dangerouslySetInnerHTML={{ __html: highlightedLines[row.index] || escapeHtml(line.content || ' ') }}
-              />
-            </div>
-          );
-        })}
+                {/* Comment bubble gutter — only present when comments are on, so
+                    the plain view keeps its original width. */}
+                {commentsEnabled && (
+                  <span className="w-5 flex-shrink-0 flex items-center justify-center select-none">
+                    {lineNum > 0 && hasComments && firstComment && (
+                      <button
+                        onClick={(e) => handleCommentBubbleClick(firstComment, e)}
+                        className="w-4 h-4 flex items-center justify-center rounded hover:bg-accent text-amber-9"
+                        title={t('codeViewer.nComments', { count: lineComments?.length })}
+                      >
+                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    )}
+                  </span>
+                )}
+                {/* Line numbers */}
+                <span className="w-10 flex-shrink-0 text-right pr-2 text-slate-9 select-none border-r border-border">
+                  {line.type !== 'added' ? line.oldLineNum : ''}
+                </span>
+                <span className="w-10 flex-shrink-0 text-right pr-2 text-slate-9 select-none border-r border-border">
+                  {line.type !== 'removed' ? line.newLineNum : ''}
+                </span>
+                {/* Symbol */}
+                <span
+                  className={`w-6 flex-shrink-0 text-center select-none ${
+                    line.type === 'removed'
+                      ? 'text-red-11'
+                      : line.type === 'added'
+                      ? 'text-green-11'
+                      : 'text-slate-9'
+                  }`}
+                >
+                  {line.type === 'removed' ? '-' : line.type === 'added' ? '+' : ' '}
+                </span>
+                {/* Content with syntax highlighting */}
+                <span
+                  className="flex-1 whitespace-pre pl-1"
+                  dangerouslySetInnerHTML={{ __html: highlightedLines[row.index] || escapeHtml(line.content || ' ') }}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
+      {/* Floating toolbar / comment cards — portaled by the shared hook. */}
+      {commentPortal}
     </div>
   );
 }

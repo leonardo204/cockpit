@@ -35,8 +35,9 @@ import { useMemo, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 
-import { DiffView } from '@cockpit/feature-explorer';
+import { DiffView, DiffUnifiedView } from '@cockpit/feature-explorer';
 import { DiffDensityToggle } from '../DiffDensityToggle';
+import { DiffViewModeToggle } from '../DiffViewModeToggle';
 import { InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
 import { isMarkdownFile, formatAsHumanReadable } from '../toolCallUtils';
 import { type useJsonSearch, JsonSearchBar } from '@cockpit/shared-ui';
@@ -144,6 +145,10 @@ export function StatusDiffPane({
    *  Lives next to `diffViewerMode` because both are file-pane-local
    *  presentation choices that shouldn't bleed into other tabs. */
   const [fileDensity, setFileDensity] = useState<'compact' | 'full'>('compact');
+
+  /** split/unified toggle for file-mode line diff — pane-local, defaults to
+   *  split, not persisted (same policy as `fileDensity`). */
+  const [viewMode, setViewMode] = useState<'split' | 'unified'>('split');
 
   const filePath = selected.file.path;
   const isImage = isImageFile(filePath);
@@ -329,6 +334,9 @@ export function StatusDiffPane({
             {!isImage && diffViewerMode === 'file' && (
               <DiffDensityToggle value={fileDensity} onChange={setFileDensity} />
             )}
+            {!isImage && diffViewerMode === 'file' && (
+              <DiffViewModeToggle value={viewMode} onChange={setViewMode} />
+            )}
             {!isImage && (
               <div className="flex items-center gap-0.5 rounded border border-border overflow-hidden">
                 {(['file', 'map'] as const).map((mode) => (
@@ -358,6 +366,24 @@ export function StatusDiffPane({
                 className="p-4 flex items-center justify-center"
                 imgClassName="max-w-full max-h-[60vh] object-contain"
                 alt={filePath}
+              />
+            ) : viewMode === 'unified' ? (
+              <DiffUnifiedView
+                oldContent={diff.oldContent}
+                newContent={diff.newContent}
+                filePath={diff.filePath}
+                cwd={cwd}
+                enableComments={true}
+                compact={fileDensity === 'compact'}
+                onPreview={
+                  !diff.isDeleted && isMarkdownFile(filePath)
+                    ? () => setShowMarkdownPreview(true)
+                    : !diff.isDeleted && filePath.endsWith('.json')
+                      ? () => setJsonPreview({ content: diff.newContent, filePath: diff.filePath })
+                      : undefined
+                }
+                previewLabel={filePath.endsWith('.json') ? t('common.readable') : t('common.preview')}
+                onContentSearch={onContentSearch}
               />
             ) : (
               <DiffView

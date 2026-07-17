@@ -310,7 +310,7 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
   // 精简/全文 — pane-local, defaults to compact (same as StatusDiffPane).
   const [density, setDensity] = useState<'compact' | 'full'>('compact');
   // split/unified — pane-local, defaults to split (same non-persisted policy
-  // as density). Unified mode has no compact/preview support (see render).
+  // as density). Both views support compact / preview / comments / search.
   const [viewMode, setViewMode] = useState<'split' | 'unified'>('split');
   // Rendered previews of the SNAPSHOT's post-change content (not the current
   // disk state — that's the point). Same overlay pattern as StatusDiffPane.
@@ -556,7 +556,8 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
                   )}
 
                   {/* Diff: split (side-by-side) or unified — toggled via the
-                      meta bar. Unified has no compact/preview support. */}
+                      meta bar. Both support compact / preview / comments /
+                      search. */}
                   <div className="flex-1 overflow-hidden">
                     {selectedFile ? (
                       selectedFile.unviewable ? (
@@ -568,7 +569,25 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
                           oldContent={selectedFile.old_string}
                           newContent={selectedFile.new_string}
                           filePath={selectedFile.path}
+                          cwd={cwd}
+                          // Same selection toolbar (comment / send-to-AI /
+                          // search) as split — commentsEnabled still gates on a
+                          // truthy cwd inside the view.
+                          enableComments
+                          onContentSearch={onContentSearch}
                           compact={density === 'compact'}
+                          onPreview={
+                            selectedFile.status === 'deleted'
+                              ? undefined
+                              : isMarkdownFile(selectedFile.path)
+                                ? () => setShowMarkdownPreview(true)
+                                : selectedFile.path.endsWith('.json')
+                                  ? () => setJsonPreview({ content: selectedFile.new_string, filePath: selectedFile.path })
+                                  : undefined
+                          }
+                          previewLabel={
+                            selectedFile.path.endsWith('.json') ? t('common.readable') : t('common.preview')
+                          }
                         />
                       ) : (
                         <DiffView
