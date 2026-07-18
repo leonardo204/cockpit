@@ -17,6 +17,7 @@ import { runTerminalFollowHandler } from './effect/terminalFollowHandler';
 import { runBrowserHandler } from './effect/browserHandler';
 import { runJupyterHandler } from './effect/jupyterHandler';
 import { runTerminalHandler } from './effect/terminalHandler';
+import { runBashHandler } from './effect/bashStreamHandler';
 import { runSessionStreamHandler } from './effect/sessionStreamHandler';
 import { wireCodeIndexToFileWatcher } from './codeIndexSync';
 // globalStateClients + broadcastToGlobalState live in a side-effect-free module so API
@@ -41,6 +42,22 @@ wireCodeIndexToFileWatcher();
 // the connected UIs.
 // ─────────────────────────────────────────────────────────
 
+/**
+ * Same-origin check for the /ws/bash upgrade: the WS `Origin` header must match
+ * the request `Host`. Opaque-origin (sandboxed, no allow-same-origin) iframes
+ * send `Origin: null`; cross-site pages send a different host — both rejected.
+ */
+function isSameOriginWs(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
 const g_ws = globalThis as unknown as {
   __cockpitWss?: WebSocketServer;
 };
@@ -63,6 +80,18 @@ const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
       runGlobalStateHandler(ws);
     } else if (pathname === '/ws/terminal') {
       runTerminalHandler(ws, query.projectCwd as string);
+    } else if (pathname === '/ws/bash') {
+      // RCE channel — only same-origin embedders may connect. Trusted HTML
+      // previews (allow-same-origin) + console bubbles carry Origin === host;
+      // an UNTRUSTED preview runs in an opaque-origin sandbox → Origin: null →
+      // rejected; an external website (drive-by to localhost) → host mismatch →
+      // rejected. This is the real gate: not injecting the SDK is not enough,
+      // since a page can hand-roll its own WebSocket to /ws/bash.
+      if (!isSameOriginWs(req)) {
+        try { ws.close(4403, 'forbidden origin'); } catch { /* ignore */ }
+      } else {
+        runBashHandler(ws, query.cwd as string | undefined);
+      }
     } else if (pathname === '/ws/browser') {
       runBrowserHandler(
         ws,
@@ -93,6 +122,7 @@ export function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer
     pathname === '/ws/watch' ||
     pathname === '/ws/global-state' ||
     pathname === '/ws/terminal' ||
+    pathname === '/ws/bash' ||
     pathname === '/ws/browser' ||
     pathname === '/ws/terminal-follow' ||
     pathname === '/ws/jupyter' ||

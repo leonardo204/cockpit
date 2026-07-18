@@ -38,6 +38,7 @@ export type WSProto =
   | "jupyter"
   | "terminal-follow"
   | "session-stream"
+  | "bash"
 
 export type WSErrorKind = "send" | "recv" | "upgrade" | "closed"
 

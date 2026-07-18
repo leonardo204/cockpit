@@ -2,13 +2,13 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { DiffView, DiffUnifiedView } from '@cockpit/feature-explorer';
+import { DiffView, DiffUnifiedView, HtmlPreviewModal } from '@cockpit/feature-explorer';
 import { DiffDensityToggle } from './DiffDensityToggle';
 import { DiffViewModeToggle } from './DiffViewModeToggle';
 import { GitFileTree, buildGitFileTree, collectGitTreeDirPaths, type GitFileNode } from './GitFileTree';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { fetchCommitDiff } from './effect/gitClient';
-import { formatAsHumanReadable } from './toolCallUtils';
+import { formatAsHumanReadable, isHtmlFile } from './toolCallUtils';
 import { useJsonSearch, JsonSearchBar, blurActiveElement } from '@cockpit/shared-ui';
 
 // Types
@@ -78,6 +78,11 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isLoadingDiff, setIsLoadingDiff] = useState(false);
   const [jsonPreview, setJsonPreview] = useState<{ content: string; filePath: string } | null>(null);
+  // HTML preview overlay. Historical commit content → always UNTRUSTED (no bash
+  // SDK): a registered-app path can't vouch for an arbitrary old revision. Note
+  // the rendered page is served from CURRENT disk (HtmlPreview URL mode), so it
+  // may differ from this commit's snapshot — see the module note.
+  const [htmlPreview, setHtmlPreview] = useState<{ content: string; filePath: string } | null>(null);
   // 精简/全文 — pane-local, defaults to compact (same as StatusDiffPane).
   const [density, setDensity] = useState<'compact' | 'full'>('compact');
   // split/unified — pane-local, defaults to split; not persisted (same policy
@@ -99,6 +104,10 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
           commitJsonSearch.close();
           return;
         }
+        if (htmlPreview) {
+          setHtmlPreview(null);
+          return;
+        }
         if (jsonPreview) {
           setJsonPreview(null);
           return;
@@ -112,7 +121,7 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
       document.addEventListener('keydown', handleKeyDown);
       return () => document.removeEventListener('keydown', handleKeyDown);
     }
-  }, [isOpen, onClose, jsonPreview, commitJsonSearch]);
+  }, [isOpen, onClose, htmlPreview, jsonPreview, commitJsonSearch]);
 
   // Load files when commit changes
   useEffect(() => {
@@ -280,11 +289,15 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
                 enableComments={true}
                 compact={density === 'compact'}
                 onPreview={
-                  !fileDiff.isDeleted && fileDiff.filePath.endsWith('.json')
-                    ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
-                    : undefined
+                  fileDiff.isDeleted
+                    ? undefined
+                    : isHtmlFile(fileDiff.filePath)
+                      ? () => setHtmlPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
+                      : fileDiff.filePath.endsWith('.json')
+                        ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
+                        : undefined
                 }
-                previewLabel={t('common.readable')}
+                previewLabel={isHtmlFile(fileDiff.filePath) ? t('common.preview') : t('common.readable')}
                 onContentSearch={onContentSearch}
               />
             ) : (
@@ -298,11 +311,15 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
                 enableComments={true}
                 compact={density === 'compact'}
                 onPreview={
-                  !fileDiff.isDeleted && fileDiff.filePath.endsWith('.json')
-                    ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
-                    : undefined
+                  fileDiff.isDeleted
+                    ? undefined
+                    : isHtmlFile(fileDiff.filePath)
+                      ? () => setHtmlPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
+                      : fileDiff.filePath.endsWith('.json')
+                        ? () => setJsonPreview({ content: fileDiff.newContent, filePath: fileDiff.filePath })
+                        : undefined
                 }
-                previewLabel={t('common.readable')}
+                previewLabel={isHtmlFile(fileDiff.filePath) ? t('common.preview') : t('common.readable')}
                 onContentSearch={onContentSearch}
               />
             )
@@ -343,6 +360,16 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
     </div>
   );
 
+  // HTML preview modal — opening it is an explicit gesture → trusted. Own Portal overlay.
+  const htmlPreviewModal = htmlPreview && (
+    <HtmlPreviewModal
+      filePath={htmlPreview.filePath}
+      content={htmlPreview.content}
+      cwd={cwd}
+      onClose={() => setHtmlPreview(null)}
+    />
+  );
+
   // Embedded mode: no Modal wrapper or title bar, but has a close button in top-right
   if (embedded) {
     return (
@@ -358,6 +385,7 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
         </button>
         {content}
         {jsonPreviewModal}
+        {htmlPreviewModal}
       </div>
     );
   }
@@ -385,6 +413,7 @@ export function CommitDetailPanel({ isOpen, onClose, commit, cwd, embedded = fal
         {/* Content */}
         {content}
         {jsonPreviewModal}
+        {htmlPreviewModal}
       </div>
     </div>
   );

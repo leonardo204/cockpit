@@ -38,8 +38,8 @@ import { toast } from '@cockpit/shared-ui';
 import { DiffView, DiffUnifiedView } from '@cockpit/feature-explorer';
 import { DiffDensityToggle } from '../DiffDensityToggle';
 import { DiffViewModeToggle } from '../DiffViewModeToggle';
-import { InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
-import { isMarkdownFile, formatAsHumanReadable } from '../toolCallUtils';
+import { InteractiveMarkdownPreview, HtmlPreviewModal } from '@cockpit/feature-explorer';
+import { isMarkdownFile, isHtmlFile, formatAsHumanReadable } from '../toolCallUtils';
 import { type useJsonSearch, JsonSearchBar } from '@cockpit/shared-ui';
 
 import { Tooltip } from '@cockpit/shared-ui';
@@ -116,6 +116,9 @@ export function StatusDiffPane({
   jsonPreviewPreRef,
 }: StatusDiffPaneProps) {
   const { t } = useTranslation();
+  // HTML preview overlay — local to the status pane (not shared with the
+  // history tab, unlike the lifted markdown/json state).
+  const [showHtmlPreview, setShowHtmlPreview] = useState(false);
   /** 2-way toggle:
    *  - 'file': line-by-line DiffView (default)
    *  - 'map':  BlockDiffViewer = Code Map view filtered to changed
@@ -152,6 +155,10 @@ export function StatusDiffPane({
 
   const filePath = selected.file.path;
   const isImage = isImageFile(filePath);
+  // Absolute path for the HTML preview modal (opening it is a user gesture → trusted).
+  const htmlAbs = filePath.startsWith('/')
+    ? filePath
+    : cwd ? `${cwd.replace(/\/$/, '')}/${filePath}` : filePath;
   const isBlockMode = !isImage && diffViewerMode === 'map';
 
   // Function-like symbols for the file-mode compact bar's hunk-
@@ -378,9 +385,11 @@ export function StatusDiffPane({
                 onPreview={
                   !diff.isDeleted && isMarkdownFile(filePath)
                     ? () => setShowMarkdownPreview(true)
-                    : !diff.isDeleted && filePath.endsWith('.json')
-                      ? () => setJsonPreview({ content: diff.newContent, filePath: diff.filePath })
-                      : undefined
+                    : !diff.isDeleted && isHtmlFile(filePath)
+                      ? () => setShowHtmlPreview(true)
+                      : !diff.isDeleted && filePath.endsWith('.json')
+                        ? () => setJsonPreview({ content: diff.newContent, filePath: diff.filePath })
+                        : undefined
                 }
                 previewLabel={filePath.endsWith('.json') ? t('common.readable') : t('common.preview')}
                 onContentSearch={onContentSearch}
@@ -399,9 +408,11 @@ export function StatusDiffPane({
                 onPreview={
                   !diff.isDeleted && isMarkdownFile(filePath)
                     ? () => setShowMarkdownPreview(true)
-                    : !diff.isDeleted && filePath.endsWith('.json')
-                      ? () => setJsonPreview({ content: diff.newContent, filePath: diff.filePath })
-                      : undefined
+                    : !diff.isDeleted && isHtmlFile(filePath)
+                      ? () => setShowHtmlPreview(true)
+                      : !diff.isDeleted && filePath.endsWith('.json')
+                        ? () => setJsonPreview({ content: diff.newContent, filePath: diff.filePath })
+                        : undefined
                 }
                 previewLabel={filePath.endsWith('.json') ? t('common.readable') : t('common.preview')}
                 onContentSearch={onContentSearch}
@@ -430,6 +441,21 @@ export function StatusDiffPane({
             />
           </div>
         </div>
+      )}
+
+      {/* Git changes HTML preview modal. Trusted only for registered html.json
+          apps; an arbitrary changed .html renders in an opaque sandbox. Its own
+          Portal overlay, so no wrapper needed. onContentSearch is omitted: an
+          untrusted preview has no selection toolbar, and even a trusted one would
+          jump the FileBrowserModal to its search tab, which the host already
+          wires via onContentSearch on the diff view. */}
+      {showHtmlPreview && (
+        <HtmlPreviewModal
+          filePath={htmlAbs}
+          content={diff.newContent}
+          cwd={cwd}
+          onClose={() => setShowHtmlPreview(false)}
+        />
       )}
 
       {/* JSON readable preview modal. State is lifted to parent so the

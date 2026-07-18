@@ -6,7 +6,7 @@ import { toast } from '@cockpit/shared-ui';
 import { BUBBLE_CONTENT_HEIGHT } from '../../CommandBubble';
 import { useBrowserBridge } from '../../useBrowserBridge';
 import { ShortIdBadge } from '../../ShortIdBadge';
-import { modKey } from '@cockpit/shared-utils';
+import { modKey, toPreviewUrl } from '@cockpit/shared-utils';
 import { unregisterBrowserBridge } from '../../effect/pluginDisconnect';
 
 // ============================================================================
@@ -41,15 +41,6 @@ function isHttpUrl(url: string): boolean {
   return t.startsWith('http://') || t.startsWith('https://');
 }
 
-/**
- * Local file path → /api/preview URL served by the local server.
- * Relative paths resolve against the project cwd.
- */
-function toPreviewUrl(filePath: string, projectCwd?: string): string {
-  let abs = filePath.trim();
-  if (!abs.startsWith('/')) abs = `${(projectCwd ?? '').replace(/\/$/, '')}/${abs}`;
-  return '/api/preview' + abs.split('/').map(encodeURIComponent).join('/');
-}
 
 /** Append _cockpit=1 param to the URL so background webNavigation can track it and the DNR network layer can strip it */
 function addCockpitParam(url: string): string {
@@ -263,7 +254,9 @@ export function BrowserBubble({
     // Reload the iframe
     if (!isHttpUrl(url)) {
       // Local file path → served by /api/preview, no cookie prep needed
-      setReadyUrl(toPreviewUrl(url, projectCwd));
+      // Console bubbles are opened intentionally (typed path / `/name` registered
+      // app) → trusted, so /api/preview injects the bash SDK.
+      setReadyUrl(toPreviewUrl(url, projectCwd, { trusted: true }));
       return;
     }
     const cockpitUrl = addCockpitParam(url);
@@ -280,7 +273,9 @@ export function BrowserBubble({
 
     // Local file path → served by /api/preview, no cookie prep needed
     if (!isHttpUrl(url)) {
-      setReadyUrl(toPreviewUrl(url, projectCwd));
+      // Console bubbles are opened intentionally (typed path / `/name` registered
+      // app) → trusted, so /api/preview injects the bash SDK.
+      setReadyUrl(toPreviewUrl(url, projectCwd, { trusted: true }));
       return;
     }
 
@@ -409,7 +404,7 @@ export function BrowserBubble({
   const handleOpenExternal = useCallback(() => {
     if (!currentUrl) return;
     // File paths can't open directly in a browser tab — route through /api/preview
-    window.open(isHttpUrl(currentUrl) ? currentUrl : toPreviewUrl(currentUrl, projectCwd), '_blank');
+    window.open(isHttpUrl(currentUrl) ? currentUrl : toPreviewUrl(currentUrl, projectCwd, { trusted: true }), '_blank');
   }, [currentUrl, projectCwd]);
 
   // ESC to exit maximize / Cmd+M to toggle maximize

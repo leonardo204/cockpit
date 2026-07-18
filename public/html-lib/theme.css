@@ -1,0 +1,99 @@
+/*
+ * Cockpit small-app theme — semantic design tokens (light + .dark).
+ * Distilled from the app's src/app/globals.css (same Radix Teal / Slate + status
+ * scales), so a small app looks native to Cockpit and gets light/dark for free.
+ *
+ * Usage:
+ *   <link rel="stylesheet" href="/html-lib/theme.css">
+ *   then use the semantic vars directly:  background: var(--background);
+ *   color: var(--foreground);  border: 1px solid var(--border);  etc.
+ *   Translucency uses the raw scales:  background: hsl(var(--green-9) / 0.12);
+ *
+ * Dark mode: add class "dark" on <body> (or <html>). To follow the system and
+ * avoid a flash, run before first paint:
+ *   document.documentElement.classList.toggle('dark', matchMedia('(prefers-color-scheme: dark)').matches)
+ */
+
+:root {
+  /* ---- Raw scales (HSL triplets — for translucency: hsl(var(--x) / <alpha>)) ---- */
+  --teal-1: 180 50% 99.2%; --teal-2: 180 44% 97%;  --teal-3: 180 43% 93.8%;
+  --teal-4: 180 44% 89.7%; --teal-5: 180 42% 84.3%; --teal-6: 181 39% 76.8%;
+  --teal-7: 181 35% 66.3%; --teal-8: 181 33% 52.5%; --teal-9: 179 35% 35%;
+  --teal-10: 179 37% 31%;  --teal-11: 180 50% 22%;  --teal-12: 186 100% 7%;
+
+  --slate-1: 240 20% 99%;  --slate-2: 240 17% 97%;  --slate-3: 240 14% 94.5%;
+  --slate-4: 240 13% 92%;  --slate-5: 240 12% 89.5%; --slate-6: 237 11% 86%;
+  --slate-7: 235 9% 81%;   --slate-8: 233 8% 70%;   --slate-9: 230 7% 55%;
+  --slate-10: 228 6% 50%;  --slate-11: 225 6% 40%;  --slate-12: 210 14% 13%;
+
+  --red-9: 358 75% 59%;   --red-10: 358 69% 55%;   --red-11: 358 65% 49%;
+  --green-9: 151 55% 42%; --green-10: 152 57% 39%; --green-11: 153 67% 28%;
+  --amber-9: 39 100% 57%; --amber-10: 36 100% 50%; --amber-11: 24 100% 37%;
+  --blue-9: 206 100% 50%; --blue-10: 207 96% 43%;  --blue-11: 208 88% 43%;
+
+  /* ---- Semantic tokens (ready-to-use colors) ---- */
+  --background: hsl(0 0% 98%);
+  --foreground: hsl(var(--slate-12));
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(var(--slate-12));
+  --primary: hsl(var(--slate-12));
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(var(--slate-3));
+  --secondary-foreground: hsl(var(--slate-12));
+  --muted: hsl(var(--slate-3));
+  --muted-foreground: hsl(var(--slate-11));
+  --accent: hsl(var(--slate-3));
+  --accent-foreground: hsl(var(--slate-12));
+  --border: hsl(var(--slate-5));
+  --input: hsl(var(--slate-5));
+  --ring: hsl(var(--teal-9));
+  --brand: hsl(var(--teal-9));
+  --brand-foreground: hsl(var(--teal-11));
+  --destructive: hsl(var(--red-9));
+  --destructive-foreground: hsl(0 0% 100%);
+
+  /* Friendly status aliases (auto-adapt in dark via the scale overrides) */
+  --success: hsl(var(--green-9));
+  --warning: hsl(var(--amber-9));
+  --error: hsl(var(--red-9));
+  --info: hsl(var(--blue-9));
+
+  --radius: 0.5rem;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.dark {
+  /* Raw scales, dark */
+  --teal-1: 183 30% 7%;   --teal-2: 183 35% 9%;    --teal-3: 183 38% 12%;
+  --teal-4: 182 40% 15%;  --teal-5: 182 40% 18%;   --teal-6: 182 38% 23%;
+  --teal-7: 181 35% 30%;  --teal-8: 180 34% 40%;   --teal-9: 179 42% 50%;
+  --teal-10: 179 48% 56%; --teal-11: 179 55% 65%;  --teal-12: 180 50% 85%;
+
+  --slate-1: 240 6% 7%;   --slate-2: 240 5% 10%;   --slate-3: 240 5% 13%;
+  --slate-4: 240 4% 16%;  --slate-5: 240 4% 19%;   --slate-6: 238 4% 23%;
+  --slate-7: 235 4% 30%;  --slate-8: 233 4% 40%;   --slate-9: 230 5% 52%;
+  --slate-10: 228 5% 58%; --slate-11: 220 9% 70%;  --slate-12: 220 9% 80%;
+
+  --red-9: 358 75% 59%;   --red-10: 357 74% 64%;   --red-11: 355 78% 75%;
+  --green-9: 151 55% 42%; --green-10: 150 52% 48%; --green-11: 148 58% 60%;
+  --amber-9: 39 100% 57%; --amber-10: 43 100% 64%; --amber-11: 46 100% 74%;
+  --blue-9: 206 100% 50%; --blue-10: 209 100% 60%; --blue-11: 210 100% 72%;
+
+  /* Semantic overrides that differ from light (the rest auto-adapt via the scales) */
+  --background: hsl(var(--slate-1));
+  --card: hsl(0 0% 12%);
+  --primary-foreground: hsl(var(--slate-1));
+  --accent: hsl(var(--slate-4));
+  --border: hsl(var(--slate-6));
+  --input: hsl(var(--slate-6));
+}
+
+/* Minimal base so linking the theme makes a page look native immediately. */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}

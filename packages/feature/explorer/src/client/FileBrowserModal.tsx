@@ -28,6 +28,8 @@ import { GitFileTree, buildGitFileTree, collectFilesUnderNode } from './GitFileT
 import { MenuContainerProvider } from '@cockpit/shared-ui';
 import { CodeViewer } from '@cockpit/feature-explorer';
 import { isMarkdownFile, isHtmlFile, isJsonFile, formatAsHumanReadable, THEME_JSON_COLORS } from './toolCallUtils';
+import { ExternalLink, BookmarkPlus } from 'lucide-react';
+import { useAddHtmlApp } from './htmlApps/useAddHtmlApp';
 import { buildTreeFromPaths, collectAllDirPaths, mergeFileTree } from './fileBrowser/utils';
 import { InteractiveMarkdownPreview } from '@cockpit/feature-explorer';
 import { HtmlPreview } from './HtmlPreview';
@@ -65,6 +67,7 @@ import { useSwipeContext } from '@cockpit/shared-ui';
 
 function FileBrowserModalImpl({ onClose, cwd, initialTab = 'tree', tabSwitchTrigger, initialSearchQuery, searchQueryTrigger }: FileBrowserModalProps) {
   const { t } = useTranslation();
+  const addHtmlApp = useAddHtmlApp();
   const { activeView, onViewChange } = useSwipeContext();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   // Editor mode in the right panel of tree / search / recent tabs:
@@ -1641,27 +1644,54 @@ function FileBrowserModalImpl({ onClose, cwd, initialTab = 'tree', tabSwitchTrig
                               }
                             />
                           )}
-                          {fileTree.fileContent?.type === 'text' && (isMarkdownFile(fileTree.selectedPath) || isHtmlFile(fileTree.selectedPath) || isJsonFile(fileTree.selectedPath)) && (
-                            <>
-                              {/* Global preview toggle: ON → main editor area renders the
-                                  markdown / html / json preview in-place (replacing
-                                  CodeViewer); state persists across file switches. Shared
-                                  flag (a file is never more than one of md/html/json, so
-                                  reusing previewMarkdown is safe). */}
+                          {fileTree.fileContent?.type === 'text' && (isMarkdownFile(fileTree.selectedPath) || isHtmlFile(fileTree.selectedPath) || isJsonFile(fileTree.selectedPath)) && (() => {
+                            // Preview toggle: ON → main area renders the md / html / json
+                            // preview in-place (replacing CodeViewer). HTML uses its OWN
+                            // flag (previewHtml, default OFF) so an interactive+SDK preview
+                            // never auto-renders — the click is the trust gesture. md/json
+                            // keep the shared, default-on previewMarkdown flag.
+                            const isHtml = isHtmlFile(fileTree.selectedPath);
+                            const on = isHtml ? fileTree.previewHtml : fileTree.previewMarkdown;
+                            const toggle = () => isHtml ? fileTree.setPreviewHtml(v => !v) : fileTree.setPreviewMarkdown(v => !v);
+                            return (
                               <button
-                                onClick={() => fileTree.setPreviewMarkdown(v => !v)}
+                                onClick={toggle}
                                 className={`px-1.5 py-0.5 text-xs rounded transition-colors ${
-                                  fileTree.previewMarkdown
-                                    ? 'bg-brand text-white'
-                                    : 'text-muted-foreground hover:bg-accent'
+                                  on ? 'bg-brand text-white' : 'text-muted-foreground hover:bg-accent'
                                 }`}
-                                title={fileTree.previewMarkdown ? t('fileBrowser.exitPreview') : t('common.preview')}
+                                title={on ? t('fileBrowser.exitPreview') : t('common.preview')}
                               >
-                                {fileTree.previewMarkdown ? t('fileBrowser.exitPreview') : t('common.preview')}
+                                {on ? t('fileBrowser.exitPreview') : t('common.preview')}
                               </button>
-                            </>
-                          )}
-                          {fileTree.fileContent?.type === 'text' && !(fileTree.previewMarkdown && (isMarkdownFile(fileTree.selectedPath) || isHtmlFile(fileTree.selectedPath) || isJsonFile(fileTree.selectedPath))) && (
+                            );
+                          })()}
+                          {/* Add this HTML to the global HTML-apps registry (html.json), and
+                              open it in a Console bubble. Both shown for HTML in BOTH preview and
+                              non-preview mode. selectedPath is project-root-relative → absolutize
+                              (registry stores absolute paths; the bubble is projectCwd-independent). */}
+                          {fileTree.fileContent?.type === 'text' && isHtmlFile(fileTree.selectedPath) && (() => {
+                            const sp = fileTree.selectedPath || '';
+                            const abs = sp.startsWith('/') ? sp : cwd ? `${cwd.replace(/\/$/, '')}/${sp}` : sp;
+                            return (
+                              <>
+                                <button
+                                  onClick={() => addHtmlApp(abs)}
+                                  className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent flex items-center"
+                                  title={t('htmlApps.addTooltip')}
+                                >
+                                  <BookmarkPlus className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => window.dispatchEvent(new CustomEvent('console-open-browser', { detail: { url: abs } }))}
+                                  className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent flex items-center"
+                                  title={t('common.openInConsole')}
+                                >
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            );
+                          })()}
+                          {fileTree.fileContent?.type === 'text' && !((fileTree.previewMarkdown && (isMarkdownFile(fileTree.selectedPath) || isJsonFile(fileTree.selectedPath))) || (fileTree.previewHtml && isHtmlFile(fileTree.selectedPath))) && (
                             <button
                               onClick={fileTree.handleToggleBlame}
                               disabled={fileTree.isLoadingBlame}
@@ -1681,7 +1711,7 @@ function FileBrowserModalImpl({ onClose, cwd, initialTab = 'tree', tabSwitchTrig
                           )}
                           {/* Edit — semi-stable (hidden only in md-preview submode), so it sits
                               left of the always-present Copy / Code Map right-edge anchors. */}
-                          {fileTree.fileContent?.type === 'text' && !(fileTree.previewMarkdown && (isMarkdownFile(fileTree.selectedPath) || isHtmlFile(fileTree.selectedPath) || isJsonFile(fileTree.selectedPath))) && (
+                          {fileTree.fileContent?.type === 'text' && !((fileTree.previewMarkdown && (isMarkdownFile(fileTree.selectedPath) || isJsonFile(fileTree.selectedPath))) || (fileTree.previewHtml && isHtmlFile(fileTree.selectedPath))) && (
                             <button
                               onClick={() => fileTree.setShowEditor(true)}
                               className="px-1.5 py-0.5 text-xs rounded transition-colors text-muted-foreground hover:bg-accent"
@@ -1774,9 +1804,10 @@ function FileBrowserModalImpl({ onClose, cwd, initialTab = 'tree', tabSwitchTrig
                               scrollToAnchor={mdLinkAnchor}
                             />
                           </div>
-                        ) : (fileTree.previewMarkdown && isHtmlFile(fileTree.selectedPath) && !fileTree.showBlame) ? (
-                          // In-place HTML preview (single-file, self-contained) — same
-                          // toggle UX as markdown, just rendered in a sandboxed iframe.
+                        ) : (fileTree.previewHtml && isHtmlFile(fileTree.selectedPath) && !fileTree.showBlame) ? (
+                          // In-place HTML preview — only when the user explicitly turned
+                          // on the HTML Preview toggle (previewHtml, default off). That
+                          // click is the trust gesture, so the preview gets the bash SDK.
                           <HtmlPreview
                             content={fileTree.fileContent.content}
                             filePath={fileTree.selectedPath}

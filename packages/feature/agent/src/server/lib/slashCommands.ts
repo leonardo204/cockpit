@@ -18,6 +18,7 @@ import { CR_PROMPT_EN, CR_PROMPT_ZH } from './crPrompt';
 import { EX_PROMPT_EN, EX_PROMPT_ZH } from './exPrompt';
 import { FX_PROMPT_EN, FX_PROMPT_ZH } from './fxPrompt';
 import { GO_PROMPT_EN, GO_PROMPT_ZH } from './goPrompt';
+import { HTML_PROMPT_EN, HTML_PROMPT_ZH } from './htmlPrompt';
 import {
   NEW_BRANCH_LABEL_EN,
   NEW_BRANCH_LABEL_ZH,
@@ -49,6 +50,7 @@ export const COMMAND_CONTENT: Record<string, CommandEntry> = {
   fx: { zh: FX_PROMPT_ZH, en: FX_PROMPT_EN },
   ex: { zh: EX_PROMPT_ZH, en: EX_PROMPT_EN },
   go: { zh: GO_PROMPT_ZH, en: GO_PROMPT_EN },
+  html: { zh: HTML_PROMPT_ZH, en: HTML_PROMPT_EN },
   cg: { zh: CG_PROMPT_ZH, en: CG_PROMPT_EN, labelZh: CG_LABEL_ZH, labelEn: CG_LABEL_EN },
   cc: { zh: CC_PROMPT_ZH, en: CC_PROMPT_EN, labelZh: CC_LABEL_ZH, labelEn: CC_LABEL_EN },
   cr: { zh: CR_PROMPT_ZH, en: CR_PROMPT_EN },

@@ -61,6 +61,13 @@ export function useFileTree({ cwd }: UseFileTreeOptions) {
   // Markdown files default to preview mode (rendered view) when opened.
   const [previewMarkdown, setPreviewMarkdown] = useState(true);
 
+  // HTML in-place preview — SEPARATE toggle, defaults OFF. An interactive HTML
+  // preview runs with the bash SDK (local command execution), so it must never
+  // auto-render: .html shows source until the user explicitly clicks Preview.
+  // That click is the trust gesture. Kept apart from previewMarkdown so markdown
+  // can keep auto-previewing without dragging HTML along.
+  const [previewHtml, setPreviewHtml] = useState(false);
+
   // Edit modal
   const [showEditor, setShowEditor] = useState(false);
 
@@ -553,6 +560,8 @@ export function useFileTree({ cwd }: UseFileTreeOptions) {
     // Modal state
     previewMarkdown,
     setPreviewMarkdown,
+    previewHtml,
+    setPreviewHtml,
     showEditor,
     setShowEditor,
 

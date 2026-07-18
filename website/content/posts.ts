@@ -32,6 +32,165 @@ export interface Post {
 
 export const posts: Post[] = [
   {
+    slug: 'html-apps-that-run-bash',
+    date: '2026-07-18',
+    keywords: [
+      'AI generated HTML app',
+      'HTML app run bash',
+      'interactive HTML preview',
+      'cockpit.bash SDK',
+      'HTML tool from prompt',
+      'local dashboard from AI',
+      'CORS-free HTML fetch',
+      'slash command html',
+      'AI 生成 HTML 应用',
+      'HTML 小应用',
+      '网页调用 bash',
+      '本地看板',
+      'Claude Code GUI',
+      'OpenCockpit',
+      'Cockpit',
+    ],
+    content: {
+      en: {
+        title: 'Turn a prompt into an HTML app that runs real bash',
+        description:
+          'A plain HTML preview is static — the same-origin sandbox blocks it from fetching real data. Cockpit now injects a `window.cockpit` SDK into the preview, so `/html` generates a small app whose buttons can `curl`, read/write files, and run scripts. Bookmark it into an HTML panel and reopen it anytime.',
+        readingTime: '5 min read',
+        body: `You ask an agent for "a small dashboard for my repo's stars," it writes a tidy \`.html\`, you open the preview — and it's dead. The page tries to \`fetch()\` an API and the same-origin sandbox kills it with a CORS error. A rendered HTML preview has always been a picture behind glass: it can lay out, but it can't *do* anything.
+
+This release breaks the glass. Cockpit now injects a \`window.cockpit\` SDK into the preview — **essentially the Bash tool, exposed to the page**. A button can \`curl\` for data, read and write files, tail a log. A static file becomes a real mini-app with a backend.
+
+## \`/html\` — generate one from a prompt
+
+It's a built-in slash command, same menu as \`/qa\` and \`/fx\`:
+
+\`\`\`text
+/html a dashboard for the Surething-io/cockpit repo — stars, forks, recent commits
+\`\`\`
+
+Cockpit attaches a built-in prompt that teaches the model to build a **small app** and — crucially — to fetch data through \`cockpit.bash('curl ...')\` instead of a direct \`fetch()\` that CORS would block. The AI uses the \`Write\` tool, and you get something you can open and click.
+
+By default you get a **React** app (zero-build — React, Babel and the theme are hosted locally by Cockpit, so it runs offline), styled to match Cockpit with light/dark. A trivial one-view page falls back to a single inline HTML file. In the chat preview you can flip between the rendered app and its **source** — a sidebar lists the entry file plus every sibling it pulls in (\`app.jsx\`, \`api.mjs\`, images…).
+
+## The page can run bash
+
+The SDK is ready on load — no library to import:
+
+| API | What it does |
+|---|---|
+| \`cockpit.cwd\` | directory of the current HTML file; relative commands run here |
+| \`cockpit.bash(command, opts?)\` | run one bash command, mirroring the Bash tool |
+
+Foreground for short commands, background for long ones:
+
+\`\`\`js
+// foreground — await the full result
+const { stdout, exitCode } = await cockpit.bash("curl -s https://api.github.com/repos/Surething-io/cockpit");
+const repo = JSON.parse(stdout);
+
+// background — stream a live log, kill() when done
+const h = cockpit.bash("tail -f ./build.log", {
+  background: true,
+  onOutput: c => box.textContent += c,
+});
+\`\`\`
+
+For anything more involved, the AI writes the backend as a **script file** next to the page and calls it CGI-style — \`cockpit.bash("node ./api.js")\`. HTML is the frontend, the script is the handler.
+
+## Bookmark it, reopen it, \`/name\` it
+
+A page earns a spot in the **HTML panel** by declaring a few \`<head>\` meta tags (\`cockpit-name\`, \`description\`, \`cockpit-icon\`). After that:
+
+- **Bookmark** it from the chat preview, the Explorer file browser, or open it straight into a Console browser bubble — the two buttons are everywhere a \`.html\` shows up.
+- The **HTML panel** (a button on the Console input bar) is a card grid of everything you've saved — preview, delete, copy path, or click to run.
+- Type \`/\` in the Console input bar and your apps appear ahead of custom commands. \`/repo-dashboard\` opens it in a bubble. The short name is the \`cockpit-name\` from the meta head.
+
+The registry is just \`~/.cockpit/html.json\` holding absolute paths — the same mechanism as \`skills.json\`. The HTML files stay in your project; the panel is a bookmark folder.
+
+## The honest part
+
+\`cockpit.bash\` is a **real command-execution channel** — equivalent to a shell on your machine. So be careful: **previewing a local \`.html\` in Cockpit executes its scripts with your privileges**, exactly as risky as running the file yourself — don't preview or bookmark an \`.html\` you don't trust. It obeys Cockpit's startup [token gate](/en/blog/cockpit-access-token/): open on localhost, validated when you set \`--token\`.
+
+## Try it
+
+Update Cockpit, open a chat, and type \`/html\` with something you'd like to see. Click the preview, then bookmark it. Details in the [HTML Apps](/en/docs/agent/html-apps/) docs.
+
+---
+
+**Try it:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [Try Online](/try)`,
+      },
+      zh: {
+        title: '一句话生成能跑真 bash 的 HTML 小应用',
+        description:
+          '普通 HTML 预览是静态的 —— 同源沙箱会拦掉它拉真实数据。Cockpit 现在往预览里注入了一个 `window.cockpit` SDK,于是 `/html` 生成的小应用,按钮就能 `curl`、读写文件、跑脚本。把它收藏进 HTML 面板,随时再打开。',
+        readingTime: '阅读约 5 分钟',
+        body: `你让 agent 做「一个看仓库 star 数的小看板」,它写了一个清清爽爽的 \`.html\`,你打开预览 —— 死的。页面想 \`fetch()\` 一个 API,同源沙箱一个 CORS 错误把它掐了。渲染出来的 HTML 预览一直是隔着玻璃的画:能排版,但什么也*做不了*。
+
+这个版本把玻璃打碎了。Cockpit 现在往预览里注入一个 \`window.cockpit\` SDK —— **本质就是 Bash 工具暴露给页面**。按钮能 \`curl\` 拉数据、读写文件、tail 日志。一份静态文件变成了有后端的真·小应用。
+
+## \`/html\` —— 一句话生成一个
+
+这是个内置斜杠命令,和 \`/qa\`、\`/fx\` 同一个菜单:
+
+\`\`\`text
+/html 做一个 Surething-io/cockpit 仓库的看板 —— star、fork、最近提交
+\`\`\`
+
+Cockpit 会挂上一份内置 prompt,教模型做一个**小应用**,并且 —— 关键 —— 通过 \`cockpit.bash('curl ...')\` 取数据,而不是会被 CORS 拦掉的直连 \`fetch()\`。AI 用 \`Write\` 工具产出文件,你打开就能点。
+
+默认你拿到的是一个 **React** 小应用(零构建 —— React、Babel、主题都由 Cockpit 本地托管,离线可用),自动套用 Cockpit 主题、带亮/暗。极简单的单视图页则退回一份内联 HTML。聊天预览里可在**渲染**和**原文**之间切换 —— 侧边栏会列出入口文件和它牵出的每个同级文件(\`app.jsx\`、\`api.mjs\`、图片…)。
+
+## 页面里能跑 bash
+
+SDK 在页面加载时就绪,不用引任何库:
+
+| API | 作用 |
+|---|---|
+| \`cockpit.cwd\` | 当前 HTML 文件所在目录;相对命令默认在这里执行 |
+| \`cockpit.bash(command, opts?)\` | 执行一条 bash 命令,对齐 Bash 工具 |
+
+短命令用前台,长/实时命令用后台:
+
+\`\`\`js
+// 前台 —— await 拿到完整结果
+const { stdout, exitCode } = await cockpit.bash("curl -s https://api.github.com/repos/Surething-io/cockpit");
+const repo = JSON.parse(stdout);
+
+// 后台 —— 流式看日志,用完 kill()
+const h = cockpit.bash("tail -f ./build.log", {
+  background: true,
+  onOutput: c => box.textContent += c,
+});
+\`\`\`
+
+逻辑再复杂一点,AI 会把后端写成页面同目录的一个**脚本文件**,CGI 式地调它 —— \`cockpit.bash("node ./api.js")\`。HTML 管前端,脚本当处理器。
+
+## 收藏、再打开、\`/名字\` 唤起
+
+页面只要在 \`<head>\` 里声明几个 meta(\`cockpit-name\`、\`description\`、\`cockpit-icon\`),就能进 **HTML 面板**。之后:
+
+- 从聊天预览、Explorer 文件浏览器**收藏**它,或直接在 Console 浏览器气泡里打开 —— 只要有 \`.html\` 露面,那两个按钮就在。
+- **HTML 面板**(Console 输入栏上的一个按钮)是你存过的所有小应用的卡片墙 —— 预览、删除、复制路径,点一下就跑。
+- 在 Console 输入栏打 \`/\`,你的小应用排在自定义命令前面。\`/repo-dashboard\` 就在气泡里打开它。这个短名就是 meta 头里的 \`cockpit-name\`。
+
+登记表就是 \`~/.cockpit/html.json\`,只存绝对路径 —— 和 \`skills.json\` 一样的机制。HTML 文件留在你项目里;面板只是个书签夹。
+
+## 实话实说
+
+\`cockpit.bash\` 是一条**真实的命令执行通道** —— 等同于在你机器上开一个 shell。所以要当心:**在 Cockpit 里预览一个本地 \`.html\`,会以你的权限执行它的脚本**,风险和你亲手运行这个文件完全一样 —— 不信任的 \`.html\` 就别去预览、也别收藏。它服从 Cockpit 启动时的[令牌门](/zh/blog/cockpit-access-token/):本机开放,设了 \`--token\` 就校验。
+
+## 试一下
+
+更新 Cockpit,打开一个聊天,\`/html\` 后面写点你想看的东西。点开预览,然后收藏它。细节见 [HTML 小应用](/zh/docs/agent/html-apps/)文档。
+
+---
+
+**试试看:** \`npm i -g @surething/cockpit\` · [GitHub](https://github.com/Surething-io/cockpit) · [在线体验](/try)`,
+      },
+    },
+  },
+  {
     slug: 'review-ai-changes-tool-by-tool',
     date: '2026-07-09',
     keywords: [

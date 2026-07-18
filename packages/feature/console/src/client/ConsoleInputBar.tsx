@@ -13,6 +13,11 @@ interface TaggedCommand extends CustomCommand {
   scope: 'project' | 'global';
 }
 
+/** A `/` autocomplete row: a registered HTML app, or a custom command. */
+type SlashItem =
+  | { kind: 'html'; name: string; path: string }
+  | { kind: 'cmd'; cmd: TaggedCommand };
+
 interface ConsoleInputBarProps {
   cwd: string;
   currentCwd: string;
@@ -46,7 +51,8 @@ export function ConsoleInputBar({
   const [autocompleteIndex, setAutocompleteIndex] = useState(0);
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [showQuickCommands, setShowQuickCommands] = useState(false);
-  const [filteredSlashCommands, setFilteredSlashCommands] = useState<TaggedCommand[]>([]);
+  const [htmlApps, setHtmlApps] = useState<{ name: string; path: string }[]>([]);
+  const [slashItems, setSlashItems] = useState<SlashItem[]>([]);
   const [showSlashCommands, setShowSlashCommands] = useState(false);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
 
@@ -61,26 +67,55 @@ export function ConsoleInputBar({
     inputRef.current?.focus();
   }, []);
 
-  // Filter on input change / custom commands (project-level first, then global)
+  // Registered HTML apps (name → path) for the `/name` autocomplete. Plain fetch
+  // (no cross-package import); refreshed when the registry changes via the shared
+  // BroadcastChannel (mirrors htmlAppsBus's channel name).
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/html-apps')
+        .then(r => (r.ok ? r.json() : []))
+        .then((list: Array<{ name?: string; path?: string; valid?: boolean }>) => {
+          if (cancelled) return;
+          setHtmlApps(
+            (Array.isArray(list) ? list : [])
+              .filter(a => a.valid !== false && a.name && a.path)
+              .map(a => ({ name: a.name as string, path: a.path as string })),
+          );
+        })
+        .catch(() => { /* registry optional */ });
+    };
+    load();
+    let ch: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      ch = new BroadcastChannel('cockpit-html-apps');
+      ch.addEventListener('message', (e: MessageEvent) => { if (e.data?.type === 'changed') load(); });
+    }
+    return () => { cancelled = true; ch?.close(); };
+  }, []);
+
+  // Filter on input change: registered HTML apps first (open as bubble), then
+  // custom commands (project-level before global).
   useEffect(() => {
     if (inputValue.startsWith('/')) {
       const keyword = inputValue.slice(1).toLowerCase();
-      const taggedProject: TaggedCommand[] = projectCommands
-        .filter(c => c.name.toLowerCase().startsWith(keyword))
-        .map(c => ({ ...c, scope: 'project' as const }));
-      const taggedGlobal: TaggedCommand[] = globalCommands
-        .filter(c => c.name.toLowerCase().startsWith(keyword))
-        .map(c => ({ ...c, scope: 'global' as const }));
-      const filtered = [...taggedProject, ...taggedGlobal];
+      const htmlItems: SlashItem[] = htmlApps
+        .filter(a => a.name.toLowerCase().startsWith(keyword))
+        .map(a => ({ kind: 'html' as const, name: a.name, path: a.path }));
+      const cmdItems: SlashItem[] = [
+        ...projectCommands.filter(c => c.name.toLowerCase().startsWith(keyword)).map(c => ({ ...c, scope: 'project' as const })),
+        ...globalCommands.filter(c => c.name.toLowerCase().startsWith(keyword)).map(c => ({ ...c, scope: 'global' as const })),
+      ].map(cmd => ({ kind: 'cmd' as const, cmd }));
+      const items = [...htmlItems, ...cmdItems];
       queueMicrotask(() => {
-        setFilteredSlashCommands(filtered);
-        setShowSlashCommands(filtered.length > 0);
+        setSlashItems(items);
+        setShowSlashCommands(items.length > 0);
         setSlashSelectedIndex(0);
       });
     } else {
       queueMicrotask(() => setShowSlashCommands(false));
     }
-  }, [inputValue, projectCommands, globalCommands]);
+  }, [inputValue, projectCommands, globalCommands, htmlApps]);
 
   // Scroll selected item into view
   useEffect(() => {
@@ -90,9 +125,14 @@ export function ConsoleInputBar({
     }
   }, [slashSelectedIndex, showSlashCommands]);
 
-  const handleSlashSelect = useCallback((cmd: CustomCommand) => {
+  const handleSlashSelect = useCallback((item: SlashItem) => {
     setShowSlashCommands(false);
-    const finalCmd = cmd.command;
+    if (item.kind === 'html') {
+      onAddPluginItem?.('browser', item.path);
+      setInputValue('');
+      return;
+    }
+    const finalCmd = item.cmd.command;
     const plugin = matchInput(finalCmd);
     if (plugin) {
       onAddPluginItem?.(plugin.type, finalCmd.trim());
@@ -107,6 +147,21 @@ export function ConsoleInputBar({
     if (isComposingRef.current) return;
     if (!inputValue.trim()) return;
 
+    // `/name` that exactly matches a registered HTML app → open its bubble.
+    // Otherwise fall through (never intercepts real commands like `/usr/bin/x`).
+    if (inputValue.startsWith('/')) {
+      const nm = inputValue.slice(1).trim();
+      const hit = htmlApps.find(a => a.name === nm);
+      if (hit) {
+        onAddPluginItem?.('browser', hit.path);
+        setInputValue('');
+        setHistoryIndex(-1);
+        setTemporaryInput('');
+        setShowSlashCommands(false);
+        return;
+      }
+    }
+
     const expanded = expandCustomCommand(inputValue);
     const finalInput = expanded ?? inputValue;
 
@@ -120,7 +175,7 @@ export function ConsoleInputBar({
     setInputValue('');
     setHistoryIndex(-1);
     setTemporaryInput('');
-  }, [inputValue, onExecute, onAddPluginItem, expandCustomCommand]);
+  }, [inputValue, onExecute, onAddPluginItem, expandCustomCommand, htmlApps]);
 
   const handleAutocomplete = useCallback(async () => {
     if (!inputRef.current) return;
@@ -181,21 +236,21 @@ export function ConsoleInputBar({
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.nativeEvent.isComposing) return;
 
-    // / command candidate list keyboard navigation
-    if (showSlashCommands && filteredSlashCommands.length > 0) {
+    // / candidate list keyboard navigation
+    if (showSlashCommands && slashItems.length > 0) {
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSlashSelectedIndex(prev => (prev - 1 + filteredSlashCommands.length) % filteredSlashCommands.length);
+        setSlashSelectedIndex(prev => (prev - 1 + slashItems.length) % slashItems.length);
         return;
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSlashSelectedIndex(prev => (prev + 1) % filteredSlashCommands.length);
+        setSlashSelectedIndex(prev => (prev + 1) % slashItems.length);
         return;
       }
       if (e.key === 'Tab' || e.key === 'Enter') {
         e.preventDefault();
-        handleSlashSelect(filteredSlashCommands[slashSelectedIndex]);
+        handleSlashSelect(slashItems[slashSelectedIndex]);
         return;
       }
       if (e.key === 'Escape') {
@@ -244,7 +299,7 @@ export function ConsoleInputBar({
         setInputValue(history[newIndex]);
       }
     }
-  }, [historyIndex, inputValue, temporaryInput, showAutocomplete, autocompleteSuggestions, autocompleteIndex, handleAutocomplete, applyAutocompleteSuggestion, showSlashCommands, filteredSlashCommands, slashSelectedIndex, handleSlashSelect, commandHistoryRef]);
+  }, [historyIndex, inputValue, temporaryInput, showAutocomplete, autocompleteSuggestions, autocompleteIndex, handleAutocomplete, applyAutocompleteSuggestion, showSlashCommands, slashItems, slashSelectedIndex, handleSlashSelect, commandHistoryRef]);
 
   return (
     <div className="border-t border-border p-4">
@@ -319,6 +374,17 @@ export function ConsoleInputBar({
           </svg>
         </button>
 
+        {/* HTML apps launcher — opens the HtmlAppsModal (rendered in Workspace)
+            via a window event, mirroring the sidebar's Skills button. */}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent('cockpit-open-html-apps'))}
+          className="px-2 py-1 text-xs font-medium rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 transition-all"
+          title="HTML apps"
+        >
+          HTML
+        </button>
+
         <input
           ref={inputRef}
           type="text"
@@ -338,23 +404,33 @@ export function ConsoleInputBar({
           className="flex-1 px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono"
         />
 
-        {/* / custom command candidate list */}
-        {showSlashCommands && filteredSlashCommands.length > 0 && (
+        {/* / candidate list — HTML apps + custom commands */}
+        {showSlashCommands && slashItems.length > 0 && (
           <div
             ref={slashListRef}
             className="absolute bottom-full left-0 right-0 mb-1 max-h-64 overflow-y-auto bg-popover border border-border rounded-lg shadow-lg z-50"
           >
-            {filteredSlashCommands.map((cmd, index) => (
+            {slashItems.map((item, index) => (
               <div
-                key={`${cmd.scope}-${cmd.name}`}
-                onClick={() => handleSlashSelect(cmd)}
+                key={item.kind === 'html' ? `html-${item.name}` : `cmd-${item.cmd.scope}-${item.cmd.name}`}
+                onClick={() => handleSlashSelect(item)}
                 className={`flex items-center gap-3 px-3 py-1.5 cursor-pointer text-sm ${
                   index === slashSelectedIndex ? 'bg-brand/10' : 'hover:bg-accent'
                 }`}
               >
-                <span className="font-mono font-medium text-foreground">/{cmd.name}</span>
-                <span className="flex-1 text-muted-foreground truncate">{cmd.command}</span>
-                <span className="text-[10px] text-muted-foreground/60 flex-shrink-0">{cmd.scope === 'project' ? t('console.scopeProject') : t('console.scopeGlobal')}</span>
+                {item.kind === 'html' ? (
+                  <>
+                    <span className="font-mono font-medium text-foreground">/{item.name}</span>
+                    <span className="flex-1 text-muted-foreground truncate">{item.path}</span>
+                    <span className="text-[10px] text-brand/70 flex-shrink-0">HTML</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="font-mono font-medium text-foreground">/{item.cmd.name}</span>
+                    <span className="flex-1 text-muted-foreground truncate">{item.cmd.command}</span>
+                    <span className="text-[10px] text-muted-foreground/60 flex-shrink-0">{item.cmd.scope === 'project' ? t('console.scopeProject') : t('console.scopeGlobal')}</span>
+                  </>
+                )}
               </div>
             ))}
           </div>

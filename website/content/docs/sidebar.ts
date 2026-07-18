@@ -79,6 +79,11 @@ export const docsSidebar: DocSection[] = [
       // line-led `/` + `@` syntax. Sits after Skills because it composes the
       // commands documented there.
       { slug: 'agent/workflows', labelKey: 'workflows', available: true },
+      // HTML apps — the `/html` command generates an interactive small app
+      // whose buttons can run real bash via the injected `cockpit.bash`
+      // SDK. Sits right after Workflows: it's the next thing a slash command can
+      // produce, and it graduates a chat reply into a reusable mini-app.
+      { slug: 'agent/html-apps', labelKey: 'htmlApps', available: true },
       { slug: 'agent/engines', labelKey: 'engines', available: true },
       { slug: 'agent/scheduled-tasks', labelKey: 'scheduledTasks', available: true },
       { slug: 'agent/notes', labelKey: 'notes', available: true },

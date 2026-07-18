@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { ProjectSessionsModal } from '@cockpit/feature-agent';
 import { FileBrowserModal } from '@cockpit/feature-explorer';
 import { GitWorktreeModal } from '@cockpit/feature-explorer';
+import { HtmlAppsModal } from '@cockpit/feature-explorer';
 import { ConsoleView, AliasManager } from '@cockpit/feature-console';
 import { ChatProvider, FileDiffViewer } from '@cockpit/feature-agent';
 import type { ToolCallInfo } from '@cockpit/feature-agent';
@@ -163,6 +164,26 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
       )
     );
   }, [initialCwd]);
+
+  // Swipe to the console panel when another panel asks to open a browser bubble
+  // there (chat HTML preview's "open in Console" button). ConsoleView is always
+  // mounted and creates the bubble off the same window event; here we just make
+  // the console panel visible.
+  useEffect(() => {
+    const handler = () => handleViewChange('console');
+    window.addEventListener('console-open-browser', handler);
+    return () => window.removeEventListener('console-open-browser', handler);
+  }, [handleViewChange]);
+
+  // HTML-apps launcher. Rendered here (inside the project iframe, same frame as
+  // ConsoleView + the console input bar's "HTML" button) — window events don't
+  // cross the iframe/parent boundary, so it can't live in the parent Workspace.
+  const [isHtmlAppsOpen, setIsHtmlAppsOpen] = useState(false);
+  useEffect(() => {
+    const handler = () => setIsHtmlAppsOpen(true);
+    window.addEventListener('cockpit-open-html-apps', handler);
+    return () => window.removeEventListener('cockpit-open-html-apps', handler);
+  }, []);
 
   // Load Git repository info (branch)
   const loadGitInfo = useCallback(async () => {
@@ -430,6 +451,11 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
                 {fileDiffRequest && (
                   <div className="absolute inset-0 z-20">
                     <FileDiffViewer
+                      // Switching to a different message must reset the viewer
+                      // (first commit / first file, or empty state) — key on the
+                      // tool-call identity forces a fresh mount per message while
+                      // leaving same-message refetches (stable key) untouched.
+                      key={fileDiffRequest.toolCalls.map((tc) => tc.id).filter(Boolean).join(',')}
                       toolCalls={fileDiffRequest.toolCalls}
                       cwd={fileDiffRequest.cwd}
                       onClose={() => setFileDiffRequest(null)}
@@ -528,6 +554,12 @@ export function TabManager({ initialCwd, initialSessionId, initialView }: TabMan
           onSave={() => setIsAliasManagerOpen(false)}
         />
       )}
+
+      {/* HTML apps launcher (opened from the console input bar's "HTML" button) */}
+      <HtmlAppsModal
+        isOpen={isHtmlAppsOpen}
+        onClose={() => setIsHtmlAppsOpen(false)}
+      />
 
     </div>
     </SwipeableViewContainer>

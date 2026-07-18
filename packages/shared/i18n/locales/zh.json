@@ -31,6 +31,7 @@
     "deleteFailed": "删除失败",
     "operationFailed": "操作失败",
     "copiedPath": "已复制路径",
+    "openInConsole": "在 Console 气泡打开",
     "copyAbsPath": "复制绝对路径",
     "loadMore": "加载更多",
     "noResult": "无匹配结果",
@@ -56,6 +57,12 @@
     "global": "全局",
     "project": "项目",
     "current": "当前"
+  },
+  "htmlApps": {
+    "addTooltip": "添加到 HTML 面板",
+    "added": "已添加到 HTML 面板",
+    "alreadyAdded": "已添加过",
+    "addFailed": "添加失败"
   },
   "toast": {
     "savedSuccess": "已保存",

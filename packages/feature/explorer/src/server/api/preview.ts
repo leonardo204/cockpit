@@ -11,6 +11,7 @@
  * escape the /api/preview prefix and 404 against the app itself.
  */
 import { createReadStream } from "fs"
+import { readFile } from "fs/promises"
 import { Readable } from "stream"
 import path from "path"
 import { Effect } from "effect"
@@ -20,6 +21,7 @@ import {
   PermissionError,
   ValidationError,
 } from "@cockpit/effect-core"
+import { injectBashSdk, resolveBashCwd, fromPreviewUrl } from "@cockpit/shared-utils"
 import {
   statWithSymlink,
   getMimeType,
@@ -47,20 +49,25 @@ const PREVIEW_MIME: Record<string, string> = {
 
 export const GET = handler((req) =>
   Effect.gen(function* () {
-    const pathname = new URL(req.url).pathname
+    const reqUrl = new URL(req.url)
+    const pathname = reqUrl.pathname
+    // Inject the bash SDK ONLY for TRUSTED previews (marked `?bash=1` by the
+    // host). Untrusted previews are served raw. The hard enforcement is the
+    // /ws/bash same-origin gate + the untrusted iframe's opaque sandbox; this
+    // just avoids shipping a live RCE bridge inside every previewed .html.
+    const wantBash = reqUrl.searchParams.get("bash") === "1"
     if (!pathname.startsWith(PREFIX)) {
       return yield* Effect.fail(
         new ValidationError({ field: "path", reason: "missing" })
       )
     }
 
-    // "/api/preview/Users/ka/x/index.html" → "/Users/ka/x/index.html"
-    const raw = decodeURIComponent(pathname.slice(PREFIX.length - 1))
-
-    // Traversal guard on the decoded segments (catches %2e%2e as well)
-    if (raw.includes("\0") || raw.split("/").includes("..")) {
+    // Decode + normalize separators + strip the drive-path leading slash + guard
+    // against traversal (posix `/Users/..` and Windows `C:/Users/..` both handled).
+    const raw = fromPreviewUrl(pathname)
+    if (raw === null) {
       return yield* Effect.fail(
-        new PermissionError({ action: "read", resource: raw })
+        new PermissionError({ action: "read", resource: pathname })
       )
     }
     const fullPath = path.normalize(raw)
@@ -82,6 +89,31 @@ export const GET = handler((req) =>
 
     const ext = path.extname(fullPath).toLowerCase()
     const contentType = PREVIEW_MIME[ext] ?? getMimeType(ext)
+
+    // HTML files get the window.cockpit bash SDK injected (same capability the
+    // srcDoc HtmlPreview grants), so the console browser bubble — which loads
+    // local HTML over this real same-origin URL — can call cockpit.bash(...).
+    // wsUrl is left empty: the SDK derives ws://host/ws/bash from window.location
+    // (this iframe has a real origin, unlike the srcDoc preview). Read fully into
+    // a string since injection rewrites the body and Content-Length changes.
+    if ((ext === ".html" || ext === ".htm") && wantBash) {
+      const html = yield* Effect.tryPromise({
+        try: () => readFile(fullPath, "utf-8"),
+        catch: (cause) =>
+          new ValidationError({ field: "path", reason: String(cause) }),
+      })
+      // fullPath is already absolute + normalized, so resolveBashCwd degenerates
+      // to a plain dirname here — shared with HtmlPreview to avoid drift.
+      const injected = injectBashSdk(html, { cwd: resolveBashCwd(fullPath) })
+      return new Response(injected, {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": String(Buffer.byteLength(injected)),
+          "Cache-Control": "no-store",
+        },
+      })
+    }
 
     const stream = createReadStream(fullPath)
     return new Response(Readable.toWeb(stream) as ReadableStream, {

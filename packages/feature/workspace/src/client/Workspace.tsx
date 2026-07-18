@@ -229,6 +229,12 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
             const iframe = iframeRefs.current.get(cwd);
             if (iframe?.contentWindow) {
               iframe.contentWindow.postMessage({ type: 'SWITCH_SESSION', sessionId: targetSessionId }, '*');
+            } else {
+              // Project is in the list but its iframe was never mounted (lazy load):
+              // postMessage would hit nothing and the first mount would default to the
+              // most recent session. Freeze the sessionId for the URL so getProjectUrl
+              // carries it on mount via the deterministic initialSessionId path.
+              initialSessionIdsRef.current.set(cwd, { sessionId: targetSessionId });
             }
           }
           if (existingIndex !== activeIndex) {
@@ -346,6 +352,11 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
           sessionId,
           switchToAgent: true,
         }, '*');
+      } else {
+        // Project is in the list but its iframe was never mounted (lazy load):
+        // freeze the sessionId (+ agent view intent) for the iframe URL so the
+        // first mount opens the requested session instead of the most recent one.
+        initialSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
       }
       setActiveIndex(existingIndex);
       saveProjects(projects, existingIndex, collapsed);
@@ -383,6 +394,11 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
           sessionId,
           switchToAgent: true,
         }, '*');
+      } else {
+        // Project is in the list but its iframe was never mounted (lazy load):
+        // freeze the sessionId (+ agent view intent) for the iframe URL so the
+        // first mount opens the requested session instead of the most recent one.
+        initialSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
       }
       if (existingIndex !== activeIndex) {
         setActiveIndex(existingIndex);

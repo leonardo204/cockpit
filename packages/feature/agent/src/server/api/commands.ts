@@ -29,6 +29,7 @@ const BUILTIN_COMMANDS: CommandInfo[] = [
   { name: "/fx", description: "Enter bug evidence-chain analysis mode", source: "builtin" },
   { name: "/ex", description: "Enter structured analysis & discussion mode", source: "builtin" },
   { name: "/go", description: "Enter landing mode: MVP staged implementation with self-verify", source: "builtin" },
+  { name: "/html", description: "Generate an interactive self-contained HTML page (built-in bash SDK)", source: "builtin" },
   { name: "/cg", description: "Enter project graph (codegraph) exploration mode", source: "builtin" },
   { name: "/cc", description: "Enter Cockpit CLI (cock subcommands) operation mode", source: "builtin" },
   { name: "/cr", description: "Full code review: static triangulation + dynamic modelling", source: "builtin" },

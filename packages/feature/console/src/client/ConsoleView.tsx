@@ -256,6 +256,18 @@ function ConsoleViewImpl({ cwd, initialShellCwd, tabId, onCwdChange, onOpenNote 
     return () => window.removeEventListener('execute-terminal-command', handler);
   }, [executeCommand]);
 
+  // Open a browser bubble from another panel (e.g. chat's HTML preview modal's
+  // "open in Console" button). TabManager handles the swipe to this panel; we
+  // just create the bubble. Local file paths and http(s) URLs both go as `url`.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const url = (e as CustomEvent).detail?.url;
+      if (url) addPluginItem('browser', url);
+    };
+    window.addEventListener('console-open-browser', handler);
+    return () => window.removeEventListener('console-open-browser', handler);
+  }, [addPluginItem]);
+
   // Bubble 50% layout
   const bubbleContentHeight = scrollAreaHeight > 0
     ? Math.floor((scrollAreaHeight - 32 - 12) / 2 - TOOLBAR_HEIGHT)

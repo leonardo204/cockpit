@@ -26,6 +26,10 @@ export * from './DiffViewModeToggle';
 export * from './CodeViewer';
 export * from './InteractiveMarkdownPreview';
 export * from './HtmlPreview';
+export { HtmlAppsModal } from './htmlApps/HtmlAppsModal';
+export { HtmlPreviewModal } from './htmlApps/HtmlPreviewModal';
+export { onHtmlAppsChanged, notifyHtmlAppsChanged } from './htmlApps/htmlAppsBus';
+export { useAddHtmlApp } from './htmlApps/useAddHtmlApp';
 export * from './PreviewModal';
 export * from './useLSP';
 

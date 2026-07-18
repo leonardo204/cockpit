@@ -23,6 +23,10 @@ export const NOTE_FILE = join(COCKPIT_DIR, 'note.md');
 export const SCHEDULED_TASKS_FILE = join(COCKPIT_DIR, 'scheduled-tasks.json');
 export const SETTINGS_FILE = join(COCKPIT_DIR, 'settings.json');
 export const SKILLS_FILE = join(COCKPIT_DIR, 'skills.json');
+// Global registry of HTML "mini-app" file paths, launched as console browser
+// bubbles. Same shape/mechanics as skills.json (manual add/remove of absolute
+// paths), but the enrichment reads each file's <title>/<meta> head.
+export const HTML_APPS_FILE = join(COCKPIT_DIR, 'html.json');
 export const REVIEW_DIR = join(COCKPIT_DIR, 'review');
 export const REVIEW_SIGNAL_FILE = join(REVIEW_DIR, '_signal');
 

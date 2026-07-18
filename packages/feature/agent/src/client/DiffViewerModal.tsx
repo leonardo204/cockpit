@@ -18,7 +18,9 @@ import {
   buildGitFileTree,
   collectGitTreeDirPaths,
   InteractiveMarkdownPreview,
+  HtmlPreviewModal,
   isMarkdownFile,
+  isHtmlFile,
   formatAsHumanReadable,
   type GitFileNode,
 } from '@cockpit/feature-explorer';
@@ -315,6 +317,9 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
   // Rendered previews of the SNAPSHOT's post-change content (not the current
   // disk state — that's the point). Same overlay pattern as StatusDiffPane.
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
+  // HTML preview overlay. Content here is AI-produced (this viewer only shows
+  // mutating tool-call snapshots), so the preview is TRUSTED (bash SDK enabled).
+  const [showHtmlPreview, setShowHtmlPreview] = useState(false);
   const [jsonPreview, setJsonPreview] = useState<{ content: string; filePath: string } | null>(null);
 
   const selectedCall = useMemo(
@@ -365,6 +370,10 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
         setShowMarkdownPreview(false);
         return;
       }
+      if (showHtmlPreview) {
+        setShowHtmlPreview(false);
+        return;
+      }
       if (jsonPreview) {
         setJsonPreview(null);
         return;
@@ -375,7 +384,7 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, showMarkdownPreview, jsonPreview]);
+  }, [onClose, showMarkdownPreview, showHtmlPreview, jsonPreview]);
 
   const totalFiles = useMemo(() => calls.reduce((n, c) => n + c.files.length, 0), [calls]);
 
@@ -581,9 +590,11 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
                               ? undefined
                               : isMarkdownFile(selectedFile.path)
                                 ? () => setShowMarkdownPreview(true)
-                                : selectedFile.path.endsWith('.json')
-                                  ? () => setJsonPreview({ content: selectedFile.new_string, filePath: selectedFile.path })
-                                  : undefined
+                                : isHtmlFile(selectedFile.path)
+                                  ? () => setShowHtmlPreview(true)
+                                  : selectedFile.path.endsWith('.json')
+                                    ? () => setJsonPreview({ content: selectedFile.new_string, filePath: selectedFile.path })
+                                    : undefined
                           }
                           previewLabel={
                             selectedFile.path.endsWith('.json') ? t('common.readable') : t('common.preview')
@@ -609,9 +620,11 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
                               ? undefined
                               : isMarkdownFile(selectedFile.path)
                                 ? () => setShowMarkdownPreview(true)
-                                : selectedFile.path.endsWith('.json')
-                                  ? () => setJsonPreview({ content: selectedFile.new_string, filePath: selectedFile.path })
-                                  : undefined
+                                : isHtmlFile(selectedFile.path)
+                                  ? () => setShowHtmlPreview(true)
+                                  : selectedFile.path.endsWith('.json')
+                                    ? () => setJsonPreview({ content: selectedFile.new_string, filePath: selectedFile.path })
+                                    : undefined
                           }
                           previewLabel={
                             selectedFile.path.endsWith('.json') ? t('common.readable') : t('common.preview')
@@ -651,6 +664,18 @@ export function FileDiffViewer({ toolCalls, cwd, onClose, onContentSearch }: Dif
               />
             </div>
           </div>
+        )}
+
+        {/* HTML preview overlay — opening it is a user gesture → trusted. Its
+            own Portal/fixed overlay, so no wrapper needed here. */}
+        {showHtmlPreview && selectedFile && (
+          <HtmlPreviewModal
+            filePath={selectedFile.path}
+            content={selectedFile.new_string}
+            cwd={cwd}
+            onClose={() => setShowHtmlPreview(false)}
+            onContentSearch={onContentSearch}
+          />
         )}
 
         {/* JSON readable preview overlay. */}
