@@ -35,10 +35,16 @@
  *     and makes double-rendering structurally impossible.
  *   - tool results are `user` events with `tool_use_id` + `content` blocks.
  *
+ * MULTI-TURN (F1-05)
+ * ------------------
+ * History is OURS now: the runtime persists transcripts and memory in SQLite,
+ * so a run resumes rather than starting from `ctx.prompt` alone. `ctx.sessionId`
+ * (when the shell supplies one) addresses an existing session; otherwise we mint
+ * one and `rekey()` to it. `runTurn` loads the prior messages, drives the
+ * engine, and appends the new ones — this file no longer touches the history at
+ * all, it only translates the events streaming out.
+ *
  * MILESTONE LIMITATIONS (deliberate, tracked)
- *   - Single-turn: the shell's history lives in Claude-SDK jsonl transcripts we
- *     do not write, so each run starts from `ctx.prompt` alone. Multi-turn
- *     needs our own transcript store; it is not wired here.
  *   - `ctx.images` are ignored (the runtime's RuntimeMessage is text-only).
  *   - The gate is permissive: it allows everything, but EVERY call goes through
  *     it and is logged. The seam is real and exercised; the Phase 2 policy gate
@@ -46,22 +52,60 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
   AiSdkEngine,
   buildToolset,
   makeGate,
   makeModelResolver,
-  MemoryStore,
   Outbox,
+  runTurn,
+  SqliteStore,
   apiKeyCredential,
   type EngineEvent,
   type Gate,
   type GateLogEntry,
   type ModelResolver,
   type ProviderProfile,
+  type Store,
   type Usage,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
+
+// ---------------------------------------------------------------------------
+// Where the database lives.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolution order, most specific first — never a hardcoded absolute path:
+ *   NABY_DB_PATH   full path to the db file (tests point this at a temp dir)
+ *   NABY_HOME      our own home dir; db is <NABY_HOME>/app.db
+ *   COCKPIT_HOME   the shell's home dir, when running inside cockpit
+ *   default        ~/.naby/app.db
+ * In the packaged app this becomes Electron's `userData` (contract §6), which
+ * is passed in as NABY_HOME rather than compiled in here.
+ */
+function resolveDbPath(): string {
+  const explicit = process.env.NABY_DB_PATH;
+  if (explicit) return explicit;
+  const home = process.env.NABY_HOME || process.env.COCKPIT_HOME;
+  return home ? join(home, 'app.db') : join(homedir(), '.naby', 'app.db');
+}
+
+/** One store per server process, opened lazily. SQLite handles the concurrency;
+ *  reopening per run would just churn file handles. */
+let sharedStore: Store | undefined;
+
+function getStore(): Store {
+  if (!sharedStore) {
+    const path = resolveDbPath();
+    mkdirSync(dirname(path), { recursive: true });
+    sharedStore = new SqliteStore({ path });
+  }
+  return sharedStore;
+}
 
 // ---------------------------------------------------------------------------
 // Credentials — read ONLY here, at the engine boundary.
@@ -169,7 +213,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
     runner: {
       async run(ctx: RunCtx): Promise<void> {
         const startedAt = Date.now();
-        const sessionId = ctx.sessionId || `naby-${randomUUID()}`;
+        // Resume when the shell hands us a session id; otherwise mint one and
+        // rekey() to it below. providerId is left empty here — runTurn records
+        // the provider that actually answers (it is a hint, not a constraint).
+        const store = getStore();
+        const sessionId = ctx.sessionId || store.createSession('').sessionId;
         const requestedModel =
           typeof ctx.params.model === 'string' ? ctx.params.model : undefined;
 
@@ -230,25 +278,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const outbox = new Outbox();
         const { toolSchemas, executors } = buildToolset(outbox);
 
-        const store = new MemoryStore();
-        store.appendMessage(sessionId, {
-          role: 'user',
-          content: ctx.prompt ?? '',
-        });
-
-        // Session framing goes through the engine's `system` OPTION, not as a
-        // system message in the history: `ai@7` rejects `role:'system'` inside
-        // `messages` outright ("System messages are not allowed in the prompt
-        // or messages fields"). The engine forwards this to the provider's
-        // dedicated system slot.
-        const engine = new AiSdkEngine({
-          resolveModel,
-          ...(ctx.cwd
-            ? {
-                system: `You are running inside the naby shell. Working directory: ${ctx.cwd}`,
-              }
-            : {}),
-        });
+        // Session framing rides on EngineRunInput.system (contract §2), passed
+        // through runTurn below. It is NOT a message and NOT an engine-level
+        // option workaround — the runtime carries it on its own field and each
+        // engine forwards it to its provider's dedicated system slot.
+        const engine = new AiSdkEngine({ resolveModel });
 
         // ---- init --------------------------------------------------------
         ctx.rekey(sessionId);
@@ -296,22 +330,34 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         };
 
         try {
-          for await (const ev of engine.run({
+          // runTurn owns the history: it loads the session's prior messages
+          // from the store, appends the user turn, drives the engine, and
+          // appends the assistant/tool messages (keeping tool calls paired with
+          // their results). We only translate the events as they stream past.
+          await runTurn({
+            engine,
+            store,
+            sessionId,
             model: {
               providerId: deps.resolveModel ? 'injected' : resolveProviderId(),
               model: modelLabel,
             },
-            messages: store.session(sessionId).messages,
+            userText: ctx.prompt ?? '',
             toolSchemas,
             gate,
             executors,
             signal: ctx.signal,
-          }) as AsyncIterable<EngineEvent>) {
+            ...(ctx.cwd
+              ? {
+                  system: `You are running inside the naby shell. Working directory: ${ctx.cwd}`,
+                }
+              : {}),
+            onEvent: (ev: EngineEvent) => {
             // Cancellation: stop translating the moment the run is stopped.
             // The signal is also handed to the engine (and through it to the
             // provider call), so this is a second, immediate barrier rather
             // than the only one.
-            if (ctx.signal.aborted) break;
+            if (ctx.signal.aborted) return;
 
             switch (ev.kind) {
               case 'init':
@@ -398,7 +444,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 break;
               }
             }
-          }
+            },
+          });
         } catch (e) {
           errorMessage = e instanceof Error ? e.message : String(e);
           ctx.emit({ type: 'error', error: errorMessage, session_id: sessionId });
