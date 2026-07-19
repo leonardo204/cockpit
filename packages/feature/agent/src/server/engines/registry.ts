@@ -4,6 +4,7 @@ import { deepseekSpec } from './deepseek';
 import { ollamaSpec } from './ollama';
 import { kimiSpec } from './kimi';
 import { codexSpec } from './codex';
+import { nabySpec } from './naby';
 
 // engine name → spec. claude/claude2 share claudeSpec (the engine field selects claude2's
 // CLAUDE_CONFIG_DIR inside the runner). Used by the scheduled-task manager to dispatch any
@@ -15,6 +16,7 @@ const SPECS: Record<string, EngineSpec> = {
   ollama: ollamaSpec,
   kimi: kimiSpec,
   codex: codexSpec,
+  naby: nabySpec,
 };
 
 export function getEngineSpec(engine: string | undefined): EngineSpec | undefined {
