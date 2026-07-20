@@ -2,23 +2,11 @@
 
 import { useState, useEffect, useMemo, memo } from 'react';
 import { Portal, toast } from '@cockpit/shared-ui';
-import { FileDiff, MessageCircleQuestion, Circle, Loader, CheckCircle2 } from 'lucide-react';
+import { MessageCircleQuestion, Circle, Loader, CheckCircle2 } from 'lucide-react';
 import { ToolCallModal } from './ToolCallModal';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
-import { DiffViewerModal, resolveDiffCalls } from './DiffViewerModal';
-import { loadSnapshotsByToolIds } from './effect/snapshotClient';
-import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
-import { isMutatingToolName } from '../shared/toolMutation';
-// Tech debt: cross-package imports into the main shell.
-//   - InteractiveMarkdownPreview, FileContextMenu: chat-adjacent code that
-//     hasn't migrated yet.
-//   - MarkdownRenderer: a generic markdown renderer; candidate for shared-ui.
-// Allowed by MODULES.md as transitional reverse imports.
-import { InteractiveMarkdownPreview, HtmlPreviewModal, isMarkdownFile, isHtmlFile, isImageFile } from '@cockpit/feature-explorer';
-import { MenuContainerProvider } from '@cockpit/shared-ui';
+import type { ChatMessage, MessageImage } from './types';
 import { MarkdownRenderer } from '@cockpit/shared-ui';
-import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { readFileForPreview } from './effect/agentClient';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/MessageBubble.tsx.
@@ -59,57 +47,6 @@ function ImageModal({ image, onClose }: ImageModalProps) {
   return <Portal>{modalContent}</Portal>;
 }
 
-// Image file preview modal — serves raw bytes via <img src> pointing at
-// /api/file?raw=true (absolute path). No content is pulled into the JS heap.
-function ImageFilePreviewModal({ filePath, onClose }: { filePath: string; onClose: () => void }) {
-  return (
-    <Portal>
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={onClose}>
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center text-white/80 hover:text-white bg-black/40 hover:bg-black/60 rounded-full transition-colors"
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-        <img
-          src={`/api/file?path=${encodeURIComponent(filePath)}&raw=true`}
-          alt={filePath.split('/').pop()}
-          className="max-w-[90vw] max-h-[90vh] object-contain"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
-    </Portal>
-  );
-}
-
-// MD preview modal — provides MenuContainerProvider so FloatingToolbar works correctly
-// container uses a callback ref (i.e. useState setter): React calls it synchronously on mount, avoiding timing issues
-function MdPreviewModal({ filePath, content, cwd, onClose }: {
-  filePath: string; content: string; cwd: string;
-  onClose: () => void;
-}) {
-  const [container, setContainer] = useState<HTMLElement | null>(null);
-
-  return (
-    <Portal>
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-0 md:p-4" onClick={onClose}>
-      <div ref={setContainer} className="bg-card shadow-xl w-full h-full rounded-none md:max-w-[90%] md:h-[90vh] md:rounded-lg flex flex-col relative" onClick={e => e.stopPropagation()}>
-        <MenuContainerProvider container={container}>
-          <InteractiveMarkdownPreview
-            content={content}
-            filePath={filePath}
-            cwd={cwd}
-            onClose={onClose}
-          />
-        </MenuContainerProvider>
-      </div>
-    </div>
-    </Portal>
-  );
-}
-
 interface MessageBubbleProps {
   message: ChatMessage;
   cwd?: string;
@@ -119,28 +56,19 @@ interface MessageBubbleProps {
   onApprovePlan?: () => void;
   /** Disable the approve button while a run is streaming (no concurrent send) */
   isLoading?: boolean;
-  /** Selected text → project-wide search (threads into the HTML preview toolbar) */
-  onContentSearch?: (query: string) => void;
-  /**
-   * Show all file changes for this message in the Explorer panel (panel 2) and
-   * auto-swipe there. When omitted (e.g. inside SubagentTranscriptModal, which
-   * has no second panel), the button falls back to a local full-screen modal.
-   */
-  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void;
 }
 
 // Threshold for collapsing tool calls — any tool call (≥1) renders inside a collapsible header,
-// so special operation entries (AskUserQuestion / FileDiff) on the header are always reachable.
+// so special operation entries (AskUserQuestion) on the header are always reachable.
 const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading, onContentSearch, onShowFileDiff }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
   // Multi-tool case: default collapsed (preserves existing behavior).
   const [toolCallsExpanded, setToolCallsExpanded] = useState(() => (message.toolCalls?.length || 0) === 1);
-  const [showDiffViewer, setShowDiffViewer] = useState(false);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
   const [showEventDetail, setShowEventDetail] = useState(false);
   const isUser = message.role === 'user';
@@ -148,66 +76,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   const toolCallsCount = message.toolCalls?.length || 0;
   const shouldCollapseToolCalls = toolCallsCount > TOOL_CALLS_COLLAPSE_THRESHOLD;
   const canFork = !!sessionId && !!cwd && !!onFork;
-
-  // Whether this message contains tool calls that may have touched files.
-  // Shares the READ_ONLY deny-list with the server-side snapshot hook (single
-  // source of truth) — Task subagents, MCP tools and Bash all snapshot server-
-  // side, so they all get the diff entry here too.
-  const hasFileChanges = useMemo(() => {
-    return message.toolCalls?.some(tc => isMutatingToolName(tc.name)) || false;
-  }, [message.toolCalls]);
-
-  // Whether the FileDiff icon should show at all. We resolve emptiness at
-  // RENDER time (not on click) so a message with zero real changes never shows
-  // a dead button. Two cheap signals, no per-file diff fetch:
-  //   1. Edit/Write can be reconstructed straight from tool params (0 requests)
-  //      — resolveDiffCalls([], …) degenerates to that fallback.
-  //   2. Otherwise the shadow-git commit LIST answers it: the snapshot hook
-  //      skips zero-change commits, so any commit for these tool ids ⇒ real
-  //      changes. The list endpoint returns metadata only (no diff bodies).
-  const paramsHaveChanges = useMemo(
-    () => resolveDiffCalls([], message.toolCalls ?? [], cwd).length > 0,
-    [message.toolCalls, cwd],
-  );
-  const [snapshotHasChanges, setSnapshotHasChanges] = useState(false);
-  const showFileDiff = paramsHaveChanges || snapshotHasChanges;
-
-  useEffect(() => {
-    // Params already prove non-empty, or nothing mutating / no cwd to query.
-    if (!hasFileChanges || paramsHaveChanges || !cwd) return;
-    const toolIds = (message.toolCalls ?? []).map(tc => tc.id).filter(Boolean);
-    if (toolIds.length === 0) return;
-    // Edit/Write family declare their target files; if such a writer has no
-    // commit yet the snapshot just hasn't landed (writes are fire-and-forget),
-    // so retry a couple times before settling on "no changes".
-    const declaredWriteIds = (message.toolCalls ?? [])
-      .filter(tc => ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tc.name))
-      .map(tc => tc.id);
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let attempt = 0;
-    const check = () => {
-      BrowserRuntime.runPromiseExit(loadSnapshotsByToolIds(cwd, toolIds)).then((exit) => {
-        if (cancelled) return;
-        const commits = exit._tag === 'Success' ? exit.value : [];
-        if (commits.length > 0) {
-          setSnapshotHasChanges(true);
-          return;
-        }
-        const landed = new Set(commits.map(c => c.toolId));
-        const pending = declaredWriteIds.some(id => !landed.has(id));
-        if (pending && attempt < 2) {
-          attempt += 1;
-          timer = setTimeout(check, 2000);
-        }
-      });
-    };
-    check();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [hasFileChanges, paramsHaveChanges, cwd, message.toolCalls]);
 
   // Last TodoWrite call
   const lastTodoWrite = useMemo(() => {
@@ -245,24 +113,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     [message.toolCalls]
   );
 
-  // Extract deduplicated previewable paths (.md / .html / .htm / images) from
-  // Read/Edit/Write tool calls. Single-click opens an in-modal preview.
-  const docFiles = useMemo(() => {
-    if (!message.toolCalls) return [];
-    const seen = new Set<string>();
-    const result: string[] = [];
-    for (const tc of message.toolCalls) {
-      if (tc.name === 'Read' || tc.name === 'Edit' || tc.name === 'Write') {
-        const fp = (tc.input as { file_path?: string }).file_path;
-        if (fp && (isMarkdownFile(fp) || isHtmlFile(fp) || isImageFile(fp)) && !seen.has(fp)) {
-          seen.add(fp);
-          result.push(fp);
-        }
-      }
-    }
-    return result;
-  }, [message.toolCalls]);
-
   // Extract and parse thoughts from tool call inputs
   const thoughts = useMemo(() => {
     if (!message.toolCalls) return [];
@@ -281,27 +131,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     }
     return result;
   }, [message.toolCalls]);
-
-  const [previewFile, setPreviewFile] = useState<string | null>(null);
-  const [previewContent, setPreviewContent] = useState<string | null>(null);
-
-  // Fetch content when a doc file (md / html) is selected. Images are served
-  // as raw bytes via <img src>, so they skip this text-content fetch.
-  useEffect(() => {
-    if (!previewFile || isImageFile(previewFile)) { queueMicrotask(() => setPreviewContent(null)); return; }
-    let cancelled = false;
-    BrowserRuntime.runPromiseExit(readFileForPreview(previewFile)).then((exit) => {
-      if (cancelled) return;
-      if (exit._tag === 'Success' && exit.value.content !== undefined) {
-        setPreviewContent(exit.value.content);
-      } else {
-        toast(t('toast.readFileFailed'), 'error');
-        setPreviewFile(null);
-      }
-    });
-    return () => { cancelled = true; };
-  }, [previewFile, t]);
-
 
   // Copy message content
   const handleCopy = () => {
@@ -557,46 +386,9 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             </div>
           )}
 
-          {/* Previewable doc list (md / html) */}
-          {docFiles.length > 0 && (
-            <div className={`${message.content || hasImages || lastTodoWrite ? 'mt-2' : ''}`}>
-              <div className="border border-border rounded-lg overflow-hidden bg-secondary/50 px-3 py-2 space-y-0.5">
-                {docFiles.map((fp) => (
-                  <button
-                    key={fp}
-                    onClick={() => setPreviewFile(fp)}
-                    className="flex items-center gap-1.5 w-full text-left hover:bg-accent rounded px-1 py-0.5 transition-colors group/md"
-                  >
-                    {isImageFile(fp) ? (
-                      // Image — picture glyph
-                      <svg className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z" />
-                        <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" stroke="none" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4-4 3 3 4-4 5 5" />
-                      </svg>
-                    ) : isHtmlFile(fp) ? (
-                      // HTML — code/`</>` glyph to distinguish from markdown docs
-                      <svg className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-                      </svg>
-                    ) : (
-                      // Markdown — document glyph
-                      <svg className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    )}
-                    <span className="text-xs text-muted-foreground group-hover/md:text-foreground truncate">
-                      {fp.split('/').pop()}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Thoughts — extracted from tool call inputs, displayed as table */}
           {thoughts.length > 0 && (
-            <div className={`${message.content || hasImages || lastTodoWrite || docFiles.length > 0 ? 'mt-2' : ''}`}>
+            <div className={`${message.content || hasImages || lastTodoWrite ? 'mt-2' : ''}`}>
               <div className="border border-border rounded-lg overflow-hidden bg-secondary/50">
                 <table className="w-full text-xs">
                   <thead>
@@ -648,24 +440,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                         title={t('chat.viewQuestions')}
                       >
                         <MessageCircleQuestion className="w-4 h-4" />
-                      </button>
-                    )}
-                    {showFileDiff && (
-                      <button
-                        onClick={() => {
-                          // Prefer showing the diff in the Explorer panel (panel 2)
-                          // with an auto-swipe; fall back to a local modal when no
-                          // panel host is available (e.g. subagent transcript).
-                          if (onShowFileDiff && message.toolCalls) {
-                            onShowFileDiff(message.toolCalls, cwd);
-                          } else {
-                            setShowDiffViewer(true);
-                          }
-                        }}
-                        className="px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors border-l border-border"
-                        title={t('chat.viewAllFileChanges')}
-                      >
-                        <FileDiff className="w-4 h-4" />
                       </button>
                     )}
                   </div>
@@ -725,38 +499,11 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
         <ImageModal image={previewImage} onClose={() => setPreviewImage(null)} />
       )}
 
-      {/* Diff viewer */}
-      {showDiffViewer && message.toolCalls && (
-        <DiffViewerModal toolCalls={message.toolCalls} cwd={cwd} onClose={() => setShowDiffViewer(false)} onContentSearch={onContentSearch} />
-      )}
-
       {/* AskQuestion viewer */}
       {showAskQuestionViewer && askQuestionCalls.length > 0 && (
         <AskQuestionViewerModal toolCalls={askQuestionCalls} onClose={() => setShowAskQuestionViewer(false)} />
       )}
 
-      {/* File preview — image via raw <img src>, html in a sandboxed iframe, md via the rich preview */}
-      {previewFile && isImageFile(previewFile) && (
-        <ImageFilePreviewModal filePath={previewFile} onClose={() => setPreviewFile(null)} />
-      )}
-      {previewFile && !isImageFile(previewFile) && previewContent !== null && (
-        isHtmlFile(previewFile) ? (
-          <HtmlPreviewModal
-            filePath={previewFile}
-            content={previewContent}
-            cwd={cwd}
-            onClose={() => setPreviewFile(null)}
-            onContentSearch={onContentSearch}
-          />
-        ) : (
-          <MdPreviewModal
-            filePath={previewFile}
-            content={previewContent}
-            cwd={cwd || ''}
-            onClose={() => setPreviewFile(null)}
-          />
-        )
-      )}
     </>
   );
 });

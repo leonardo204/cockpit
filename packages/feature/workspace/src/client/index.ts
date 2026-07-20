@@ -1,9 +1,7 @@
 // @cockpit/feature-workspace — application integrator.
-// By convention, this is the one feature package that consumes ALL other
-// feature packages (Agent, Explorer, Console, Comments, Review, Skills) to
-// build the multi-feature workspace UI. Other features should use other
-// features only when there's a clear "supporting subdomain" relationship
-// (e.g. agent uses explorer for code rendering).
+// After the F1-03 chat-first trim the only feature package left to integrate
+// is @cockpit/feature-agent; explorer / console / comments / review / skills
+// were deleted along with the panels they provided.
 //
 // Layering rule (2-layer): feature-* → shared-*. Features may import other
 // features (acyclic). Shared packages cannot import features. See
@@ -18,8 +16,7 @@ export { ProjectItem } from './ProjectItem';
 export { EmptyState } from './EmptyState';
 
 // ============================================
-// Per-project tab orchestrator (mounts feature-agent / feature-explorer /
-// feature-console panels in a 3-panel swipe layout)
+// Per-project tab orchestrator (mounts the feature-agent chat panel)
 // ============================================
 export { TabManager } from './TabManager';
 export { TabManagerTopBar } from './TabManagerTopBar';

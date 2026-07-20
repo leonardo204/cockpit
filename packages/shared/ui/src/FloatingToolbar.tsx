@@ -12,7 +12,9 @@ interface FloatingToolbarProps {
   y: number;
   visible: boolean;
   container: HTMLElement;
-  onAddComment: () => void;
+  /** Optional: the persistent code-annotation feature was removed in the
+   *  chat-first trim (F1-03). Omit to hide the "Add comment" button. */
+  onAddComment?: () => void;
   onSendToAI: () => void;
   onSearch?: () => void;
   isChatLoading?: boolean;
@@ -38,12 +40,14 @@ export function FloatingToolbar({ x, y, visible, container, onAddComment, onSend
         pointerEvents: visible ? 'auto' : 'none',
       }}
     >
-      <button
-        className="px-3 py-1.5 text-xs font-medium border border-brand text-brand rounded-md hover:bg-brand/10 transition-colors"
-        onClick={onAddComment}
-      >
-        {t('floatingToolbar.addComment')}
-      </button>
+      {onAddComment && (
+        <button
+          className="px-3 py-1.5 text-xs font-medium border border-brand text-brand rounded-md hover:bg-brand/10 transition-colors"
+          onClick={onAddComment}
+        >
+          {t('floatingToolbar.addComment')}
+        </button>
+      )}
       <button
         className="px-3 py-1.5 text-xs font-medium border border-brand text-brand rounded-md hover:bg-brand/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         onClick={onSendToAI}
@@ -94,7 +98,8 @@ interface ToolbarRendererProps {
   floatingToolbarRef: React.RefObject<ToolbarData | null>;
   bumpRef: React.MutableRefObject<() => void>;
   container: HTMLElement;
-  onAddComment: () => void;
+  /** Optional — see FloatingToolbarProps.onAddComment. */
+  onAddComment?: () => void;
   onSendToAI: () => void;
   onSearch?: () => void;
   isChatLoading?: boolean;

@@ -1,5 +1,5 @@
 /**
- * Server-only AppRuntime composition — wires in the DB drivers (pg / mysql2 / ioredis / neo4j-driver).
+ * Server-only AppRuntime composition.
  *
  * Must be imported from `@cockpit/effect-runtime/server`; **never** from the root
  * package (which is the browser bundle entry).
@@ -13,13 +13,6 @@ import {
   ConfigLive,
   CockpitConfig,
 } from "@cockpit/effect-core"
-import {
-  PgServiceLive,
-  MySQLServiceLive,
-  RedisServiceLive,
-  Neo4jServiceLive,
-  MongoServiceLive,
-} from "@cockpit/feature-console/effect"
 import {
   SchedulerLive,
   AgentServiceLive,
@@ -38,14 +31,11 @@ const ServerBaseLayer = Layer.unwrapEffect(
   })
 )
 
+// F1-03 chat-first trim: the DB service layers (Pg / MySQL / Redis / Neo4j /
+// Mongo) came from @cockpit/feature-console's database bubbles and were dropped
+// with that package, along with the pg / mysql2 / ioredis / neo4j-driver deps.
 export const AppLayer = Layer.mergeAll(
   ServerBaseLayer,
-  // DB services
-  PgServiceLive,
-  MySQLServiceLive,
-  RedisServiceLive,
-  Neo4jServiceLive,
-  MongoServiceLive,
   // Scheduler
   SchedulerLive,
   // Agent

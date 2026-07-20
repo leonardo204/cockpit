@@ -16,7 +16,6 @@ export { TodoViewerModal } from './TodoViewerModal';
 export { UserMessagesModal } from './UserMessagesModal';
 export { AskQuestionViewerModal } from './AskQuestionViewerModal';
 export { ToolCallModal } from './ToolCallModal';
-export { DiffViewerModal, FileDiffViewer } from './DiffViewerModal';
 
 // Mobile (/m) — recent-sessions list + single chat, no desktop 3-panel layout
 export { MobileApp } from './mobile/MobileApp';

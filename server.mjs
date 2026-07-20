@@ -1,7 +1,7 @@
 import { createServer } from 'http';
 import { createGzip, constants as zlibConstants } from 'zlib';
 import { exec, execSync } from 'child_process';
-import { networkInterfaces, homedir } from 'os';
+import { homedir } from 'os';
 import { writeFileSync, mkdirSync, readFileSync, realpathSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -71,11 +71,6 @@ async function ensureSingleInstance() {
 //    .next/dev/logs and refuses to start). So the parent must explicitly
 //    kill all direct children before exiting.
 // ============================================
-// Assigned once the server-side bundle is loaded (see app.prepare below). Lets the
-// synchronous exit hook flush live PTY scrollback to disk so a graceful restart
-// (Ctrl-C / SIGINT / SIGTERM) keeps terminal bubbles' content. null until ready.
-let flushRunningSync = null;
-
 let _cleanupRan = false;
 function killChildren() {
   if (_cleanupRan) return;
@@ -101,10 +96,8 @@ function killChildren() {
 // Normal exit path (including every process.exit() call) — Node guarantees
 // this handler runs synchronously. All signal/exception paths ultimately go
 // through process.exit() → 'exit' fires → this single hook covers every
-// graceful shutdown. Flush live PTY scrollback to disk first, then kill the
-// children (the flush reads this process's own memory — independent of them).
+// graceful shutdown.
 process.on('exit', () => {
-  try { flushRunningSync?.(); } catch {}
   killChildren();
 });
 
@@ -138,12 +131,12 @@ const handle = app.getRequestHandler();
 app.prepare().then(async () => {
   await ensureSingleInstance();
   const upgradeHandler = app.getUpgradeHandler();
-  // v2 P8: HTTP intercepts (handleTerminalApi / handleBrowserApi) moved to src/lib/httpApi.ts
+  // F1-03: the /api/terminal/* + /api/browser/* + /api/connection/* HTTP intercepts
+  // (src/lib/httpApi.ts) shared in-process state with @cockpit/feature-console's
+  // terminal + browser-bridge registries. Both are deleted, so the intercepts and
+  // the PTY-scrollback flush hook went with them.
   const { handleUpgrade, broadcastToGlobalState } = await import(dev ? './src/lib/wsServer.ts' : './dist/wsServer.mjs');
   const auth = await import(dev ? './src/lib/auth.ts' : './dist/auth.mjs');
-  const httpApi = await import(dev ? './src/lib/httpApi.ts' : './dist/httpApi.mjs');
-  const { handleBrowserApi, handleTerminalApi, handleConnectionApi } = httpApi;
-  flushRunningSync = httpApi.flushAllRunningSync || null;
   const { scheduledTaskManager } = await import(dev ? '@cockpit/feature-agent/server/scheduledTasks' : './dist/scheduledTasks.mjs');
 
   // Initialize the scheduled-task manager
@@ -291,20 +284,6 @@ app.prepare().then(async () => {
     markLocalRequest(req);
     if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
 
-    // /api/browser/* must be handled inside the custom server (it shares
-    // BrowserBridge memory with the WS side)
-    if (req.url?.startsWith('/api/browser/') && req.method === 'POST') {
-      const handled = await handleBrowserApi(req, res);
-      if (handled) return;
-    }
-    if (req.url?.startsWith('/api/terminal/') && req.method === 'POST') {
-      const handled = await handleTerminalApi(req, res);
-      if (handled) return;
-    }
-    if (req.url?.startsWith('/api/connection/') && req.method === 'POST') {
-      const handled = await handleConnectionApi(req, res);
-      if (handled) return;
-    }
     handle(req, res);
   });
 
@@ -342,69 +321,4 @@ app.prepare().then(async () => {
     }
   });
 
-  // ============================================
-  // Share Server — LAN review-sharing service.
-  // Route allowlist: only /review/* and its supporting assets are exposed.
-  // ============================================
-  const sharePort = port + 1000; // dev 3456→4456, prod 3457→4457
-
-  const SHARE_ALLOWED_PREFIXES = ['/review/', '/api/review', '/_next/', '/fonts/', '/icons/'];
-  const SHARE_ALLOWED_EXACT = ['/favicon.ico'];
-
-  function isShareAllowed(url) {
-    const pathname = url.split('?')[0];
-    if (SHARE_ALLOWED_EXACT.includes(pathname)) return true;
-    return SHARE_ALLOWED_PREFIXES.some(p => pathname.startsWith(p));
-  }
-
-  function getLanIPs() {
-    const interfaces = networkInterfaces();
-    const ips = [];
-    for (const iface of Object.values(interfaces)) {
-      for (const alias of iface || []) {
-        if (alias.family === 'IPv4' && !alias.internal) {
-          ips.push(alias.address);
-        }
-      }
-    }
-    return ips;
-  }
-
-  const shareServer = createServer((req, res) => {
-    // Token gate first (share is also covered). Read the gate BEFORE we inject
-    // x-forwarded-for below, so the injection can't fool the local check.
-    if (applyHttpGate(req, res)) return;
-    if (req.url?.startsWith('/api/')) gzipJsonResponse(req, res);
-    if (isShareAllowed(req.url || '')) {
-      // The share port is the revocation surface for LAN viewers — never the
-      // local admin. Force the marker to '0' (also strips any forged inbound
-      // value). The admin uses the main port (localhost) to keep access to a
-      // closed review.
-      req.headers['x-cockpit-local'] = '0';
-      // Inject the client's real IP for /api/review/identify
-      const clientIp = req.socket.remoteAddress || '';
-      req.headers['x-forwarded-for'] = clientIp;
-      handle(req, res);
-    } else {
-      res.writeHead(403, { 'Content-Type': 'text/plain' });
-      res.end('403 Forbidden');
-    }
-  });
-
-  shareServer.listen(sharePort, '0.0.0.0', () => {
-    const lanIPs = getLanIPs();
-    if (lanIPs.length > 0) {
-      lanIPs.forEach(ip => console.log(`> Share on http://${ip}:${sharePort}`));
-    } else {
-      console.log(`> Share on http://0.0.0.0:${sharePort}`);
-    }
-  });
-
-  shareServer.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.log(`> Share server port ${sharePort} in use, skipping`);
-    } else {
-      console.error('Share server error:', err.message);
-    }
-  });
 });

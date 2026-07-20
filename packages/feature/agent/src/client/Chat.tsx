@@ -7,7 +7,6 @@ import { useLiveStream } from './useLiveStream';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import {
   querySessionByPath,
-  runBashCommand,
   forkSession,
 } from './effect/agentClient';
 import { publishTopic } from '@cockpit/effect-react';
@@ -26,7 +25,6 @@ import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, Cha
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { OllamaModelPicker } from './OllamaModelPicker';
 import { DeepseekConfigPicker } from './DeepseekConfigPicker';
-import { CommentsListModal } from '@cockpit/feature-comments';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/Chat.tsx.
@@ -55,7 +53,6 @@ interface ChatProps {
   onLoadingChange?: (isLoading: boolean) => void;
   onSessionIdChange?: (sessionId: string) => void;
   onTitleChange?: (title: string) => void;
-  onShowGitStatus?: () => void;
   onOpenNote?: () => void;
   onCreateScheduledTask?: (params: {
     cwd: string;
@@ -72,20 +69,17 @@ interface ChatProps {
     cron?: string;
   }) => void;
   onOpenSession?: (sessionId: string, title?: string) => void; // Open a new session (used for Fork)
-  onContentSearch?: (query: string) => void; // Selected text → project-wide search
-  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void; // Message file changes → Explorer panel + auto-swipe
   onOpenSessionBrowser?: () => void; // Host-handled: open the cross-engine session browser
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onShowGitStatus, onOpenNote, onCreateScheduledTask, onOpenSession, onContentSearch, onShowFileDiff, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
-  const [isCommentsListOpen, setIsCommentsListOpen] = useState(false);
   const [isUserMessagesOpen, setIsUserMessagesOpen] = useState(false);
   const [historyTokenUsage, setHistoryTokenUsage] = useState<TokenUsage | null>(null);
   // Execution mode (per-tab): controlled by TabInfo.chatMode (persisted); falls back to local state when no prop (standalone use)
@@ -196,28 +190,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
       }
     }
 
-    const isBangCmd = firstLine.startsWith('!') && firstLine.length > 1;
-    if (isBangCmd) {
-      const command = firstLine.slice(1).trim();
-      if (!command) { handleSend(content, images); return; }
-
-      const userNote = content.split('\n').slice(1).join('\n').trim();
-
-      const exit = await BrowserRuntime.runPromiseExit(
-        runBashCommand({ command, cwd: initialCwd })
-      );
-      if (exit._tag === 'Success') {
-        const data = exit.value;
-        const output = [data.stdout, data.stderr].filter(Boolean).join('\n') || '(no output)';
-        const exitInfo = data.exitCode ? ` (exit code: ${data.exitCode})` : '';
-        let message = t('chat.executedCommand', { command, exitInfo, output });
-        if (userNote) message += `\n\n${userNote}`;
-        handleSend(message, images);
-      } else {
-        handleSend(t('chat.executedCommandFailed', { command, error: exit.cause }), images);
-      }
-      return;
-    }
     handleSend(content, images);
   }, [handleSend, initialCwd, t, isClaudeEngine, chatMode, setPlanMode]);
 
@@ -456,10 +428,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
   const handleFork = useRef((messageId: string) => handleForkRef.current(messageId)).current;
 
   // Stabilize ChatInput callback props, combined with React.memo to avoid unnecessary re-renders
-  const handleShowComments = useCallback(() => {
-    setIsCommentsListOpen(true);
-  }, []);
-
   const handleShowUserMessages = useCallback(() => {
     setIsUserMessagesOpen(true);
   }, []);
@@ -586,8 +554,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
             onLoadMore={loadMoreHistory}
             onFork={handleFork}
             isActive={isActive}
-            onContentSearch={onContentSearch}
-            onShowFileDiff={onShowFileDiff}
             onApprovePlan={handleApprovePlan}
           />
         )}
@@ -603,8 +569,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
           disabled={isLoading || liveRunning}
           cwd={initialCwd}
           engine={engine}
-          onShowGitStatus={onShowGitStatus}
-          onShowComments={initialCwd ? handleShowComments : undefined}
           onShowUserMessages={handleShowUserMessages}
           onOpenNote={onOpenNote}
           onCreateScheduledTask={handleCreateScheduledTask}
@@ -626,15 +590,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
         <ProjectSessionsModal
           isOpen={isProjectSessionsOpen}
           onClose={() => setIsProjectSessionsOpen(false)}
-          cwd={initialCwd}
-        />
-      )}
-
-      {/* Comments List Modal */}
-      {initialCwd && (
-        <CommentsListModal
-          isOpen={isCommentsListOpen}
-          onClose={() => setIsCommentsListOpen(false)}
           cwd={initialCwd}
         />
       )}

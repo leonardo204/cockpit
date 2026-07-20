@@ -3,7 +3,6 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: {
     wsServer:       'src/lib/wsServer.ts',
-    httpApi:        'src/lib/httpApi.ts',
     auth:           'src/lib/auth.ts',
     scheduledTasks: 'packages/feature/agent/src/server/scheduledTasks.ts',
   },

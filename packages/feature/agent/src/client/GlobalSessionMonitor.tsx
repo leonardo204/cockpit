@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { fetchCurrentBranch } from '@cockpit/feature-explorer';
 import { RecentSessionsModal } from './RecentSessionsModal';
 
 export interface GlobalSession {
@@ -33,10 +31,6 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
   // Rich tooltip: which session is hovered + where to anchor it (fixed positioning
   // escapes the dropdown's overflow-y-auto clipping)
   const [tooltip, setTooltip] = useState<{ session: GlobalSession; top: number; left: number } | null>(null);
-  // Per-cwd git branch cache (null = fetched, not a git repo / detached HEAD).
-  // Lazily fetched on hover via the lightweight /api/git/current-branch (mirrors ProjectItem).
-  const [branches, setBranches] = useState<Record<string, string | null>>({});
-
   const showTooltip = useCallback((session: GlobalSession, e: React.MouseEvent<HTMLElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const TOOLTIP_MAX_H = 260;
@@ -45,16 +39,6 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
       top = Math.max(8, window.innerHeight - TOOLTIP_MAX_H - 8);
     }
     setTooltip({ session, top, left: rect.right + 8 });
-    // Fetch the branch once per cwd; reuse the cached value on subsequent hovers.
-    setBranches((prev) => {
-      if (session.cwd in prev) return prev;
-      BrowserRuntime.runPromiseExit(fetchCurrentBranch(session.cwd)).then((exit) => {
-        if (exit._tag === 'Success') {
-          setBranches((cur) => ({ ...cur, [session.cwd]: exit.value.branch }));
-        }
-      });
-      return { ...prev, [session.cwd]: null };
-    });
   }, []);
   const hideTooltip = useCallback(() => setTooltip(null), []);
 
@@ -230,18 +214,6 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
           {tooltip.session.title && (
             <div className="text-xs font-medium text-foreground truncate mt-0.5" title={tooltip.session.title}>
               {tooltip.session.title}
-            </div>
-          )}
-          {branches[tooltip.session.cwd] && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground font-normal min-w-0">
-              {/* git branch icon — signals this is a git branch */}
-              <svg className="w-3 h-3 flex-shrink-0 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <circle cx="6" cy="6" r="2.5" />
-                <circle cx="6" cy="18" r="2.5" />
-                <circle cx="18" cy="7" r="2.5" />
-                <path strokeLinecap="round" d="M6 8.5v7M8.5 6.5h4.5a3 3 0 013 3v0" />
-              </svg>
-              <span className="truncate">{branches[tooltip.session.cwd]}</span>
             </div>
           )}
           {((tooltip.session.firstMessages?.length ?? 0) > 0 || (tooltip.session.lastMessages?.length ?? 0) > 0) ? (

@@ -4,15 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@cockpit/shared-ui';
 import { toast } from '@cockpit/shared-ui';
-import { isMacClient } from '@cockpit/shared-utils';
-import { useCockpitBridge } from '@cockpit/feature-console';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { Effect } from 'effect';
 import {
   loadSettings,
   saveSettings,
   loadCockpitVersion,
-  loadExtensionVersion,
 } from './effect/workspaceClient';
 
 interface SettingsModalProps {
@@ -23,8 +20,6 @@ interface SettingsModalProps {
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
-  const bridge = useCockpitBridge();
-  const [extensionPath, setExtensionPath] = useState<string>('');
   const [appVersion, setAppVersion] = useState<string>('');
 
   // Language: 'en', 'zh', or 'auto' (use browser detection)
@@ -53,25 +48,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     i18n.changeLanguage(effective);
   }, [i18n]);
 
-  const extensionStatus = bridge ? 'installed' as const : 'not-installed' as const;
-  const extensionVersion = bridge?.version ?? null;
-
   // Fetch app version
   useEffect(() => {
     if (!isOpen) return;
     BrowserRuntime.runPromiseExit(loadCockpitVersion()).then((exit) => {
       if (exit._tag === 'Success' && exit.value.version) {
         setAppVersion(exit.value.version);
-      }
-    });
-  }, [isOpen]);
-
-  // Fetch extension directory path
-  useEffect(() => {
-    if (!isOpen) return;
-    BrowserRuntime.runPromiseExit(loadExtensionVersion()).then((exit) => {
-      if (exit._tag === 'Success' && exit.value.path) {
-        setExtensionPath(exit.value.path);
       }
     });
   }, [isOpen]);
@@ -159,69 +141,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                   <span className="text-xs font-medium">{option.label}</span>
                 </button>
               ))}
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="border-t border-border" />
-
-          {/* Extension Section */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('settings.browserExtension')}
-            </label>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
-                  extensionStatus === 'installed' ? 'bg-green-500' : 'bg-slate-400'
-                }`} />
-                <span>
-                  {extensionStatus === 'installed' && `${t('settings.extensionInstalled')}${extensionVersion ? ` (v${extensionVersion})` : ''}`}
-                  {extensionStatus === 'not-installed' && t('settings.extensionNotInstalled')}
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {t('settings.extensionDescription')}
-              </p>
-              {extensionStatus !== 'installed' && (
-                <div className="text-xs text-muted-foreground bg-muted/50 rounded-md p-2 space-y-1">
-                  <p className="font-medium text-foreground">{t('settings.installSteps')}</p>
-                  <p>{t('settings.step1')} <code className="px-1 py-0.5 bg-muted rounded text-foreground">chrome://extensions</code></p>
-                  <p>{t('settings.step2')}</p>
-                  <p>{t('settings.step3')}</p>
-                  {isMacClient() && <p dangerouslySetInnerHTML={{ __html: t('settings.step4mac') }} />}
-                </div>
-              )}
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    const path = extensionPath || 'chrome-extension';
-                    navigator.clipboard.writeText(path);
-                    toast(t('toast.copiedName', { name: path }));
-                  }}
-                  className="px-3 py-1.5 text-xs bg-brand text-white rounded-md hover:bg-brand/90 transition-colors"
-                >
-                  {t('settings.copyExtensionPath')}
-                </button>
-                {extensionStatus === 'installed' && (
-                  <button
-                    onClick={() => {
-                      if (bridge?.id && (window as unknown as { chrome?: { runtime?: { sendMessage?: (id: string, msg: unknown) => void } } }).chrome?.runtime?.sendMessage) {
-                        (window as unknown as { chrome: { runtime: { sendMessage: (id: string, msg: unknown) => void } } }).chrome.runtime.sendMessage(bridge.id, { type: 'reload' });
-                        toast(t('toast.pluginReloading'));
-                        // After reload, the content script re-injects window.__cockpitBridge
-                        // useCockpitBridge will auto-update via the cockpit-bridge-ready event
-                      }
-                    }}
-                    className="px-3 py-1.5 text-xs border border-border text-foreground rounded-md hover:bg-muted transition-colors"
-                  >
-                    {t('settings.reloadExtension')}
-                  </button>
-                )}
-              </div>
-              {extensionPath && (
-                <p className="text-[11px] text-muted-foreground font-mono truncate">{extensionPath}</p>
-              )}
             </div>
           </div>
 

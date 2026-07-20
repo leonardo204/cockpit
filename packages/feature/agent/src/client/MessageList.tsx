@@ -4,18 +4,22 @@ import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHand
 import { useChatContextOptional } from './ChatContext';
 import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './types';
 import { MessageBubble } from './MessageBubble';
-// Tech debt: cross-package imports into the main shell.
-//   - useChatSearch / useComments / useAllComments: hooks living in
-//     src/hooks/, candidates for either feature-agent (if chat-only) or
-//     shared (if reusable across panels). Decide when migrating hooks/.
-//   - FloatingToolbar / CodeInputCards: chat-adjacent UI not yet migrated.
-// Allowed by MODULES.md as transitional reverse imports.
 import { useChatSearch } from './useChatSearch';
-import { useComments } from '@cockpit/feature-comments';
-import { fetchAllCommentsWithCode, buildAIMessage, clearAllComments, CHAT_COMMENT_FILE, type CodeReference } from '@cockpit/feature-comments';
 import { ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
-import { AddCommentInput, SendToAIInput } from '@cockpit/shared-ui';
+import { SendToAIInput } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
+
+/**
+ * Quote-reply formatter — inlined from the removed `@cockpit/feature-comments`
+ * `buildAIMessage()` (F1-03 chat-first trim). The persistent code-annotation
+ * store is gone; the only surviving path is "select text in a reply, ask a
+ * question about it", which needs nothing more than markdown blockquoting.
+ */
+function buildQuotedMessage(selectedText: string, question: string): string {
+  const quoted = selectedText.split('\n').map(l => `> ${l}`).join('\n');
+  const q = question.trim();
+  return q ? `${quoted}\n\n${q}` : quoted;
+}
 
 // Migrated from src/components/project/MessageList.tsx.
 
@@ -33,9 +37,6 @@ interface MessageListProps {
   onLoadMore?: () => void;
   onFork?: (messageId: string) => void;
   isActive?: boolean; // Whether the tab is active (handles scroll issues for hidden tabs)
-  onContentSearch?: (query: string) => void; // Selected text → project-wide search
-  /** Show a message's file changes in the Explorer panel (panel 2) + auto-swipe */
-  onShowFileDiff?: (toolCalls: ToolCallInfo[], cwd?: string) => void;
   /** Plan mode: approve the presented plan → turn off plan mode and resend to execute */
   onApprovePlan?: () => void;
 }
@@ -46,7 +47,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, engine, apiRetryInfo, ptyNotice, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onContentSearch, onShowFileDiff, onApprovePlan },
+  { messages, isLoading, cwd, sessionId, engine, apiRetryInfo, ptyNotice, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onApprovePlan },
   ref
 ) {
   const { t } = useTranslation();
@@ -78,16 +79,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   } = useChatSearch(outerRef);
   const chatCtx = useChatContextOptional();
 
-  // --- Selection toolbar & persistent comments ---
+  // --- Selection toolbar (quote-reply / search) ---
   const floatingToolbarRef = useRef<ToolbarData | null>(null);
   const bumpToolbarRef = useRef<() => void>(() => {});
-  const { addComment, refresh: refreshComments } = useComments({ cwd: cwd || '', filePath: CHAT_COMMENT_FILE });
-  const [commentInput, setCommentInput] = useState<{ x: number; y: number; text: string } | null>(null);
   const [sendAIInput, setSendAIInput] = useState<{ x: number; y: number; text: string } | null>(null);
 
   // Selection detection — text selection within the message area
   const handleSelectionMouseUp = useCallback((e: React.MouseEvent) => {
-    if (commentInput || sendAIInput) return;
+    if (sendAIInput) return;
 
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
@@ -119,7 +118,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       lineSnapshot: text,
     };
     bumpToolbarRef.current();
-  }, [commentInput, sendAIInput]);
+  }, [sendAIInput]);
 
   // Clear the toolbar on mousedown (unless clicking the toolbar/card itself)
   const handleSelectionMouseDown = useCallback((e: React.MouseEvent) => {
@@ -132,15 +131,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   }, []);
 
   // Toolbar button callbacks
-  const handleAddComment = useCallback(() => {
-    const tb = floatingToolbarRef.current;
-    if (!tb) return;
-    setCommentInput({ x: tb.x, y: tb.y, text: tb.selectedText });
-    floatingToolbarRef.current = null;
-    bumpToolbarRef.current();
-    window.getSelection()?.removeAllRanges();
-  }, []);
-
   const handleSendToAI = useCallback(() => {
     const tb = floatingToolbarRef.current;
     if (!tb) return;
@@ -150,65 +140,20 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     window.getSelection()?.removeAllRanges();
   }, []);
 
-  const handleSearch = useCallback(() => {
-    const tb = floatingToolbarRef.current;
-    if (!tb || !onContentSearch) return;
-    const query = tb.selectedText.trim();
-    floatingToolbarRef.current = null;
-    bumpToolbarRef.current();
-    window.getSelection()?.removeAllRanges();
-    if (query) onContentSearch(query);
-  }, [onContentSearch]);
+  // Quote-reply: send the selected text back into the chat as a blockquote
+  // plus the user's question. Purely local formatting — no persistence.
+  const sendSelectionToAI = useCallback((selectedText: string, question: string) => {
+    if (!chatCtx) return;
+    chatCtx.sendMessage(buildQuotedMessage(selectedText, question));
+  }, [chatCtx]);
 
-  // Comment submit — persist via useComments
-  const handleCommentSubmit = useCallback(async (content: string) => {
-    if (!commentInput) return;
-    await addComment(0, 0, content, commentInput.text);
-    setCommentInput(null);
-  }, [commentInput, addComment]);
-
-  // Shared send-to-AI orchestration for both entries (standalone SendToAI
-  // card / comment card button) — reuse fetchAllCommentsWithCode +
-  // buildAIMessage + clearAllComments.
-  const sendSelectionToAI = useCallback(async (selectedText: string, question: string) => {
-    if (!chatCtx || !cwd) return;
-    try {
-      const allComments = await fetchAllCommentsWithCode(cwd);
-      const references: CodeReference[] = allComments.map(c => ({
-        filePath: c.filePath,
-        startLine: c.startLine,
-        endLine: c.endLine,
-        codeContent: c.codeContent,
-        note: c.content || undefined,
-      }));
-      // Treat the currently selected text as the last reference
-      references.push({
-        filePath: CHAT_COMMENT_FILE,
-        startLine: 0,
-        endLine: 0,
-        codeContent: selectedText,
-      });
-      const message = buildAIMessage(references, question);
-      chatCtx.sendMessage(message);
-      await clearAllComments(cwd);
-      refreshComments();
-    } catch (err) {
-      console.error('Failed to send to AI:', err);
-    }
-  }, [chatCtx, cwd, refreshComments]);
-
-  // Both cards close themselves on submit — deliberately NO trailing state
-  // reset after the async send (a late set(null) could clobber a card the
-  // user opened in the meantime).
+  // The card closes itself on submit — deliberately NO trailing state reset
+  // after the send (a late set(null) could clobber a card the user opened in
+  // the meantime).
   const handleSendAISubmit = useCallback((question: string) => {
     if (!sendAIInput) return;
-    void sendSelectionToAI(sendAIInput.text, question);
+    sendSelectionToAI(sendAIInput.text, question);
   }, [sendAIInput, sendSelectionToAI]);
-
-  const handleCommentSendToAI = useCallback((question: string) => {
-    if (!commentInput) return;
-    void sendSelectionToAI(commentInput.text, question);
-  }, [commentInput, sendSelectionToAI]);
 
   // Deduplicate messages (prevent duplicate key warnings)
   const uniqueMessages = useMemo(() => {
@@ -434,8 +379,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   onFork={onFork}
                   onApprovePlan={onApprovePlan}
                   isLoading={isLoading}
-                  onContentSearch={onContentSearch}
-                  onShowFileDiff={onShowFileDiff}
                 />
               </div>
             ))}
@@ -516,24 +459,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
           floatingToolbarRef={floatingToolbarRef}
           bumpRef={bumpToolbarRef}
           container={outerEl}
-          onAddComment={handleAddComment}
           onSendToAI={handleSendToAI}
-          onSearch={onContentSearch ? handleSearch : undefined}
-          isChatLoading={chatCtx?.isLoading}
-        />
-      )}
-
-      {/* Add comment card (also hosts a Send-to-AI action) */}
-      {commentInput && outerEl && (
-        <AddCommentInput
-          x={commentInput.x}
-          y={commentInput.y}
-          range={{ start: 0, end: 0 }}
-          lineSnapshot={commentInput.text}
-          container={outerEl}
-          onSubmit={handleCommentSubmit}
-          onSendToAI={chatCtx ? handleCommentSendToAI : undefined}
-          onClose={() => setCommentInput(null)}
           isChatLoading={chatCtx?.isLoading}
         />
       )}

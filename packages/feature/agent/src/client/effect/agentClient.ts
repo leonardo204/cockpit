@@ -125,33 +125,6 @@ export const loadSlashCommands = <T = unknown>(): Effect.Effect<
 > => httpJson<ReadonlyArray<T>>("/api/commands")
 
 // ─────────────────────────────────────────────────────────
-// /api/skills
-// ─────────────────────────────────────────────────────────
-
-export interface SkillsResponse {
-  skills?: ReadonlyArray<unknown>
-  [key: string]: unknown
-}
-
-export const loadSkills = (): Effect.Effect<SkillsResponse, AppError> =>
-  httpJson("/api/skills")
-
-// ─────────────────────────────────────────────────────────
-// /api/bash — execute shell command via Bash tool
-// ─────────────────────────────────────────────────────────
-
-export interface BashResponse {
-  stdout?: string
-  stderr?: string
-  exitCode?: number
-  [key: string]: unknown
-}
-
-export const runBashCommand = (
-  body: { command: string; cwd?: string; [key: string]: unknown }
-): Effect.Effect<BashResponse, AppError> => httpPostJson("/api/bash", body)
-
-// ─────────────────────────────────────────────────────────
 // /api/session-by-path (used inside Chat.tsx; complements the helper inside useChatHistory)
 // ─────────────────────────────────────────────────────────
 
@@ -306,20 +279,6 @@ export const loadOllamaModelsWithAutoStart = (
     }
     return second
   })
-
-// ─────────────────────────────────────────────────────────
-// /api/file (read content for markdown preview)
-// ─────────────────────────────────────────────────────────
-
-export interface FileReadResponse {
-  content?: string
-  error?: string
-}
-
-export const readFileForPreview = (
-  path: string
-): Effect.Effect<FileReadResponse, AppError> =>
-  httpJson(`/api/file?path=${encodeURIComponent(path)}`)
 
 // ─────────────────────────────────────────────────────────
 // /api/claude-stats?engine= (token usage)

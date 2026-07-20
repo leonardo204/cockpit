@@ -5,7 +5,7 @@ import { TabManager } from '@cockpit/feature-workspace';
 export const dynamic = 'force-dynamic';
 
 interface ProjectPageProps {
-  searchParams: Promise<{ cwd?: string; sessionId?: string; view?: string }>;
+  searchParams: Promise<{ cwd?: string; sessionId?: string }>;
 }
 
 export async function generateMetadata({ searchParams }: ProjectPageProps): Promise<Metadata> {
@@ -19,8 +19,7 @@ export async function generateMetadata({ searchParams }: ProjectPageProps): Prom
 
 export default async function ProjectPage({ searchParams }: ProjectPageProps) {
   const params = await searchParams;
-  const { cwd, sessionId, view } = params;
-  const initialView = view === 'agent' || view === 'explorer' || view === 'console' ? view : undefined;
+  const { cwd, sessionId } = params;
 
-  return <TabManager initialCwd={cwd} initialSessionId={sessionId} initialView={initialView} />;
+  return <TabManager initialCwd={cwd} initialSessionId={sessionId} />;
 }

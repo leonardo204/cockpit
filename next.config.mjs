@@ -34,11 +34,6 @@ const nextConfig = {
     '@cockpit/shared-utils',
     '@cockpit/shared-i18n',
     '@cockpit/feature-agent',
-    '@cockpit/feature-comments',
-    '@cockpit/feature-console',
-    '@cockpit/feature-explorer',
-    '@cockpit/feature-review',
-    '@cockpit/feature-skills',
     '@cockpit/feature-workspace',
   ],
   turbopack: {
@@ -85,7 +80,6 @@ const nextConfig = {
   serverExternalPackages: [
     '@anthropic-ai/claude-agent-sdk',
     'node-pty',
-    'web-tree-sitter',
     '@vscode/ripgrep',
     // Pure-JS but Node-only (uses node crypto/https); keep it out of any bundle.
     'web-push',

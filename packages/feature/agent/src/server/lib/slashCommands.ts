@@ -6,19 +6,19 @@
 //
 // `labelZh` / `labelEn` are OPTIONAL per command. Set them only when the
 // command wants to override the default neutral "问题：" / "Question: "
-// prefix attached to the user's trailing text — see `/cg` which uses
-// "探索问题：" / "Exploration: " to prime a stronger model mindset.
+// prefix attached to the user's trailing text — see `/new-branch`.
+//
+// F1-03 chat-first trim removed /cg (needed /api/projectGraph/*), /html (needed
+// the /api/preview + /ws/bash window.cockpit SDK), /cr (needed feature-review),
+// /skillify (needed feature-skills) and /cc (documented `cock` subcommands that
+// drove the terminal / browser / codegraph APIs). All of those backends are gone.
 import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { COCKPIT_DIR, SKILLS_FILE } from '@cockpit/shared-utils';
 import { AP_PROMPT_EN, AP_PROMPT_ZH } from './apPrompt';
-import { CC_LABEL_EN, CC_LABEL_ZH, CC_PROMPT_EN, CC_PROMPT_ZH } from './ccPrompt';
-import { CG_LABEL_EN, CG_LABEL_ZH, CG_PROMPT_EN, CG_PROMPT_ZH } from './cgPrompt';
-import { CR_PROMPT_EN, CR_PROMPT_ZH } from './crPrompt';
 import { EX_PROMPT_EN, EX_PROMPT_ZH } from './exPrompt';
 import { FX_PROMPT_EN, FX_PROMPT_ZH } from './fxPrompt';
 import { GO_PROMPT_EN, GO_PROMPT_ZH } from './goPrompt';
-import { HTML_PROMPT_EN, HTML_PROMPT_ZH } from './htmlPrompt';
 import {
   NEW_BRANCH_LABEL_EN,
   NEW_BRANCH_LABEL_ZH,
@@ -26,12 +26,6 @@ import {
   NEW_BRANCH_PROMPT_ZH,
 } from './newBranchPrompt';
 import { QA_PROMPT_EN, QA_PROMPT_ZH } from './qaPrompt';
-import {
-  SKILLIFY_LABEL_EN,
-  SKILLIFY_LABEL_ZH,
-  SKILLIFY_PROMPT_EN,
-  SKILLIFY_PROMPT_ZH,
-} from './skillifyPrompt';
 
 interface CommandEntry {
   /** Prompt content for each language — a COMPLETE SKILL.md (YAML frontmatter +
@@ -50,21 +44,11 @@ export const COMMAND_CONTENT: Record<string, CommandEntry> = {
   fx: { zh: FX_PROMPT_ZH, en: FX_PROMPT_EN },
   ex: { zh: EX_PROMPT_ZH, en: EX_PROMPT_EN },
   go: { zh: GO_PROMPT_ZH, en: GO_PROMPT_EN },
-  html: { zh: HTML_PROMPT_ZH, en: HTML_PROMPT_EN },
-  cg: { zh: CG_PROMPT_ZH, en: CG_PROMPT_EN, labelZh: CG_LABEL_ZH, labelEn: CG_LABEL_EN },
-  cc: { zh: CC_PROMPT_ZH, en: CC_PROMPT_EN, labelZh: CC_LABEL_ZH, labelEn: CC_LABEL_EN },
-  cr: { zh: CR_PROMPT_ZH, en: CR_PROMPT_EN },
   'new-branch': {
     zh: NEW_BRANCH_PROMPT_ZH,
     en: NEW_BRANCH_PROMPT_EN,
     labelZh: NEW_BRANCH_LABEL_ZH,
     labelEn: NEW_BRANCH_LABEL_EN,
-  },
-  skillify: {
-    zh: SKILLIFY_PROMPT_ZH,
-    en: SKILLIFY_PROMPT_EN,
-    labelZh: SKILLIFY_LABEL_ZH,
-    labelEn: SKILLIFY_LABEL_EN,
   },
 };
 

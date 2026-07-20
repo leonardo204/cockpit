@@ -8,7 +8,6 @@ import { SessionBrowser } from './SessionBrowser';
 import { SettingsModal } from './SettingsModal';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
-import { SkillsModal } from '@cockpit/feature-skills';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
 import { useEffectQuery } from '@cockpit/effect-react';
 import { fetchProjects, saveProjects as saveProjectsEffect } from './effect/projectClient';
@@ -34,7 +33,6 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const [isTokenStatsOpen, setIsTokenStatsOpen] = useState(false);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteProjectCwd, setNoteProjectCwd] = useState<string | null>(null);
-  const [isSkillsOpen, setIsSkillsOpen] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
   // Lazy load: only render project iframes that have been activated before (ever-growing set)
   const [loadedCwds, setLoadedCwds] = useState<Set<string>>(new Set());
@@ -265,7 +263,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   // iframes don't bubble keydown to the parent window, so the per-panel
   // listeners inside TabManager / FileBrowserModal don't run when focus is in
   // the left ProjectSidebar or one of the parent-window modals
-  // (SessionBrowser / SettingsModal / NoteModal / SkillsModal / TokenStatsModal).
+  // (SessionBrowser / SettingsModal / NoteModal / TokenStatsModal).
   // Without this, Cmd+P pops the browser print dialog, Cmd+S triggers "Save
   // Page As...", Cmd+F shows the native find bar, etc. We swallow them at the
   // parent root as a no-op; any parent-window component that wants to react
@@ -421,18 +419,18 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   }, [projects, activeIndex, collapsed, saveProjects, updateUrl]);
 
   // Build iframe URL. For a project opened with a specific session, carry the sessionId
-  // (and, when the open intent was "jump into a session", view=agent) in the URL so that
-  // useTabState inside the iframe activates it deterministically on mount. The value is
-  // read from initialSessionIdsRef, which is frozen at project birth, so the src string is
-  // stable across re-renders (in-iframe session switches never change it → no iframe reload).
+  // in the URL so that useTabState inside the iframe activates it deterministically on
+  // mount. The value is read from initialSessionIdsRef, which is frozen at project birth,
+  // so the src string is stable across re-renders (in-iframe session switches never change
+  // it → no iframe reload).
+  //
+  // F1-03: the `view=agent` intent parameter is gone — chat is the only panel now, so
+  // "jump into a session" needs no view coordination.
   const getProjectUrl = (project: ProjectInfo) => {
     let url = `/project?cwd=${encodeURIComponent(project.cwd)}`;
     const initial = initialSessionIdsRef.current.get(project.cwd);
     if (initial?.sessionId) {
       url += `&sessionId=${encodeURIComponent(initial.sessionId)}`;
-      if (initial.switchToAgent) {
-        url += `&view=agent`;
-      }
     }
     return url;
   };
@@ -467,7 +465,6 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onOpenSessionBrowser={() => setIsSessionBrowserOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenNote={(cwd) => { setNoteProjectCwd(cwd ?? null); setIsNoteOpen(true); }}
-        onOpenSkills={() => setIsSkillsOpen(true)}
         onSwitchProject={handleSwitchProject}
         onAddProject={(cwd) => {
           const existingIndex = projects.findIndex(p => p.cwd === cwd);
@@ -554,12 +551,6 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onClose={() => { setIsNoteOpen(false); setNoteProjectCwd(null); }}
         projectCwd={noteProjectCwd}
         projectName={noteProjectCwd ? noteProjectCwd.split('/').pop() : null}
-      />
-
-      {/* Skills Modal */}
-      <SkillsModal
-        isOpen={isSkillsOpen}
-        onClose={() => setIsSkillsOpen(false)}
       />
 
       {/* Bottom-left session complete notification */}

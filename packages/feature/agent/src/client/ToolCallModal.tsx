@@ -6,12 +6,7 @@ import { toast } from '@cockpit/shared-ui';
 import { SubagentTranscriptModal } from './SubagentTranscriptModal';
 import { WorkflowRunModal } from './WorkflowRunModal';
 import type { ToolCallInfo } from './types';
-// Tech debt: PreviewModal is a heavy main-shell component (depends on
-// DiffView/CodeViewer/MarkdownRenderer/...). Pulling it cleanly would mean
-// migrating its 11+ deps in lockstep. Allowed by MODULES.md as transitional
-// reverse import. Clean up: extract a simpler preview primitive into shared,
-// or migrate the relevant parts of PreviewModal into feature-agent later.
-import { PreviewModal } from '@cockpit/feature-explorer';
+import { ToolCallPreviewModal } from './ToolCallPreviewModal';
 
 // Migrated from src/components/project/ToolCallModal.tsx.
 
@@ -54,7 +49,7 @@ interface ToolCallProps {
 export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const [previewContent, setPreviewContent] = useState<{ title: string; content: string; toolName: string } | null>(null);
+  const [previewContent, setPreviewContent] = useState<{ title: string; content: string } | null>(null);
   const [showSubagent, setShowSubagent] = useState(false);
   const [showWorkflow, setShowWorkflow] = useState(false);
 
@@ -141,7 +136,6 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
     setPreviewContent({
       title: `${toolCall.name}${displayPath ? ` ${displayPath}` : ''} - ${suffix}`,
       content,
-      toolName: toolCall.name,
     });
   };
 
@@ -295,10 +289,9 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
 
       {/* Preview modal */}
       {previewContent && (
-        <PreviewModal
+        <ToolCallPreviewModal
           title={previewContent.title}
           content={previewContent.content}
-          toolName={previewContent.toolName}
           onClose={() => setPreviewContent(null)}
         />
       )}

@@ -68,18 +68,13 @@ export const saveSettings = (
   })
 
 // ─────────────────────────────────────────────────────────
-// /api/version & /api/extension/version
+// /api/version
 // ─────────────────────────────────────────────────────────
 
 export const loadCockpitVersion = (): Effect.Effect<
   { version?: string },
   AppError
 > => httpJson("/api/version")
-
-export const loadExtensionVersion = (): Effect.Effect<
-  { version?: string; installed?: boolean; path?: string },
-  AppError
-> => httpJson("/api/extension/version")
 
 // ─────────────────────────────────────────────────────────
 // /api/note
@@ -196,36 +191,3 @@ export const pickFolder = (): Effect.Effect<
   { folder?: string | null },
   AppError
 > => httpJson("/api/pick-folder")
-
-// ─────────────────────────────────────────────────────────
-// /api/open-vscode & /api/open-cursor (fire-and-forget)
-// ─────────────────────────────────────────────────────────
-
-export const openInVscode = (
-  cwd: string
-): Effect.Effect<unknown, AppError> =>
-  httpPostJson("/api/open-vscode", { cwd })
-
-export const openInCursor = (
-  cwd: string
-): Effect.Effect<unknown, AppError> =>
-  httpPostJson("/api/open-cursor", { cwd })
-
-// ─────────────────────────────────────────────────────────
-// /api/git/worktree (GET list + POST create)
-// ─────────────────────────────────────────────────────────
-
-export interface WorktreeResponse {
-  worktrees?: ReadonlyArray<unknown>
-  [key: string]: unknown
-}
-
-export const loadGitWorktrees = (
-  cwd: string
-): Effect.Effect<WorktreeResponse, AppError> =>
-  httpJson(`/api/git/worktree?cwd=${encodeURIComponent(cwd)}`)
-
-export const createGitWorktree = (
-  body: Record<string, unknown>
-): Effect.Effect<unknown, AppError> =>
-  httpPostJson("/api/git/worktree", body)

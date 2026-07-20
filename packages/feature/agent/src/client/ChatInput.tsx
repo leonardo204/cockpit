@@ -6,10 +6,8 @@ import { toast } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
 import { ImagePreview } from '@cockpit/shared-ui';
 import { ScheduleTaskPopover } from './ScheduleTaskPopover';
-import { onSkillsChanged } from '@cockpit/feature-skills';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { stageFiles } from '@cockpit/feature-explorer';
-import { loadSkills as loadSkillsEff, loadSlashCommands } from './effect/agentClient';
+import { loadSlashCommands } from './effect/agentClient';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
@@ -20,20 +18,8 @@ interface CommandInfo {
   description: string;
   // `'global' | 'project'` (`.claude/commands/*.md`) used to be valid sources;
   // that mechanism was retired with Claude Code's commands convention.
-  source: 'builtin' | 'skill';
-  // Only present when source === 'skill'
-  skillPath?: string;
+  source: 'builtin';
   argumentHint?: string;
-}
-
-interface SkillInfo {
-  id: string;
-  path: string;
-  name: string;
-  description: string;
-  icon?: string;
-  argumentHint?: string;
-  valid: boolean;
 }
 
 interface ChatInputProps {
@@ -41,8 +27,6 @@ interface ChatInputProps {
   disabled?: boolean;
   cwd?: string;
   engine?: ChatEngine;
-  onShowGitStatus?: () => void;
-  onShowComments?: () => void;
   onShowUserMessages?: () => void;
   onOpenNote?: () => void;
   onCreateScheduledTask?: (params: {
@@ -56,14 +40,13 @@ interface ChatInputProps {
   }) => void;
 }
 
-export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine: _engine, onShowGitStatus, onShowComments, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine: _engine, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
   // Caret offset into `input`; drives line-aware command autocomplete.
   const [caret, setCaret] = useState(0);
   const [images, setImages] = useState<ImageInfo[]>([]);
   const [commands, setCommands] = useState<CommandInfo[]>([]);
-  const [skills, setSkills] = useState<CommandInfo[]>([]);
   const [showScheduler, setShowScheduler] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [commandsDismissed, setCommandsDismissed] = useState(false);
@@ -101,34 +84,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     });
   }, []);
 
-  // Load skills (separate endpoint, globally-configured, ~/.cockpit/skills.json)
-  const loadSkills = useCallback(async () => {
-    const exit = await BrowserRuntime.runPromiseExit(loadSkillsEff());
-    if (exit._tag === 'Success') {
-      const data = (exit.value as { skills?: SkillInfo[] }).skills
-        ?? (exit.value as unknown as SkillInfo[]);
-      const list = Array.isArray(data) ? data : [];
-      const mapped: CommandInfo[] = list
-        .filter((s) => s.valid && !!s.name)
-        .map((s) => ({
-          name: `/${s.name}`,
-          description: s.description || '',
-          source: 'skill' as const,
-          skillPath: s.path,
-          argumentHint: s.argumentHint,
-        }));
-      setSkills(mapped);
-    } else {
-      console.error('Failed to load skills:', exit.cause);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSkills();
-    // Re-load when SkillsModal notifies the skills list changed
-    return onSkillsChanged(loadSkills);
-  }, [loadSkills]);
-
   // The line containing the caret — commands are line-led, so autocomplete keys
   // off the current line, not the whole (possibly multi-line) input.
   const activeLine = useMemo(() => {
@@ -148,7 +103,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
   }, [activeLine.text]);
 
   // Command filtering: useMemo derived computation, eliminates setState churn per keystroke.
-  // Commands first, then skills — grouped display preserves the two sections.
   // Client-side commands that perform a UI action instead of expanding to a prompt.
   // `/plan` toggles plan mode (consumed in Chat.wrappedHandleSend) — only on claude engines.
   const localCommands = useMemo<CommandInfo[]>(() => {
@@ -166,8 +120,8 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     if (!commandQuery) return [];
     const { verb } = commandQuery;
     const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
-    return [...localCommands.filter(match), ...commands.filter(match), ...skills.filter(match)];
-  }, [commandQuery, localCommands, commands, skills]);
+    return [...localCommands.filter(match), ...commands.filter(match)];
+  }, [commandQuery, localCommands, commands]);
 
   const showCommands = !commandsDismissed && !!commandQuery && filteredCommands.length > 0;
 
@@ -196,10 +150,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     const hasContent = trimmed || images.length > 0;
     if (!hasContent || disabled) return;
 
-    // Slash/at commands (/qa, @new-branch, user skills, multi-line) are resolved
-    // server-side by resolveCommandPrompt — send the raw text so the displayed
-    // message stays readable and a single resolver handles builtins + skills +
-    // sequential multi-command.
+    // Slash/at commands (/qa, @new-branch, multi-line) are resolved server-side
+    // by resolveCommandPrompt — send the raw text so the displayed message stays
+    // readable and a single resolver handles builtins + sequential multi-command.
     onSend(trimmed, images.length > 0 ? images : undefined);
     setInput('');
     setImages([]);
@@ -321,8 +274,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     switch (source) {
       case 'builtin':
         return t('common.builtin');
-      case 'skill':
-        return 'Skill';
     }
   };
 
@@ -330,8 +281,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     switch (source) {
       case 'builtin':
         return 'bg-brand/15 text-brand dark:bg-brand/25 dark:text-teal-11';
-      case 'skill':
-        return 'bg-purple-9/15 text-purple-11 dark:bg-purple-9/25 dark:text-purple-11';
     }
   };
 
@@ -346,19 +295,12 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
           className="absolute bottom-full left-0 right-0 mx-4 mb-2 max-h-64 overflow-y-auto bg-card border border-border rounded-lg shadow-lg"
         >
           {filteredCommands.map((cmd, index) => {
-            const prev = index > 0 ? filteredCommands[index - 1] : null;
-            const isFirstSkill = cmd.source === 'skill' && (!prev || prev.source !== 'skill');
-            const isFirstCommand = cmd.source !== 'skill' && index === 0;
+            const isFirstCommand = index === 0;
             return (
               <div key={cmd.name}>
                 {isFirstCommand && (
                   <div className="px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
                     Commands
-                  </div>
-                )}
-                {isFirstSkill && (
-                  <div className="px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
-                    Skills
                   </div>
                 )}
                 <div
@@ -374,9 +316,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
                       {(commandQuery?.marker ?? '/') + cmd.name.slice(1)}
                     </span>
                     <span className="flex-1 text-sm text-muted-foreground truncate">
-                      {cmd.source === 'builtin'
-                        ? t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })
-                        : cmd.description}
+                      {t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })}
                     </span>
                     <span
                       className={`text-xs px-1.5 py-0.5 rounded ${getSourceColor(cmd.source)}`}
@@ -384,11 +324,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
                       {getSourceLabel(cmd.source)}
                     </span>
                   </div>
-                  {cmd.source === 'skill' && cmd.argumentHint && (
-                    <div className="font-mono text-xs text-muted-foreground mt-0.5 pl-0 truncate">
-                      {cmd.argumentHint}
-                    </div>
-                  )}
                 </div>
               </div>
             );
@@ -397,57 +332,6 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
       )}
 
       <div className="flex gap-2 items-end p-4">
-        {/* Git stage all files button */}
-        <button
-          onClick={async () => {
-            if (!cwd) return;
-            const exit = await BrowserRuntime.runPromiseExit(stageFiles(cwd, ['.']));
-            if (exit._tag === 'Success') {
-              toast(t('toast.stagedAllFiles'), 'success');
-              window.dispatchEvent(new CustomEvent('git-status-changed'));
-            } else {
-              console.error('Error staging files:', exit.cause);
-              toast(t('toast.stageFailed'), 'error');
-            }
-          }}
-          className="p-2 text-green-11 hover:text-green-10 hover:bg-green-9/10 active:bg-green-9/20 active:scale-95 rounded-lg transition-all"
-          title={t('chat.stageAll')}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-        </button>
-
-        {/* Git view changes button - clickable even during generation */}
-        {onShowGitStatus && (
-          <button
-            onClick={onShowGitStatus}
-            className="p-2 text-brand hover:text-teal-10 hover:bg-brand/10 active:bg-brand/20 active:scale-95 rounded-lg transition-all"
-            title={t('chat.viewGitChanges')}
-          >
-            {/* Git branch icon */}
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <circle cx="6" cy="6" r="2" strokeWidth={2} />
-              <circle cx="18" cy="6" r="2" strokeWidth={2} />
-              <circle cx="6" cy="18" r="2" strokeWidth={2} />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 8v10M18 8v4c0 2-2 4-6 4" />
-            </svg>
-          </button>
-        )}
-
-        {/* View comments button */}
-        {onShowComments && (
-          <button
-            onClick={onShowComments}
-            className="p-2 text-amber-11 hover:text-amber-10 hover:bg-amber-9/10 active:bg-amber-9/20 active:scale-95 rounded-lg transition-all"
-            title={t('chat.viewAllComments')}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-            </svg>
-          </button>
-        )}
-
         {/* User messages list button */}
         {onShowUserMessages && (
           <button

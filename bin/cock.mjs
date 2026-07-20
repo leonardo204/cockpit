@@ -20,10 +20,6 @@ Commands:
   cockpit                        Start server, open last project
   cockpit .                      Start server, open current directory
   cockpit <path>                 Start server, open specified directory
-  browser <id> <action>          Control browser bubbles
-  terminal <id> <action>         Control terminal bubbles
-  codegraph <subcmd> [...]       Query the project code graph (search/risk/affected/...)
-  connection list [--cwd …]      List all bubbles (term + browser) with user-set titles
   update                         Update to latest version
 
 Options:
@@ -73,90 +69,13 @@ if (!process.env.COCKPIT_PORT) {
   process.env.COCKPIT_PORT = '3457';
 }
 
-// Subcommand routing
-
-// Flush stdout/stderr before exit. process.exit() does NOT wait for
-// async pipe writes to drain — for large outputs (> 16 KiB Node stream
-// highWaterMark) this truncates at exactly 16384 bytes on macOS pipes.
-// Without this, an ollama agent capturing our stdout via execAsync
-// receives a cleanly cut mid-string blob and then misdiagnoses it as
-// "output truncated" (reproduced in sessions 6910d071 & 22727dd4).
-async function flushAndExit(code) {
-  const drain = (stream) => new Promise((resolve) => {
-    if (!stream.writableLength) { resolve(); return; }
-    // Writing an empty string returns false iff the stream is backpressured;
-    // the callback then fires once the kernel has actually accepted the data.
-    stream.write('', 'utf8', () => resolve());
-  });
-  try { await Promise.all([drain(process.stdout), drain(process.stderr)]); } catch { /* ignore */ }
-  process.exit(code);
-}
-
-if (process.argv[2] === 'browser') {
-  process.argv.splice(2, 1);
-  const mod = await import('./cock-browser.mjs');
-  await mod.done;
-  await flushAndExit(0);
-}
-
-if (process.argv[2] === 'terminal') {
-  process.argv.splice(2, 1);
-  const mod = await import('./cock-terminal.mjs');
-  await mod.done;
-  await flushAndExit(0);
-}
-
-if (process.argv[2] === 'codegraph') {
-  process.argv.splice(2, 1);
-  const mod = await import('./cock-codegraph.mjs');
-  await mod.done;
-  await flushAndExit(0);
-}
-
-if (process.argv[2] === 'connection') {
-  process.argv.splice(2, 1);
-  // cock-connection.mjs handles flow + exit itself (single subcmd, simple).
-  await import('./cock-connection.mjs');
-  // import() resolves when the module finishes top-level await; that script
-  // already calls process.exit() on its own paths, so this fallback only
-  // fires for the 0-exit happy path that finished normally.
-  await flushAndExit(0);
-}
-
-if (process.argv[2] === 'update') {
-  console.log('Updating @surething/cockpit...');
-  const installArgs = ['install', '-g', '@surething/cockpit@latest', '--include=optional'];
-  let result = spawnSync('npm', installArgs, { stdio: 'inherit' });
-
-  // An in-place `npm i -g` can drop the SDK's platform-specific native binary
-  // (an optional dependency) when the SDK version bumps — see
-  // scripts/claudeBinary.mjs. A clean uninstall + reinstall reliably refetches
-  // it. Guard here so `cockpit update` never leaves chat silently broken.
-  if (result.status === 0 && !hasClaudeBinary()) {
-    console.log('Native Claude binary missing after update — reinstalling to repair...');
-    spawnSync('npm', ['uninstall', '-g', '@surething/cockpit'], { stdio: 'inherit' });
-    result = spawnSync('npm', installArgs, { stdio: 'inherit' });
-  }
-
-  if (result.status === 0) {
-    const { readFileSync } = await import('fs');
-    const pkg = JSON.parse(readFileSync(resolve(PROJECT_ROOT, 'package.json'), 'utf8'));
-    console.log(`\nUpdated to v${pkg.version}`);
-    if (!hasClaudeBinary()) {
-      console.error('\nWarning: the native Claude CLI binary is still missing; chat will not work.');
-      console.error('Fix manually: npm uninstall -g @surething/cockpit && npm install -g @surething/cockpit');
-    }
-  }
-  process.exit(result.status ?? 1);
-}
-
 // ============================================
 // Resolve project directory (if provided)
 // ============================================
 const { existsSync, mkdirSync } = await import('fs');
 const { homedir } = await import('os');
 
-const knownCommands = new Set(['browser', 'terminal', 'update', 'help', 'codegraph', 'connection']);
+const knownCommands = new Set(['update', 'help']);
 const arg = process.argv[2];
 let projectDir = null;
 

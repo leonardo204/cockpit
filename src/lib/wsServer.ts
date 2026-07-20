@@ -1,36 +1,31 @@
 /**
  * WebSocket Server — dispatch only.
  *
- * The 6 WS handlers live in src/lib/effect/; this file only owns WS upgrade,
- * route dispatch, and the broadcast helper.
+ * The surviving WS handlers live in src/lib/effect/; this file only owns WS
+ * upgrade, route dispatch, and the broadcast helper.
  *
- * Handler implementations: src/lib/effect/{globalStateHandler,fileWatchHandler,
- * terminalFollowHandler,browserHandler,jupyterHandler,terminalHandler}.ts
+ * F1-03 chat-first trim: /ws/terminal, /ws/bash, /ws/browser, /ws/terminal-follow
+ * and /ws/jupyter belonged to @cockpit/feature-console; /ws/watch backed the
+ * Explorer file tree and the git-branch indicators. All were deleted with their
+ * features, leaving the two chat channels:
+ *
+ *   /ws/global-state   — cross-project session list push (sidebar / recents)
+ *   /ws/session-stream — live tail of an in-flight chat run
+ *
+ * Handler implementations: src/lib/effect/{globalStateHandler,sessionStreamHandler}.ts
  */
 import { IncomingMessage } from 'http';
 import { Duplex } from 'stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import { parse } from 'url';
 import { runGlobalStateHandler } from './effect/globalStateHandler';
-import { runFileWatchHandler } from './effect/fileWatchHandler';
-import { runTerminalFollowHandler } from './effect/terminalFollowHandler';
-import { runBrowserHandler } from './effect/browserHandler';
-import { runJupyterHandler } from './effect/jupyterHandler';
-import { runTerminalHandler } from './effect/terminalHandler';
-import { runBashHandler } from './effect/bashStreamHandler';
 import { runSessionStreamHandler } from './effect/sessionStreamHandler';
-import { wireCodeIndexToFileWatcher } from './codeIndexSync';
 // globalStateClients + broadcastToGlobalState live in a side-effect-free module so API
 // routes can broadcast without importing this server.
 import { globalStateClients, broadcastToGlobalState } from './globalStateBroadcast';
 
 // Re-exported for existing callers that import it from here.
 export { broadcastToGlobalState };
-
-// Wire fileWatcher → codeIndex lazy sync. wsServer is on the guaranteed
-// server-boot path, so calling this at module top-level runs it exactly once
-// per process. `wireCodeIndexToFileWatcher` is itself idempotent.
-wireCodeIndexToFileWatcher();
 
 // ─────────────────────────────────────────────────────────
 // WSS + client set are pinned to globalThis so a second module realm (Next.js
@@ -42,25 +37,11 @@ wireCodeIndexToFileWatcher();
 // the connected UIs.
 // ─────────────────────────────────────────────────────────
 
-/**
- * Same-origin check for the /ws/bash upgrade: the WS `Origin` header must match
- * the request `Host`. Opaque-origin (sandboxed, no allow-same-origin) iframes
- * send `Origin: null`; cross-site pages send a different host — both rejected.
- */
-function isSameOriginWs(req: IncomingMessage): boolean {
-  const origin = req.headers.origin;
-  const host = req.headers.host;
-  if (!origin || !host) return false;
-  try {
-    return new URL(origin).host === host;
-  } catch {
-    return false;
-  }
-}
-
 const g_ws = globalThis as unknown as {
   __cockpitWss?: WebSocketServer;
 };
+
+const WS_ROUTES: readonly string[] = ['/ws/global-state', '/ws/session-stream'];
 
 const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
   const server = new WebSocketServer({ noServer: true });
@@ -71,38 +52,11 @@ const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
   server.on('connection', (ws: WebSocket, req: IncomingMessage) => {
     const { pathname, query } = parse(req.url || '', true);
 
-    if (pathname === '/ws/watch') {
-      runFileWatchHandler(ws, query.cwd as string);
-    } else if (pathname === '/ws/global-state') {
+    if (pathname === '/ws/global-state') {
       // Keep globalStateClients populated so broadcastToGlobalState can reach this socket
       globalStateClients.add(ws);
       ws.on('close', () => globalStateClients.delete(ws));
       runGlobalStateHandler(ws);
-    } else if (pathname === '/ws/terminal') {
-      runTerminalHandler(ws, query.projectCwd as string);
-    } else if (pathname === '/ws/bash') {
-      // RCE channel — only same-origin embedders may connect. Trusted HTML
-      // previews (allow-same-origin) + console bubbles carry Origin === host;
-      // an UNTRUSTED preview runs in an opaque-origin sandbox → Origin: null →
-      // rejected; an external website (drive-by to localhost) → host mismatch →
-      // rejected. This is the real gate: not injecting the SDK is not enough,
-      // since a page can hand-roll its own WebSocket to /ws/bash.
-      if (!isSameOriginWs(req)) {
-        try { ws.close(4403, 'forbidden origin'); } catch { /* ignore */ }
-      } else {
-        runBashHandler(ws, query.cwd as string | undefined);
-      }
-    } else if (pathname === '/ws/browser') {
-      runBrowserHandler(
-        ws,
-        query.fullId as string,
-        query.projectCwd as string | undefined,
-        query.tabId as string | undefined,
-      );
-    } else if (pathname === '/ws/terminal-follow') {
-      runTerminalFollowHandler(ws, query.id as string);
-    } else if (pathname === '/ws/jupyter') {
-      runJupyterHandler(ws, query.bubbleId as string, query.cwd as string);
     } else if (pathname === '/ws/session-stream') {
       runSessionStreamHandler(ws, query.sessionId as string);
     }
@@ -118,16 +72,7 @@ const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
 export function handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {
   const { pathname } = parse(req.url || '', true);
 
-  if (
-    pathname === '/ws/watch' ||
-    pathname === '/ws/global-state' ||
-    pathname === '/ws/terminal' ||
-    pathname === '/ws/bash' ||
-    pathname === '/ws/browser' ||
-    pathname === '/ws/terminal-follow' ||
-    pathname === '/ws/jupyter' ||
-    pathname === '/ws/session-stream'
-  ) {
+  if (pathname && WS_ROUTES.includes(pathname)) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
