@@ -88,14 +88,10 @@ export function TabManagerTopBar({ initialCwd }: TabManagerTopBarProps) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
             </svg>
           </button>
-          {/* Surething website */}
-          <button
-            onClick={() => window.open('https://surething.io?from=cockpit', '_blank')}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
-            title={t('tabManagerTopBar.openSurething')}
-          >
-            <img src="https://surething.io/logo.png?from=cockpit" alt="Surething" className="w-5 h-5 rounded-sm" />
-          </button>
+          {/* A vendor promo button used to sit here, rendering <img src="https://surething.io/
+              logo.png?from=cockpit">. Removed: this is a local-first app, and a remote image
+              fetch to a vendor domain on every render is both an outbound beacon (it leaks
+              usage to a third party) and the wrong brand to be putting in this toolbar. */}
         </div>
       </div>
     </div>
