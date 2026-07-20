@@ -22,6 +22,33 @@ interface ProjectsData {
   collapsed: boolean;
 }
 
+/**
+ * Stamp "the user opened this just now" on one project.
+ *
+ * THIS LIST IS THE RECENTS LIST. `~/.cockpit/projects.json` already records the
+ * projects the user opened in this app and already survives a restart, so the
+ * home screen reads it rather than a second store that could disagree with it.
+ * The only thing recents needed on top was an ordering key, which is this.
+ *
+ * Returns a NEW array only when something changed, so the many call sites that
+ * pass the result straight to `saveProjects` do not churn state needlessly.
+ */
+function touchOpened(projects: ProjectInfo[], cwd: string): ProjectInfo[] {
+  const now = Date.now();
+  let changed = false;
+  const next = projects.map((p) => {
+    if (p.cwd !== cwd) return p;
+    changed = true;
+    return { ...p, lastOpenedAt: now };
+  });
+  return changed ? next : projects;
+}
+
+/** A project entering the list is, by definition, being opened now. */
+function newProject(cwd: string): ProjectInfo {
+  return { cwd, lastOpenedAt: Date.now() };
+}
+
 interface WorkspaceProps {
   initialCwd?: string;
   initialSessionId?: string;
@@ -163,14 +190,13 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
     if (existingIndex >= 0) {
       // Project already exists, switch to it
-      if (existingIndex !== activeIndex) {
-        setActiveIndex(existingIndex);
-        saveProjects(projects, existingIndex, collapsed);
-      }
+      const touched = touchOpened(projects, initialCwd);
+      setProjects(touched);
+      setActiveIndex(existingIndex);
+      saveProjects(touched, existingIndex, collapsed);
     } else {
       // New project, add to list
-      const newProject: ProjectInfo = { cwd: initialCwd };
-      const newProjects = [...projects, newProject];
+      const newProjects = [...projects, newProject(initialCwd)];
       const newActiveIndex = newProjects.length - 1;
       setProjects(newProjects);
       setActiveIndex(newActiveIndex);
@@ -272,14 +298,15 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
               initialSessionIdsRef.current.set(cwd, { sessionId: targetSessionId });
             }
           }
+          const touched = touchOpened(projects, cwd);
+          setProjects(touched);
           if (existingIndex !== activeIndex) {
             setActiveIndex(existingIndex);
-            saveProjects(projects, existingIndex, collapsed);
           }
+          saveProjects(touched, existingIndex, collapsed);
         } else {
           // New project, add to list
-          const newProject: ProjectInfo = { cwd };
-          const newProjects = [...projects, newProject];
+          const newProjects = [...projects, newProject(cwd)];
           const newActiveIndex = newProjects.length - 1;
           setProjects(newProjects);
           setActiveIndex(newActiveIndex);
@@ -327,7 +354,10 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const handleSelectProject = useCallback((index: number) => {
     setShowHome(false);
     setActiveIndex(index);
-    saveProjects(projects, index, collapsed);
+    const selectedCwd = projects[index]?.cwd;
+    const touched = selectedCwd ? touchOpened(projects, selectedCwd) : projects;
+    setProjects(touched);
+    saveProjects(touched, index, collapsed);
     const selectedProject = projects[index];
     if (selectedProject?.cwd) {
       // Update URL (using the tracked sessionId)
@@ -352,6 +382,38 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
     setActiveIndex(newActiveIndex);
     saveProjects(newProjects, newActiveIndex, collapsed);
   }, [projects, activeIndex, collapsed, saveProjects]);
+
+  // Open a project by path — the shared body behind every "add/open this
+  // folder" affordance (sidebar project browser, home screen Open/Create, a
+  // recents row). One implementation, so they cannot drift on the thing that
+  // now matters: an opened project is recorded as opened.
+  const openProjectByCwd = useCallback((cwd: string) => {
+    setShowHome(false);
+    const existingIndex = projects.findIndex(p => p.cwd === cwd);
+    if (existingIndex >= 0) {
+      const touched = touchOpened(projects, cwd);
+      setProjects(touched);
+      setActiveIndex(existingIndex);
+      saveProjects(touched, existingIndex, collapsed);
+    } else {
+      const newProjects = [...projects, newProject(cwd)];
+      const newActiveIndex = newProjects.length - 1;
+      setProjects(newProjects);
+      setActiveIndex(newActiveIndex);
+      saveProjects(newProjects, newActiveIndex, collapsed);
+    }
+    updateUrl(cwd, projectSessionIdsRef.current.get(cwd));
+  }, [projects, collapsed, saveProjects, updateUrl]);
+
+  // Remove a project FROM THE LIST, addressed by path — what the home screen's
+  // × does. Deliberately the same code path as the sidebar's remove: one list,
+  // one removal. It rewrites ~/.cockpit/projects.json and NOTHING else — the
+  // directory and its session transcripts (~/.claude/projects/…) are untouched,
+  // so reopening the project brings its history back with it.
+  const handleRemoveRecent = useCallback((cwd: string) => {
+    const index = projects.findIndex(p => p.cwd === cwd);
+    if (index >= 0) handleRemoveProject(index);
+  }, [projects, handleRemoveProject]);
 
   // Reorder projects
   const handleReorderProjects = useCallback((newProjects: ProjectInfo[]) => {
@@ -396,12 +458,13 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         // first mount opens the requested session instead of the most recent one.
         initialSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
       }
+      const touched = touchOpened(projects, cwd);
+      setProjects(touched);
       setActiveIndex(existingIndex);
-      saveProjects(projects, existingIndex, collapsed);
+      saveProjects(touched, existingIndex, collapsed);
     } else {
       // New project, append to list
-      const newProject: ProjectInfo = { cwd };
-      const newProjects = [...projects, newProject];
+      const newProjects = [...projects, newProject(cwd)];
       const newActiveIndex = newProjects.length - 1;
       setProjects(newProjects);
       setActiveIndex(newActiveIndex);
@@ -441,14 +504,15 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         // first mount opens the requested session instead of the most recent one.
         initialSessionIdsRef.current.set(cwd, { sessionId, switchToAgent: true });
       }
+      const touched = touchOpened(projects, cwd);
+      setProjects(touched);
       if (existingIndex !== activeIndex) {
         setActiveIndex(existingIndex);
-        saveProjects(projects, existingIndex, collapsed);
       }
+      saveProjects(touched, existingIndex, collapsed);
     } else {
       // New project, add to list
-      const newProject: ProjectInfo = { cwd };
-      const newProjects = [...projects, newProject];
+      const newProjects = [...projects, newProject(cwd)];
       const newActiveIndex = newProjects.length - 1;
       setProjects(newProjects);
       setActiveIndex(newActiveIndex);
@@ -509,21 +573,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenNote={(cwd) => { setNoteProjectCwd(cwd ?? null); setIsNoteOpen(true); }}
         onSwitchProject={handleSwitchProject}
-        onAddProject={(cwd) => {
-          // Adding/opening a project leaves the home screen.
-          setShowHome(false);
-          const existingIndex = projects.findIndex(p => p.cwd === cwd);
-          if (existingIndex >= 0) {
-            setActiveIndex(existingIndex);
-            saveProjects(projects, existingIndex, collapsed);
-          } else {
-            const newProjects = [...projects, { cwd }];
-            const newActiveIndex = newProjects.length - 1;
-            setProjects(newProjects);
-            setActiveIndex(newActiveIndex);
-            saveProjects(newProjects, newActiveIndex, collapsed);
-          }
-        }}
+        onAddProject={openProjectByCwd}
       />
 
       {/* Right content area */}
@@ -531,7 +581,16 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         {/* The home screen. Shown when there is no project to show, and on
             demand when the user closed their last tab (`showHome`). */}
         {(projects.length === 0 || showHome) && (
-          <EmptyState onSelectSession={handleAddProject} />
+          // The home screen lists the projects the user has opened IN THIS APP
+          // — `projects` — not everything found under ~/.claude/projects. Past
+          // sessions per project still come from that history; only the list of
+          // projects changed hands.
+          <EmptyState
+            onSelectSession={handleAddProject}
+            recents={projects}
+            onOpenProject={openProjectByCwd}
+            onRemoveRecent={handleRemoveRecent}
+          />
         )}
         {projects.length > 0 && (
           // Project iframe container (lazy load: only render projects that have been activated).
@@ -569,19 +628,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onClose={() => setIsSessionBrowserOpen(false)}
         onSelectSession={handleAddProject}
         onAddProject={(cwd) => {
-          // Adding/opening a project leaves the home screen.
-          setShowHome(false);
-          const existingIndex = projects.findIndex(p => p.cwd === cwd);
-          if (existingIndex >= 0) {
-            setActiveIndex(existingIndex);
-            saveProjects(projects, existingIndex, collapsed);
-          } else {
-            const newProjects = [...projects, { cwd }];
-            const newActiveIndex = newProjects.length - 1;
-            setProjects(newProjects);
-            setActiveIndex(newActiveIndex);
-            saveProjects(newProjects, newActiveIndex, collapsed);
-          }
+          openProjectByCwd(cwd);
           setIsSessionBrowserOpen(false);
         }}
       />

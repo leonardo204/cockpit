@@ -14,6 +14,9 @@ import { useLatestVersion } from './useLatestVersion';
 export interface ProjectInfo {
   cwd: string;
   sessionId?: string;
+  /** Epoch ms of the last open in this app. Persisted via /api/projects; the
+   *  home screen orders its recents list by it. See server/effect/project.ts. */
+  lastOpenedAt?: number;
 }
 
 interface ProjectSidebarProps {

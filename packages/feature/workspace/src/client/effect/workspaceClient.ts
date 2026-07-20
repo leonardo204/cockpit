@@ -191,3 +191,22 @@ export const pickFolder = (): Effect.Effect<
   { folder?: string | null },
   AppError
 > => httpJson("/api/pick-folder")
+
+// ─────────────────────────────────────────────────────────
+// /api/create-project
+// ─────────────────────────────────────────────────────────
+
+/**
+ * A refused name (collision, separator, missing parent) is a NORMAL outcome and
+ * arrives as `{ok:false, reason}` with HTTP 200 — same contract as saveNote's
+ * conflict. Only genuine faults fail the Effect.
+ */
+export type CreateProjectResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: string }
+
+export const createProject = (
+  parent: string,
+  name: string
+): Effect.Effect<CreateProjectResult, AppError> =>
+  httpPostJson("/api/create-project", { parent, name })
