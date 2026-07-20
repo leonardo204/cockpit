@@ -25,20 +25,20 @@ export const APP_NAME = 'Naby';
  */
 export const APP_TITLE = 'Naby (Alpha version)';
 
-/** Separator between the product name and the working directory. An em dash
- *  rather than a hyphen so a project literally named "x - y" stays readable. */
-export const APP_TITLE_SEPARATOR = ' — ';
-
 /**
- * The window title for a given working directory.
+ * The window title. Always just the product name.
  *
- * The directory is kept because it is the only thing distinguishing two windows
- * of the same app, but it comes SECOND — a title bar that reads "anomaly-agent"
- * with no product name is how the pre-fork build lost its identity.
+ * The working directory used to be appended, on the reasoning that it is what
+ * distinguishes two windows of the same app. In practice it read as if the app
+ * were named after whatever project happened to be open, which is the identity
+ * problem the rebrand was meant to fix. The current project is already visible
+ * in the UI; the title bar does not need to repeat it.
+ *
+ * The `cwd` parameter is retained so callers do not have to change, and so the
+ * decision lives in one place if per-window disambiguation is ever wanted back.
  */
-export function appTitleForCwd(cwd?: string | null): string {
-  const dirName = cwd?.split('/').filter(Boolean).pop();
-  return dirName ? `${APP_TITLE}${APP_TITLE_SEPARATOR}${dirName}` : APP_TITLE;
+export function appTitleForCwd(_cwd?: string | null): string {
+  return APP_TITLE;
 }
 
 /** One sentence describing the product, for HTML metadata and the PWA manifest. */
