@@ -6,6 +6,9 @@ import { ProjectSidebar, ProjectInfo } from './ProjectSidebar';
 import { EmptyState } from './EmptyState';
 import { SessionBrowser } from './SessionBrowser';
 import { SettingsModal } from './SettingsModal';
+// F1-06. Renders itself only when the desktop app has no provider key yet;
+// returns null in every other case (including the browser dev server).
+import { NabyOnboardingWizard } from './NabyProviderSetup';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
@@ -555,6 +558,10 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
       {/* Bottom-left session complete notification */}
       <SessionCompleteToastContainer onNavigate={handleSwitchProject} />
+
+      {/* First-run wizard (F1-06). Covers the workspace until a provider key
+          exists or the user skips; re-enterable from Settings → AI provider. */}
+      <NabyOnboardingWizard />
     </div>
   );
 }

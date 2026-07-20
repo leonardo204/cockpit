@@ -60,7 +60,10 @@ import {
   buildToolset,
   makeGate,
   makeModelResolver,
+  NO_CREDENTIAL_MESSAGE,
   Outbox,
+  preflightProvider,
+  resolveProviderCredential,
   runTurn,
   SqliteStore,
   apiKeyCredential,
@@ -111,60 +114,28 @@ function getStore(): Store {
 // Credentials — read ONLY here, at the engine boundary.
 // ---------------------------------------------------------------------------
 
-/** Env var → provider profile. First match wins; NABY_PROVIDER forces one. */
-const PROVIDERS = [
-  {
-    id: 'anthropic',
-    kind: 'anthropic' as const,
-    envVar: 'NABY_ANTHROPIC_API_KEY',
-    defaultModel: 'claude-sonnet-4-5',
-    label: 'Anthropic',
-  },
-  {
-    id: 'openai',
-    kind: 'openai' as const,
-    envVar: 'NABY_OPENAI_API_KEY',
-    defaultModel: 'gpt-4o',
-    label: 'OpenAI',
-  },
-];
-
-type ResolvedProvider = { profile: ProviderProfile; apiKey: string };
-
 /**
- * Pick a configured provider from the environment. Returns null when nothing is
- * configured — preflight turns that into a 400 instead of a mid-run crash.
- * The key is read here and nowhere else; it is passed straight into the
- * runtime's credential resolver and never stored, logged or emitted.
+ * F1-04. Provider selection and key lookup now live in the RUNTIME
+ * (`resolveProviderCredential`), not here. This file keeps its old role — the
+ * one place a key is read — but no longer owns the policy for finding one.
+ *
+ * Why it moved: the resolution order is vault-first, environment-second, and
+ * the vault is `safeStorage` in the Electron main process. The Next server runs
+ * inside that same process, so the runtime reads the key through an in-process
+ * bridge the main process installs; this file never imports `electron`, so the
+ * plain `cockpit` CLI path still works and falls back to the env vars.
+ *
+ * It also made the failure testable. `preflightProvider()` is asserted directly
+ * by spike-f104 with a fake key and no network — which was impossible while the
+ * logic sat in a submodule module that neither the main process nor a spike
+ * driver could import.
  */
-function resolveProvider(requestedModel?: string): ResolvedProvider | null {
-  const forced = process.env.NABY_PROVIDER;
-  const candidates = forced ? PROVIDERS.filter((p) => p.id === forced) : PROVIDERS;
+type ResolvedCredential = { profile: ProviderProfile; apiKey: string };
 
-  for (const p of candidates) {
-    const apiKey = process.env[p.envVar];
-    if (!apiKey) continue;
-    return {
-      apiKey,
-      profile: {
-        id: p.id,
-        label: p.label,
-        kind: p.kind,
-        config: { kind: p.kind },
-        model: requestedModel || process.env.NABY_MODEL || p.defaultModel,
-        // Opaque handle. The runtime's CredentialResolver maps it back to the
-        // secret we captured above; the profile itself never holds one.
-        credentialRef: `env:${p.envVar}`,
-      },
-    };
-  }
-  return null;
+async function resolveProvider(requestedModel?: string): Promise<ResolvedCredential | null> {
+  const resolution = await resolveProviderCredential({ requestedModel });
+  return resolution.ok ? { profile: resolution.value.profile, apiKey: resolution.value.apiKey } : null;
 }
-
-const MISSING_KEY_ERROR =
-  'naby engine: no provider API key configured. Set NABY_ANTHROPIC_API_KEY or ' +
-  'NABY_OPENAI_API_KEY in the server environment (optionally NABY_PROVIDER to ' +
-  'pick one, NABY_MODEL to override the model).';
 
 // ---------------------------------------------------------------------------
 // Injection seam — production wiring by default, overridable for tests.
@@ -204,8 +175,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
       // A test-injected resolver supplies its own model, so no key is needed.
       if (deps.resolveModel) return { ok: true as const };
       const model = typeof params.model === 'string' ? params.model : undefined;
-      if (!resolveProvider(model)) {
-        return { ok: false as const, status: 400, error: MISSING_KEY_ERROR };
+      // The message on the failure path is what a NON-DEVELOPER reads when the
+      // app cannot answer, so it is written in the runtime next to the
+      // resolution logic and points at the settings screen, not at an env var.
+      const result = await preflightProvider({ requestedModel: model });
+      if (!result.ok) {
+        return { ok: false as const, status: result.status, error: result.error };
       }
       return { ok: true as const };
     },
@@ -224,22 +199,26 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // ---- provider + model resolver -----------------------------------
         let resolveModel: ModelResolver;
         let modelLabel: string;
+        // The id of the provider that actually answers. Captured from the
+        // resolution rather than re-derived later, so the ModelSelection can
+        // never name a different provider than the one whose key was used.
+        let providerId = 'injected';
 
         if (deps.resolveModel) {
           resolveModel = deps.resolveModel;
           modelLabel = requestedModel || 'injected-model';
         } else {
-          const resolved = resolveProvider(requestedModel);
+          const resolved = await resolveProvider(requestedModel);
           if (!resolved) {
             // preflight normally catches this; belt-and-braces for the
             // scheduled-task path, which may call run() directly.
-            ctx.emit({ type: 'error', error: MISSING_KEY_ERROR });
+            ctx.emit({ type: 'error', error: NO_CREDENTIAL_MESSAGE });
             ctx.emit({
               type: 'result',
               subtype: 'error_during_execution',
               session_id: sessionId,
               is_error: true,
-              result: MISSING_KEY_ERROR,
+              result: NO_CREDENTIAL_MESSAGE,
               usage: toSdkUsage(undefined),
               total_cost_usd: 0,
               duration_ms: Date.now() - startedAt,
@@ -249,6 +228,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           }
           const { profile, apiKey } = resolved;
           modelLabel = profile.model;
+          providerId = profile.id;
           const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
           // Our ModelResolver takes a ModelSelection; makeModelResolver's
           // signature is (providerId, model?). Bridge the two.
@@ -338,10 +318,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             engine,
             store,
             sessionId,
-            model: {
-              providerId: deps.resolveModel ? 'injected' : resolveProviderId(),
-              model: modelLabel,
-            },
+            model: { providerId, model: modelLabel },
             userText: ctx.prompt ?? '',
             toolSchemas,
             gate,
@@ -478,12 +455,6 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
       // this engine does not write.
     },
   };
-}
-
-/** Provider id for the run's ModelSelection; falls back to the first candidate
- *  so the selection is well-formed even on the (preflight-blocked) no-key path. */
-function resolveProviderId(): string {
-  return process.env.NABY_PROVIDER || resolveProvider()?.profile.id || 'anthropic';
 }
 
 export const nabySpec: EngineSpec = createNabySpec();

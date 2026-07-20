@@ -11,6 +11,10 @@ import {
   saveSettings,
   loadCockpitVersion,
 } from './effect/workspaceClient';
+// F1-04. Provider keys are a desktop-app concern (safeStorage lives in the
+// Electron main process), so the section renders itself as unavailable when
+// `window.naby` is absent — i.e. in the plain browser dev server.
+import { NabyProviderSettings } from './NabyProviderSetup';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -89,8 +93,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-4 space-y-4">
+        {/* Content — scrolls: the AI provider section can expand past the
+            viewport on a short window, and a modal that clips its Save button
+            is worse than one that scrolls. */}
+        <div className="p-4 space-y-4 max-h-[75vh] overflow-y-auto">
           {/* Theme Section */}
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">
@@ -142,6 +148,15 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-border" />
+
+          {/* AI provider Section (F1-04) */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">AI provider</label>
+            <NabyProviderSettings isOpen={isOpen} />
           </div>
 
           {/* Divider */}
