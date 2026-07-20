@@ -2,6 +2,9 @@
 
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+// F1-07. Per-session cost + which engine is answering. Renders nothing until
+// /api/naby responds, so the header is unchanged when the runtime is absent.
+import { NabySessionCost } from './NabySessionCost';
 
 // ============================================
 // Chat Header
@@ -48,6 +51,8 @@ export function ChatHeader({
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {/* F1-07 — per-session cost / usage and the answering engine. */}
+          <NabySessionCost sessionId={sessionId} />
           {/* Show project path */}
           {cwd && (
             <span

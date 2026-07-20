@@ -58,21 +58,30 @@ import { dirname, join } from 'node:path';
 import {
   AiSdkEngine,
   buildToolset,
+  ClaudeAgentSdkEngine,
+  DEV_ENGINE_LABEL,
+  loadMcpToolset,
   makeGate,
   makeModelResolver,
-  NO_CREDENTIAL_MESSAGE,
   Outbox,
-  preflightProvider,
+  preflightEngine,
+  readSettings,
   resolveProviderCredential,
   runTurn,
+  selectEngine,
   SqliteStore,
+  toSelectOptions,
   apiKeyCredential,
+  type Engine,
   type EngineEvent,
+  type Executor,
   type Gate,
   type GateLogEntry,
+  type McpLoadResult,
   type ModelResolver,
   type ProviderProfile,
   type Store,
+  type ToolSchema,
   type Usage,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
@@ -101,7 +110,10 @@ function resolveDbPath(): string {
  *  reopening per run would just churn file handles. */
 let sharedStore: Store | undefined;
 
-function getStore(): Store {
+/** Exported so the `/api/naby` route reads the SAME database this engine writes
+ *  — per-session usage (F1-07) and the MCP registry (F1-08) are only coherent
+ *  if the reader and the writer agree on the file. */
+export function getStore(): Store {
   if (!sharedStore) {
     const path = resolveDbPath();
     mkdirSync(dirname(path), { recursive: true });
@@ -175,13 +187,26 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
       // A test-injected resolver supplies its own model, so no key is needed.
       if (deps.resolveModel) return { ok: true as const };
       const model = typeof params.model === 'string' ? params.model : undefined;
-      // The message on the failure path is what a NON-DEVELOPER reads when the
-      // app cannot answer, so it is written in the runtime next to the
-      // resolution logic and points at the settings screen, not at an env var.
-      const result = await preflightProvider({ requestedModel: model });
+      // WHICH ENGINE WILL ANSWER — not just "is there a key". Since the dev
+      // engine can answer with no key at all, "no API key configured" is no
+      // longer the same question as "this app cannot reply to you", and
+      // preflight has to ask the second one.
+      //
+      // Both the success and failure strings are written in the runtime, next
+      // to the selection logic, for a NON-DEVELOPER: they name the thing to
+      // click, not the env var to export.
+      const result = await preflightEngine({
+        requestedModel: model,
+        ...toSelectOptions(readSettings(getStore())),
+      });
       if (!result.ok) {
         return { ok: false as const, status: result.status, error: result.error };
       }
+      // Logged rather than returned: `preflight`'s success shape carries no
+      // message field, and inventing one would be a change to the shell's
+      // engine interface (i.e. a bigger fork diff) for something the user can
+      // already see in the chat header via /api/naby.
+      console.log(`[engine:naby] preflight: ${result.summary}`);
       return { ok: true as const };
     },
 
@@ -196,29 +221,62 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const requestedModel =
           typeof ctx.params.model === 'string' ? ctx.params.model : undefined;
 
-        // ---- provider + model resolver -----------------------------------
-        let resolveModel: ModelResolver;
+        // ---- which engine answers, and on what ----------------------------
+        //
+        // TWO BACKENDS BEHIND ONE SEAM (contract §2). `AiSdkEngine` needs a
+        // provider API key; `ClaudeAgentSdkEngine` needs none — it runs on the
+        // Claude sign-in already on this computer. The runtime's `selectEngine`
+        // owns the policy (explicit NABY_ENGINE first, then a configured
+        // provider, then the dev engine); this file only builds what it is told
+        // to build, so the decision stays testable outside the submodule.
+        //
+        // The dev engine is only ever REACHABLE in an unpackaged build:
+        // electron-builder excludes the Agent SDK, and the runtime imports it
+        // lazily, so in a shipped app `selectEngine` never picks it and nothing
+        // here loads it.
+        let engine: Engine;
+        // TWO DIFFERENT THINGS, deliberately not one variable:
+        //   modelLabel     — for display (the init event the UI renders).
+        //   modelForEngine — the FUNCTIONAL model id handed to the engine, or
+        //                    undefined to mean "use your own default".
+        // Collapsing them is a real bug, not a style question: the dev engine
+        // passes `ModelSelection.model` straight to the Agent SDK's `model`
+        // option, so a friendly label like "claude (local sign-in)" is sent as
+        // a model id and the SDK rejects the turn with "there's an issue with
+        // the selected model". A label must never reach a functional field.
         let modelLabel: string;
+        let modelForEngine: string | undefined;
         // The id of the provider that actually answers. Captured from the
         // resolution rather than re-derived later, so the ModelSelection can
         // never name a different provider than the one whose key was used.
         let providerId = 'injected';
+        let engineId = 'ai-sdk';
+        let costBasis: 'metered' | 'subscription' = 'metered';
 
         if (deps.resolveModel) {
-          resolveModel = deps.resolveModel;
+          // A test-injected resolver supplies its own model, so no key and no
+          // engine selection are needed — this is the SPIKE-02 seam.
+          const resolveModel: ModelResolver = deps.resolveModel;
           modelLabel = requestedModel || 'injected-model';
+          modelForEngine = modelLabel;
+          engine = new AiSdkEngine({ resolveModel });
         } else {
-          const resolved = await resolveProvider(requestedModel);
-          if (!resolved) {
+          // The user's stored choice (F1-08) rides in as options, so the
+          // selection policy itself stays in the runtime and testable.
+          const selection = await selectEngine({
+            requestedModel,
+            ...toSelectOptions(readSettings(store)),
+          });
+          if (!selection.ok) {
             // preflight normally catches this; belt-and-braces for the
             // scheduled-task path, which may call run() directly.
-            ctx.emit({ type: 'error', error: NO_CREDENTIAL_MESSAGE });
+            ctx.emit({ type: 'error', error: selection.message });
             ctx.emit({
               type: 'result',
               subtype: 'error_during_execution',
               session_id: sessionId,
               is_error: true,
-              result: NO_CREDENTIAL_MESSAGE,
+              result: selection.message,
               usage: toSdkUsage(undefined),
               total_cost_usd: 0,
               duration_ms: Date.now() - startedAt,
@@ -226,13 +284,51 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             });
             return;
           }
-          const { profile, apiKey } = resolved;
-          modelLabel = profile.model;
-          providerId = profile.id;
-          const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
-          // Our ModelResolver takes a ModelSelection; makeModelResolver's
-          // signature is (providerId, model?). Bridge the two.
-          resolveModel = (selection) => base(selection.providerId, selection.model);
+
+          if (selection.engine === 'dev-claude') {
+            // No key is read on this path AT ALL — that is the point of it.
+            engine = new ClaudeAgentSdkEngine();
+            engineId = 'dev-claude';
+            costBasis = 'subscription';
+            providerId = 'dev-claude';
+            // May be undefined — that means "the Agent SDK picks its own
+            // default", which is the normal case and must stay undefined
+            // rather than becoming a made-up string.
+            modelForEngine = selection.model ?? requestedModel;
+            modelLabel = modelForEngine ?? 'claude (local sign-in)';
+            console.log(`[engine:naby] ${selection.summary}`);
+          } else {
+            const resolved = await resolveProvider(requestedModel);
+            if (!resolved) {
+              // selectEngine said a credential resolves, so this is a race
+              // (a key cleared between the two calls), not a normal path.
+              const message =
+                'The provider key changed while this message was being sent. Please try again.';
+              ctx.emit({ type: 'error', error: message });
+              ctx.emit({
+                type: 'result',
+                subtype: 'error_during_execution',
+                session_id: sessionId,
+                is_error: true,
+                result: message,
+                usage: toSdkUsage(undefined),
+                total_cost_usd: 0,
+                duration_ms: Date.now() - startedAt,
+                num_turns: 0,
+              });
+              return;
+            }
+            const { profile, apiKey } = resolved;
+            modelLabel = profile.model;
+            modelForEngine = profile.model;
+            providerId = profile.id;
+            const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
+            // Our ModelResolver takes a ModelSelection; makeModelResolver's
+            // signature is (providerId, model?). Bridge the two.
+            engine = new AiSdkEngine({
+              resolveModel: (selectionArg) => base(selectionArg.providerId, selectionArg.model),
+            });
+          }
         }
 
         // ---- runtime construction ----------------------------------------
@@ -256,13 +352,42 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         };
 
         const outbox = new Outbox();
-        const { toolSchemas, executors } = buildToolset(outbox);
+        const builtin = buildToolset(outbox);
 
-        // Session framing rides on EngineRunInput.system (contract §2), passed
-        // through runTurn below. It is NOT a message and NOT an engine-level
-        // option workaround — the runtime carries it on its own field and each
-        // engine forwards it to its provider's dedicated system slot.
-        const engine = new AiSdkEngine({ resolveModel });
+        // ---- MCP tools (F1-08) -------------------------------------------
+        //
+        // The registry is provider-independent (contract §5) and lives in the
+        // same store as everything else, so the SAME servers are loaded
+        // whichever engine was selected above.
+        //
+        // These come back as execute-less schemas plus runtime Executors — the
+        // runtime loads them with `listTools()` and dispatches with
+        // `callTool()`, never AI SDK's auto-executing `tools()`. That is what
+        // puts an MCP call on exactly the same path as a built-in one: through
+        // the gate below, which runs before ANY executor.
+        //
+        // A server that is down yields a failure entry, not an exception — one
+        // unreachable MCP server must not stop the user from chatting.
+        let mcp: McpLoadResult | undefined;
+        try {
+          mcp = await loadMcpToolset(store.listMcpEntries());
+          for (const failure of mcp.failures) {
+            console.warn(`[engine:naby] MCP server "${failure.name}" unavailable: ${failure.message}`);
+          }
+        } catch (e) {
+          console.warn(
+            `[engine:naby] MCP registry could not be loaded: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+
+        const toolSchemas: ToolSchema[] = [
+          ...builtin.toolSchemas,
+          ...(mcp?.toolSchemas ?? []),
+        ];
+        const executors: Record<string, Executor> = {
+          ...builtin.executors,
+          ...(mcp?.executors ?? {}),
+        };
 
         // ---- init --------------------------------------------------------
         ctx.rekey(sessionId);
@@ -273,7 +398,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           model: modelLabel,
           cwd: ctx.cwd,
           tools: toolSchemas.map((t) => t.name),
-          mcp_servers: [],
+          // F1-08. What actually connected — a server that failed to start is
+          // absent here AND logged, so "my MCP server is not working" is
+          // visible rather than silent.
+          mcp_servers: (mcp?.connections ?? []).map((c) => ({
+            name: c.entry.name,
+            status: 'connected',
+          })),
           permissionMode: 'default',
           slash_commands: [],
           apiKeySource: 'env',
@@ -318,12 +449,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             engine,
             store,
             sessionId,
-            model: { providerId, model: modelLabel },
+            model: { providerId, ...(modelForEngine ? { model: modelForEngine } : {}) },
             userText: ctx.prompt ?? '',
             toolSchemas,
             gate,
             executors,
             signal: ctx.signal,
+            // F1-07. runTurn records one usage row per answered turn. It cannot
+            // infer either of these — `Engine` is an interface and says nothing
+            // about which backend implements it or who pays for it — so the
+            // composition root, which chose the engine, supplies them.
+            engineId,
+            costBasis,
             ...(ctx.cwd
               ? {
                   system: `You are running inside the naby shell. Working directory: ${ctx.cwd}`,
@@ -426,6 +563,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         } catch (e) {
           errorMessage = e instanceof Error ? e.message : String(e);
           ctx.emit({ type: 'error', error: errorMessage, session_id: sessionId });
+        } finally {
+          // Every stdio MCP server is a CHILD PROCESS. Not closing them leaks
+          // one process per chat turn, which on a long-lived desktop server is
+          // a slow-motion resource exhaustion bug rather than a tidiness issue.
+          // `finally` so it happens on the abort and throw paths too.
+          await mcp?.closeAll();
         }
 
         // The stream can end without a result — an abort mid-iteration, or a

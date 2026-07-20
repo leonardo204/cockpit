@@ -347,10 +347,16 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
 
   if (unavailable) {
     return (
-      <p className="text-xs text-muted-foreground">
-        Provider keys are managed by the Naby desktop app. Running in a browser, keys come from the
-        environment instead.
-      </p>
+      <div className="space-y-4">
+        <p className="text-xs text-muted-foreground">
+          Provider keys are managed by the Naby desktop app. Running in a browser, keys come from
+          the environment instead.
+        </p>
+        {/* Engine choice and MCP servers are runtime state, not keychain state,
+            so they work here even without the desktop bridge. */}
+        <NabyEngineSelector isOpen={isOpen} />
+        <NabyMcpServers isOpen={isOpen} />
+      </div>
     );
   }
   if (!data) return <p className="text-xs text-muted-foreground">Loading…</p>;
@@ -358,6 +364,8 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
   return (
     <div className="space-y-2">
       <SecurityBanner security={data.security} />
+      <NabyEngineSelector isOpen={isOpen} />
+      <p className="text-xs font-medium text-foreground pt-2">API keys</p>
       {data.providers.map((row) => (
         <div key={row.kind} className="border border-border rounded">
           <button
@@ -380,6 +388,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
           )}
         </div>
       ))}
+      <NabyMcpServers isOpen={isOpen} />
     </div>
   );
 }
@@ -500,6 +509,390 @@ export function NabyOnboardingWizard() {
           </span>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// F1-08 — which engine/provider answers
+// ---------------------------------------------------------------------------
+//
+// THIS TALKS TO /api/naby, NOT TO THE PRELOAD BRIDGE, and the split is by
+// sensitivity rather than convenience: keys go over IPC to the Electron main
+// process because they are secrets; "which provider should answer" is ordinary
+// runtime state owned by the Next server, and widening the preload bridge for
+// non-secret data would enlarge the one surface F1-04 deliberately kept narrow.
+//
+// The dev-engine option is only OFFERED when `devEngineAvailable` says the
+// Agent SDK actually resolves. In a packaged build it never does (design §3.3
+// — electron-builder excludes it), so a shipped app simply does not show a
+// choice that could not work.
+
+type NabyEngineState = {
+  engine: { ok: boolean; id?: string; costBasis?: string; summary: string };
+  settings: { enginePreference?: string; selectedProvider?: string };
+  devEngineAvailable: boolean;
+  providers: { id: string; label: string; model: string; ready: boolean }[];
+  mcp: McpRow[];
+};
+
+async function nabyGet(): Promise<NabyEngineState | null> {
+  try {
+    const res = await fetch('/api/naby');
+    if (!res.ok) return null;
+    return (await res.json()) as NabyEngineState;
+  } catch {
+    return null;
+  }
+}
+
+async function nabyPost(body: unknown): Promise<{ ok: boolean; error?: string; message?: string }> {
+  try {
+    const res = await fetch('/api/naby', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { error?: string; message?: string }
+      | null;
+    if (!res.ok) return { ok: false, error: json?.error ?? `request failed (${res.status})` };
+    return { ok: true, ...(json?.message ? { message: json.message } : {}) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
+  const [state, setState] = useState<NabyEngineState | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    setState(await nabyGet());
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) void reload();
+  }, [isOpen, reload]);
+
+  const choose = useCallback(
+    async (enginePreference: string, selectedProvider: string) => {
+      setBusy(true);
+      try {
+        await nabyPost({ action: 'settings.set', enginePreference, selectedProvider });
+        await reload();
+      } finally {
+        setBusy(false);
+      }
+    },
+    [reload],
+  );
+
+  if (!state) return null;
+
+  const pref = state.settings.enginePreference ?? '';
+  const selectedProvider = state.settings.selectedProvider ?? '';
+
+  // "Automatic" is first and is the default, because it is right for almost
+  // everyone: a configured provider answers, and if none is configured the dev
+  // engine picks up the slack rather than the app being unusable.
+  const options: { id: string; label: string; hint: string; onPick: () => void; active: boolean }[] =
+    [
+      {
+        id: 'auto',
+        label: 'Automatic',
+        hint: 'Use a provider you have set up; otherwise the development model, if available.',
+        onPick: () => void choose('', ''),
+        active: pref === '' && selectedProvider === '',
+      },
+    ];
+
+  if (state.devEngineAvailable) {
+    options.push({
+      id: 'dev-claude',
+      label: 'Development model — no API key needed',
+      hint: 'Uses the Claude sign-in already on this computer. No per-message charge. Development builds only.',
+      onPick: () => void choose('dev-claude', ''),
+      active: pref === 'dev-claude',
+    });
+  }
+
+  for (const p of state.providers) {
+    options.push({
+      id: p.id,
+      label: p.label,
+      hint: p.ready
+        ? `${p.model} — billed to your ${p.label} account.`
+        : `${p.model} — no API key saved yet, so this cannot answer.`,
+      onPick: () => void choose('ai-sdk', p.id),
+      active: pref === 'ai-sdk' && selectedProvider === p.id,
+    });
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-foreground">Which model answers</p>
+      <div className="space-y-1">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            onClick={o.onPick}
+            disabled={busy}
+            className={`w-full text-left px-2 py-1.5 rounded border transition-colors ${
+              o.active
+                ? 'border-brand bg-brand/5'
+                : 'border-border hover:border-brand/50 hover:bg-accent/40'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-foreground">{o.label}</span>
+              {o.active && <span className="text-xs text-brand">selected</span>}
+            </div>
+            <p className="text-xs text-muted-foreground">{o.hint}</p>
+          </button>
+        ))}
+      </div>
+      {/* The runtime's own sentence about what will actually happen — kept as
+          the single source of truth rather than re-derived in the UI. */}
+      <p className={`text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-amber-500'}`}>
+        {state.engine.summary}
+      </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// F1-08 — MCP server CRUD
+// ---------------------------------------------------------------------------
+//
+// The registry is PROVIDER-INDEPENDENT (contract §5): these servers are the
+// same whichever model was chosen above, which is why this section sits beside
+// the provider choice rather than inside it.
+//
+// SECRETS: `env` / `headers` values are never sent back by the API — only their
+// KEY NAMES (see redactEntry in api/naby.ts). So this form can add them but
+// cannot display them, exactly like the API-key field above.
+//
+// "Test" connects and lists tools. It deliberately does not CALL a tool:
+// connecting is safe, invoking is the thing the gate exists to mediate.
+
+type McpRow = {
+  name: string;
+  transport: 'stdio' | 'http' | 'sse';
+  command?: string;
+  args?: string[];
+  url?: string;
+  timeoutMs?: number;
+  envKeys?: string[];
+  headerKeys?: string[];
+};
+
+function McpAddForm({ onAdded }: { onAdded: () => void }) {
+  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
+  const [name, setName] = useState('');
+  const [command, setCommand] = useState('');
+  const [args, setArgs] = useState('');
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const entry =
+        transport === 'stdio'
+          ? {
+              name: name.trim(),
+              transport,
+              command: command.trim(),
+              // Split on whitespace: the common case is `-y some-package`, and
+              // a full shell-quoting parser here would be a lie anyway since
+              // the command is spawned without a shell.
+              ...(args.trim() ? { args: args.trim().split(/\s+/) } : {}),
+            }
+          : { name: name.trim(), transport, url: url.trim() };
+      const res = await nabyPost({ action: 'mcp.upsert', entry });
+      if (!res.ok) {
+        setError(res.error ?? 'could not save');
+        return;
+      }
+      setName('');
+      setCommand('');
+      setArgs('');
+      setUrl('');
+      onAdded();
+    } finally {
+      setBusy(false);
+    }
+  }, [args, command, name, onAdded, transport, url]);
+
+  const canSave =
+    name.trim().length > 0 &&
+    (transport === 'stdio' ? command.trim().length > 0 : url.trim().length > 0);
+
+  return (
+    <div className="space-y-2 border border-border rounded p-2">
+      <div className="flex gap-1">
+        {(['stdio', 'http', 'sse'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTransport(t)}
+            className={`px-2 py-1 text-xs rounded border ${
+              transport === t ? 'border-brand text-brand' : 'border-border text-muted-foreground'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Name, e.g. filesystem"
+        className={inputClass}
+      />
+      {transport === 'stdio' ? (
+        <>
+          <input
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            placeholder="Command, e.g. npx"
+            className={inputClass}
+          />
+          <input
+            value={args}
+            onChange={(e) => setArgs(e.target.value)}
+            placeholder="Arguments, e.g. -y @modelcontextprotocol/server-filesystem /tmp"
+            className={inputClass}
+          />
+        </>
+      ) : (
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://example.com/mcp"
+          className={inputClass}
+        />
+      )}
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <button
+        onClick={() => void submit()}
+        disabled={!canSave || busy}
+        className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
+      >
+        {busy ? 'Saving…' : 'Add server'}
+      </button>
+    </div>
+  );
+}
+
+export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
+  const [rows, setRows] = useState<McpRow[] | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [status, setStatus] = useState<Record<string, string>>({});
+
+  const reload = useCallback(async () => {
+    const state = await nabyGet();
+    setRows(state?.mcp ?? []);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) void reload();
+  }, [isOpen, reload]);
+
+  const test = useCallback(async (serverName: string) => {
+    setStatus((prev) => ({ ...prev, [serverName]: 'Connecting…' }));
+    const res = await nabyPost({ action: 'mcp.test', name: serverName });
+    setStatus((prev) => ({
+      ...prev,
+      [serverName]: res.ok ? (res.message ?? 'Connected.') : `Failed: ${res.error}`,
+    }));
+  }, []);
+
+  const remove = useCallback(
+    async (serverName: string) => {
+      await nabyPost({ action: 'mcp.remove', name: serverName });
+      await reload();
+    },
+    [reload],
+  );
+
+  if (!rows) return null;
+
+  return (
+    <div className="space-y-2 pt-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-foreground">MCP servers</p>
+        <button
+          onClick={() => setAdding((v) => !v)}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          {adding ? 'cancel' : '+ add'}
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Tools from these servers are offered to the model, and every call one makes is checked by
+        the approval gate before it runs — the same as Naby&apos;s own tools.
+      </p>
+
+      {adding && (
+        <McpAddForm
+          onAdded={() => {
+            setAdding(false);
+            void reload();
+          }}
+        />
+      )}
+
+      {rows.length === 0 && !adding && (
+        <p className="text-xs text-muted-foreground">No MCP servers configured.</p>
+      )}
+
+      {rows.map((row) => (
+        <div key={row.name} className="border border-border rounded px-2 py-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm text-foreground truncate">{row.name}</p>
+              <p className="text-xs text-muted-foreground truncate">
+                {row.transport === 'stdio'
+                  ? `${row.command ?? ''} ${(row.args ?? []).join(' ')}`.trim()
+                  : (row.url ?? '')}
+              </p>
+              {(row.envKeys?.length || row.headerKeys?.length) && (
+                <p className="text-xs text-muted-foreground">
+                  {row.envKeys?.length ? `env: ${row.envKeys.join(', ')}` : ''}
+                  {row.headerKeys?.length ? `headers: ${row.headerKeys.join(', ')}` : ''}
+                  {' (values hidden)'}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => void test(row.name)}
+                className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
+              >
+                Test
+              </button>
+              <button
+                onClick={() => void remove(row.name)}
+                className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-red-500"
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+          {status[row.name] && (
+            <p
+              className={`mt-1 text-xs ${
+                status[row.name]?.startsWith('Failed') ? 'text-red-500' : 'text-green-600 dark:text-green-400'
+              }`}
+            >
+              {status[row.name]}
+            </p>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
