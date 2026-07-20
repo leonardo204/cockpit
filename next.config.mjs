@@ -64,7 +64,6 @@ const nextConfig = {
   },
   // 这些包不让 webpack 打包，运行时从 node_modules 加载
   // claude-agent-sdk: 内部通过 __dirname 定位 cli.js，打包会把路径硬编码为构建机路径
-  // node-pty: 原生模块，不能被 webpack 打包
   // web-tree-sitter: 它的 ESM 包对 Node 环境会做 `await import("module")`
   //   来拿 createRequire。一旦被 webpack 打包，"module" 走 webpack 的 chunk
   //   loader (__webpack_require__.t with mode 19)，对 Node built-in 的
@@ -79,7 +78,6 @@ const nextConfig = {
   //   externalize 后由 Node 直接 ESM 加载，import.meta.url 是真实文件路径。
   serverExternalPackages: [
     '@anthropic-ai/claude-agent-sdk',
-    'node-pty',
     '@vscode/ripgrep',
     // Pure-JS but Node-only (uses node crypto/https); keep it out of any bundle.
     'web-push',

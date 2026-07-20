@@ -110,14 +110,12 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
   const {
     isLoading,
     apiRetryInfo,
-    ptyNotice,
     handleSend,
     handleStop,
   } = useChatStream(messages, setMessages, {
     sessionId,
     cwd,
     engine,
-    chatMode: 'sdk',
     planMode: false,
     ollamaModel: resolved.ollamaModel,
     deepseekModel: resolved.deepseekModel,
@@ -188,7 +186,6 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
           sessionId={sessionId}
           engine={engine}
           apiRetryInfo={apiRetryInfo}
-          ptyNotice={ptyNotice}
           hasMoreHistory={hasMoreHistory}
           isLoadingMore={isLoadingMore}
           onLoadMore={loadMoreHistory}

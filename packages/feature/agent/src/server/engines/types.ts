@@ -19,10 +19,7 @@ export interface DispatchParams {
   engine?: string;
   model?: string;
   // claude-only (other runners ignore)
-  mode?: string;
   permissionMode?: string;
-  ptyCols?: number;
-  ptyRows?: number;
 }
 
 /** Dispatch result. The run is detached (fire-and-forget); on success the caller gets the

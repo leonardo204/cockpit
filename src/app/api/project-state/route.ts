@@ -14,13 +14,19 @@ import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
 import { broadcastToGlobalState } from "../../../lib/globalStateBroadcast"
 
+/**
+ * Persisted shape. Session files written by older builds may still contain a `chatModes`
+ * key (the removed SDK/PTY execution-mode picker). That is safe: reads go through
+ * `readJsonFile`, a plain JSON.parse + cast with no runtime validation, so an unknown key
+ * is carried through untouched and never read; and the POST handler rebuilds `next`
+ * field-by-field, so the stale key is simply dropped the next time the file is written.
+ */
 interface ProjectState {
   sessions: string[]
   activeSessionId?: string
   engines?: Record<string, string>
   ollamaModels?: Record<string, string>
   deepseekModels?: Record<string, string>
-  chatModes?: Record<string, string>
   planModes?: Record<string, boolean>
 }
 
@@ -89,7 +95,6 @@ export const POST = handler((req) =>
           const engines = merge(existing.engines, body.engines)
           const ollamaModels = merge(existing.ollamaModels, body.ollamaModels)
           const deepseekModels = merge(existing.deepseekModels, body.deepseekModels)
-          const chatModes = merge(existing.chatModes, body.chatModes)
           const planModes = merge<boolean>(existing.planModes, body.planModes)
           const active = body.activeSessionId ?? existing.activeSessionId
           const next: ProjectState = {
@@ -98,7 +103,6 @@ export const POST = handler((req) =>
             ...(Object.keys(engines).length ? { engines } : {}),
             ...(Object.keys(ollamaModels).length ? { ollamaModels } : {}),
             ...(Object.keys(deepseekModels).length ? { deepseekModels } : {}),
-            ...(Object.keys(chatModes).length ? { chatModes } : {}),
             ...(Object.keys(planModes).length ? { planModes } : {}),
           }
           await writeJsonFile(filePath, next)

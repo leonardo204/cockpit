@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { usePageVisible, useWebSocket } from '@cockpit/shared-ui';
-import type { ChatEngine, DeepseekModel, ChatMode } from '@cockpit/feature-agent';
+import type { ChatEngine, DeepseekModel } from '@cockpit/feature-agent';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
 import { Effect } from 'effect';
@@ -27,7 +27,6 @@ export interface TabInfo {
   engine?: ChatEngine;
   ollamaModel?: string;
   deepseekModel?: DeepseekModel;
-  chatMode?: ChatMode;
   planMode?: boolean;
 }
 
@@ -112,7 +111,9 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         const savedEngines: Record<string, string> = data.engines || {};
         const savedOllamaModels: Record<string, string> = data.ollamaModels || {};
         const savedDeepseekModels: Record<string, string> = data.deepseekModels || {};
-        const savedChatModes: Record<string, string> = data.chatModes || {};
+        // NOTE: persisted session state may still carry a `chatModes` key written by
+        // older builds (the removed SDK/PTY picker). It is simply not read — unknown
+        // keys are ignored on load and dropped on the next save.
         const savedPlanModes: Record<string, boolean> = data.planModes || {};
 
         // Merge URL sessionId with sessions in session.json (deduplicate)
@@ -130,7 +131,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
             engine: (savedEngines[sessionId] as ChatEngine) || undefined,
             ollamaModel: savedOllamaModels[sessionId] || undefined,
             deepseekModel: (savedDeepseekModels[sessionId] as DeepseekModel) || undefined,
-            chatMode: (savedChatModes[sessionId] as ChatMode) || undefined,
             planMode: savedPlanModes[sessionId] || undefined,
           }));
 
@@ -173,7 +173,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     const engines: Record<string, string> = {};
     const ollamaModels: Record<string, string> = {};
     const deepseekModels: Record<string, string> = {};
-    const chatModes: Record<string, string> = {};
     const planModes: Record<string, boolean> = {};
     for (const tab of tabs) {
       if (tab.sessionId && tab.engine) {
@@ -192,7 +191,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
       // survives → re-applied on reload). Sessions open only in OTHER tabs aren't
       // in this payload, so the union still preserves their settings.
       if (tab.sessionId) {
-        chatModes[tab.sessionId] = tab.chatMode === 'pty' ? 'pty' : 'sdk';
         planModes[tab.sessionId] = !!tab.planMode;
       }
     }
@@ -213,7 +211,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         engines,
         ollamaModels,
         deepseekModels,
-        chatModes,
         planModes,
         ...(closedSessionIds.length ? { closedSessionIds } : {}),
       }).pipe(
@@ -260,7 +257,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
       const engines = (data.engines || {}) as Record<string, string>;
       const ollamaModels = (data.ollamaModels || {}) as Record<string, string>;
       const deepseekModels = (data.deepseekModels || {}) as Record<string, string>;
-      const chatModes = (data.chatModes || {}) as Record<string, string>;
       const planModes = (data.planModes || {}) as Record<string, boolean>;
 
       const prev = tabsRef.current;
@@ -282,7 +278,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         engine: (engines[sid] as ChatEngine) || undefined,
         ollamaModel: ollamaModels[sid] || undefined,
         deepseekModel: (deepseekModels[sid] as DeepseekModel) || undefined,
-        chatMode: (chatModes[sid] as ChatMode) || undefined,
         planMode: planModes[sid] || undefined,
       }));
       let next = [...kept, ...added];
@@ -447,15 +442,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     );
   }, []);
 
-  // Update execution mode (sdk/pty) for a tab
-  const updateTabChatMode = useCallback((tabId: string, chatMode: ChatMode) => {
-    setTabs((prev) =>
-      prev.map((tab) =>
-        tab.id === tabId ? { ...tab, chatMode } : tab
-      )
-    );
-  }, []);
-
   // Update plan mode (read-only planning) for a tab
   const updateTabPlanMode = useCallback((tabId: string, planMode: boolean) => {
     setTabs((prev) =>
@@ -599,7 +585,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     updateTabState,
     updateTabOllamaModel,
     updateTabDeepseekModel,
-    updateTabChatMode,
     updateTabPlanMode,
 
     // Drag operations

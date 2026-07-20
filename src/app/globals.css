@@ -1,5 +1,7 @@
 @import "tailwindcss";
-@import "@xterm/xterm/css/xterm.css";
+/* The xterm.css import lived here for the PTY execution mode's floating terminal.
+   That mode (and its XtermFloatingWindow) is gone, and nothing else renders an
+   xterm surface, so the stylesheet and the @xterm/xterm dependency went with it. */
 
 /* Stop compositor-level scroll chaining from propagating across frames to the parent frame */
 html, body {

@@ -19,8 +19,7 @@ import { useChatHistory } from './useChatHistory';
 import { useChatStream } from './useChatStream';
 import { MessageList, MessageListHandle } from './MessageList';
 import { ChatInput } from './ChatInput';
-import { XtermFloatingWindow, XtermFloatingHandle } from './XtermFloatingWindow';
-import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, ChatMode, ToolCallInfo } from './types';
+import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
@@ -39,8 +38,6 @@ interface ChatProps {
   onOllamaModelChange?: (model: string) => void;
   deepseekModel?: DeepseekModel;
   onDeepseekModelChange?: (model: DeepseekModel) => void;
-  chatMode?: ChatMode;
-  onChatModeChange?: (chatMode: ChatMode) => void;
   planMode?: boolean;
   onPlanModeChange?: (planMode: boolean) => void;
   hideHeader?: boolean;
@@ -74,7 +71,7 @@ interface ChatProps {
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode: chatModeProp, onChatModeChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -83,17 +80,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
   const [isUserMessagesOpen, setIsUserMessagesOpen] = useState(false);
   const [historyTokenUsage, setHistoryTokenUsage] = useState<TokenUsage | null>(null);
-  // Execution mode (per-tab): controlled by TabInfo.chatMode (persisted); falls back to local state when no prop (standalone use)
-  // Default 'sdk' (Claude Agent SDK) — tabs without an explicit choice run in SDK mode
-  const [localChatMode, setLocalChatMode] = useState<ChatMode>('sdk');
-  const chatMode = chatModeProp ?? localChatMode;
-  const setChatMode = useCallback((m: ChatMode) => {
-    setLocalChatMode(m);
-    onChatModeChange?.(m);
-  }, [onChatModeChange]);
   // Plan mode (per-tab): controlled by TabInfo.planMode (persisted); falls back to
   // local state when no prop (standalone use). Read-only exploration that produces a
-  // plan without editing — only meaningful in SDK mode on a claude engine.
+  // plan without editing — only meaningful on a claude engine.
   const [localPlanMode, setLocalPlanMode] = useState(false);
   const planMode = planModeProp ?? localPlanMode;
   const setPlanMode = useCallback((p: boolean) => {
@@ -101,21 +90,21 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     onPlanModeChange?.(p);
   }, [onPlanModeChange]);
   const isClaudeEngine = !engine || engine === 'claude' || engine === 'claude2';
-  // PTY floating window: receives raw terminal output
-  const ptyWindowRef = useRef<XtermFloatingHandle>(null);
-  const handlePtyOutput = useCallback((data: string) => {
-    ptyWindowRef.current?.write(data);
-  }, []);
-  // Manual fallback: floating-window keys → written into the running PTY's stdin
-  const handlePtyInput = useCallback((data: string) => {
-    if (!sessionId) return;
-    fetch('/api/chat/pty-input', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, data }),
-    }).catch(() => {});
-  }, [sessionId]);
-  const prevPtyLoadingRef = useRef(false);
+  // Read-only engine identity for the status line. Derived from what the client already
+  // knows (the `engine` prop + the per-engine model the pickers own). The server's
+  // `system/init` event does carry a richer `model` label and the run's `providerId`, but
+  // neither is captured client-side today, and surfacing them would mean adding a new
+  // client-visible field — out of scope for a status indicator.
+  const engineLabel = useMemo(() => {
+    switch (engine) {
+      case 'claude2': return 'Claude Agent SDK (claude2)';
+      case 'codex': return 'Codex';
+      case 'kimi': return 'Kimi';
+      case 'ollama': return ollamaModel ? `Ollama · ${ollamaModel.replace(/:latest$/, '')}` : 'Ollama';
+      case 'deepseek': return deepseekModel ? `DeepSeek · ${deepseekModel}` : 'DeepSeek';
+      default: return 'Claude Agent SDK';
+    }
+  }, [engine, ollamaModel, deepseekModel]);
   const messageListRef = useRef<MessageListHandle>(null);
   const handleSendRef = useRef<((message: string) => void) | null>(null);
 
@@ -144,20 +133,17 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     tokenUsage: streamTokenUsage,
     rateLimitInfo,
     apiRetryInfo,
-    ptyNotice,
     handleSend,
     handleStop,
   } = useChatStream(messages, setMessages, {
     sessionId,
     cwd: initialCwd,
     engine,
-    chatMode,
     planMode,
     ollamaModel,
     deepseekModel,
     onSessionId: setSessionId,
     onFetchTitle: fetchSessionTitle,
-    onPtyOutput: handlePtyOutput,
     onRunComplete: () => reconcileFromDiskRef.current?.(),
   });
 
@@ -166,12 +152,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     const firstLine = content.split('\n')[0];
 
     // /plan [task] — client-side plan-mode control (mirrors Claude Code's /plan).
-    // Consumed locally; never sent to the agent as literal text. Only meaningful in
-    // SDK mode on a claude engine (where the plan checkbox lives).
+    // Consumed locally; never sent to the agent as literal text. Only meaningful on a
+    // claude engine (where the plan checkbox lives).
     //   /plan        → enable plan mode (no send)
     //   /plan off    → disable plan mode (no send; cockpit convenience — Claude Code uses Shift+Tab)
     //   /plan <task> → enable plan mode AND send <task> (runs in plan mode)
-    if (isClaudeEngine && chatMode === 'sdk') {
+    if (isClaudeEngine) {
       const planCmd = /^\/plan(?:\s+([\s\S]*))?$/.exec(content.trim());
       if (planCmd) {
         const rest = (planCmd[1] ?? '').trim();
@@ -192,7 +178,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     }
 
     handleSend(content, images);
-  }, [handleSend, initialCwd, t, isClaudeEngine, chatMode, setPlanMode]);
+  }, [handleSend, initialCwd, t, isClaudeEngine, setPlanMode]);
 
   // Plan-card "approve & run": the user's approval for the presented plan. Persistent off —
   // the Plan toggle visibly turns off and stays off for subsequent turns (mirrors native
@@ -292,14 +278,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     if (isLoading || liveRunning) return;
     loadHistoryByCwdAndSessionId(initialCwd, sid, true, 10, undefined, true);
   }, [refreshSignal, sessionId, loadedSessionId, initialCwd, isLoading, liveRunning, loadHistoryByCwdAndSessionId]);
-
-  // PTY floating window: clear the screen at the start of a new turn (isLoading rising edge)
-  useEffect(() => {
-    if (chatMode === 'pty' && isLoading && !prevPtyLoadingRef.current) {
-      ptyWindowRef.current?.clear();
-    }
-    prevPtyLoadingRef.current = isLoading;
-  }, [isLoading, chatMode]);
 
   // Merge token usage: stream takes priority, fallback to history
   const tokenUsage = streamTokenUsage || historyTokenUsage;
@@ -470,59 +448,44 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
           />
         )}
 
-        {/* Execution mode (claude/claude2 only): SDK ↔ PTY (subscription billing). Switchable dynamically at any time.
-            After switching to PTY, subsequent messages resume via `claude -r`; if the session contains SDK edit history,
-            upstream rendering may crash — covered by the driver's crash detection (errors instead of hanging), and the
-            user can switch back to SDK. */}
+        {/* Engine status (claude/claude2 only). This slot used to hold an "Execution mode"
+            SDK ↔ PTY picker. The PTY option spawned `claude --dangerously-skip-permissions`,
+            a second execution path that bypassed the approval gate, so it was removed rather
+            than repaired — there is now exactly one path and therefore nothing to pick. What
+            remains is READ-ONLY status: which engine is answering. */}
         {isClaudeEngine && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50">
-            <span className="text-xs text-muted-foreground">{t('chat.executionMode', { defaultValue: 'Execution mode' })}</span>
-            <div className="inline-flex rounded-md border border-border overflow-hidden text-xs" role="group" data-testid="chatmode-toggle">
-              <button
-                type="button"
-                data-testid="chatmode-sdk"
-                onClick={() => setChatMode('sdk')}
-                className={`px-2 py-0.5 ${chatMode === 'sdk' ? 'bg-brand text-white' : 'bg-transparent text-muted-foreground hover:bg-accent'}`}
-              >
-                Claude Agent SDK
-              </button>
-              <button
-                type="button"
-                data-testid="chatmode-pty"
-                onClick={() => setChatMode('pty')}
-                className={`px-2 py-0.5 ${chatMode === 'pty' ? 'bg-brand text-white' : 'bg-transparent text-muted-foreground hover:bg-accent'}`}
-                title={t('chat.ptyModeHint', { defaultValue: 'Subscription-billing mode: driven by the interactive claude CLI' })}
-              >
-                Claude Code CLI
-              </button>
-            </div>
-            {/* Whether the local Claude sign-in both modes depend on actually
-                exists. Placed immediately after the toggle because that is where
-                the user is when they choose an engine that needs it — and
-                because a logged-out machine otherwise fails only at send time,
-                with an error that does not say what to do. */}
+            <span
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground select-none"
+              data-testid="engine-status"
+            >
+              {t('chat.engineStatus', { defaultValue: 'Engine' })}
+              <span className="text-foreground/70">{engineLabel}</span>
+            </span>
+            {/* Whether the local Claude sign-in this engine depends on actually
+                exists. Placed immediately after the status because that is where
+                the user is looking — and because a logged-out machine otherwise
+                fails only at send time, with an error that does not say what to do. */}
             <ClaudeLoginStatus />
-            {/* Plan mode (SDK only): read-only exploration → produces a plan without editing.
+            {/* Plan mode: read-only exploration → produces a plan without editing.
                 Plan-only — uncheck and resend to actually implement. */}
-            {chatMode === 'sdk' && (
-              <label
-                className="flex items-center gap-1.5 ml-2 pl-3 border-l border-border text-xs cursor-pointer select-none"
-                title={t('chat.planModeHint', { defaultValue: 'Plan mode: read-only exploration that produces a plan without editing. Uncheck and resend to implement.' })}
-              >
-                <input
-                  type="checkbox"
-                  data-testid="planmode-toggle"
-                  checked={planMode}
-                  onChange={(e) => setPlanMode(e.target.checked)}
-                  className="accent-brand"
-                />
-                <span className="flex items-center gap-1 text-foreground">
-                  <ClipboardList className="w-3.5 h-3.5" />
-                  {t('chat.planMode', { defaultValue: 'Plan mode' })}
-                </span>
-                <span className="text-muted-foreground">{t('chat.planModeDesc', { defaultValue: 'read-only · plan first, no edits' })}</span>
-              </label>
-            )}
+            <label
+              className="flex items-center gap-1.5 ml-2 pl-3 border-l border-border text-xs cursor-pointer select-none"
+              title={t('chat.planModeHint', { defaultValue: 'Plan mode: read-only exploration that produces a plan without editing. Uncheck and resend to implement.' })}
+            >
+              <input
+                type="checkbox"
+                data-testid="planmode-toggle"
+                checked={planMode}
+                onChange={(e) => setPlanMode(e.target.checked)}
+                className="accent-brand"
+              />
+              <span className="flex items-center gap-1 text-foreground">
+                <ClipboardList className="w-3.5 h-3.5" />
+                {t('chat.planMode', { defaultValue: 'Plan mode' })}
+              </span>
+              <span className="text-muted-foreground">{t('chat.planModeDesc', { defaultValue: 'read-only · plan first, no edits' })}</span>
+            </label>
           </div>
         )}
 
@@ -555,7 +518,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
             sessionId={sessionId}
             engine={engine}
             apiRetryInfo={apiRetryInfo}
-            ptyNotice={ptyNotice}
             hasMoreHistory={hasMoreHistory}
             isLoadingMore={isLoadingMore}
             onLoadMore={loadMoreHistory}
@@ -579,14 +541,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
           onShowUserMessages={handleShowUserMessages}
           onOpenNote={onOpenNote}
           onCreateScheduledTask={handleCreateScheduledTask}
-        />
-
-        {/* PTY-mode floating window (dual-view: live terminal) */}
-        <XtermFloatingWindow
-          ref={ptyWindowRef}
-          visible={isClaudeEngine && chatMode === 'pty'}
-          running={isLoading}
-          onInput={handlePtyInput}
         />
       </div>
 

@@ -1,7 +1,6 @@
 import { CLAUDE2_DIR } from '@cockpit/shared-utils';
 import { getSessionTitle } from '../state/globalState';
 import { runSdkLoop, type BuildSdkOptions } from './shared/sdkLoop';
-import { runPtyTurn } from './shared/ptyBranch';
 import type { EngineSpec, RunCtx } from './types';
 
 type PlanPermissionResult =
@@ -86,13 +85,11 @@ function buildClaudeOptions(ctx: RunCtx): BuildSdkOptions {
 export const claudeSpec: EngineSpec = {
   name: 'claude',
   runner: {
+    // The SDK loop is the ONLY execution path. A second, PTY-based path used to live here
+    // (spawning `claude --dangerously-skip-permissions`), which bypassed the approval gate
+    // that is this product's core feature. It was removed rather than repaired: an ungated
+    // execution path is not a mode, it is a hole.
     async run(ctx) {
-      const { mode, engine } = ctx.params;
-      // PTY mode (subscription billing) — claude/claude2 only.
-      if (mode === 'pty' && (!engine || engine === 'claude' || engine === 'claude2')) {
-        await runPtyTurn(ctx);
-        return;
-      }
       await runSdkLoop(ctx, buildClaudeOptions(ctx));
     },
     resolveTitle: (cwd, sessionId) => getSessionTitle(cwd, sessionId),

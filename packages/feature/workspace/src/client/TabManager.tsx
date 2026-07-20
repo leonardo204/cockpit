@@ -54,7 +54,6 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     updateTabState,
     updateTabOllamaModel,
     updateTabDeepseekModel,
-    updateTabChatMode,
     updateTabPlanMode,
     handleTabDragStart,
     handleTabDragOver,
@@ -198,8 +197,6 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                       onOllamaModelChange={updateTabOllamaModel}
                       deepseekModel={tab.deepseekModel}
                       onDeepseekModelChange={updateTabDeepseekModel}
-                      chatMode={tab.chatMode}
-                      onChatModeChange={updateTabChatMode}
                       planMode={tab.planMode}
                       onPlanModeChange={updateTabPlanMode}
                       isActive={tab.id === activeTabId}

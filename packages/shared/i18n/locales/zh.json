@@ -455,8 +455,7 @@
     "copyCommandTooltip": "复制命令: claude -r {{sessionId}}",
     "executedCommand": "执行了 `{{command}}`{{exitInfo}}，输出：\n```\n{{output}}\n```",
     "executedCommandFailed": "执行 `{{command}}` 失败：{{error}}",
-    "executionMode": "执行模式",
-    "ptyModeHint": "订阅计费模式：用交互式 claude CLI 驱动",
+    "engineStatus": "引擎",
     "planMode": "计划模式",
     "planModeDesc": "只读·先出计划不改代码",
     "planModeOn": "已开启计划模式——只读;发一个任务即可拿到计划",
@@ -465,15 +464,7 @@
     "planTitle": "计划（待你确认）",
     "approvePlan": "批准并执行",
     "planApproveHint": "本环境无审批弹窗，点此退出计划模式并执行",
-    "approvePlanPrompt": "已批准，按上述计划开始执行。",
-    "ptyTerminal": "PTY 终端",
-    "ptyRunning": "运行中",
-    "ptyCollapse": "收起",
-    "ptyExpand": "展开",
-    "ptyStuck": "PTY 似乎卡住（可能在等待对话框输入），请在 PTY 终端手动处理。",
-    "ptyTimedOut": "PTY 超时未人工处理，已结束该回合。",
-    "ptyCrash": "Claude CLI 渲染崩溃（上游 bug）：{{error}}。该会话历史可能含无法渲染的编辑记录。",
-    "ptyQuestionEsc": "AI 的交互式提问无法在本模式中应答，已自动取消并结束本轮。问题内容见聊天区，下一条消息直接回答即可。"
+    "approvePlanPrompt": "已批准，按上述计划开始执行。"
   },
   "console": {
     "enterCommandOrUrl": "输入命令或网址开始使用",
@@ -1034,8 +1025,7 @@
     "openInVSCode": "在 VS Code 中打开",
     "openInCursor": "在 Cursor 中打开",
     "aliasesGlobal": "命令别名（全局）",
-    "tokenStats": "Token 统计",
-    "openSurething": "打开 Surething"
+    "tokenStats": "Token 统计"
   },
   "hoverTooltip": {
     "findReferences": "查找引用",

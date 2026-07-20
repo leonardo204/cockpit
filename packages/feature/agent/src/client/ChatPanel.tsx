@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import { Chat } from './Chat';
-import type { ChatEngine, DeepseekModel, ChatMode, ToolCallInfo } from './types';
+import type { ChatEngine, DeepseekModel, ToolCallInfo } from './types';
 
 // Migrated from src/components/project/ChatPanel.tsx.
 
@@ -19,8 +19,6 @@ interface ChatPanelProps {
   onOllamaModelChange?: (tabId: string, model: string) => void;
   deepseekModel?: DeepseekModel;
   onDeepseekModelChange?: (tabId: string, model: DeepseekModel) => void;
-  chatMode?: ChatMode;
-  onChatModeChange?: (tabId: string, chatMode: ChatMode) => void;
   planMode?: boolean;
   onPlanModeChange?: (tabId: string, planMode: boolean) => void;
   isActive?: boolean;
@@ -45,7 +43,7 @@ interface ChatPanelProps {
   onOpenSession?: (sessionId: string, title?: string) => void;
 }
 
-export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, chatMode, onChatModeChange, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onOpenNote, onCreateScheduledTask, onOpenSession }: ChatPanelProps) {
+export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onOpenNote, onCreateScheduledTask, onOpenSession }: ChatPanelProps) {
   const handleLoadingChange = useCallback((isLoading: boolean) => {
     onStateChange(tabId, { isLoading });
   }, [tabId, onStateChange]);
@@ -66,10 +64,6 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllama
     onDeepseekModelChange?.(tabId, model);
   }, [tabId, onDeepseekModelChange]);
 
-  const handleChatModeChange = useCallback((m: ChatMode) => {
-    onChatModeChange?.(tabId, m);
-  }, [tabId, onChatModeChange]);
-
   const handlePlanModeChange = useCallback((p: boolean) => {
     onPlanModeChange?.(tabId, p);
   }, [tabId, onPlanModeChange]);
@@ -84,8 +78,6 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllama
       onOllamaModelChange={handleOllamaModelChange}
       deepseekModel={deepseekModel}
       onDeepseekModelChange={handleDeepseekModelChange}
-      chatMode={chatMode}
-      onChatModeChange={handleChatModeChange}
       planMode={planMode}
       onPlanModeChange={handlePlanModeChange}
       hideHeader

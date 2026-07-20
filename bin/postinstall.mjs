@@ -1,14 +1,6 @@
 #!/usr/bin/env node
 
-import { accessSync, cpSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
-import { homedir } from 'os';
 import { hasClaudeBinary } from '../scripts/claudeBinary.mjs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const projectRoot = join(__dirname, '..');
 
 
 // Warn (don't fail) if the Claude Agent SDK's native binary didn't land — the
@@ -25,17 +17,8 @@ try {
   console.warn('[postinstall] Claude binary check failed:', err?.message ?? err);
 }
 
-if (process.platform !== 'win32') {
-  // node-pty: spawn-helper needs the executable bit
-  try {
-    const spawnHelper = join(
-      projectRoot,
-      `node_modules/node-pty/prebuilds/${process.platform}-${process.arch}/spawn-helper`,
-    );
-    accessSync(spawnHelper);
-    execSync(`chmod +x "${spawnHelper}"`);
-  } catch {}
-}
+// A node-pty spawn-helper chmod used to run here. node-pty was only ever needed by the
+// PTY execution mode, which has been removed along with its dependency.
 
 // F1-03 chat-first trim: postinstall used to stage two things into ~/.cockpit/
 // for npm installs — chrome-extension/ (the browser bridge for feature-console's

@@ -455,8 +455,7 @@
     "copyCommandTooltip": "Copy command: claude -r {{sessionId}}",
     "executedCommand": "Executed `{{command}}`{{exitInfo}}, output:\n```\n{{output}}\n```",
     "executedCommandFailed": "Failed to execute `{{command}}`: {{error}}",
-    "executionMode": "Execution Mode",
-    "ptyModeHint": "Subscription billing mode: uses interactive claude CLI",
+    "engineStatus": "Engine",
     "planMode": "Plan mode",
     "planModeDesc": "read-only · plan first, no edits",
     "planModeOn": "Plan mode on — read-only; send a task to get a plan",
@@ -465,15 +464,7 @@
     "planTitle": "Plan (awaiting your review)",
     "approvePlan": "Approve & run",
     "planApproveHint": "No approval dialog here — click to exit plan mode and execute",
-    "approvePlanPrompt": "Approved — proceed with the plan above.",
-    "ptyTerminal": "PTY Terminal",
-    "ptyRunning": "running",
-    "ptyCollapse": "Collapse",
-    "ptyExpand": "Expand",
-    "ptyStuck": "PTY seems stuck (waiting for a dialog?). Please handle it in the terminal below.",
-    "ptyTimedOut": "PTY timed out without manual handling; the turn was terminated.",
-    "ptyCrash": "Claude CLI render crash (upstream bug): {{error}}. This session's history may contain edits that fail to render.",
-    "ptyQuestionEsc": "AI asked an interactive question, which cannot be answered in this mode; it was auto-cancelled and the turn was ended. See the question in the chat and answer it in your next message."
+    "approvePlanPrompt": "Approved — proceed with the plan above."
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",
@@ -1034,8 +1025,7 @@
     "openInVSCode": "Open in VS Code",
     "openInCursor": "Open in Cursor",
     "aliasesGlobal": "Command Aliases (Global)",
-    "tokenStats": "Token Stats",
-    "openSurething": "Open Surething"
+    "tokenStats": "Token Stats"
   },
   "hoverTooltip": {
     "findReferences": "Find References",
