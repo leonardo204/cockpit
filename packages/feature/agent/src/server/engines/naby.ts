@@ -418,6 +418,26 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         let usage: Usage | undefined;
         let turns = 0;
 
+        // ---- harness events: low-noise by construction --------------------
+        //
+        // These are OBSERVATIONAL (see the `harness` doc in the runtime): they
+        // report that the backend's own harness did something — a background
+        // task, a compaction, injected hook output — and they must never affect
+        // the turn. They are also BURSTY: a subagent-heavy turn can emit the
+        // same label many times over, and the client renders each one as a
+        // muted bar in the transcript.
+        //
+        // So the stream is thinned HERE, at the point that knows the run, in
+        // two ways. Deduping on the full label+detail collapses a repeated
+        // event to its first occurrence, which is the only informative one; the
+        // hard cap then bounds the pathological case absolutely, so no
+        // backend-side loop can turn into an unbounded transcript. Dropping
+        // extras is safe precisely because nothing downstream depends on
+        // completeness — the events carry no state.
+        const harnessSeen = new Set<string>();
+        let harnessEmitted = 0;
+        const HARNESS_EVENT_CAP = 20;
+
         const emitToolResult = (
           toolUseId: string,
           content: string,
@@ -461,9 +481,28 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // composition root, which chose the engine, supplies them.
             engineId,
             costBasis,
+            // THE DIRECTORY THIS TURN IS ABOUT — told to the model (`system`)
+            // and to the ENGINE (`cwd`) from the SAME source, in the same
+            // conditional, on purpose.
+            //
+            // These used to be one line, not two: the system prompt announced
+            // `ctx.cwd` while the engine was given nothing, so the Agent SDK
+            // fell back to the Electron process's cwd — naby's own source
+            // checkout — and loaded NABY's `.claude/` harness (CLAUDE.md,
+            // hooks) into a chat about someone else's project. The model was
+            // told one directory and was standing in another. Full write-up on
+            // `EngineRunInput.cwd` in the runtime.
+            //
+            // `RunCtx.cwd` is documented as "normalized, may be ''", and the
+            // empty string is NOT a directory: passing it through would hand
+            // the SDK a falsy-but-present value and re-open the same ambiguity.
+            // The truthiness guard means no-directory stays UNDEFINED end to
+            // end, which the contract defines as "say nothing about a
+            // directory" rather than "use the ambient one".
             ...(ctx.cwd
               ? {
                   system: `You are running inside the naby shell. Working directory: ${ctx.cwd}`,
+                  cwd: ctx.cwd,
                 }
               : {}),
             onEvent: (ev: EngineEvent) => {
@@ -532,6 +571,28 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
               case 'tool_result': {
                 emitToolResult(ev.toolCallId, ev.output.content, ev.isError);
+                break;
+              }
+
+              case 'harness': {
+                const key = ev.detail ? `${ev.subtype} ${ev.detail}` : ev.subtype;
+                if (harnessSeen.has(key)) break;
+                if (harnessEmitted >= HARNESS_EVENT_CAP) break;
+                harnessSeen.add(key);
+                harnessEmitted += 1;
+                // `subtype:'harness'` keeps this off the client's existing
+                // system subtypes ('init' / 'task_notification' / 'api_retry'),
+                // each of which has its own handler and its own meaning. The
+                // client turns this into a role:'system' row with
+                // systemEvent.kind 'meta' — the muted one-line bar that already
+                // exists — rather than a conversation bubble.
+                ctx.emit({
+                  type: 'system',
+                  subtype: 'harness',
+                  session_id: sessionId,
+                  harness_subtype: ev.subtype,
+                  ...(ev.detail ? { harness_detail: ev.detail } : {}),
+                } satisfies RunEvent);
                 break;
               }
 

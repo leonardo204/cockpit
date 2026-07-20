@@ -9,7 +9,7 @@ import type { ChatMessage, ToolCallInfo } from './types';
 //   - originator (useChatStream): creates it on send, passes its id (behavior unchanged)
 //   - viewer (useLiveStream): creates it on `system.init`, passes its id
 // Hook-side concerns (throttling, onSessionId/onFetchTitle/token usage/retry & rate-limit
-// indicators, pty_output→xterm) stay OUT of here.
+// indicators) stay OUT of here.
 
 interface Block {
   type?: string;
@@ -37,6 +37,12 @@ export interface StreamEvent {
   status?: 'completed' | 'failed' | 'stopped';
   summary?: string;
   output_file?: string;
+  // system/harness fields (naby engine) — an observational report that the
+  // BACKEND's harness did something (background task, context compaction,
+  // injected hook output). Both are short pre-sanitized labels produced in the
+  // runtime, never raw message bodies.
+  harness_subtype?: string;
+  harness_detail?: string;
 }
 
 export function applyStreamEvent(
@@ -105,6 +111,37 @@ export function applyStreamEvent(
       }
     }
     return out;
+  }
+
+  // system/harness — the backend's harness reporting activity that is NOT conversation
+  // (background task lifecycle, context compaction, injected hook output). Rendered through
+  // the EXISTING muted one-line bar: a role:'system' row with systemEvent.kind 'meta', which
+  // MessageBubble already renders as a pill rather than a bubble. No new rendering path.
+  //
+  // Appended as its own row instead of merged into the assistant bubble, because it is not
+  // something the assistant said — merging it would put backend bookkeeping into the reply
+  // text. It also deliberately does NOT touch `isStreaming`: a harness event says nothing
+  // about whether the turn is still going, and clearing the flag here would end the bubble
+  // early. The turn still ends only on `result`.
+  //
+  // Low-noise: the server already dedupes and caps these per run, and the identity check
+  // below makes the reducer idempotent, so a replayed/duplicated event cannot stack up
+  // repeated bars (the viewer re-runs this reducer over reconnect snapshots).
+  if (ev.type === 'system' && ev.subtype === 'harness') {
+    const label = ev.harness_subtype || 'harness event';
+    const detail = ev.harness_detail;
+    const id = `harness-${assistantId}-${label}${detail ? `-${detail}` : ''}`;
+    if (messages.some((m) => m.id === id)) return messages;
+    const content = detail ? `${label} · ${detail}` : label;
+    return [
+      ...messages,
+      {
+        id,
+        role: 'system',
+        content,
+        systemEvent: { kind: 'meta', ...(detail ? { detail: content } : {}) },
+      } as ChatMessage,
+    ];
   }
 
   // in-stream error ({type:'error', error}) — emitted by codex/kimi/ollama/deepseek and the
