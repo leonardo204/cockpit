@@ -141,7 +141,11 @@ export function EmptyState({ onSelectSession }: EmptyStateProps) {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-card">
+    // `data-testid` marks THE HOME SCREEN. This component is both the
+    // first-launch view and the destination of "close the last tab", and the UI
+    // spike asserts against a stable hook rather than a translated heading —
+    // which would make the assertion fail the moment someone switches locale.
+    <div className="flex-1 flex flex-col bg-card" data-testid="home-screen">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <h2 className="text-lg font-medium text-foreground">

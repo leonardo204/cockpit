@@ -4,6 +4,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import "./globals.css";
 import { Providers } from "@cockpit/feature-workspace";
+import { APP_DESCRIPTION, APP_NAME, APP_TITLE } from "@cockpit/shared-utils";
 
 // boot.js runs synchronously before first paint (mobile redirect + theme + SW
 // cleanup). Inlined from the source file rather than referenced via
@@ -40,14 +41,17 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "OpenCockpit",
-  description: "OpenCockpit is a local-first AI development hub with chat agents, a file explorer, terminals, and browser bubbles in one swipeable workspace. One seat. One AI.",
+  title: APP_TITLE,
+  description: APP_DESCRIPTION,
   // Manifest is served by app/manifest.ts at /manifest.webmanifest and linked
   // automatically by Next — don't point at a stale /manifest.json (404).
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "Cockpit",
+    // Home-screen label when installed as a PWA. The bare product name, not
+    // APP_TITLE: iOS truncates this hard and "(Alpha version)" would be all a
+    // user sees of it.
+    title: APP_NAME,
   },
   icons: {
     icon: "/icons/icon-192x192.png",

@@ -66,6 +66,19 @@ export interface ScreenshotPreparePayload {
   readonly cwd: string
 }
 
+/**
+ * "The last tab in this project was closed — take me home."
+ *
+ * The tab bar lives inside the per-project iframe, but the home screen is a
+ * PARENT-window view (Workspace's EmptyState). The iframe therefore cannot
+ * navigate itself home; it can only say that it should be left, which is what
+ * this topic carries. `cwd` identifies the sender so the parent ignores a
+ * message from a project it is no longer showing.
+ */
+export interface GoHomePayload {
+  readonly cwd: string
+}
+
 // ─────────────────────────────────────────────────────────
 // Topics table — single source of truth; add new protocols here.
 // ─────────────────────────────────────────────────────────
@@ -93,6 +106,7 @@ export const Topics = {
     "screenshot-prepare"
   ),
   ScreenshotDone: defineTopic<Record<string, never>>("screenshot-done"),
+  GoHome: defineTopic<GoHomePayload>("go-home"),
 } as const
 
 export type TopicId = (typeof Topics)[keyof typeof Topics]["id"]

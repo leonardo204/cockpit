@@ -340,6 +340,24 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   }, [activeTabId]);
 
   // Close tab
+  //
+  // CLOSING THE LAST TAB IS THE INTERESTING CASE. The tab bar now offers a close
+  // button on every tab (the old `tabs.length > 1` gate is gone), so "no tabs
+  // left" is reachable by design rather than only by a sync race. Two things
+  // have to happen, and they are separate concerns:
+  //
+  //   1. This iframe must not be left as an empty shell. `tabs[0].id` is read
+  //      every render, and an empty chat host is a broken-looking screen even if
+  //      it does not throw — so a fresh blank tab is seeded, exactly as the
+  //      cross-window reconcile path already does.
+  //   2. The USER should not be looking at that blank tab. Closing your last
+  //      conversation reads as "I am done with this project", and the honest
+  //      destination is the home screen. That screen lives in the PARENT window
+  //      (Workspace's EmptyState), so the iframe cannot navigate there itself —
+  //      it publishes GoHome and the parent decides.
+  //
+  // The seeded tab is therefore not wasted work: it is what this iframe shows if
+  // the user comes back to the project from the sidebar.
   const closeTab = useCallback((tabId: string) => {
     // Record an explicit close so the next save removes it from the shared union (and the
     // broadcast tells other browser tabs to remove exactly this session).
@@ -357,6 +375,14 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
           title: 'New Chat',
         };
         setActiveTabId(newTab.id);
+        // Published from inside the updater, but it is not a render-phase side
+        // effect on this component: publishTopic posts a window message, which
+        // is delivered asynchronously to the PARENT window. Scheduling it here
+        // rather than in an effect keeps "the tab list became empty" and "go
+        // home" as one atomic decision, with no extra state to keep in sync.
+        if (initialCwd) {
+          publishTopic(Topics.GoHome, { cwd: initialCwd });
+        }
         return [newTab];
       }
       return newTabs;

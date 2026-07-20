@@ -29,6 +29,7 @@
 import { Effect } from 'effect';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
+  describeClaudeLogin,
   getCredentialBridge,
   isClaudeAgentSdkAvailable,
   loadMcpToolset,
@@ -80,7 +81,14 @@ function redactEntry(entry: McpEntry): RedactedMcpEntry {
 // GET — what is answering, what it has cost, what MCP servers exist
 // ---------------------------------------------------------------------------
 
-export async function readNabyState(sessionId: string | null): Promise<{
+export async function readNabyState(
+  sessionId: string | null,
+  /** Bypass the runtime's 10s login-status cache. Set by an explicit user
+   *  "Re-check" only — a user who has just run `claude login` in a terminal must
+   *  not be shown a stale answer, but ordinary polls must not defeat the cache
+   *  that keeps this off the filesystem. */
+  opts: { recheckLogin?: boolean } = {},
+): Promise<{
   engine: {
     ok: boolean;
     /** 'dev-claude' | 'ai-sdk' when ok. */
@@ -94,6 +102,18 @@ export async function readNabyState(sessionId: string | null): Promise<{
   /** Whether the dev engine exists in THIS build. The UI must not offer a
    *  choice that cannot work — in a packaged app the Agent SDK is excluded. */
   devEngineAvailable: boolean;
+  /** Whether the LOCAL Claude sign-in the dev engine runs on is present and
+   *  usable. NOT A SECRET and not derived from one: the runtime reads two
+   *  expiry timestamps and returns a status word plus a sentence — no token
+   *  material reaches this process boundary, let alone the renderer. */
+  claudeLogin: {
+    status: string;
+    summary: string;
+    remedy: string | null;
+    cliFound: boolean;
+    checkedAt: number;
+    relevant: boolean;
+  };
   /** Configured providers, for the selection UI. NO SECRETS: `ready` is the
    *  result of a credential resolution, never the credential. */
   providers: { id: string; label: string; model: string; ready: boolean }[];
@@ -121,6 +141,9 @@ export async function readNabyState(sessionId: string | null): Promise<{
 
   return {
     devEngineAvailable: isClaudeAgentSdkAvailable(),
+    // Synchronous and cached in the runtime, so this adds nothing measurable to
+    // a request that already opened the store and resolved a credential.
+    claudeLogin: describeClaudeLogin(opts.recheckLogin ? { force: true } : {}),
     providers,
     engine: selection.ok
       ? {
@@ -217,8 +240,11 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
 
 export const GET = handler((request) =>
   Effect.gen(function* () {
-    const sessionId = new URL(request.url).searchParams.get('sessionId');
-    const state = yield* Effect.promise(() => readNabyState(sessionId));
+    const params = new URL(request.url).searchParams;
+    const sessionId = params.get('sessionId');
+    const state = yield* Effect.promise(() =>
+      readNabyState(sessionId, { recheckLogin: params.get('recheckLogin') === '1' }),
+    );
     return ok(state);
   })
 );

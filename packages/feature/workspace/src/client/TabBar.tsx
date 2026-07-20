@@ -285,20 +285,26 @@ export function TabBar({
               {tab.engine === 'deepseek' && (
                 <span className="flex-shrink-0 text-[9px] px-1 py-0 rounded bg-sky-500/15 text-sky-400 font-medium leading-relaxed">DS</span>
               )}
-              {tabs.length > 1 && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCloseTab(tab.id);
-                  }}
-                  className="ml-1 p-0.5 rounded hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
-                  title={t('tabBar.closeTab')}
-                >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              )}
+              {/* Close is offered on EVERY tab, including the last one.
+                  Upstream gated this on `tabs.length > 1` because closing the
+                  last tab left the shell with nothing to render. That is no
+                  longer true: `closeTab` seeds a fresh tab and asks the parent
+                  window for the home screen (see useTabState.closeTab), so the
+                  gate now only removes a control the user expects to be there. */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCloseTab(tab.id);
+                }}
+                className="ml-1 p-0.5 rounded hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
+                title={t('tabBar.closeTab')}
+                aria-label={t('tabBar.closeTab')}
+                data-testid="tab-close"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           </Tooltip>
         ))}

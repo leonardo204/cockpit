@@ -1,6 +1,7 @@
 'use client';
 
 import { toast } from '@cockpit/shared-ui';
+import { APP_NAME } from '@cockpit/shared-utils';
 import { useTranslation } from 'react-i18next';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
@@ -27,7 +28,7 @@ export function TabManagerTopBar({ initialCwd }: TabManagerTopBarProps) {
           <div className="flex items-center gap-2">
             <img
               src="/icons/icon-72x72.png"
-              alt="Cockpit"
+              alt={APP_NAME}
               className="w-6 h-6 cursor-pointer"
               title={t('tabManagerTopBar.copyPageUrl')}
               onClick={() => {
@@ -59,7 +60,7 @@ export function TabManagerTopBar({ initialCwd }: TabManagerTopBarProps) {
               </>
             ) : (
               <h1 className="text-lg font-semibold text-foreground">
-                Cockpit
+                {APP_NAME}
               </h1>
             )}
           </div>

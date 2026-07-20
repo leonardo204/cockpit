@@ -1,4 +1,5 @@
 import type { MetadataRoute } from 'next'
+import { APP_DESCRIPTION, APP_NAME, APP_TITLE } from '@cockpit/shared-utils'
 
 const ICON_SIZES = [72, 96, 128, 144, 152, 192, 384, 512]
 
@@ -7,9 +8,11 @@ export default function manifest(): MetadataRoute.Manifest {
   const iconPath = isDev ? '/icons/dev' : '/icons'
 
   return {
-    name: isDev ? 'OpenCockpit (Dev)' : 'OpenCockpit',
-    short_name: isDev ? 'Cockpit Dev' : 'Cockpit',
-    description: 'OpenCockpit is a local-first AI development hub with chat agents, a file explorer, terminals, and browser bubbles in one swipeable workspace. One seat. One AI.',
+    name: isDev ? `${APP_TITLE} (Dev)` : APP_TITLE,
+    // short_name is what fits under a launcher icon — the bare product name,
+    // since anything longer is truncated to uselessness.
+    short_name: isDev ? `${APP_NAME} Dev` : APP_NAME,
+    description: APP_DESCRIPTION,
     // Stable identity + full scope so the installed PWA captures every in-app
     // navigation (desktop workspace AND the mobile /m route).
     id: '/',

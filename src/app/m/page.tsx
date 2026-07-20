@@ -1,12 +1,13 @@
 import { Metadata } from 'next';
 import { getGlobalSessionsSnapshot } from '@cockpit/feature-agent/server/state/globalState';
 import MobileClient from './MobileClient';
+import { APP_TITLE } from '@cockpit/shared-utils';
 
 // Disable static pre-rendering; use dynamic rendering (mirrors the root page).
 export const dynamic = 'force-dynamic';
 
 export const metadata: Metadata = {
-  title: 'Cockpit',
+  title: APP_TITLE,
 };
 
 interface MobilePageProps {

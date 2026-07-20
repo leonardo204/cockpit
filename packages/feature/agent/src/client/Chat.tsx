@@ -23,6 +23,7 @@ import { XtermFloatingWindow, XtermFloatingHandle } from './XtermFloatingWindow'
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, ChatMode, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
+import { ClaudeLoginStatus } from './ClaudeLoginStatus';
 import { OllamaModelPicker } from './OllamaModelPicker';
 import { DeepseekConfigPicker } from './DeepseekConfigPicker';
 import { useTranslation } from 'react-i18next';
@@ -495,6 +496,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
                 Claude Code CLI
               </button>
             </div>
+            {/* Whether the local Claude sign-in both modes depend on actually
+                exists. Placed immediately after the toggle because that is where
+                the user is when they choose an engine that needs it — and
+                because a logged-out machine otherwise fails only at send time,
+                with an error that does not say what to do. */}
+            <ClaudeLoginStatus />
             {/* Plan mode (SDK only): read-only exploration → produces a plan without editing.
                 Plan-only — uncheck and resend to actually implement. */}
             {chatMode === 'sdk' && (

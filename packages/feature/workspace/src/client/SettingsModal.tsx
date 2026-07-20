@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@cockpit/shared-ui';
+import { APP_DESCRIPTION, APP_TITLE } from '@cockpit/shared-utils';
 import { toast } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { Effect } from 'effect';
@@ -168,8 +169,11 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               {t('settings.about')}
             </label>
             <div className="text-xs text-muted-foreground space-y-1">
-              <p>Cockpit{appVersion ? ` v${appVersion}` : ''}</p>
-              <p className="text-muted-foreground/60">One seat. One AI. Everything under control.</p>
+              {/* APP_TITLE, not APP_NAME: the About box is exactly where a
+                  tester looks to confirm which build they are reporting on, and
+                  "Alpha" is the most important word there. */}
+              <p>{APP_TITLE}{appVersion ? ` · shell v${appVersion}` : ''}</p>
+              <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
             </div>
           </div>
         </div>

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 // F1-07. Per-session cost + which engine is answering. Renders nothing until
 // /api/naby responds, so the header is unchanged when the runtime is absent.
 import { NabySessionCost } from './NabySessionCost';
+import { APP_NAME } from '@cockpit/shared-utils';
 
 // ============================================
 // Chat Header
@@ -40,13 +41,16 @@ export function ChatHeader({
     <div className="border-b border-border px-4 py-3 bg-card">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <img src="/icons/icon-72x72.png" alt="Cockpit" className="w-6 h-6" />
+          <img src="/icons/icon-72x72.png" alt={APP_NAME} className="w-6 h-6" />
           <div className="flex items-baseline gap-2">
             <h1 className="text-lg font-semibold text-foreground">
-              Cockpit
+              {APP_NAME}
             </h1>
+            {/* Upstream's tagline described upstream's product (a multi-seat
+                coding workbench). Replaced rather than dropped: the slot is the
+                first thing a new user reads. */}
             <span className="text-xs text-muted-foreground">
-              One seat. One AI. Everything under control.
+              Your persona agent. Local-first.
             </span>
           </div>
         </div>

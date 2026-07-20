@@ -12,6 +12,7 @@ import { NabyOnboardingWizard } from './NabyProviderSetup';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
+import { APP_TITLE, appTitleForCwd } from '@cockpit/shared-utils';
 import { useEffectQuery } from '@cockpit/effect-react';
 import { fetchProjects, saveProjects as saveProjectsEffect } from './effect/projectClient';
 
@@ -37,6 +38,20 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteProjectCwd, setNoteProjectCwd] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  // THE HOME SCREEN.
+  //
+  // There is no separate "home" route in this app after the F1-03 trim — the
+  // landing view is EmptyState, the session/project browser Workspace already
+  // shows when no project is open. So "go home" is that same view, shown on
+  // demand rather than only when `projects.length === 0`.
+  //
+  // It is a VIEW flag, not a mutation: closing your last tab must not silently
+  // delete the project from the sidebar. The project stays exactly where it was,
+  // its iframe stays mounted (so returning to it is instant and loses no state),
+  // and any action that expresses "I want to be in a project again" — picking a
+  // session here, clicking a project in the sidebar, a jump from a toast —
+  // clears the flag.
+  const [showHome, setShowHome] = useState(false);
   // Lazy load: only render project iframes that have been activated before (ever-growing set)
   const [loadedCwds, setLoadedCwds] = useState<Set<string>>(new Set());
   const iframeRefs = useRef<Map<string, HTMLIFrameElement>>(new Map());
@@ -124,9 +139,11 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
     }
     window.history.replaceState({}, '', url.toString());
 
-    // Update the browser tab title
-    const dirName = cwd.split('/').filter(Boolean).pop();
-    document.title = dirName ? `Cockpit - ${dirName}` : 'Cockpit';
+    // Update the window title. The PRODUCT NAME leads (this app is Naby, not
+    // the upstream it forked from); the working directory follows, because
+    // "which project is this window" is the thing a user with several windows
+    // actually needs from a title bar.
+    document.title = appTitleForCwd(cwd);
   }, []);
 
   // Handle cwd and sessionId from URL parameters
@@ -217,10 +234,27 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         preScreenshotIndexRef.current = null;
         return;
       }
+      // The last tab inside a project was closed → show the home screen.
+      // Guarded on the sender being the project currently on screen: a
+      // background project tidying itself up must not yank the user out of the
+      // one they are working in.
+      if (event.data?.type === 'GO_HOME' && event.data?.cwd) {
+        if (projects[activeIndex]?.cwd === event.data.cwd) {
+          setShowHome(true);
+          // The title still names the project we just left; on the home screen
+          // that is simply wrong. The project itself is untouched — only the
+          // label follows the view.
+          document.title = APP_TITLE;
+        }
+        return;
+      }
       // Request from inside an iframe to open or switch a project (worktree switch, session open, etc.)
       if (event.data?.type === 'OPEN_PROJECT' && event.data?.cwd) {
         const { cwd, sessionId } = event.data;
         const targetSessionId = sessionId || '';
+        // Opening a project is the clearest possible "I am not on the home
+        // screen any more".
+        setShowHome(false);
         projectSessionIdsRef.current.set(cwd, targetSessionId);
 
         const existingIndex = projects.findIndex(p => p.cwd === cwd);
@@ -291,6 +325,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   // Select project
   const handleSelectProject = useCallback((index: number) => {
+    setShowHome(false);
     setActiveIndex(index);
     saveProjects(projects, index, collapsed);
     const selectedProject = projects[index];
@@ -338,6 +373,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   // Add project (selected from SessionBrowser or EmptyState)
   const handleAddProject = useCallback((cwd: string, sessionId: string) => {
+    // Picking a session on the home screen is how the user leaves it.
+    setShowHome(false);
     // Track sessionId
     projectSessionIdsRef.current.set(cwd, sessionId);
 
@@ -381,6 +418,9 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   // Switch project/session (called from GlobalSessionMonitor)
   const handleSwitchProject = useCallback((cwd: string, sessionId: string) => {
+    // A jump from a completion toast or the global session monitor means the
+    // user asked to be somewhere specific — never leave them on the home view.
+    setShowHome(false);
     // Track sessionId
     projectSessionIdsRef.current.set(cwd, sessionId);
 
@@ -470,6 +510,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onOpenNote={(cwd) => { setNoteProjectCwd(cwd ?? null); setIsNoteOpen(true); }}
         onSwitchProject={handleSwitchProject}
         onAddProject={(cwd) => {
+          // Adding/opening a project leaves the home screen.
+          setShowHome(false);
           const existingIndex = projects.findIndex(p => p.cwd === cwd);
           if (existingIndex >= 0) {
             setActiveIndex(existingIndex);
@@ -486,12 +528,18 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
       {/* Right content area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {projects.length === 0 ? (
-          // Empty state: show all session list
+        {/* The home screen. Shown when there is no project to show, and on
+            demand when the user closed their last tab (`showHome`). */}
+        {(projects.length === 0 || showHome) && (
           <EmptyState onSelectSession={handleAddProject} />
-        ) : (
-          // Project iframe container (lazy load: only render projects that have been activated)
-          <div className="flex-1 relative overflow-hidden">
+        )}
+        {projects.length > 0 && (
+          // Project iframe container (lazy load: only render projects that have been activated).
+          // HIDDEN rather than unmounted while the home screen is up: unmounting
+          // would tear down every project's iframe — websockets, scroll position,
+          // in-flight streams and all — and rebuild them on return. Going home is
+          // a navigation, not a reset.
+          <div className={`flex-1 relative overflow-hidden ${showHome ? 'hidden' : ''}`}>
             {projects.map((project, index) => (
               loadedCwds.has(project.cwd) && (
                 <iframe
@@ -521,6 +569,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onClose={() => setIsSessionBrowserOpen(false)}
         onSelectSession={handleAddProject}
         onAddProject={(cwd) => {
+          // Adding/opening a project leaves the home screen.
+          setShowHome(false);
           const existingIndex = projects.findIndex(p => p.cwd === cwd);
           if (existingIndex >= 0) {
             setActiveIndex(existingIndex);
