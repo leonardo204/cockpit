@@ -405,6 +405,23 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
     updateUrl(cwd, projectSessionIdsRef.current.get(cwd));
   }, [projects, collapsed, saveProjects, updateUrl]);
 
+  /** Pick a folder and open it — the one way a project is added, shared by the
+   *  home screen's "Open" and the sidebar's "Open Project" so the two cannot
+   *  drift apart. */
+  const handlePickAndOpenProject = useCallback(async () => {
+    // Dynamic imports to match how this file already reaches the Effect runtime
+    // (see the handler above) and to keep the picker out of the initial bundle.
+    const [{ BrowserRuntime }, { pickFolder }] = await Promise.all([
+      import('@cockpit/effect-runtime'),
+      import('./effect/workspaceClient'),
+    ]);
+    const exit = await BrowserRuntime.runPromiseExit(pickFolder());
+    if (exit._tag === 'Success' && exit.value.folder) {
+      openProjectByCwd(exit.value.folder);
+    }
+  }, [openProjectByCwd]);
+
+
   // Remove a project FROM THE LIST, addressed by path — what the home screen's
   // × does. Deliberately the same code path as the sidebar's remove: one list,
   // one removal. It rewrites ~/.cockpit/projects.json and NOTHING else — the
@@ -569,7 +586,12 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onRemoveProject={handleRemoveProject}
         onReorderProjects={handleReorderProjects}
         onToggleCollapse={handleToggleCollapse}
-        onOpenSessionBrowser={() => setIsSessionBrowserOpen(true)}
+        // The sidebar's "Open Project" now goes straight to the folder picker,
+        // matching the home screen. It used to open the session browser — a
+        // machine-wide scan of every project on disk, which is exactly the model
+        // the recents list replaced. Two buttons with the same label doing
+        // different things is worse than either one alone.
+        onOpenSessionBrowser={handlePickAndOpenProject}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenNote={(cwd) => { setNoteProjectCwd(cwd ?? null); setIsNoteOpen(true); }}
         onSwitchProject={handleSwitchProject}
