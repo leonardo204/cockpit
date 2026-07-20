@@ -145,7 +145,12 @@ export function EmptyState({ onSelectSession }: EmptyStateProps) {
     // first-launch view and the destination of "close the last tab", and the UI
     // spike asserts against a stable hook rather than a translated heading —
     // which would make the assertion fail the moment someone switches locale.
-    <div className="flex-1 flex flex-col bg-card" data-testid="home-screen">
+    // `min-h-0` is load-bearing, not tidying. A flex item defaults to
+    // `min-height: auto`, so without it this grows to fit the project list
+    // instead of being clipped by the parent — and the `flex-1 overflow-y-auto`
+    // content area below then has no bounded height to scroll within, so the
+    // whole list overflows the viewport and nothing scrolls at all.
+    <div className="flex-1 min-h-0 flex flex-col bg-card" data-testid="home-screen">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-border">
         <h2 className="text-lg font-medium text-foreground">
