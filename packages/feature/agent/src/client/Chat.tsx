@@ -80,6 +80,11 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
   const [isUserMessagesOpen, setIsUserMessagesOpen] = useState(false);
   const [historyTokenUsage, setHistoryTokenUsage] = useState<TokenUsage | null>(null);
+  // The engine's RESOLVED model, captured live from each turn's system/init
+  // (server already ships it as event.model). Null until the first init of the
+  // session arrives; the status line falls back to the static engineLabel until
+  // then. Read-only display only.
+  const [liveModel, setLiveModel] = useState<string | null>(null);
   // Plan mode (per-tab): controlled by TabInfo.planMode (persisted); falls back to
   // local state when no prop (standalone use). Read-only exploration that produces a
   // plan without editing — only meaningful on a claude engine.
@@ -90,11 +95,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     onPlanModeChange?.(p);
   }, [onPlanModeChange]);
   const isClaudeEngine = !engine || engine === 'claude' || engine === 'claude2';
-  // Read-only engine identity for the status line. Derived from what the client already
-  // knows (the `engine` prop + the per-engine model the pickers own). The server's
-  // `system/init` event does carry a richer `model` label and the run's `providerId`, but
-  // neither is captured client-side today, and surfacing them would mean adding a new
-  // client-visible field — out of scope for a status indicator.
+  // Read-only engine identity for the status line, used as the FALLBACK before a
+  // turn has started. Derived from what the client already knows (the `engine`
+  // prop + the per-engine model the pickers own). Once a turn begins, the
+  // server's `system/init` carries the RESOLVED model label as `event.model`,
+  // which useChatStream now captures into `liveModel` and the status line
+  // displays in preference to this static string.
   const engineLabel = useMemo(() => {
     switch (engine) {
       case 'claude2': return 'Claude Agent SDK (claude2)';
@@ -145,6 +151,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     onSessionId: setSessionId,
     onFetchTitle: fetchSessionTitle,
     onRunComplete: () => reconcileFromDiskRef.current?.(),
+    onEngineModel: setLiveModel,
   });
 
   // ! prefix: first line is command, subsequent lines are user notes, supports images
@@ -460,7 +467,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
               data-testid="engine-status"
             >
               {t('chat.engineStatus', { defaultValue: 'Engine' })}
-              <span className="text-foreground/70">{engineLabel}</span>
+              <span className="text-foreground/70">{liveModel ?? engineLabel}</span>
             </span>
             {/* Whether the local Claude sign-in this engine depends on actually
                 exists. Placed immediately after the status because that is where

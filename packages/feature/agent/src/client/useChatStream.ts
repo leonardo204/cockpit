@@ -49,6 +49,14 @@ interface UseChatStreamOptions {
    * lingers as ephemeral ids until the next refresh.
    */
   onRunComplete?: () => void;
+  /**
+   * The engine's RESOLVED model label, delivered on each turn's `system/init`
+   * (the server computes it in naby.ts as `modelLabel` and already puts it on
+   * the wire as `event.model`). Lets the status indicator show the real model
+   * answering — the Claude model id in dev, the provider's model id in prod —
+   * instead of only the static engine name. Read-only; may fire every turn.
+   */
+  onEngineModel?: (model: string) => void;
 }
 
 interface UseChatStreamReturn {
@@ -72,7 +80,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, planMode, ollamaModel, deepseekModel, onSessionId, onFetchTitle, onRunComplete }: UseChatStreamOptions
+  { sessionId, cwd, engine, planMode, ollamaModel, deepseekModel, onSessionId, onFetchTitle, onRunComplete, onEngineModel }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -91,6 +99,13 @@ export function useChatStream(
   // handleSend too). endRun runs long after mount, so the ref is always populated by then.
   const onRunCompleteRef = useRef(onRunComplete);
   onRunCompleteRef.current = onRunComplete;
+
+  // Same ref indirection for the resolved-model callback: it can be an inline
+  // closure from the parent (new identity each render), and handleStreamEvent is
+  // a stable useCallback — threading the callback through its deps would churn
+  // the whole stream handler every render.
+  const onEngineModelRef = useRef(onEngineModel);
+  onEngineModelRef.current = onEngineModel;
 
   // #10 R5/#7: connection watchdog. The detached run is driven entirely by /ws/session-stream;
   // if that socket never connects (ws server down, upgrade rejected), no event ever arrives and
@@ -185,6 +200,10 @@ export function useChatStream(
       const newSessionId = event.session_id as string;
       onSessionId(newSessionId);
       sessionIdRef.current = newSessionId;
+      // The resolved model label the server put on the init event. Surface it so
+      // the status indicator can show the actual model answering this turn.
+      const initModel = event.model;
+      if (typeof initModel === 'string' && initModel) onEngineModelRef.current?.(initModel);
       setApiRetryInfo(null); // successful init means any prior retry chain resolved
       // #bg: a turn that starts AFTER this run already produced a result is a follow-up (e.g. the
       // auto-run when a background task reports back) → give it its own assistant bubble instead
