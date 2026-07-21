@@ -46,9 +46,13 @@
  *
  * MILESTONE LIMITATIONS (deliberate, tracked)
  *   - `ctx.images` are ignored (the runtime's RuntimeMessage is text-only).
- *   - The gate is permissive: it allows everything, but EVERY call goes through
- *     it and is logged. The seam is real and exercised; the Phase 2 policy gate
- *     drops in by replacing the decision policy below and nothing else.
+ *   - The gate runs the Phase-1 harness-observation FLOOR (not the full Phase 2
+ *     policy): it allows read-only inspection + delegation + skills + our own
+ *     runtime tools and DENIES filesystem mutation / shell exec — from the main
+ *     loop and from inside any subagent. This is what makes it safe to run the
+ *     dev engine with built-ins enabled (so skill/subagent activity is visible).
+ *     EVERY call still goes through the gate and is logged; the Phase 2 policy
+ *     gate drops in by replacing the decision policy below and nothing else.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -62,6 +66,7 @@ import {
   DEV_ENGINE_LABEL,
   loadMcpToolset,
   makeGate,
+  phase1HarnessFloor,
   makeModelResolver,
   Outbox,
   preflightEngine,
@@ -332,25 +337,6 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         }
 
         // ---- runtime construction ----------------------------------------
-        // The gate is PERMISSIVE for this milestone but structurally real: it
-        // is the same makeGate() the runtime uses, every call passes through
-        // it, and every decision is logged. Phase 2 replaces the policy
-        // function; nothing else here changes.
-        const gated = makeGate(() => ({ behavior: 'allow' }));
-        // Thin observer around the runtime's gate. The decision is still made
-        // (and logged) by makeGate; this only reports it. Because it sits on
-        // the return path, an observation is proof the gate ran — and the
-        // runtime does not invoke an executor until this returns.
-        const gate: Gate = async (call) => {
-          const decision = await gated.gate(call);
-          const entry = gated.log[gated.log.length - 1];
-          console.log(
-            `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${decision.behavior}`,
-          );
-          if (entry) deps.onGateDecision?.(entry);
-          return decision;
-        };
-
         const outbox = new Outbox();
         const builtin = buildToolset(outbox);
 
@@ -387,6 +373,44 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const executors: Record<string, Executor> = {
           ...builtin.executors,
           ...(mcp?.executors ?? {}),
+        };
+
+        // ---- the gate ----------------------------------------------------
+        //
+        // Built HERE (after the toolset) because the Phase-1 floor needs to
+        // know THIS turn's runtime tool names — they are always allowed (they
+        // are our own executors, gated for real in Phase 2), while everything
+        // else is decided by the floor.
+        //
+        // WHY A FLOOR AND NOT ALLOW-ALL. The dev engine now runs with the SDK's
+        // built-ins ENABLED (so Task / Skill / subagents actually run and their
+        // activity can be shown). An allow-all policy would then auto-approve a
+        // subagent's internal Bash / Write / Edit — i.e. a real mutation/exec
+        // hole. `phase1HarnessFloor` is the minimal safe policy for that world:
+        // deny-by-default, allow read-only inspection + delegation + skills +
+        // our runtime tools, DENY Bash/Write/Edit/… from the main loop AND from
+        // inside any subagent (the PreToolUse gate reaches both — verified in
+        // spike-harness-visibility). It is NOT the Phase-2 policy engine (no
+        // per-project rules, no approval UI); it is the safety floor that makes
+        // observation safe until Phase 2 replaces it.
+        //
+        // The prod (AI-SDK) engine's tools ARE these same runtime tools, so
+        // passing the runtime tool names covers that path too: its calls are on
+        // the allowlist and pass, while it has no built-ins to deny.
+        const runtimeToolNames = toolSchemas.map((t) => t.name);
+        const gated = makeGate(phase1HarnessFloor(runtimeToolNames));
+        // Thin observer around the runtime's gate. The decision is still made
+        // (and logged) by makeGate; this only reports it. Because it sits on
+        // the return path, an observation is proof the gate ran — and the
+        // runtime does not invoke an executor until this returns.
+        const gate: Gate = async (call) => {
+          const decision = await gated.gate(call);
+          const entry = gated.log[gated.log.length - 1];
+          console.log(
+            `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${decision.behavior}`,
+          );
+          if (entry) deps.onGateDecision?.(entry);
+          return decision;
         };
 
         // ---- init --------------------------------------------------------
