@@ -1,65 +1,38 @@
-import * as fs from 'fs';
-import * as readline from 'readline';
+/**
+ * /api/session/[sessionId]/history — a session's full transcript for the chat
+ * view (useChatHistory.loadHistory).
+ *
+ * RE-BACKED ONTO THE NABY STORE (Phase C-2). The transcript is now
+ * `getMessages(sessionId)` from `app.db` (the messages table), mapped into the
+ * `ChatMessage` shape the client renders — NOT parsed from a
+ * `~/.claude/projects/<enc>/<id>.jsonl` file. The conversation renders straight
+ * from the database the engine wrote.
+ *
+ * The WIRE CONTRACT is unchanged — `{ messages: ChatMessage[] }` with
+ * `ChatMessage { id, role, content, images?, timestamp?, systemEvent?,
+ * toolCalls? }`. The store's RuntimeMessage stream carries user/assistant text
+ * (with the assistant's tool calls) plus separate `tool` result rows; we fold
+ * each tool result into its calling assistant message's `toolCalls[].result`,
+ * exactly the pairing the old jsonl `tool_use` / `tool_result` reader produced.
+ */
 import { Effect } from 'effect';
-import { getClaudeSessionPath } from '@cockpit/shared-utils';
 import { dynamicHandler, ok } from '@cockpit/effect-runtime/server';
 import {
   AppError,
   NotFoundError,
   ValidationError,
 } from '@cockpit/effect-core';
+import { getStore } from '../../engines/naby';
+import type { RuntimeMessage } from '../../engines/naby';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-interface TranscriptMessage {
-  type: string;
-  // Harness-injected (non-typed) user messages — routed out of the user-bubble
-  // bucket. See session-by-path.ts for the same treatment.
-  isMeta?: boolean;
-  isCompactSummary?: boolean;
-  origin?: { kind?: string };
-  sourceToolUseID?: string;
-  message?: {
-    role?: string;
-    content?: string | Array<{
-      type: string;
-      text?: string;
-      name?: string;
-      id?: string;
-      input?: Record<string, unknown>;
-      tool_use_id?: string;
-      content?: string;
-      is_error?: boolean;
-      // Image-related fields
-      source?: {
-        type: string;
-        media_type: string;
-        data: string;
-      };
-    }>;
-  };
-  uuid?: string;
-  timestamp?: string;
-  toolUseResult?: {
-    stdout?: string;
-    stderr?: string;
-  };
-}
-
-interface MessageImage {
-  type: 'base64';
-  media_type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
-  data: string;
-}
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  images?: MessageImage[];
   timestamp?: string;
-  systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
   toolCalls?: Array<{
     id: string;
     name: string;
@@ -70,46 +43,44 @@ interface ChatMessage {
   }>;
 }
 
-// Plain text of a user message, whether string- or block-form.
-function messageText(msg: TranscriptMessage): string {
-  const c = msg.message?.content;
-  if (typeof c === 'string') return c;
-  if (Array.isArray(c)) return c.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
-  return '';
-}
-
-// The harness-injection kind of a user message, or null if it's a real user turn.
-function injectionKind(msg: TranscriptMessage): 'skill' | 'task-notification' | 'meta' | null {
-  if (msg.isMeta && msg.sourceToolUseID) return 'skill';
-  if (msg.origin?.kind === 'task-notification') return 'task-notification';
-  if (msg.origin?.kind && msg.origin.kind !== 'human') return 'meta';
-  if (msg.isMeta) return 'meta';
-  if (msg.isCompactSummary) return 'meta'; // context-compaction continuation notice (no isMeta on some versions)
-  return null;
-}
-
-function buildSystemEvent(msg: TranscriptMessage, kind: 'task-notification' | 'meta'): ChatMessage | null {
-  const raw = messageText(msg);
-  if (kind === 'task-notification') {
-    const summary = raw.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]?.trim();
-    const status = raw.match(/<status>([\s\S]*?)<\/status>/)?.[1]?.trim();
-    return {
-      id: msg.uuid || `sysevent-${Date.now()}`,
-      role: 'system',
-      content: summary || raw.trim().slice(0, 200),
-      timestamp: msg.timestamp,
-      systemEvent: { kind: 'task-notification', detail: raw.trim(), ...(status ? { status } : {}) },
-    };
+/**
+ * Map the store's RuntimeMessage stream into the client's ChatMessage list.
+ * `tool` rows are not rendered as their own bubbles — their output is folded
+ * into the matching assistant message's tool call (by toolCallId), mirroring the
+ * old tool_use/tool_result pairing.
+ */
+function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
+  // First pass: collect every tool output keyed by the call it answers.
+  const toolResults = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      toolResults.set(m.toolCallId, m.output?.content ?? '');
+    }
   }
-  const text = raw.trim();
-  if (!text) return null;
-  return {
-    id: msg.uuid || `sysevent-${Date.now()}`,
-    role: 'system',
-    content: text,
-    timestamp: msg.timestamp,
-    systemEvent: { kind: 'meta' },
-  };
+
+  // Second pass: build user/assistant bubbles in order.
+  const out: ChatMessage[] = [];
+  messages.forEach((m, i) => {
+    if (m.role === 'user') {
+      out.push({ id: `user-${i}`, role: 'user', content: m.content });
+    } else if (m.role === 'assistant') {
+      const toolCalls = (m.toolCalls ?? []).map((tc) => ({
+        id: tc.toolCallId,
+        name: tc.toolName,
+        input: (tc.input as Record<string, unknown>) ?? {},
+        result: toolResults.get(tc.toolCallId),
+        isLoading: false,
+      }));
+      out.push({
+        id: `assistant-${i}`,
+        role: 'assistant',
+        content: m.content,
+        ...(toolCalls.length ? { toolCalls } : {}),
+      });
+    }
+    // role === 'tool' is consumed above (folded into its assistant call).
+  });
+  return out;
 }
 
 export const GET = dynamicHandler<
@@ -122,194 +93,18 @@ export const GET = dynamicHandler<
         new ValidationError({ field: 'sessionId', reason: 'missing' })
       );
     }
-    const cwd = process.cwd();
-    const transcriptPath = getClaudeSessionPath(cwd, sessionId);
-    if (!fs.existsSync(transcriptPath)) {
+    const store = getStore();
+    // Unknown session id → 404, same status the old "file not found" path used.
+    if (!store.getSession(sessionId)) {
       return yield* Effect.fail(
         new NotFoundError({ resource: 'session', id: sessionId })
       );
     }
-    const messages = yield* Effect.tryPromise({
-      try: () => parseTranscriptFile(transcriptPath),
+    const messages = yield* Effect.try({
+      try: () => toChatMessages(store.getMessages(sessionId)),
       catch: (cause) =>
-        new AppError({ message: 'parseTranscriptFile failed', cause }),
+        new AppError({ message: 'load session history failed', cause }),
     });
     return ok({ messages });
   })
 );
-
-async function parseTranscriptFile(filePath: string): Promise<ChatMessage[]> {
-  const fileStream = fs.createReadStream(filePath);
-  const rl = readline.createInterface({
-    input: fileStream,
-    crlfDelay: Infinity,
-  });
-
-  const rawMessages: TranscriptMessage[] = [];
-
-  for await (const line of rl) {
-    try {
-      const obj = JSON.parse(line) as TranscriptMessage;
-      if (obj.type === 'user' || obj.type === 'assistant') {
-        rawMessages.push(obj);
-      }
-    } catch {
-      // Ignore lines with parse errors
-    }
-  }
-
-  // Convert message format
-  return convertToChatMessages(rawMessages);
-}
-
-function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] {
-  const chatMessages: ChatMessage[] = [];
-  let currentAssistantMessage: ChatMessage | null = null;
-  const toolResults = new Map<string, string>();
-  const skillContents = new Map<string, string>();
-
-  // First pass: collect all tool results + skill bodies
-  for (const msg of rawMessages) {
-    if (msg.type === 'user' && msg.message?.content && Array.isArray(msg.message.content)) {
-      for (const block of msg.message.content) {
-        if (block.type === 'tool_result' && block.tool_use_id) {
-          toolResults.set(block.tool_use_id, block.content || '');
-        }
-      }
-    }
-    if (msg.type === 'user' && injectionKind(msg) === 'skill' && msg.sourceToolUseID) {
-      const text = messageText(msg);
-      if (text) skillContents.set(msg.sourceToolUseID, text);
-    }
-  }
-
-  // Second pass: build the message list
-  for (const msg of rawMessages) {
-    // Handle user text messages
-    if (msg.type === 'user' && msg.message?.role === 'user' && msg.message?.content) {
-      // Route harness-injected messages out of the user-bubble bucket:
-      // skill bodies fold into their tool call; task-notification / meta → system-event row.
-      const injected = injectionKind(msg);
-      if (injected) {
-        if (injected !== 'skill') {
-          const ev = buildSystemEvent(msg, injected);
-          if (ev) {
-            if (currentAssistantMessage) {
-              chatMessages.push(currentAssistantMessage);
-              currentAssistantMessage = null;
-            }
-            chatMessages.push(ev);
-          }
-        }
-        continue;
-      }
-      // content may be a string or an array
-      const content = msg.message.content;
-      if (typeof content === 'string') {
-        // If there is an unfinished assistant message, save it first
-        if (currentAssistantMessage) {
-          chatMessages.push(currentAssistantMessage);
-          currentAssistantMessage = null;
-        }
-
-        const userMessage: ChatMessage = {
-          id: msg.uuid || `user-${Date.now()}`,
-          role: 'user',
-          content: content,
-          timestamp: msg.timestamp,
-        };
-        chatMessages.push(userMessage);
-        continue;
-      }
-
-      if (!Array.isArray(content)) continue;
-
-      const textBlocks = content.filter((b) => b.type === 'text');
-      const imageBlocks = content.filter((b) => b.type === 'image' && b.source);
-
-      // Only create a user message when there is text or images
-      if (textBlocks.length > 0 || imageBlocks.length > 0) {
-        // If there is an unfinished assistant message, save it first
-        if (currentAssistantMessage) {
-          chatMessages.push(currentAssistantMessage);
-          currentAssistantMessage = null;
-        }
-
-        const userMessage: ChatMessage = {
-          id: msg.uuid || `user-${Date.now()}`,
-          role: 'user',
-          content: textBlocks.map((b) => b.text || '').join('\n'),
-          timestamp: msg.timestamp,
-        };
-
-        // Add images
-        if (imageBlocks.length > 0) {
-          userMessage.images = imageBlocks.map((b) => ({
-            type: 'base64' as const,
-            media_type: (b.source?.media_type || 'image/png') as MessageImage['media_type'],
-            data: b.source?.data || '',
-          }));
-        }
-
-        chatMessages.push(userMessage);
-      }
-    }
-
-    // Handle assistant messages
-    if (msg.type === 'assistant' && msg.message?.content) {
-      const content = msg.message.content;
-      if (!Array.isArray(content)) continue;
-
-      const textBlocks = content.filter((b) => b.type === 'text');
-      const toolBlocks = content.filter((b) => b.type === 'tool_use');
-
-      // Start of a new conversation turn (has text content and the previous assistant message is done)
-      if (textBlocks.length > 0) {
-        if (currentAssistantMessage) {
-          // Append text to the current message
-          currentAssistantMessage.content += textBlocks.map((b) => b.text || '').join('\n');
-        } else {
-          currentAssistantMessage = {
-            id: msg.uuid || `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: textBlocks.map((b) => b.text || '').join('\n'),
-            timestamp: msg.timestamp,
-            toolCalls: [],
-          };
-        }
-      }
-
-      // Handle tool calls
-      if (toolBlocks.length > 0) {
-        if (!currentAssistantMessage) {
-          currentAssistantMessage = {
-            id: msg.uuid || `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: '',
-            toolCalls: [],
-          };
-        }
-
-        for (const tool of toolBlocks) {
-          if (tool.name && tool.id) {
-            currentAssistantMessage.toolCalls!.push({
-              id: tool.id,
-              name: tool.name,
-              input: tool.input || {},
-              result: toolResults.get(tool.id),
-              isLoading: false,
-              ...(skillContents.has(tool.id) ? { skillContent: skillContents.get(tool.id) } : {}),
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // Save the last assistant message
-  if (currentAssistantMessage) {
-    chatMessages.push(currentAssistantMessage);
-  }
-
-  return chatMessages;
-}

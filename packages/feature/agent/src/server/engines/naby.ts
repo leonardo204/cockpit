@@ -84,11 +84,20 @@ import {
   type GateLogEntry,
   type McpLoadResult,
   type ModelResolver,
+  type Project,
   type ProviderProfile,
+  type RuntimeMessage,
+  type SessionRef,
   type Store,
   type ToolSchema,
   type Usage,
 } from '../../../../../../../dist/naby-runtime.mjs';
+
+// Re-exported so the session-browsing routes (Phase C-2) can type the store
+// data they map without each re-deriving the deep dist/ path. The store is the
+// single source of truth for these shapes; the routes render them into the
+// existing wire contracts.
+export type { Project, RuntimeMessage, SessionRef, Store };
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
 import { ensureCockpitImport } from './cockpitImport';
 

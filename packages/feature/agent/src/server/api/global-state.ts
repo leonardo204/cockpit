@@ -1,82 +1,106 @@
 /**
- * /api/global-state — P8+ migration
+ * /api/global-state — the cross-project "Recent sessions" search panel
+ * (RecentSessionsModal).
+ *
+ * RE-BACKED ONTO THE NABY STORE (Phase C-2). The recent list is now
+ * `listSessions()` from `app.db` (MRU, already sorted), filtered to sessions
+ * that belong to a project (have a `cwd`). Titles and previews are built from
+ * the store's messages table — NOT `~/.cockpit/state.json` and NOT any provider
+ * `.jsonl`. So the panel shows only Naby's own sessions.
+ *
+ * STATUS ROUND-TRIP: the GET reads and the POST writes a session's coarse
+ * status via a Naby setting (`session.status.<id>`), keeping the panel's own
+ * update→reload cycle working WITHOUT resurrecting `state.json`. A custom title
+ * likewise round-trips through `session.customTitle.<id>` (shared with the
+ * pinned-sessions route, so a rename is one source of truth).
+ *
+ * KNOWN SCOPED LIMITATION: the live run/notification status the engine writes
+ * still goes to `state.json` via the separate `updateGlobalState` path (WS
+ * sidebar dropdown / scheduled tasks), which this route deliberately no longer
+ * reads. So the search panel's status dot reflects only statuses set through
+ * this route; wiring engine status into the store is a later phase.
+ *
+ * The WIRE CONTRACT is unchanged — GET returns
+ * `{ sessions: RecentSessionInfo[] }` with
+ * `{ cwd, sessionId, lastActive, status, title?, lastUserMessage?,
+ *    firstMessages?, lastMessages?, searchText?, engine? }`.
  */
 import { Effect } from "effect"
-import { GLOBAL_STATE_FILE, readJsonFile } from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
+import { getStore } from "../engines/naby"
 import {
-  updateGlobalState,
-  getSessionPreview,
-  type SessionStatus,
-} from "../state/globalState"
+  deriveTitle,
+  engineFromProvider,
+  sampleMessages,
+  userTexts,
+} from "./sessions/nabyBrowse"
 
-interface GlobalSession {
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
+const statusKey = (sessionId: string) => `session.status.${sessionId}`
+const customTitleKey = (sessionId: string) => `session.customTitle.${sessionId}`
+
+interface RecentSession {
   cwd: string
   sessionId: string
   lastActive: number
-  status: SessionStatus
+  status: string
   title?: string
   lastUserMessage?: string
   firstMessages?: string[]
   lastMessages?: string[]
+  searchText?: string
+  engine?: string
 }
 
-interface GlobalState {
-  sessions: GlobalSession[]
+/**
+ * Build the recent-session list from the store: every session linked to a
+ * project, MRU-ordered, each enriched with a title + first/last preview + full
+ * search corpus read from its messages.
+ */
+function buildRecentSessions(): RecentSession[] {
+  const store = getStore()
+  const out: RecentSession[] = []
+  // listSessions() is already MRU (last_used_at DESC).
+  for (const ref of store.listSessions()) {
+    // Recent is a cross-PROJECT view; a projectless session has no cwd for the
+    // card to open, so skip it (mirrors the old list, which only held sessions
+    // with a real cwd).
+    if (!ref.cwd) continue
+
+    const messages = store.getMessages(ref.sessionId)
+    const texts = userTexts(messages)
+    const custom = store.getSetting(customTitleKey(ref.sessionId))
+    const title =
+      custom && custom.trim() ? custom : deriveTitle(ref, texts)
+    const { firstMessages, lastMessages } = sampleMessages(texts)
+    const status = store.getSetting(statusKey(ref.sessionId)) ?? ref.status ?? "normal"
+
+    out.push({
+      cwd: ref.cwd,
+      sessionId: ref.sessionId,
+      lastActive: ref.lastUsedAt,
+      status,
+      title,
+      lastUserMessage: texts[texts.length - 1],
+      firstMessages,
+      lastMessages,
+      // Untruncated corpus for the search panel: cwd + title + every user
+      // message, lowercased. Display fields stay truncated; matching reads this.
+      searchText: [ref.cwd, title, ...texts].join("\n").toLowerCase(),
+      engine: engineFromProvider(ref.providerId),
+    })
+  }
+  return out
 }
 
 export const GET = handler(() =>
-  Effect.gen(function* () {
-    const state = yield* Effect.tryPromise({
-      try: () =>
-        readJsonFile<GlobalState>(GLOBAL_STATE_FILE, { sessions: [] }),
-      catch: (cause) =>
-        new FSError({ path: GLOBAL_STATE_FILE, op: "read", cause }),
-    })
-    for (const s of state.sessions) {
-      if (!s.status) {
-        const legacy = s as GlobalSession & { isLoading?: boolean }
-        s.status = legacy.isLoading ? "loading" : "normal"
-      }
-    }
-    state.sessions.sort((a, b) => b.lastActive - a.lastActive)
-    // Return the full persisted list (week-bounded, 15–100) enriched with a
-    // first/last user-message preview so the search panel can render the same
-    // card layout as ProjectSessionsModal. Each entry reads its transcript once;
-    // IO is local (<10ms) so a one-shot read on panel open is acceptable.
-    const sessions = yield* Effect.all(
-      state.sessions.map((session) =>
-        Effect.promise(() =>
-          // Search panel needs the full-text corpus; the WS snapshot omits it.
-          getSessionPreview(session.cwd, session.sessionId, { includeSearchText: true })
-        ).pipe(
-          Effect.map((preview) => {
-            // Live title (summary line preferred). The persisted title is a
-            // teardown-time snapshot that predates the summary, so prefer the
-            // freshly read one; fall back only when the transcript is gone.
-            const title =
-              preview.title && preview.title !== "Untitled Session"
-                ? preview.title
-                : (session.title ?? preview.title)
-            return {
-              ...session,
-              title,
-              lastUserMessage: preview.lastUserMessage ?? session.lastUserMessage,
-              firstMessages: preview.firstMessages,
-              lastMessages: preview.lastMessages,
-              // Untruncated full-text corpus for the search panel: cwd + title +
-              // summary + every user message (preview.searchText). Display fields
-              // above stay truncated; matching reads this instead.
-              searchText: `${session.cwd}\n${title}\n${preview.searchText}`,
-            }
-          })
-        )
-      ),
-      { concurrency: "unbounded" }
-    )
-    return ok({ sessions })
-  })
+  Effect.try({
+    try: () => buildRecentSessions(),
+    catch: (cause) => new FSError({ path: "app.db:global-state", op: "read", cause }),
+  }).pipe(Effect.map((sessions) => ok({ sessions })))
 )
 
 export const POST = handler((req) =>
@@ -84,7 +108,7 @@ export const POST = handler((req) =>
     const body = (yield* parseJsonRaw(req)) as {
       cwd?: string
       sessionId?: string
-      status?: SessionStatus
+      status?: string
       title?: string
     }
     if (!body.cwd || !body.sessionId) {
@@ -95,20 +119,20 @@ export const POST = handler((req) =>
         })
       )
     }
-    const { cwd, sessionId, status, title } = body
-    yield* Effect.tryPromise({
-      try: () =>
-        updateGlobalState(cwd, sessionId, status || "normal", title),
-      catch: (cause) =>
-        new FSError({ path: GLOBAL_STATE_FILE, op: "write", cause }),
+    const { sessionId, status, title } = body
+    const sessions = yield* Effect.try({
+      try: () => {
+        const store = getStore()
+        // Persist the status (and title override, when supplied) as Naby
+        // settings so the panel's own reload sees them — no state.json write.
+        store.setSetting(statusKey(sessionId), status || "normal")
+        if (title !== undefined) {
+          store.setSetting(customTitleKey(sessionId), title)
+        }
+        return buildRecentSessions()
+      },
+      catch: (cause) => new FSError({ path: "app.db:global-state", op: "write", cause }),
     })
-    const state = yield* Effect.tryPromise({
-      try: () =>
-        readJsonFile<GlobalState>(GLOBAL_STATE_FILE, { sessions: [] }),
-      catch: (cause) =>
-        new FSError({ path: GLOBAL_STATE_FILE, op: "read", cause }),
-    })
-    state.sessions.sort((a, b) => b.lastActive - a.lastActive)
-    return ok(state)
+    return ok({ sessions })
   })
 )
