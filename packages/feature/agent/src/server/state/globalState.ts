@@ -14,8 +14,22 @@ import { createInterface } from 'readline';
 import { basename } from 'path';
 import { sendPushNotification } from '../push/push';
 import { generateTitle } from '../sessionTitle';
+import { getStore } from '../engines/naby';
 
 export type SessionStatus = 'normal' | 'loading' | 'unread';
+
+// Session run/read STATUS is unified on the Naby store (Phase C-2 follow-up).
+// The engine mirrors it here, the search panel (/api/global-state) reads/writes
+// it, and the "mark read" path clears it — all keyed by `session.status.<id>`.
+// state.json remains the recent-list/MRU source only; its per-session `status`
+// field is no longer the source of truth for the sidebar badge (see the
+// snapshot override below), which fixes the badge that never cleared because
+// the read (state.json) and the "mark read" write (store) disagreed.
+const statusSettingKey = (sessionId: string) => `session.status.${sessionId}`;
+// "Clear recents" watermark: sessions last used at/before this epoch-ms are
+// hidden from the recent list (both the sidebar snapshot and the search panel),
+// WITHOUT deleting the session or its transcript.
+const CLEARED_BEFORE_KEY = 'recent.clearedBefore';
 
 interface GlobalSession {
   cwd: string;
@@ -111,6 +125,16 @@ export async function updateGlobalState(
     state.sessions = state.sessions.slice(0, keep);
 
     await writeJsonFile(GLOBAL_STATE_FILE, state);
+
+    // Mirror the coarse status into the Naby store so the sidebar badge and the
+    // search panel (which read `session.status.<id>`) agree with the engine.
+    // Non-fatal: state.json above is the recent-list source; the store is the
+    // status source of truth. A store failure must never fail the run.
+    try {
+      getStore().setSetting(statusSettingKey(sessionId), status);
+    } catch {
+      /* store optional — never fail the state write */
+    }
 
     // Web Push: notify once when a run finishes (status enters 'unread').
     // Gated on the previous status so repeated 'unread' writes don't re-notify.
@@ -383,6 +407,28 @@ export async function getGlobalSessionsSnapshot(limit = 15): Promise<GlobalSessi
       const legacy = s as GlobalSession & { isLoading?: boolean };
       s.status = legacy.isLoading ? 'loading' : 'normal';
     }
+  }
+
+  // STATUS + CLEAR come from the Naby store (single source of truth). Read them
+  // best-effort so a store failure degrades to the state.json values rather than
+  // breaking the snapshot:
+  //   - override each session's status with `session.status.<id>` (the value the
+  //     "mark read" path writes) so viewing a session clears the badge, and
+  //   - drop sessions hidden by a "clear recents" watermark.
+  let clearedBefore = 0;
+  try {
+    const store = getStore();
+    const raw = store.getSetting(CLEARED_BEFORE_KEY);
+    clearedBefore = raw ? Number(raw) || 0 : 0;
+    for (const s of state.sessions) {
+      const st = store.getSetting(statusSettingKey(s.sessionId));
+      if (st) s.status = st as SessionStatus;
+    }
+  } catch {
+    /* store unavailable — fall back to the state.json status values */
+  }
+  if (clearedBefore > 0) {
+    state.sessions = state.sessions.filter((s) => s.lastActive > clearedBefore);
   }
 
   state.sessions.sort((a, b) => b.lastActive - a.lastActive);

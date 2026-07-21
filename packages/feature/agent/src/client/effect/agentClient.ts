@@ -195,6 +195,20 @@ export const loadRecentSessions = (): Effect.Effect<
     Effect.map((r) => r.sessions ?? [])
   )
 
+/**
+ * Clear the recent-sessions list (DELETE /api/global-state). Hides the current
+ * recents behind a `recent.clearedBefore` watermark — sessions and transcripts
+ * are NOT deleted (still reachable via Browse all sessions). Returns the
+ * now-filtered list so the caller can update in place.
+ */
+export const clearRecentSessions = (): Effect.Effect<
+  ReadonlyArray<RecentSessionInfo>,
+  AppError
+> =>
+  httpJson<{ sessions: RecentSessionInfo[] }>("/api/global-state", {
+    method: "DELETE",
+  }).pipe(Effect.map((r) => r.sessions ?? []))
+
 // ─────────────────────────────────────────────────────────
 // /api/ollama/{models,start}
 // ─────────────────────────────────────────────────────────

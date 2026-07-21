@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { loadRecentSessions, type RecentSessionInfo } from './effect/agentClient';
+import { loadRecentSessions, clearRecentSessions, type RecentSessionInfo } from './effect/agentClient';
 
 interface RecentSessionsModalProps {
   isOpen: boolean;
@@ -30,6 +30,9 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState('');
+  // Two-click confirm for the destructive "clear recents" action (no undo, but
+  // reversible-ish: sessions aren't deleted, only hidden until they run again).
+  const [confirmClear, setConfirmClear] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const loadSessions = useCallback(async () => {
@@ -43,6 +46,23 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
     }
     setIsLoading(false);
   }, [t]);
+
+  // Clear the recent list (hides sessions behind a server watermark; does NOT
+  // delete transcripts/projects). The DELETE returns the now-filtered list.
+  const handleClear = useCallback(async () => {
+    const exit = await BrowserRuntime.runPromiseExit(clearRecentSessions());
+    if (exit._tag === 'Success') {
+      setSessions([...exit.value]);
+    } else {
+      setError(t('sessions.loadSessionsFailed'));
+    }
+    setConfirmClear(false);
+  }, [t]);
+
+  // Drop the pending confirm whenever the modal closes.
+  useEffect(() => {
+    if (!isOpen) setConfirmClear(false);
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -118,6 +138,36 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
             </h2>
           </div>
           <div className="flex items-center gap-3 ml-4">
+            {/* Clear recents — hides the list without deleting any session or
+                transcript. Two-click confirm; disabled when already empty. */}
+            {confirmClear ? (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={handleClear}
+                  className="px-2 py-1 text-xs rounded bg-red-500 text-white hover:bg-red-600 transition-colors"
+                >
+                  {t('sessions.clearRecentsConfirm')}
+                </button>
+                <button
+                  onClick={() => setConfirmClear(false)}
+                  className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t('common.cancel')}
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmClear(true)}
+                disabled={sessions.length === 0}
+                className="p-1 text-slate-9 hover:text-red-500 hover:bg-accent rounded transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                title={t('sessions.clearRecents')}
+                aria-label={t('sessions.clearRecents')}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            )}
             <div className="relative">
               <input
                 ref={searchInputRef}

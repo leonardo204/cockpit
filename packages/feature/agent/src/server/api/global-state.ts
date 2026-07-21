@@ -41,6 +41,12 @@ export const dynamic = "force-dynamic"
 
 const statusKey = (sessionId: string) => `session.status.${sessionId}`
 const customTitleKey = (sessionId: string) => `session.customTitle.${sessionId}`
+// "Clear recents" watermark (epoch ms). Sessions last used at/before it are
+// hidden from the recent list — the session and its transcript are NOT deleted
+// (still reachable via Browse all sessions); a later turn bumps `lastUsedAt`
+// past the watermark and the session reappears. Shared with the WS snapshot in
+// state/globalState.ts so the sidebar dropdown and this panel clear together.
+const CLEARED_BEFORE_KEY = 'recent.clearedBefore'
 
 interface RecentSession {
   cwd: string
@@ -63,12 +69,18 @@ interface RecentSession {
 function buildRecentSessions(): RecentSession[] {
   const store = getStore()
   const out: RecentSession[] = []
+  const clearedRaw = store.getSetting(CLEARED_BEFORE_KEY)
+  const clearedBefore = clearedRaw ? Number(clearedRaw) || 0 : 0
   // listSessions() is already MRU (last_used_at DESC).
   for (const ref of store.listSessions()) {
     // Recent is a cross-PROJECT view; a projectless session has no cwd for the
     // card to open, so skip it (mirrors the old list, which only held sessions
     // with a real cwd).
     if (!ref.cwd) continue
+
+    // Hidden by a "clear recents" — the row is gone from the list but the
+    // session + transcript remain; a new turn (bumping lastUsedAt) un-hides it.
+    if (clearedBefore > 0 && ref.lastUsedAt <= clearedBefore) continue
 
     const messages = store.getMessages(ref.sessionId)
     const texts = userTexts(messages)
@@ -135,4 +147,25 @@ export const POST = handler((req) =>
     })
     return ok({ sessions })
   })
+)
+
+/**
+ * DELETE — clear the recent-sessions list.
+ *
+ * Sets the `recent.clearedBefore` watermark to now, which hides every currently
+ * recent session from BOTH the search panel (this route's GET) and the sidebar
+ * dropdown (the WS snapshot reads the same key). This does NOT delete any
+ * session, transcript, or project — cleared sessions stay reachable via Browse
+ * all sessions, and any session that runs again bumps its `lastUsedAt` past the
+ * watermark and returns to the list. Returns the (now-empty) filtered list.
+ */
+export const DELETE = handler(() =>
+  Effect.try({
+    try: () => {
+      const store = getStore()
+      store.setSetting(CLEARED_BEFORE_KEY, String(Date.now()))
+      return buildRecentSessions()
+    },
+    catch: (cause) => new FSError({ path: "app.db:global-state", op: "write", cause }),
+  }).pipe(Effect.map((sessions) => ok({ sessions })))
 )
