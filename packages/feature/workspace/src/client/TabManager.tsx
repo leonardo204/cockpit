@@ -45,11 +45,6 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     switchTab,
     handleSelectSession,
     handleNewTab,
-    handleNewClaude2Tab,
-    handleNewCodexTab,
-    handleNewKimiTab,
-    handleNewOllamaTab,
-    handleNewDeepseekTab,
     handleOpenSession,
     updateTabState,
     updateTabOllamaModel,
@@ -203,11 +198,6 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                 onSwitchTab={switchTab}
                 onCloseTab={closeTab}
                 onNewTab={handleNewTab}
-                onNewClaude2Tab={handleNewClaude2Tab}
-                onNewCodexTab={handleNewCodexTab}
-                onNewKimiTab={handleNewKimiTab}
-                onNewOllamaTab={handleNewOllamaTab}
-                onNewDeepseekTab={handleNewDeepseekTab}
                 onOpenProjectSessions={initialCwd ? () => setIsProjectSessionsOpen(true) : undefined}
                 onDragStart={handleTabDragStart}
                 onDragOver={handleTabDragOver}

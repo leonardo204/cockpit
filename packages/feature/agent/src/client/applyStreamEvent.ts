@@ -133,15 +133,22 @@ export function applyStreamEvent(
     const id = `harness-${assistantId}-${label}${detail ? `-${detail}` : ''}`;
     if (messages.some((m) => m.id === id)) return messages;
     const content = detail ? `${label} · ${detail}` : label;
-    return [
-      ...messages,
-      {
-        id,
-        role: 'system',
-        content,
-        systemEvent: { kind: 'meta', ...(detail ? { detail: content } : {}) },
-      } as ChatMessage,
-    ];
+    const row = {
+      id,
+      role: 'system',
+      content,
+      systemEvent: { kind: 'meta', ...(detail ? { detail: content } : {}) },
+    } as ChatMessage;
+    // Insert the harness row IMMEDIATELY BEFORE the current assistant bubble
+    // rather than at the very end. These events (SessionStart hooks firing,
+    // rate-limit notices) happen around the START of the turn, but the assistant
+    // bubble is created up front, so appending stacked them BELOW the reply —
+    // reading as "the hooks ran after the answer." Placing them just above the
+    // bubble keeps chronological order. If the bubble does not exist yet, append
+    // (it will be added after, still below these rows).
+    const idx = messages.findIndex((m) => m.id === assistantId);
+    if (idx < 0) return [...messages, row];
+    return [...messages.slice(0, idx), row, ...messages.slice(idx)];
   }
 
   // in-stream error ({type:'error', error}) — emitted by codex/kimi/ollama/deepseek and the
