@@ -71,6 +71,26 @@ export const saveProjectState = (
       new AppError({ message: "saveProjectState failed", cause }),
   })
 
+/**
+ * Delete a project's whole session-state file. Called when a project is removed
+ * from recents so its sessions do not linger as ghosts. Idempotent server-side
+ * (rm --force), so a missing file is still a success.
+ */
+export const deleteProjectState = (
+  cwd: string
+): Effect.Effect<void, AppError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const res = await fetch(
+        `/api/project-state?cwd=${encodeURIComponent(cwd)}`,
+        { method: "DELETE" }
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    },
+    catch: (cause) =>
+      new AppError({ message: "deleteProjectState failed", cause }),
+  })
+
 // ─────────────────────────────────────────────────────────
 // global-state (POST update session status)
 // ─────────────────────────────────────────────────────────

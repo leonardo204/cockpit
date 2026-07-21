@@ -3,6 +3,7 @@
  *
  * Project session-list CRUD (indexed by cwd).
  */
+import { rm } from "node:fs/promises"
 import { Effect } from "effect"
 import {
   getSessionFilePath,
@@ -117,5 +118,38 @@ export const POST = handler((req) =>
       broadcastToGlobalState({ type: "project-state-changed", cwd, closedSessionIds: closedIds })
     )
     return ok(state)
+  })
+)
+
+/**
+ * DELETE — remove a project's whole session-state file.
+ *
+ * Used when a project is removed from the recents list: the product decision is
+ * that deleting a project also discards its session history, so its sessions do
+ * not linger as ghosts in the session browsers. Idempotent — deleting an
+ * already-absent file is a success (`rm(..., { force: true })`), so a
+ * double-remove or a project that never had a state file does not error.
+ *
+ * NOTE: this removes the per-project `state.json` (the session LIST the tabs and
+ * recents read). Transcript bodies the Agent SDK may have written elsewhere are
+ * not this file's concern; they are unreferenced once the list is gone.
+ */
+export const DELETE = handler((req) =>
+  Effect.gen(function* () {
+    const cwd = new URL(req.url).searchParams.get("cwd")
+    if (!cwd) {
+      return yield* Effect.fail(
+        new ValidationError({ field: "cwd", reason: "missing" })
+      )
+    }
+    const filePath = getSessionFilePath(cwd)
+    yield* Effect.tryPromise({
+      try: () => rm(filePath, { force: true }),
+      catch: (cause) => new FSError({ path: filePath, op: "rm", cause }),
+    })
+    yield* Effect.sync(() =>
+      broadcastToGlobalState({ type: "project-state-changed", cwd, closedSessionIds: [] })
+    )
+    return ok({ deleted: true })
   })
 )
