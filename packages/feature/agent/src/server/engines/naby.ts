@@ -436,7 +436,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // passing the runtime tool names covers that path too: its calls are on
         // the allowlist and pass, while it has no built-ins to deny.
         const runtimeToolNames = toolSchemas.map((t) => t.name);
-        const gated = makeGate(phase1HarnessFloor(runtimeToolNames));
+        // THE "ALLOW CHANGES" TOGGLE (setting `gate.allowChanges`, default ON).
+        //
+        // The floor above makes OBSERVATION safe, but it also blocks the agent
+        // from doing real work (Bash / Write / Edit), which in dev mode — the
+        // developer's own local Claude sign-in, where the bare `claude` CLI
+        // already has full access — is more restrictive than the user wants. The
+        // toggle lets the user opt into full capability:
+        //   * ON  (default): allow-all, so the agent can write files and run
+        //     commands like the CLI. Every call is STILL logged through makeGate's
+        //     observer, and subagent/skill activity still surfaces — the gate runs,
+        //     it just permits. This is the interim before Phase 2's approval UI.
+        //   * OFF: the phase1HarnessFloor — read-only observation, mutation denied
+        //     from the main loop AND inside any subagent.
+        // Read per turn so flipping the toggle takes effect on the next message.
+        const allowChanges =
+          (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
+        const gated = makeGate(
+          allowChanges
+            ? () => ({ behavior: 'allow' as const })
+            : phase1HarnessFloor(runtimeToolNames),
+        );
         // Thin observer around the runtime's gate. The decision is still made
         // (and logged) by makeGate; this only reports it. Because it sits on
         // the return path, an observation is proof the gate ran — and the

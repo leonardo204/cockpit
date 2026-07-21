@@ -29,6 +29,7 @@
 import { Effect } from 'effect';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
+  claudeLogout,
   describeClaudeLogin,
   getCredentialBridge,
   isClaudeAgentSdkAvailable,
@@ -40,6 +41,7 @@ import {
   toSelectOptions,
   validateMcpEntry,
   writeSettings,
+  type ClaudeLoginAccount,
   type McpEntry,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
@@ -113,7 +115,16 @@ export async function readNabyState(
     cliFound: boolean;
     checkedAt: number;
     relevant: boolean;
+    /** WHICH account is signed in, to the extent the credential file says so.
+     *  `null` when signed out/unknown or when the file carries no identity —
+     *  NEVER an email, because the OAuth file has none (see ClaudeLoginAccount).
+     *  No secret material: these are subscription/tier LABELS only. */
+    account: ClaudeLoginAccount | null;
   };
+  /** The app-wide "Allow changes" gate policy (setting `gate.allowChanges`).
+   *  `true` (the default when unset) = the agent may edit files / run commands;
+   *  `false` = read-only observation. Not a secret. */
+  gate: { allowChanges: boolean };
   /** Configured providers, for the selection UI. NO SECRETS: `ready` is the
    *  result of a credential resolution, never the credential. */
   providers: { id: string; label: string; model: string; ready: boolean }[];
@@ -144,6 +155,10 @@ export async function readNabyState(
     // Synchronous and cached in the runtime, so this adds nothing measurable to
     // a request that already opened the store and resolved a credential.
     claudeLogin: describeClaudeLogin(opts.recheckLogin ? { force: true } : {}),
+    // The gate policy is a single global setting. Default ON (allow) when unset —
+    // the same default the engine applies, kept in one place here so the UI and
+    // the engine can never disagree about what "unset" means.
+    gate: { allowChanges: (store.getSetting('gate.allowChanges') ?? 'true') !== 'false' },
     providers,
     engine: selection.ok
       ? {
@@ -167,12 +182,14 @@ export async function readNabyState(
 
 export type NabyAction =
   | { action: 'settings.set'; enginePreference?: string; selectedProvider?: string }
+  | { action: 'gate.set'; allowChanges: boolean }
+  | { action: 'claude.logout' }
   | { action: 'mcp.upsert'; entry: unknown }
   | { action: 'mcp.remove'; name: string }
   | { action: 'mcp.test'; name: string };
 
 export type NabyActionResult =
-  | { ok: true; message?: string; tools?: string[] }
+  | { ok: true; message?: string; tools?: string[]; allowChanges?: boolean; removed?: boolean }
   | { ok: false; error: string };
 
 export async function runNabyAction(body: NabyAction): Promise<NabyActionResult> {
@@ -191,6 +208,30 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           : {}),
       });
       return { ok: true };
+    }
+
+    case 'gate.set': {
+      // THE "ALLOW CHANGES" TOGGLE. Stored as a string ('true'/'false') because
+      // that is the store's setting shape and exactly what the engine reads per
+      // turn (`getSetting('gate.allowChanges')`). One writer, one reader, one
+      // encoding — so a flip here takes effect on the very next message.
+      if (typeof body.allowChanges !== 'boolean') {
+        return { ok: false, error: 'allowChanges must be a boolean' };
+      }
+      store.setSetting('gate.allowChanges', body.allowChanges ? 'true' : 'false');
+      return { ok: true, allowChanges: body.allowChanges };
+    }
+
+    case 'claude.logout': {
+      // Sign out of the LOCAL Claude dev sign-in by removing its OAuth
+      // credential file (the runtime owns the path and the safety — see
+      // `claudeLogout`). No secret crosses this boundary: the file is deleted,
+      // never read. The runtime resets its login cache, so the next GET (or the
+      // UI's explicit re-check) reports signed-out immediately rather than a
+      // 10s-stale "signed in".
+      const result = claudeLogout();
+      if (!result.ok) return { ok: false, error: result.error };
+      return { ok: true, removed: result.removed };
     }
 
     case 'mcp.upsert': {

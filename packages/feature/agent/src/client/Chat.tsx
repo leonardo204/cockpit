@@ -23,6 +23,7 @@ import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, Too
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
+import { AllowChangesToggle } from './AllowChangesToggle';
 import { OllamaModelPicker } from './OllamaModelPicker';
 import { DeepseekConfigPicker } from './DeepseekConfigPicker';
 import { useTranslation } from 'react-i18next';
@@ -493,6 +494,10 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
               </span>
               <span className="text-muted-foreground">{t('chat.planModeDesc', { defaultValue: 'read-only · plan first, no edits' })}</span>
             </label>
+            {/* Allow changes: the app-wide gate policy. ON = the agent can edit
+                files / run commands (still logged); OFF = read-only observation.
+                Global (not per-tab), so it owns its own read/write to /api/naby. */}
+            <AllowChangesToggle />
           </div>
         )}
 
