@@ -78,7 +78,16 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   // and any action that expresses "I want to be in a project again" — picking a
   // session here, clicking a project in the sidebar, a jump from a toast —
   // clears the flag.
-  const [showHome, setShowHome] = useState(false);
+  // A COLD LAUNCH lands on home. The Electron window loads `/` with no `cwd`
+  // param, so `initialCwd` is undefined on a normal start and set only when
+  // deep-linking into a project. Starting `showHome` from `!initialCwd` makes a
+  // fresh launch show the recents/home view instead of silently re-entering the
+  // last-opened project — a returning user with a non-empty `projects.json` used
+  // to boot straight into `activeIndex`, which read as "the app reopened my old
+  // session for me." Every open path (`handleSelectProject`, `openProjectByCwd`,
+  // `handleAddProject`, `OPEN_PROJECT`) already clears this flag, so picking a
+  // recent from home still enters the project; `GO_HOME` still sets it back.
+  const [showHome, setShowHome] = useState(!initialCwd);
   // Lazy load: only render project iframes that have been activated before (ever-growing set)
   const [loadedCwds, setLoadedCwds] = useState<Set<string>>(new Set());
   const iframeRefs = useRef<Map<string, HTMLIFrameElement>>(new Map());
@@ -368,6 +377,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   // Remove project
   const handleRemoveProject = useCallback((index: number) => {
+    const removed = projects[index];
     const newProjects = projects.filter((_, i) => i !== index);
     let newActiveIndex = activeIndex;
 
@@ -381,6 +391,22 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
     setProjects(newProjects);
     setActiveIndex(newActiveIndex);
     saveProjects(newProjects, newActiveIndex, collapsed);
+
+    // Removing a project also discards its session history — otherwise the
+    // sessions linger as ghosts in the session browsers. Fire-and-forget and
+    // idempotent server-side, so a project that never had a state file is fine.
+    if (removed?.cwd) {
+      void (async () => {
+        const [{ BrowserRuntime }, { deleteProjectState }] = await Promise.all([
+          import('@cockpit/effect-runtime'),
+          import('./effect/stateClient'),
+        ]);
+        const { Effect } = await import('effect');
+        await BrowserRuntime.runPromise(
+          deleteProjectState(removed.cwd).pipe(Effect.catchAll(() => Effect.void))
+        );
+      })();
+    }
   }, [projects, activeIndex, collapsed, saveProjects]);
 
   // Open a project by path — the shared body behind every "add/open this

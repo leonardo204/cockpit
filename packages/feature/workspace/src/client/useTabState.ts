@@ -106,8 +106,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         )
       );
       if (data) {
-        const savedSessions: string[] = data.sessions || [];
-        const savedActiveSessionId: string | undefined = data.activeSessionId;
         const savedEngines: Record<string, string> = data.engines || {};
         const savedOllamaModels: Record<string, string> = data.ollamaModels || {};
         const savedDeepseekModels: Record<string, string> = data.deepseekModels || {};
@@ -116,33 +114,34 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         // keys are ignored on load and dropped on the next save.
         const savedPlanModes: Record<string, boolean> = data.planModes || {};
 
-        // Merge URL sessionId with sessions in session.json (deduplicate)
-        let allSessions = [...savedSessions];
-        if (initialSessionId && !allSessions.includes(initialSessionId)) {
-          allSessions = [initialSessionId, ...allSessions];
-        }
-
-        if (allSessions.length > 0) {
-          const restoredTabs: TabInfo[] = allSessions.map((sessionId: string, index: number) => ({
-            id: `tab-${Date.now()}-${index}`,
-            cwd: initialCwd,
-            sessionId,
-            title: `Session ${sessionId.slice(0, 6)}...`,
-            engine: (savedEngines[sessionId] as ChatEngine) || undefined,
-            ollamaModel: savedOllamaModels[sessionId] || undefined,
-            deepseekModel: (savedDeepseekModels[sessionId] as DeepseekModel) || undefined,
-            planMode: savedPlanModes[sessionId] || undefined,
-          }));
-
-          // Activation priority: URL sessionId > session.json activeSessionId > first
-          const activeSessionToUse = initialSessionId || savedActiveSessionId;
-          let activeIndex = activeSessionToUse ? allSessions.indexOf(activeSessionToUse) : -1;
-          if (activeIndex < 0) activeIndex = 0;
-
-          const newActiveTabId = restoredTabs[activeIndex].id;
-          setTabs(restoredTabs);
-          setActiveTabId(newActiveTabId);
-
+        // PRODUCT RULE: opening a project starts a NEW session. We deliberately do
+        // NOT rebuild the previous multi-tab layout from state.json — a fresh open
+        // used to silently reconnect the last active session (the "기존 세션 연결"
+        // complaint), which this app must not do. The saved sessions are NOT lost:
+        // the save effect below is a union (it only ADDS, and removes solely via an
+        // explicit closedSessionIds; see /api/project-state), so they stay on disk
+        // and remain reachable through Recent Sessions / Browse all sessions.
+        //
+        // The one exception is an EXPLICIT open of a specific past session — a deep
+        // link or a pick from the session browser — which arrives as initialSessionId.
+        // That id is already seeded into the default tab (see the tabs initial state
+        // above); here we only carry over its saved per-session settings so the
+        // reopened session keeps its engine / model / plan-mode.
+        if (initialSessionId) {
+          setTabs((prev) =>
+            prev.map((t) =>
+              t.sessionId === initialSessionId
+                ? {
+                    ...t,
+                    engine: (savedEngines[initialSessionId] as ChatEngine) || t.engine,
+                    ollamaModel: savedOllamaModels[initialSessionId] || t.ollamaModel,
+                    deepseekModel:
+                      (savedDeepseekModels[initialSessionId] as DeepseekModel) || t.deepseekModel,
+                    planMode: savedPlanModes[initialSessionId] ?? t.planMode,
+                  }
+                : t,
+            ),
+          );
           setTimeout(() => {
             isInitializingRef.current = false;
           }, 0);
@@ -241,56 +240,34 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   }, [activeTabId, tabs, initialCwd]);
 
   // #10: keep in-app tabs in sync across browser tabs of the same project. The
-  // /api/project-state route broadcasts `project-state-changed` after every tab open/close.
-  // We do NOT mirror by set-diff (a tab that simply hasn't opened a session must not be read
-  // as "closed it" — that collapsed every tab to the smallest set). Instead:
-  //   • ADD: any session in the shared state.json (a union) we don't have a tab for.
-  //   • REMOVE: only the sessions in the event's `closedSessionIds` (an explicit close).
-  // State is written before the broadcast, so engine/model are already correct (no race).
+  // /api/project-state broadcasts `project-state-changed` after every tab open/close.
+  // We reconcile REMOVALS ONLY — the sessions named in the event's `closedSessionIds`.
+  //
+  // We deliberately do NOT add sessions from the persisted union. That ADD path
+  // existed for cross-window sync, but with the "opening a project starts a NEW
+  // session" rule (see loadSessions) it does the wrong thing: state.json keeps
+  // every past session, so on the first save→broadcast after opening, reconcile
+  // pulled the WHOLE history back in as tabs — the "I pressed + and my old
+  // sessions reappeared" bug. Naby is a single-window desktop app, so there is no
+  // second window whose newly-opened session we need to mirror; past sessions are
+  // reached through the session browsers, never auto-restored here.
   const reconcileTabs = useCallback((closedIds: string[]) => {
-    if (!initialCwd) return;
-    BrowserRuntime.runPromise(
-      loadProjectState(initialCwd).pipe(Effect.catchAll(() => Effect.succeed(null)))
-    ).then((data) => {
-      if (!data) return;
-      const saved: string[] = data.sessions || [];
-      const engines = (data.engines || {}) as Record<string, string>;
-      const ollamaModels = (data.ollamaModels || {}) as Record<string, string>;
-      const deepseekModels = (data.deepseekModels || {}) as Record<string, string>;
-      const planModes = (data.planModes || {}) as Record<string, boolean>;
-
-      const prev = tabsRef.current;
-      const closedSet = new Set(closedIds);
-      // remove only explicitly-closed sessions; keep placeholders + everything else
-      const kept = prev.filter((t) => !t.sessionId || !closedSet.has(t.sessionId));
-      const keptIds = new Set(kept.map((t) => t.sessionId).filter(Boolean));
-      // add union sessions we don't have
-      const toAdd = saved.filter((sid) => !keptIds.has(sid));
-
-      // No removal + no add → bail (referential stability avoids a save→broadcast loop).
-      if (kept.length === prev.length && toAdd.length === 0) return;
-
-      const added: TabInfo[] = toAdd.map((sid, i) => ({
-        id: `tab-${Date.now()}-sync-${i}`,
-        cwd: initialCwd,
-        sessionId: sid,
-        title: `Session ${sid.slice(0, 6)}...`,
-        engine: (engines[sid] as ChatEngine) || undefined,
-        ollamaModel: ollamaModels[sid] || undefined,
-        deepseekModel: (deepseekModels[sid] as DeepseekModel) || undefined,
-        planMode: planModes[sid] || undefined,
-      }));
-      let next = [...kept, ...added];
-      // never leave the tab bar empty (tabs[0].id is read every render)
-      if (next.length === 0) {
-        next = [{ id: `tab-${Date.now()}`, cwd: initialCwd, title: 'New Chat' }];
-      }
-      setTabs(next);
-      // active tab closed elsewhere → fall back to the last remaining tab
-      if (!next.some((t) => t.id === activeTabIdRef.current)) {
-        setActiveTabId(next[next.length - 1].id);
-      }
-    });
+    if (!initialCwd || closedIds.length === 0) return;
+    const closedSet = new Set(closedIds);
+    const prev = tabsRef.current;
+    // remove only explicitly-closed sessions; keep placeholders + everything else
+    const kept = prev.filter((t) => !t.sessionId || !closedSet.has(t.sessionId));
+    if (kept.length === prev.length) return; // nothing we hold was closed
+    // never leave the tab bar empty (tabs[0].id is read every render)
+    const next =
+      kept.length === 0
+        ? [{ id: `tab-${Date.now()}`, cwd: initialCwd, title: 'New Chat' }]
+        : kept;
+    setTabs(next);
+    // active tab closed elsewhere → fall back to the last remaining tab
+    if (!next.some((t) => t.id === activeTabIdRef.current)) {
+      setActiveTabId(next[next.length - 1].id);
+    }
   }, [initialCwd]);
 
   useWebSocket({
@@ -394,32 +371,16 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     }
   }, [tabs, initialCwd, addTab]);
 
-  // Create new blank tab (Claude Code, appended to end)
+  // Create new blank tab (appended to end). Naby has a single runtime engine —
+  // the engine picker was removed, so every new tab is a default tab (engine
+  // undefined → the Naby `claude` path → /api/chat → nabySpec). dev/prod is
+  // decided by whether an API key is configured, not by a per-tab choice.
   const handleNewTab = useCallback(() => {
     addTab(initialCwd, undefined, undefined, undefined, undefined, undefined, true);
   }, [initialCwd, addTab]);
 
-  // Create new Claude 2 tab (appended to end)
-  const handleNewClaude2Tab = useCallback(() => {
-    addTab(initialCwd, undefined, 'New Claude 2 Chat', 'claude2', undefined, undefined, true);
-  }, [initialCwd, addTab]);
-
-  // Create new Codex tab (appended to end)
-  const handleNewCodexTab = useCallback(() => {
-    addTab(initialCwd, undefined, 'New Codex Chat', 'codex', undefined, undefined, true);
-  }, [initialCwd, addTab]);
-
-  // Create new Kimi tab (appended to end)
-  const handleNewKimiTab = useCallback(() => {
-    addTab(initialCwd, undefined, 'New Kimi Chat', 'kimi', undefined, undefined, true);
-  }, [initialCwd, addTab]);
-
-  // Create new Ollama tab (appended to end)
-  const handleNewOllamaTab = useCallback((model?: string) => {
-    addTab(initialCwd, undefined, model ? `New Ollama (${model})` : 'New Ollama Chat', 'ollama', model, undefined, true);
-  }, [initialCwd, addTab]);
-
-  // Update Ollama model for a tab
+  // Update Ollama model for a tab (kept for sessions that still carry a saved
+  // ollama engine from before the picker was removed; ChatPanel wires this)
   const updateTabOllamaModel = useCallback((tabId: string, model: string) => {
     setTabs((prev) =>
       prev.map((tab) =>
@@ -427,11 +388,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
       )
     );
   }, []);
-
-  // Create new DeepSeek tab (defaults to v4-flash; picker in chat header lets user switch later) (appended to end)
-  const handleNewDeepseekTab = useCallback(() => {
-    addTab(initialCwd, undefined, 'New DeepSeek Chat', 'deepseek', undefined, 'deepseek-v4-flash', true);
-  }, [initialCwd, addTab]);
 
   // Update DeepSeek model for a tab
   const updateTabDeepseekModel = useCallback((tabId: string, model: DeepseekModel) => {
@@ -576,11 +532,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     switchTab,
     handleSelectSession,
     handleNewTab,
-    handleNewClaude2Tab,
-    handleNewCodexTab,
-    handleNewKimiTab,
-    handleNewOllamaTab,
-    handleNewDeepseekTab,
     handleOpenSession,
     updateTabState,
     updateTabOllamaModel,
