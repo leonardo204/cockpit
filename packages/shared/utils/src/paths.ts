@@ -288,8 +288,9 @@ export function findCodexSessionPath(threadId: string): string | null {
       { encoding: 'utf8', timeout: 3000 }
     ).trim();
     if (result) {
-      // Return first match
-      return result.split('\n')[0];
+      // Return first match. `?? null` keeps the declared `string | null` return
+      // sound under noUncheckedIndexedAccess (split()[0] is `string | undefined`).
+      return result.split('\n')[0] ?? null;
     }
   } catch { /* ignore */ }
   return null;

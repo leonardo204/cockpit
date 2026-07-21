@@ -90,6 +90,7 @@ import {
   type Usage,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
+import { ensureCockpitImport } from './cockpitImport';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -123,6 +124,11 @@ export function getStore(): Store {
     const path = resolveDbPath();
     mkdirSync(dirname(path), { recursive: true });
     sharedStore = new SqliteStore({ path });
+    // One-time, guarded, non-fatal: carry the existing cockpit project list and
+    // session↔project links into the store the first time it opens (Phase C).
+    // Runs here — inside the once-per-process init — so it happens exactly once
+    // and before any route reads projects out of the store.
+    ensureCockpitImport(sharedStore);
   }
   return sharedStore;
 }
@@ -222,7 +228,30 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // rekey() to it below. providerId is left empty here — runTurn records
         // the provider that actually answers (it is a hint, not a constraint).
         const store = getStore();
-        const sessionId = ctx.sessionId || store.createSession('').sessionId;
+        // Phase D — record the OWNING PROJECT on the session lifecycle (§6.1).
+        // When this turn is about a directory (`ctx.cwd` is a non-empty string),
+        // make sure the project row exists and bumps to the front of the MRU
+        // list (`touchProject`), and LINK the session to it — a link, not a key,
+        // so message/memory/usage stay keyed by sessionId alone. A projectless
+        // turn (no cwd) stays fully valid: none of this runs for it, and provider
+        // independence is untouched (nothing here reads or writes a provider).
+        //
+        // `RunCtx.cwd` is documented "normalized, may be ''", and '' is NOT a
+        // directory — the length guard keeps a no-directory turn projectless end
+        // to end rather than minting a project keyed by the empty string.
+        const projectCwd =
+          typeof ctx.cwd === 'string' && ctx.cwd.length > 0 ? ctx.cwd : undefined;
+        let sessionId: string;
+        if (ctx.sessionId) {
+          // Resuming an existing session: link it to this turn's project.
+          sessionId = ctx.sessionId;
+          if (projectCwd) store.setSessionProject(sessionId, projectCwd);
+        } else {
+          // Minting a fresh session: create it already linked to the project.
+          // providerId is left empty — runTurn records who actually answers.
+          sessionId = store.createSession('', undefined, projectCwd).sessionId;
+        }
+        if (projectCwd) store.touchProject(projectCwd);
         const requestedModel =
           typeof ctx.params.model === 'string' ? ctx.params.model : undefined;
 

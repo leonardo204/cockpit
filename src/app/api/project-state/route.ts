@@ -1,27 +1,36 @@
 /**
- * /api/project-state — P6 migration
+ * /api/project-state — a project's session list + per-session UI state.
  *
- * Project session-list CRUD (indexed by cwd).
+ * RE-BACKED ONTO THE NABY STORE (Phase C, part 1). The session list for a project
+ * is now the set of sessions LINKED to that cwd in `app.db` (`SessionRef.cwd`),
+ * not the per-project `~/.cockpit/projects/<enc>/session.json` file. The WIRE
+ * CONTRACT is unchanged — the client still reads/writes
+ * `{ sessions, activeSessionId?, engines?, ollamaModels?, deepseekModels?, planModes? }`
+ * — so the running UI cannot tell the difference.
+ *
+ * WHERE EACH FIELD LIVES NOW:
+ *   - `sessions[]`       → `listSessionsByProject(cwd)` (MRU), the session→project
+ *                          links. A POST `setSessionProject`s each incoming id.
+ *   - `activeSessionId`  → a Naby setting keyed by cwd (`ui.activeSession.<cwd>`),
+ *                          falling back to the MRU head.
+ *   - `planModes`        → per-session Naby settings (`session.planMode.<id>`), so
+ *                          the plan-mode checkbox still round-trips.
+ *   - `engines` / `ollamaModels` / `deepseekModels` → the engine-picker was
+ *                          removed; these are vestigial and return `{}`.
+ *
+ * UNION / NO-SHRINK is inherent here: a POST only ADDS links for the sessions the
+ * tab lists and only REMOVES via `closedSessionIds` (deleteSession). Sessions a
+ * given tab does not list stay linked — a tab can never collapse the shared set.
  */
-import { rm } from "node:fs/promises"
 import { Effect } from "effect"
-import {
-  getSessionFilePath,
-  readJsonFile,
-  writeJsonFile,
-  withFileLock,
-} from "@cockpit/shared-utils"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
+import { getStore } from "@cockpit/feature-agent/server/engines/naby"
 import { broadcastToGlobalState } from "../../../lib/globalStateBroadcast"
 
-/**
- * Persisted shape. Session files written by older builds may still contain a `chatModes`
- * key (the removed SDK/PTY execution-mode picker). That is safe: reads go through
- * `readJsonFile`, a plain JSON.parse + cast with no runtime validation, so an unknown key
- * is carried through untouched and never read; and the POST handler rebuilds `next`
- * field-by-field, so the stale key is simply dropped the next time the file is written.
- */
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
 interface ProjectState {
   sessions: string[]
   activeSessionId?: string
@@ -29,6 +38,39 @@ interface ProjectState {
   ollamaModels?: Record<string, string>
   deepseekModels?: Record<string, string>
   planModes?: Record<string, boolean>
+}
+
+const activeSessionKey = (cwd: string) => `ui.activeSession.${cwd}`
+const planModeKey = (sessionId: string) => `session.planMode.${sessionId}`
+
+/**
+ * Build the wire state for a project from the store: the MRU session list, the
+ * stored/derived active session, empty (vestigial) engine maps, and the per-
+ * session plan-mode flags for exactly the sessions in the list.
+ */
+function readProjectState(cwd: string): ProjectState {
+  const store = getStore()
+  const sessions = store.listSessionsByProject(cwd).map((s) => s.sessionId)
+  const inSet = new Set(sessions)
+
+  const storedActive = store.getSetting(activeSessionKey(cwd))
+  const activeSessionId =
+    storedActive && inSet.has(storedActive) ? storedActive : sessions[0]
+
+  const planModes: Record<string, boolean> = {}
+  for (const sid of sessions) {
+    if (store.getSetting(planModeKey(sid)) === "true") planModes[sid] = true
+  }
+
+  return {
+    sessions,
+    ...(activeSessionId ? { activeSessionId } : {}),
+    // Vestigial (engine-picker removed) — returned empty to keep the shape.
+    engines: {},
+    ollamaModels: {},
+    deepseekModels: {},
+    ...(Object.keys(planModes).length ? { planModes } : {}),
+  }
 }
 
 export const GET = handler((req) =>
@@ -39,10 +81,9 @@ export const GET = handler((req) =>
         new ValidationError({ field: "cwd", reason: "missing" })
       )
     }
-    const filePath = getSessionFilePath(cwd)
-    const state = yield* Effect.tryPromise({
-      try: () => readJsonFile<ProjectState>(filePath, { sessions: [] }),
-      catch: (cause) => new FSError({ path: filePath, op: "read", cause }),
+    const state = yield* Effect.try({
+      try: () => readProjectState(cwd),
+      catch: (cause) => new FSError({ path: "app.db:project-state", op: "read", cause }),
     })
     return ok(state)
   })
@@ -61,59 +102,53 @@ export const POST = handler((req) =>
     }
     if (!Array.isArray(body.sessions)) {
       return yield* Effect.fail(
-        new ValidationError({
-          field: "sessions",
-          reason: "must be array",
-        })
+        new ValidationError({ field: "sessions", reason: "must be array" })
       )
     }
 
     const cwd = body.cwd
     const incoming = body.sessions
     const closedIds = body.closedSessionIds ?? []
-    const filePath = getSessionFilePath(cwd)
+    const planModesIn = body.planModes ?? {}
+    const activeIn = body.activeSessionId
 
-    // Read-modify-write under a lock: UNION the incoming sessions with what's already
-    // persisted, then subtract explicitly-closed ids. A browser tab only knows ITS OWN open
-    // subset; a plain overwrite would let a tab with fewer tabs shrink the shared set and
-    // collapse the others (the "not opened here" == "closed" bug). Union makes those
-    // distinct — removal happens ONLY via closedSessionIds.
-    const state = yield* Effect.tryPromise({
-      try: () =>
-        withFileLock(filePath, async () => {
-          const existing = await readJsonFile<ProjectState>(filePath, { sessions: [] })
-          const closed = new Set(closedIds)
-          const union: string[] = []
-          for (const sid of [...existing.sessions, ...incoming]) {
-            if (!closed.has(sid) && !union.includes(sid)) union.push(sid)
-          }
-          const inSet = new Set(union)
-          const merge = <T>(a?: Record<string, T>, b?: Record<string, T>) => {
-            const m: Record<string, T> = { ...(a ?? {}), ...(b ?? {}) }
-            for (const id of Object.keys(m)) if (!inSet.has(id)) delete m[id] // drop closed/orphan
-            return m
-          }
-          const engines = merge(existing.engines, body.engines)
-          const ollamaModels = merge(existing.ollamaModels, body.ollamaModels)
-          const deepseekModels = merge(existing.deepseekModels, body.deepseekModels)
-          const planModes = merge<boolean>(existing.planModes, body.planModes)
-          const active = body.activeSessionId ?? existing.activeSessionId
-          const next: ProjectState = {
-            sessions: union,
-            ...(active && inSet.has(active) ? { activeSessionId: active } : {}),
-            ...(Object.keys(engines).length ? { engines } : {}),
-            ...(Object.keys(ollamaModels).length ? { ollamaModels } : {}),
-            ...(Object.keys(deepseekModels).length ? { deepseekModels } : {}),
-            ...(Object.keys(planModes).length ? { planModes } : {}),
-          }
-          await writeJsonFile(filePath, next)
-          return next
-        }),
-      catch: (cause) => new FSError({ path: filePath, op: "write", cause }),
+    const state = yield* Effect.try({
+      try: () => {
+        const store = getStore()
+
+        // Removal happens ONLY via closedSessionIds — deleteSession drops the
+        // session and everything keyed to it. Do this first so a session that is
+        // both listed and closed ends up closed.
+        for (const sid of closedIds) store.deleteSession(sid)
+
+        // Link each incoming session to this project. Only for sessions that
+        // exist in the store (a tab should not conjure a session row); linking is
+        // idempotent and never touches messages/memory. This is the UNION add —
+        // sessions other tabs linked stay linked.
+        const closed = new Set(closedIds)
+        for (const sid of incoming) {
+          if (closed.has(sid)) continue
+          if (store.getSession(sid)) store.setSessionProject(sid, cwd)
+        }
+
+        // Persist per-session plan-mode flags (skip closed/deleted ids).
+        for (const [sid, on] of Object.entries(planModesIn)) {
+          if (closed.has(sid)) continue
+          store.setSetting(planModeKey(sid), String(Boolean(on)))
+        }
+
+        // Persist the active session when it survives (present and not closed).
+        if (activeIn && !closed.has(activeIn) && store.getSession(activeIn)) {
+          store.setSetting(activeSessionKey(cwd), activeIn)
+        }
+
+        return readProjectState(cwd)
+      },
+      catch: (cause) => new FSError({ path: "app.db:project-state", op: "write", cause }),
     })
 
-    // #10: notify other browser tabs to reconcile in-app tabs. closedSessionIds carries the
-    // precise removals so viewers remove exactly those tabs (never collapse by set diff).
+    // #10: notify other browser tabs to reconcile in-app tabs. closedSessionIds
+    // carries the precise removals so viewers remove exactly those tabs.
     yield* Effect.sync(() =>
       broadcastToGlobalState({ type: "project-state-changed", cwd, closedSessionIds: closedIds })
     )
@@ -122,17 +157,12 @@ export const POST = handler((req) =>
 )
 
 /**
- * DELETE — remove a project's whole session-state file.
+ * DELETE — remove a project (CASCADE).
  *
- * Used when a project is removed from the recents list: the product decision is
- * that deleting a project also discards its session history, so its sessions do
- * not linger as ghosts in the session browsers. Idempotent — deleting an
- * already-absent file is a success (`rm(..., { force: true })`), so a
- * double-remove or a project that never had a state file does not error.
- *
- * NOTE: this removes the per-project `state.json` (the session LIST the tabs and
- * recents read). Transcript bodies the Agent SDK may have written elsewhere are
- * not this file's concern; they are unreferenced once the list is gone.
+ * Replaces the old per-project state-file delete: `removeProject` drops the
+ * project row AND every session it owns (with their messages/memory/usage), so
+ * the project's sessions do not linger as ghosts. Idempotent — removing an
+ * already-absent project is a success. The client contract is unchanged.
  */
 export const DELETE = handler((req) =>
   Effect.gen(function* () {
@@ -142,10 +172,9 @@ export const DELETE = handler((req) =>
         new ValidationError({ field: "cwd", reason: "missing" })
       )
     }
-    const filePath = getSessionFilePath(cwd)
-    yield* Effect.tryPromise({
-      try: () => rm(filePath, { force: true }),
-      catch: (cause) => new FSError({ path: filePath, op: "rm", cause }),
+    yield* Effect.try({
+      try: () => getStore().removeProject(cwd),
+      catch: (cause) => new FSError({ path: "app.db:project-state", op: "rm", cause }),
     })
     yield* Effect.sync(() =>
       broadcastToGlobalState({ type: "project-state-changed", cwd, closedSessionIds: [] })
