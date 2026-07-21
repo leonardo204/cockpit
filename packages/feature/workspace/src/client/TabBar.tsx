@@ -227,8 +227,13 @@ export function TabBar({
               }`}
               onClick={() => onSwitchTab(tab.id)}
             >
-              {/* Circle number + status badge (top-right) */}
-              <div className="relative flex-shrink-0">
+              {/* Circle number + status badge (top-right). The number doubles
+                  as the Cmd/Ctrl+N shortcut hint (see TabManager keydown);
+                  only the first 9 tabs are reachable that way. */}
+              <div
+                className="relative flex-shrink-0"
+                title={index < 9 ? `⌘${index + 1}` : undefined}
+              >
                 <TabNumberIcon number={index + 1} isActive={tab.id === activeTabId} />
                 {/* Loading pulse dot - top-right */}
                 {tab.isLoading && (

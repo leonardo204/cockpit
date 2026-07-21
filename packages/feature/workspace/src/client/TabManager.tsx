@@ -12,7 +12,7 @@
  * and the HTML-apps launcher all went with the panels they drove.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ProjectSessionsModal } from '@cockpit/feature-agent';
 import { ChatProvider } from '@cockpit/feature-agent';
 import { PanelPortalProvider } from '@cockpit/shared-ui';
@@ -90,11 +90,43 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   // never re-fetch messages appended externally (e.g. a scheduled-task run).
   const [sessionRefresh, setSessionRefresh] = useState<{ sessionId: string; nonce: number } | null>(null);
 
-  // Globally swallow Cmd+S so the browser's "Save Page As..." never leaks through.
+  // Cmd/Ctrl+1..9 tab switching needs the live tab list + switchTab without
+  // re-registering the keydown listener on every tab change. Ref indirection
+  // keeps the effect's dep array empty (single stable listener) while always
+  // reading the current values.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const switchTabRef = useRef(switchTab);
+  switchTabRef.current = switchTab;
+
+  // Global keyboard shortcuts for the chat host. This listener lives on the
+  // project iframe's own window (the same window the tab UI renders into), so
+  // it fires whenever focus is inside the iframe — which is where the chat and
+  // tab bar are. (The parent-window listener in Workspace.tsx cannot see these
+  // events because iframe keydowns don't bubble to the parent; that is exactly
+  // why the tab shortcut belongs here, next to the existing Cmd+S swallow that
+  // already relies on this behaviour.)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === 's') {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      // Swallow Cmd+S so the browser's "Save Page As..." never leaks through.
+      if (e.key === 's') {
         e.preventDefault();
+        return;
+      }
+      // Cmd/Ctrl+1..9 → switch to the Nth tab. 1..8 are positional; 9 always
+      // jumps to the LAST tab (common convention). Out-of-range positions
+      // (e.g. Cmd+5 with 3 tabs) are ignored so the browser default is left
+      // untouched.
+      if (e.key >= '1' && e.key <= '9') {
+        const currentTabs = tabsRef.current;
+        if (currentTabs.length === 0) return;
+        const digit = Number(e.key);
+        const targetIndex = digit === 9 ? currentTabs.length - 1 : digit - 1;
+        if (targetIndex >= 0 && targetIndex < currentTabs.length) {
+          e.preventDefault();
+          switchTabRef.current(currentTabs[targetIndex].id);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);

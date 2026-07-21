@@ -592,6 +592,10 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         // the recents list replaced. Two buttons with the same label doing
         // different things is worse than either one alone.
         onOpenSessionBrowser={handlePickAndOpenProject}
+        // "Browse all sessions" (sidebar footer) opens the machine-wide
+        // SessionBrowser modal — the only entry point to it now that the top
+        // button is the folder picker.
+        onBrowseAllSessions={() => setIsSessionBrowserOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenNote={(cwd) => { setNoteProjectCwd(cwd ?? null); setIsNoteOpen(true); }}
         onSwitchProject={handleSwitchProject}
