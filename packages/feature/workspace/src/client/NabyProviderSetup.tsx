@@ -133,12 +133,13 @@ const inputClass =
   'w-full px-2 py-1.5 text-sm rounded border border-border bg-background text-foreground ' +
   'placeholder:text-muted-foreground/60 focus:outline-none focus:border-brand';
 
-/** Azure's apiVersion is the one config field with a sane default to offer. */
+/** Placeholders/hints per config field. */
 const CONFIG_PLACEHOLDERS: Record<string, string> = {
   region: 'us-east-1',
-  resource: 'my-azure-resource',
+  baseURL: 'https://<resource>.services.ai.azure.com/openai/v1',
+  resource: 'my-azure-resource (classic endpoint only)',
   deployment: 'my-deployment-name',
-  apiVersion: '2024-10-21',
+  apiVersion: '2024-10-21 (classic endpoint only)',
 };
 
 // ---------------------------------------------------------------------------
@@ -168,7 +169,19 @@ function ProviderForm({
   const [insecureWarning, setInsecureWarning] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  const missing = row.configFields.filter((f) => !config[f]?.trim());
+  // Azure has TWO valid endpoint shapes, so not every configField is required at
+  // once: supply EITHER `baseURL` (newer AI-Services /openai/v1 endpoint) OR
+  // `resource` + `apiVersion` (classic). `deployment` is always required. Every
+  // other provider requires all of its configFields.
+  const missing =
+    row.kind === 'azure-openai'
+      ? [
+          ...(config.deployment?.trim() ? [] : ['deployment']),
+          ...(config.baseURL?.trim() || (config.resource?.trim() && config.apiVersion?.trim())
+            ? []
+            : ['baseURL-or-resource']),
+        ]
+      : row.configFields.filter((f) => !config[f]?.trim());
   const canSave = (key.trim().length > 0 || row.stored) && model.trim().length > 0 && missing.length === 0;
 
   const save = useCallback(
