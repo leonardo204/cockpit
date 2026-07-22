@@ -10,6 +10,9 @@ import {
   ValidationError,
 } from '@cockpit/effect-core';
 import { generateTitle } from '../sessionTitle';
+import { getStore } from '../engines/naby';
+import type { RuntimeMessage } from '../engines/naby';
+import { deriveTitle, userTexts } from './sessions/nabyBrowse';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -247,14 +250,11 @@ export const POST = handler((req) =>
       );
     }
 
-    // Resolve the session's transcript file (single-engine: Claude Agent SDK path).
-    const resolved = yield* Effect.sync(() => resolveSessionPath(cwd, sessionId));
-    if (!resolved) {
-      return yield* Effect.fail(
-        new NotFoundError({ resource: 'session', id: sessionId })
-      );
-    }
-    const { sessionPath, engine } = resolved;
+    // SPECIAL FILE-BASED DRILL-INS come first. A subagent transcript and a
+    // workflow run journal are files the SDK / harness writes (not conversation
+    // rows), so ONLY these two branches resolve the on-disk session path. The
+    // PRIMARY main-session transcript (no toolUseId / workflowId) is served from
+    // the Naby store (app.db) further down — it no longer requires a `.jsonl`.
 
     // Subagent transcript branch: same parser/fingerprint flow on the agent jsonl
     if (toolUseId) {
@@ -263,6 +263,13 @@ export const POST = handler((req) =>
           new ValidationError({ field: 'toolUseId', reason: 'invalid' })
         );
       }
+      const resolved = yield* Effect.sync(() => resolveSessionPath(cwd, sessionId));
+      if (!resolved) {
+        return yield* Effect.fail(
+          new NotFoundError({ resource: 'session', id: sessionId })
+        );
+      }
+      const { sessionPath } = resolved;
       const sub = yield* Effect.sync(() => findSubagentTranscript(sessionPath, toolUseId));
       if (!sub) {
         return yield* Effect.fail(
@@ -294,6 +301,13 @@ export const POST = handler((req) =>
           new ValidationError({ field: 'workflowId', reason: 'invalid' })
         );
       }
+      const resolved = yield* Effect.sync(() => resolveSessionPath(cwd, sessionId));
+      if (!resolved) {
+        return yield* Effect.fail(
+          new NotFoundError({ resource: 'session', id: sessionId })
+        );
+      }
+      const { sessionPath } = resolved;
 
       if (workflowAgentId) {
         if (!/^[A-Za-z0-9_-]+$/.test(workflowAgentId)) {
@@ -340,35 +354,172 @@ export const POST = handler((req) =>
       return ok({ workflow, fingerprint: journalFingerprint });
     }
 
-    const fingerprint = getFileFingerprint(sessionPath);
+    // PRIMARY main-session transcript — served from the Naby store (app.db), the
+    // single source of truth for a session's conversation. This is the load
+    // Refresh / Recent / Browse all fire; it MUST NOT depend on a `.jsonl` file,
+    // which a naby session never writes (that was the empty-chat bug).
+    const store = getStore();
+    const session = store.getSession(sessionId);
+    // Unknown session id → 404, the same status the old "file not found" path
+    // returned, so the client's `!response.ok` handling is unchanged.
+    if (!session) {
+      return yield* Effect.fail(
+        new NotFoundError({ resource: 'session', id: sessionId })
+      );
+    }
+
+    const runtimeMessages = yield* Effect.try({
+      try: () => store.getMessages(sessionId),
+      catch: (cause) =>
+        new AppError({ message: 'getMessages failed', cause }),
+    });
+
+    // Store fingerprint: cheap, stable, and changes on exactly the two events
+    // the client's incremental "has it changed?" check cares about — a new
+    // message appended (count grows) or the last message's text growing while a
+    // turn streams (tail length grows). Same-fingerprint → { notModified }.
+    const fingerprint = storeFingerprint(runtimeMessages);
     if (ifFingerprint && ifFingerprint === fingerprint) {
       return ok({ notModified: true, fingerprint });
     }
 
-    const parseResult = yield* Effect.tryPromise({
-      try: async () => parseTranscriptFile(sessionPath, limit, beforeTurnIndex),
-      catch: (cause) =>
-        new AppError({ message: 'parseTranscriptFile failed', cause }),
-    });
-
-    const { messages, title, usage } = parseResult;
-    const totalTurns = 'totalTurns' in parseResult ? parseResult.totalTurns : 0;
-    const hasMore = 'hasMore' in parseResult ? parseResult.hasMore : false;
+    // Map the WHOLE transcript first (stable ids by absolute index, so a windowed
+    // page and the full load agree on ids — mergeIncrementalMessages aligns by
+    // id), then slice to the requested turn-window exactly like the old file
+    // reader did (paginate from the end; "load more" walks backwards via
+    // beforeTurnIndex).
+    const allMessages = toChatMessages(runtimeMessages);
+    const { messages, totalTurns, hasMore } = paginateTurns(allMessages, limit, beforeTurnIndex);
+    const title = deriveTitle(session, userTexts(runtimeMessages));
+    const usage = lastUsage(store, sessionId);
     return ok({
       messages,
       sessionId,
       title,
-      usage,
+      ...(usage ? { usage } : {}),
       totalTurns,
       hasMore,
       fingerprint,
       // Authoritative engine for this session. Naby is single-engine, so this is
       // always 'claude'; retained in the response shape for the mobile (/m) client
       // and any legacy readers.
-      engine,
+      engine: 'claude',
     });
   })
 );
+
+// A cheap, stable fingerprint over the store's message set. `${count}-${tailLen}`
+// changes when a message is appended (count) OR the last message's text grows as
+// a turn streams (tail length), which are exactly the changes the client's
+// incremental reload needs to notice; an unchanged transcript yields the same
+// string, so the { notModified } short-circuit still works.
+function storeFingerprint(messages: RuntimeMessage[]): string {
+  const n = messages.length;
+  const last = messages[n - 1];
+  const tail = last ? (last.role === 'tool' ? last.output?.content ?? '' : last.content) : '';
+  return `${n}-${tail.length}`;
+}
+
+/**
+ * Map the store's RuntimeMessage stream into the client's ChatMessage list —
+ * the SAME folding the store-backed `/api/session/[sessionId]/history` route
+ * does (RuntimeMessage → ChatMessage, `tool` rows folded into the calling
+ * assistant message's `toolCalls[].result` by toolCallId), mirroring the old
+ * jsonl tool_use/tool_result pairing. Ids are keyed to the absolute index in the
+ * full message array so they stay stable between a full load and a windowed
+ * (limit=N turns) page — that is what lets the client's mergeIncrementalMessages
+ * realign a suffix window without truncating pre-window history.
+ */
+function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
+  // First pass: collect every tool output keyed by the call it answers.
+  const toolResults = new Map<string, string>();
+  for (const m of messages) {
+    if (m.role === 'tool') {
+      toolResults.set(m.toolCallId, m.output?.content ?? '');
+    }
+  }
+
+  // Second pass: build user/assistant bubbles in order.
+  const out: ChatMessage[] = [];
+  messages.forEach((m, i) => {
+    if (m.role === 'user') {
+      out.push({ id: `user-${i}`, role: 'user', content: m.content });
+    } else if (m.role === 'assistant') {
+      const toolCalls = (m.toolCalls ?? []).map((tc) => ({
+        id: tc.toolCallId,
+        name: tc.toolName,
+        input: (tc.input as Record<string, unknown>) ?? {},
+        result: toolResults.get(tc.toolCallId),
+        isLoading: false,
+      }));
+      out.push({
+        id: `assistant-${i}`,
+        role: 'assistant',
+        content: m.content,
+        ...(toolCalls.length ? { toolCalls } : {}),
+      });
+    }
+    // role === 'tool' is consumed above (folded into its assistant call).
+  });
+  return out;
+}
+
+/**
+ * Turn-window pagination over a full ChatMessage list — the exact semantics the
+ * old file reader used, so the client's "load last page first, scroll up loads
+ * older turns" flow is unchanged. One turn starts at each user message; the
+ * window is the last `limit` turns ending at `beforeTurnIndex` (defaulting to
+ * the end). `hasMore` is true when older turns remain before the window.
+ */
+function paginateTurns(
+  allMessages: ChatMessage[],
+  limit?: number,
+  beforeTurnIndex?: number
+): { messages: ChatMessage[]; totalTurns: number; hasMore: boolean } {
+  const turns: ChatMessage[][] = [];
+  let currentTurn: ChatMessage[] = [];
+  for (const msg of allMessages) {
+    if (msg.role === 'user') {
+      if (currentTurn.length > 0) turns.push(currentTurn);
+      currentTurn = [msg];
+    } else {
+      currentTurn.push(msg);
+    }
+  }
+  if (currentTurn.length > 0) turns.push(currentTurn);
+
+  const totalTurns = turns.length;
+
+  // No pagination params → the full transcript (matches the file reader).
+  if (limit === undefined) {
+    return { messages: allMessages, totalTurns, hasMore: false };
+  }
+
+  const endIndex = beforeTurnIndex !== undefined ? beforeTurnIndex : totalTurns;
+  const startIndex = Math.max(0, endIndex - limit);
+  const hasMore = startIndex > 0;
+  const messages = turns.slice(startIndex, endIndex).flat();
+  return { messages, totalTurns, hasMore };
+}
+
+// The token usage of the last answered turn, shaped like the Agent-SDK usage the
+// live `result` event emits (see engines/naby `toSdkUsage`) so the chat token HUD
+// reads the same fields after a reload as it did live. Absent when the session
+// has no recorded turns yet.
+function lastUsage(
+  store: ReturnType<typeof getStore>,
+  sessionId: string
+): TokenUsage | undefined {
+  const records = store.listUsage(sessionId);
+  const last = records[records.length - 1];
+  if (!last) return undefined;
+  return {
+    input_tokens: last.inputTokens,
+    output_tokens: last.outputTokens,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: last.cachedInputTokens,
+  };
+}
 
 function resolveSessionPath(
   cwd: string,
