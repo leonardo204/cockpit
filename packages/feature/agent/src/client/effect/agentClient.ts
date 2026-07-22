@@ -302,3 +302,14 @@ export const loadClaudeStats = <A = Record<string, unknown>>(
   engine: string
 ): Effect.Effect<A, AppError> =>
   httpJson(`/api/claude-stats?engine=${encodeURIComponent(engine)}`)
+
+// ─────────────────────────────────────────────────────────
+// /api/naby/stats (Naby-store usage & cost — the re-backed source)
+// ─────────────────────────────────────────────────────────
+//
+// Sources the token/usage modal from NABY'S OWN records (app.db `usage` table)
+// instead of the provider's ~/.claude transcripts. Same StatsData shape as the
+// old claude-stats endpoint, so the modal's charts are unchanged.
+
+export const loadNabyStats = <A = Record<string, unknown>>(): Effect.Effect<A, AppError> =>
+  httpJson(`/api/naby/stats`)

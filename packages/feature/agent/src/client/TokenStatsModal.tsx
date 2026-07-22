@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { useEscToClose } from '@cockpit/shared-ui';
-import { loadClaudeStats } from './effect/agentClient';
+import { loadNabyStats } from './effect/agentClient';
 
 interface TokenStatsModalProps {
   isOpen: boolean;
@@ -38,17 +38,6 @@ function getLabel(modelId: string) {
 
 function getColor(modelId: string) {
   return (MODEL_PRICING[modelId] ?? getPricing(modelId)).color;
-}
-
-function calcCost(modelId: string, usage: ModelUsage): number {
-  const p = getPricing(modelId);
-  const M = 1_000_000;
-  return (
-    (usage.inputTokens / M) * p.input +
-    (usage.outputTokens / M) * p.output +
-    (usage.cacheReadInputTokens / M) * p.cacheRead +
-    (usage.cacheCreationInputTokens / M) * p.cacheWrite
-  );
 }
 
 function fmtTokens(n: number): string {
@@ -86,6 +75,24 @@ interface DailyModelTokens {
   tokensByModel: Record<string, number>;
 }
 
+/** The runtime's aggregate usage summary (subset used here), sourced from the
+ *  Naby store via /api/naby/stats. Carries the metered-vs-subscription split
+ *  and the ready-made caption/tooltip wording — same as the per-session strip. */
+interface UsageSummary {
+  turns: number;
+  totalTokens: number;
+  /** Sum over METERED, PRICED turns. Undefined when nothing metered was priced. */
+  billedUsd?: number;
+  /** false when a metered turn had no price — billedUsd is then a floor. */
+  billedComplete: boolean;
+  /** Turns that ran on a local subscription (dev-claude): no per-message charge. */
+  subscriptionTurns: number;
+  /** What those subscription turns WOULD have cost on the metered API. */
+  subscriptionEquivalentUsd?: number;
+  label: string;
+  detail: string;
+}
+
 interface StatsData {
   modelUsage?: Record<string, ModelUsage>;
   dailyActivity?: DailyActivity[];
@@ -95,6 +102,7 @@ interface StatsData {
   totalMessages?: number;
   longestSession?: { duration: number };
   firstSessionDate?: string;
+  usageSummary?: UsageSummary;
 }
 
 type TimeRange = 'day' | 'week' | 'month';
@@ -375,19 +383,18 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<TimeRange>('day');
   const [tokenChartMode, setTokenChartMode] = useState<'tokens' | 'cost'>('tokens');
-  const [statsEngine, setStatsEngine] = useState<'claude' | 'claude2'>('claude');
 
   useEffect(() => {
     if (!isOpen) return;
     queueMicrotask(() => setLoading(true));
-    BrowserRuntime.runPromiseExit(loadClaudeStats(statsEngine)).then((exit) => {
+    BrowserRuntime.runPromiseExit(loadNabyStats()).then((exit) => {
       if (exit._tag === 'Success') {
         const data = exit.value as { error?: unknown } & Record<string, unknown>;
         if (!data.error) queueMicrotask(() => setStats(data as unknown as StatsData));
       }
       queueMicrotask(() => setLoading(false));
     });
-  }, [isOpen, statsEngine]);
+  }, [isOpen]);
 
   // Model cost breakdown table
   const modelRows = useMemo(() => {
@@ -399,7 +406,9 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
         label: getLabel(id),
         color: getColor(id),
         usage,
-        cost: calcCost(id, usage),
+        // AUTHORITATIVE cost from the server (runtime price table / engine-
+        // reported cost, metered-vs-subscription aware) — not re-derived here.
+        cost: usage.costUSD ?? 0,
         totalTokens: usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens,
       }))
       .sort((a, b) => b.cost - a.cost);
@@ -547,22 +556,6 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
         <div className="flex items-center justify-between px-6 py-3 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-medium text-foreground">{t('tokenStats.title')}</h2>
-            {/* Engine toggle */}
-            <div className="flex bg-muted rounded-md p-0.5">
-              {(['claude', 'claude2'] as const).map(eng => (
-                <button
-                  key={eng}
-                  className={`px-2.5 py-0.5 text-[11px] rounded transition-colors ${
-                    statsEngine === eng
-                      ? 'bg-background text-foreground shadow-sm'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                  onClick={() => { setStats(null); setStatsEngine(eng); }}
-                >
-                  {eng === 'claude' ? 'Claude' : 'Claude 2'}
-                </button>
-              ))}
-            </div>
             {/* Time range toggle */}
             <div className="flex bg-muted rounded-md p-0.5">
               {rangeButtons.map(b => (
@@ -599,7 +592,12 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
               <div className="grid grid-cols-5 gap-3">
                 <StatCard label={t('tokenStats.totalSessions')} value={String(stats.totalSessions ?? 0)} />
                 <StatCard label={t('tokenStats.totalMessages')} value={fmtTokens(stats.totalMessages ?? 0)} />
-                <StatCard label={t('tokenStats.equivalentApiCost')} value={fmtCost(totalCost)} highlight />
+                <StatCard
+                  label={t('tokenStats.estimatedCost')}
+                  value={`${fmtCost(totalCost)}${stats.usageSummary && stats.usageSummary.billedComplete === false ? '+' : ''}`}
+                  title={stats.usageSummary?.detail}
+                  highlight
+                />
                 <StatCard
                   label={t('tokenStats.longestSession')}
                   value={stats.longestSession ? formatDuration(stats.longestSession.duration) : '-'}
@@ -735,9 +733,9 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
   );
 }
 
-function StatCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function StatCard({ label, value, highlight, title }: { label: string; value: string; highlight?: boolean; title?: string }) {
   return (
-    <div className="bg-muted/30 rounded-lg px-3 py-2.5">
+    <div className={`bg-muted/30 rounded-lg px-3 py-2.5${title ? ' cursor-help' : ''}`} title={title}>
       <div className="text-[10px] text-muted-foreground">{label}</div>
       <div className={`text-sm font-semibold mt-0.5 ${highlight ? 'text-brand' : 'text-foreground'}`}>{value}</div>
     </div>
