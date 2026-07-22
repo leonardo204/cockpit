@@ -20,9 +20,18 @@
  * `<sessionId>/` directory tree are removed together -- structure-agnostic, so
  * any future subdirectory type is covered without changing this code.
  *
- * Protection: sessions listed in `pinned-sessions.json` are never auto-deleted.
- * If that file is present but unreadable/corrupt, the ENTIRE pass is skipped
- * (fail-safe -- a torn whitelist must never license deleting protected data).
+ * Protection: a session is never auto-deleted while it is pinned. The pinned
+ * set is the UNION of two sources:
+ *   1. the Naby store (`getStore().listPinnedSessions()`, the live source of
+ *      truth since the pinned route was re-backed onto `app.db`), and
+ *   2. the legacy `pinned-sessions.json` whitelist (read-only, kept as a
+ *      transitional safety net for pins made before the store existed — the
+ *      file is no longer written, and pre-store pins were never migrated).
+ * Both are keyed by sessionId, which is exactly the `<sessionId>.jsonl` stem
+ * this sweep groups on. If EITHER source can't be read safely (store throws,
+ * or the JSON file is present but corrupt/unreadable), the ENTIRE pass is
+ * skipped (fail-safe -- a torn whitelist must never license deleting protected
+ * data). A simply-absent file / empty store is fine and lets the sweep proceed.
  *
  * Trigger: a daily background pass (first run immediately, then every 24h),
  * forked into the layer's Scope so runtime disposal interrupts it. There is no
@@ -32,6 +41,7 @@ import { readdir, readFile, rm, rmdir, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { Context, Effect, Layer, Schedule } from "effect"
 import { AppError, CockpitConfig } from "@cockpit/effect-core"
+import { getStore } from "../server/engines/naby"
 
 const DAY_MS = 24 * 3600 * 1000
 
@@ -47,7 +57,7 @@ const isDirectory = (p: string): Effect.Effect<boolean, never> =>
   )
 
 /**
- * Load the pinned-session id whitelist. Distinguishes three cases:
+ * Load the legacy pinned-session id whitelist. Distinguishes three cases:
  *  - missing file  -> `{ ok: true, ids: {} }` (no pins, cleanup proceeds)
  *  - readable JSON -> `{ ok: true, ids }`
  *  - corrupt/unreadable -> `{ ok: false }` (caller SKIPS the whole pass)
@@ -76,19 +86,42 @@ const loadPinnedIds = (pinnedFile: string): Effect.Effect<PinLoad, never> =>
     catch: () => null,
   }).pipe(Effect.orElseSucceed(() => ({ ok: false }) as PinLoad))
 
+/**
+ * Load the pinned-session ids from the Naby store (`app.db`) -- the live source
+ * of truth since the pinned route was re-backed onto the store. Fail-safe: if
+ * the store can't be opened/read (`getStore()` or `listPinnedSessions()`
+ * throws), return `{ ok: false }` so the caller SKIPS the whole pass rather
+ * than risk deleting a session the store would have protected.
+ */
+const loadStorePinnedIds = (): Effect.Effect<PinLoad, never> =>
+  Effect.try({
+    try: (): PinLoad => {
+      const ids = new Set<string>()
+      for (const ref of getStore().listPinnedSessions()) {
+        if (ref.sessionId) ids.add(ref.sessionId)
+      }
+      return { ok: true, ids }
+    },
+    catch: () => null,
+  }).pipe(Effect.orElseSucceed(() => ({ ok: false }) as PinLoad))
+
 const cleanupSessions = (
   root: string,
   keepDays: number,
   pinnedFile: string
 ): Effect.Effect<void, AppError> =>
   Effect.gen(function* () {
-    const pins = yield* loadPinnedIds(pinnedFile)
-    if (!pins.ok) {
+    // Protected set = Naby store pins UNION legacy JSON pins. If EITHER source
+    // can't be read safely, skip the whole pass (fail-safe).
+    const filePins = yield* loadPinnedIds(pinnedFile)
+    const storePins = yield* loadStorePinnedIds()
+    if (!filePins.ok || !storePins.ok) {
       yield* Effect.logWarning(
-        "session cleanup: pinned-sessions.json is unreadable/corrupt -- skipping this pass (refusing to risk deleting protected sessions)"
+        "session cleanup: pinned set is unreadable (store error or corrupt pinned-sessions.json) -- skipping this pass (refusing to risk deleting protected sessions)"
       )
       return
     }
+    const pinnedIds = new Set<string>([...storePins.ids, ...filePins.ids])
 
     const cutoff = Date.now() - keepDays * DAY_MS
     const cwdDirs = yield* fsTry("readdir root", () => readdir(root)).pipe(
@@ -121,7 +154,7 @@ const cleanupSessions = (
       }
 
       for (const [stem, s] of sessions) {
-        if (pins.ids.has(stem)) continue // pinned -> never auto-delete
+        if (pinnedIds.has(stem)) continue // pinned -> never auto-delete
 
         // Basis = parent transcript mtime (last activity). Fall back to the
         // attachment dir only for an orphan `<id>/` with no `.jsonl`.
