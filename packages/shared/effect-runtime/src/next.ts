@@ -167,7 +167,7 @@ const errorToResponse = (cause: Cause.Cause<unknown>): Response => {
  *
  *   export const GET = handler(() =>
  *     Effect.gen(function* () {
- *       const service = yield* ProjectService
+ *       const service = yield* SomeService
  *       const data = yield* service.list
  *       return ok(data)
  *     })
@@ -175,7 +175,7 @@ const errorToResponse = (cause: Cause.Cause<unknown>): Response => {
  *
  *   export const POST = handler((req) =>
  *     Effect.gen(function* () {
- *       const body = yield* parseJson(req, ProjectSchema)
+ *       const body = yield* parseJson(req, SomeSchema)
  *       ...
  *     })
  *   )

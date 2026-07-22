@@ -1,18 +1,12 @@
 /**
- * ProjectService — Effect wrapper over the project-list persistence layer.
+ * Project wire contract — the shapes exchanged with `/api/projects`.
  *
- * Wraps readJsonFile / writeJsonFile from `@cockpit/shared-utils` and turns any
- * fs throw into an FSError so callers get a typed failure channel.
- *
- * Layout follows the EFFECT.md §4 service template:
- * - Tag, Service interface, and Live implementation in one file.
- * - Promise-based utils wrapped via Effect.tryPromise.
- * - All errors unified under FSError (Tagged).
+ * The file-I/O half (ProjectService / ProjectServiceLive, which read & wrote
+ * `~/.cockpit/projects.json`) was removed in Phase E: the projects list is now
+ * served store-backed by `/api/projects/route.ts` off the Naby store, so the
+ * old JSON persistence layer is dead. Only the wire types remain here — they
+ * are imported as `type`s by the route and the browser client.
  */
-import { Context, Effect, Layer } from "effect"
-import { join } from "path"
-import { COCKPIT_DIR, readJsonFile, writeJsonFile } from "@cockpit/shared-utils"
-import { FSError } from "@cockpit/effect-core"
 
 // ─────────────────────────────────────────────────────────
 // Data model — wire contract for /api/projects/route.ts.
@@ -41,44 +35,3 @@ export interface ProjectsData {
   readonly activeIndex: number
   readonly collapsed: boolean
 }
-
-const DEFAULT_DATA: ProjectsData = {
-  projects: [],
-  activeIndex: 0,
-  collapsed: false,
-}
-
-const PROJECTS_FILE = join(COCKPIT_DIR, "projects.json")
-
-// ─────────────────────────────────────────────────────────
-// Service Tag
-// ─────────────────────────────────────────────────────────
-
-export interface ProjectService {
-  readonly read: Effect.Effect<ProjectsData, FSError>
-  readonly write: (data: ProjectsData) => Effect.Effect<void, FSError>
-}
-
-export const ProjectService =
-  Context.GenericTag<ProjectService>("@cockpit/ProjectService")
-
-// ─────────────────────────────────────────────────────────
-// Live implementation
-// ─────────────────────────────────────────────────────────
-
-export const ProjectServiceLive = Layer.succeed(
-  ProjectService,
-  ProjectService.of({
-    read: Effect.tryPromise({
-      try: () => readJsonFile<ProjectsData>(PROJECTS_FILE, DEFAULT_DATA),
-      catch: (cause) =>
-        new FSError({ path: PROJECTS_FILE, op: "read", cause }),
-    }),
-    write: (data) =>
-      Effect.tryPromise({
-        try: () => writeJsonFile(PROJECTS_FILE, data),
-        catch: (cause) =>
-          new FSError({ path: PROJECTS_FILE, op: "write", cause }),
-      }),
-  })
-)
