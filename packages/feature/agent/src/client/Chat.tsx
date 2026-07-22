@@ -23,6 +23,7 @@ import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } fro
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
+import { EngineSwitcher } from './EngineSwitcher';
 import { AllowChangesToggle } from './AllowChangesToggle';
 import { useTranslation } from 'react-i18next';
 
@@ -77,8 +78,8 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   const [historyTokenUsage, setHistoryTokenUsage] = useState<TokenUsage | null>(null);
   // The engine's RESOLVED model, captured live from each turn's system/init
   // (server already ships it as event.model). Null until the first init of the
-  // session arrives; the status line falls back to the static engineLabel until
-  // then. Read-only display only.
+  // session arrives; until then <EngineSwitcher/> shows the SELECTED engine's
+  // label instead. Passed to the switcher, which prefers this once present.
   const [liveModel, setLiveModel] = useState<string | null>(null);
   // Plan mode (per-tab): controlled by TabInfo.planMode (persisted); falls back to
   // local state when no prop (standalone use). Read-only exploration that produces a
@@ -90,47 +91,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onPlanModeChange?.(p);
   }, [onPlanModeChange]);
   const isClaudeEngine = !engine || engine === 'claude';
-  // Read-only engine identity for the status line, used as the FALLBACK before a
-  // turn has started. It must reflect WHICH engine the next turn will use — the
-  // user's selected provider — not a hardcoded string: showing "Claude Agent SDK"
-  // while Azure is selected reads as "my choice was ignored". We read the same
-  // /api/naby the settings modal uses (engine.id + selected provider label), so
-  // the header and the settings can never disagree. Once a turn begins, the
-  // server's system/init carries the RESOLVED model as event.model, which
-  // useChatStream captures into `liveModel` and the line prefers over this.
-  const [engineLabel, setEngineLabel] = useState('…');
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const res = await fetch('/api/naby');
-        if (!res.ok) return;
-        const s = (await res.json()) as {
-          engine?: { ok?: boolean; id?: string };
-          settings?: { selectedProvider?: string };
-          providers?: { id: string; label: string; model?: string }[];
-        };
-        if (!alive) return;
-        if (s.engine?.id === 'ai-sdk') {
-          const pid = s.settings?.selectedProvider;
-          const p = s.providers?.find((x) => x.id === pid) ?? s.providers?.find((x) => x.id);
-          setEngineLabel(p ? (p.model ? `${p.label} · ${p.model}` : p.label) : 'API provider');
-        } else if (s.engine?.id === 'dev-claude') {
-          setEngineLabel('Claude (subscription)');
-        } else {
-          setEngineLabel('No engine');
-        }
-      } catch {
-        /* leave the placeholder; the chat surfaces any real failure */
-      }
-    };
-    void load();
-    return () => {
-      alive = false;
-    };
-    // Re-read when the tab or the live model changes (a turn just resolved the
-    // engine) so a settings change is reflected on the next render/turn.
-  }, [sessionId, liveModel]);
+  // The engine identity for this row is now owned by <EngineSwitcher/>: it reads
+  // the same /api/naby the settings modal uses (engine.id + selected provider
+  // label) so the header and the settings can never disagree, prefers the
+  // RESOLVED `liveModel` once a turn has started, AND makes the label a clickable
+  // quick-switch. Chat no longer runs its own /api/naby label effect — one owner
+  // for the engine read in this row.
   const messageListRef = useRef<MessageListHandle>(null);
   const handleSendRef = useRef<((message: string) => void) | null>(null);
 
@@ -471,20 +437,16 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           />
         )}
 
-        {/* Engine status. This slot used to hold an "Execution mode"
-            SDK ↔ PTY picker. The PTY option spawned `claude --dangerously-skip-permissions`,
-            a second execution path that bypassed the approval gate, so it was removed rather
-            than repaired — there is now exactly one path and therefore nothing to pick. What
-            remains is READ-ONLY status: which engine is answering. */}
+        {/* Engine row. This slot used to hold an "Execution mode" SDK ↔ PTY
+            picker (the PTY path spawned `claude --dangerously-skip-permissions`,
+            bypassing the approval gate, so it was removed — there is one path
+            now). The engine label became read-only status, and is now a CLICKABLE
+            quick-switch: <EngineSwitcher/> lists the configured providers and
+            switches the engine in place (selectEngine re-reads settings each turn,
+            so a pick takes effect on the next message — no reload). */}
         {isClaudeEngine && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50">
-            <span
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground select-none"
-              data-testid="engine-status"
-            >
-              {t('chat.engineStatus', { defaultValue: 'Engine' })}
-              <span className="text-foreground/70">{liveModel ?? engineLabel}</span>
-            </span>
+            <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} />
             {/* Whether the local Claude sign-in this engine depends on actually
                 exists. Placed immediately after the status because that is where
                 the user is looking — and because a logged-out machine otherwise

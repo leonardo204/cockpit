@@ -496,6 +496,14 @@
     "recheck": "Re-check",
     "checking": "Checking…"
   },
+  "engineSwitcher": {
+    "title": "Which model answers",
+    "automatic": "Automatic",
+    "automaticHint": "Use a provider you have set up; otherwise Claude (subscription), if available.",
+    "devClaudeHint": "Uses the Claude sign-in on this computer (Agent SDK). No API key, no per-message charge.",
+    "notConfigured": "not configured",
+    "manageInSettings": "Manage in Settings"
+  },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",
     "emptyIntro": "Type any of the following in the input bar to create a bubble:",

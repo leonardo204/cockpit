@@ -496,6 +496,14 @@
     "recheck": "重新检查",
     "checking": "检查中…"
   },
+  "engineSwitcher": {
+    "title": "由哪个模型回答",
+    "automatic": "自动",
+    "automaticHint": "优先使用你已配置的服务商；若没有，则使用 Claude（订阅），如可用。",
+    "devClaudeHint": "使用本机的 Claude 登录（Agent SDK）。无需 API key，也不产生按次计费。",
+    "notConfigured": "未配置",
+    "manageInSettings": "在设置中管理"
+  },
   "console": {
     "enterCommandOrUrl": "输入命令或网址开始使用",
     "emptyIntro": "在下方输入框输入以下内容，即可创建对应气泡：",
