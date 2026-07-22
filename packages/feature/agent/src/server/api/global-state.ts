@@ -35,18 +35,17 @@ import {
   sampleMessages,
   userTexts,
 } from "./sessions/nabyBrowse"
+import {
+  CLEARED_BEFORE_KEY,
+  isRecentVisible,
+  parseClearedBefore,
+} from "../state/recentFilter"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 const statusKey = (sessionId: string) => `session.status.${sessionId}`
 const customTitleKey = (sessionId: string) => `session.customTitle.${sessionId}`
-// "Clear recents" watermark (epoch ms). Sessions last used at/before it are
-// hidden from the recent list — the session and its transcript are NOT deleted
-// (still reachable via Browse all sessions); a later turn bumps `lastUsedAt`
-// past the watermark and the session reappears. Shared with the WS snapshot in
-// state/globalState.ts so the sidebar dropdown and this panel clear together.
-const CLEARED_BEFORE_KEY = 'recent.clearedBefore'
 
 interface RecentSession {
   cwd: string
@@ -69,18 +68,17 @@ interface RecentSession {
 function buildRecentSessions(): RecentSession[] {
   const store = getStore()
   const out: RecentSession[] = []
-  const clearedRaw = store.getSetting(CLEARED_BEFORE_KEY)
-  const clearedBefore = clearedRaw ? Number(clearedRaw) || 0 : 0
+  const clearedBefore = parseClearedBefore(store.getSetting(CLEARED_BEFORE_KEY))
   // listSessions() is already MRU (last_used_at DESC).
   for (const ref of store.listSessions()) {
-    // Recent is a cross-PROJECT view; a projectless session has no cwd for the
-    // card to open, so skip it (mirrors the old list, which only held sessions
-    // with a real cwd).
-    if (!ref.cwd) continue
-
-    // Hidden by a "clear recents" — the row is gone from the list but the
-    // session + transcript remain; a new turn (bumping lastUsedAt) un-hides it.
-    if (clearedBefore > 0 && ref.lastUsedAt <= clearedBefore) continue
+    // Visibility (watermark + projectless inclusion) is the SAME shared
+    // predicate the sidebar dropdown uses, so the two recent views can't drift.
+    // Notably this NO LONGER skips projectless sessions: a session with no cwd
+    // is still a recent session — it is listed and opened by sessionId. Skipping
+    // them was the bug that left the maximized modal empty while the dropdown
+    // (which never filtered by cwd) still showed them. Hidden-by-"clear recents"
+    // rows keep their session + transcript; a new turn un-hides them.
+    if (!isRecentVisible({ lastActive: ref.lastUsedAt, cwd: ref.cwd }, clearedBefore)) continue
 
     const messages = store.getMessages(ref.sessionId)
     const texts = userTexts(messages)
@@ -90,8 +88,11 @@ function buildRecentSessions(): RecentSession[] {
     const { firstMessages, lastMessages } = sampleMessages(texts)
     const status = store.getSetting(statusKey(ref.sessionId)) ?? ref.status ?? "normal"
 
+    // A projectless session has no cwd; the wire shape requires a string, so
+    // send '' and let the client render a placeholder + open by sessionId.
+    const cwd = ref.cwd ?? ''
     out.push({
-      cwd: ref.cwd,
+      cwd,
       sessionId: ref.sessionId,
       lastActive: ref.lastUsedAt,
       status,
@@ -101,7 +102,7 @@ function buildRecentSessions(): RecentSession[] {
       lastMessages,
       // Untruncated corpus for the search panel: cwd + title + every user
       // message, lowercased. Display fields stay truncated; matching reads this.
-      searchText: [ref.cwd, title, ...texts].join("\n").toLowerCase(),
+      searchText: [cwd, title, ...texts].join("\n").toLowerCase(),
       engine: engineFromProvider(ref.providerId),
     })
   }

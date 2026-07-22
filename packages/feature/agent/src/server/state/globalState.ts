@@ -15,6 +15,7 @@ import { basename } from 'path';
 import { sendPushNotification } from '../push/push';
 import { generateTitle } from '../sessionTitle';
 import { getStore } from '../engines/naby';
+import { CLEARED_BEFORE_KEY, isRecentVisible, parseClearedBefore } from './recentFilter';
 
 export type SessionStatus = 'normal' | 'loading' | 'unread';
 
@@ -26,10 +27,9 @@ export type SessionStatus = 'normal' | 'loading' | 'unread';
 // snapshot override below), which fixes the badge that never cleared because
 // the read (state.json) and the "mark read" write (store) disagreed.
 const statusSettingKey = (sessionId: string) => `session.status.${sessionId}`;
-// "Clear recents" watermark: sessions last used at/before this epoch-ms are
-// hidden from the recent list (both the sidebar snapshot and the search panel),
-// WITHOUT deleting the session or its transcript.
-const CLEARED_BEFORE_KEY = 'recent.clearedBefore';
+// "Clear recents" watermark + the shared visibility predicate now live in
+// ./recentFilter, imported above, so this snapshot (the sidebar dropdown) and
+// the search panel (/api/global-state) apply the SAME rules and can't drift.
 
 interface GlobalSession {
   cwd: string;
@@ -418,8 +418,7 @@ export async function getGlobalSessionsSnapshot(limit = 15): Promise<GlobalSessi
   let clearedBefore = 0;
   try {
     const store = getStore();
-    const raw = store.getSetting(CLEARED_BEFORE_KEY);
-    clearedBefore = raw ? Number(raw) || 0 : 0;
+    clearedBefore = parseClearedBefore(store.getSetting(CLEARED_BEFORE_KEY));
     for (const s of state.sessions) {
       const st = store.getSetting(statusSettingKey(s.sessionId));
       if (st) s.status = st as SessionStatus;
@@ -427,9 +426,11 @@ export async function getGlobalSessionsSnapshot(limit = 15): Promise<GlobalSessi
   } catch {
     /* store unavailable — fall back to the state.json status values */
   }
-  if (clearedBefore > 0) {
-    state.sessions = state.sessions.filter((s) => s.lastActive > clearedBefore);
-  }
+  // Same shared predicate the search panel uses (watermark + projectless
+  // inclusion). state.json sessions always carry a cwd, so the projectless rule
+  // is a no-op here today, but sharing the predicate keeps the two views from
+  // drifting on the watermark boundary.
+  state.sessions = state.sessions.filter((s) => isRecentVisible(s, clearedBefore));
 
   state.sessions.sort((a, b) => b.lastActive - a.lastActive);
   const recent = state.sessions.slice(0, limit);

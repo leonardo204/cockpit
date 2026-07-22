@@ -226,16 +226,46 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     );
   }, [tabs, activeTabId, initialCwd]);
 
-  // Notify parent Workspace when switching tab (parent handles URL update)
+  // Notify parent Workspace when switching tab (parent handles the ADDRESS-BAR
+  // URL update) AND reflect the active session into THIS iframe's own URL.
+  //
+  // The iframe page is `/project?cwd=…`; its src (built by Workspace.getProjectUrl)
+  // is frozen at project birth and never carries the live sessionId. So a full
+  // `window.location.reload()` from inside the iframe (the top-bar Refresh) used
+  // to reload `/project?cwd=…` with NO sessionId → useTabState started a blank
+  // "New Chat" and the session the user was viewing was lost.
+  //
+  // Fix (BUG 2, Option A): stamp the active sessionId onto the iframe document's
+  // OWN url via history.replaceState. It does not reload or re-fetch anything and
+  // does not touch the parent's iframe src, so it is invisible until a reload —
+  // at which point ProjectPage reads `sessionId` from the URL into
+  // useTabState({ initialSessionId }), and the existing "explicit initialSessionId
+  // reopens exactly that session" branch restores it (NOT the whole history).
+  // This is why it does NOT reintroduce "opening a project from home restores all
+  // old sessions": a fresh open still has no sessionId in getProjectUrl; only an
+  // in-iframe reload of an already-active session carries it.
   useEffect(() => {
     if (isInitializingRef.current || !initialCwd) return;
 
     const activeTab = tabs.find(t => t.id === activeTabId);
-    if (!activeTab?.sessionId) return;
+    const sessionId = activeTab?.sessionId;
+
+    // Keep the iframe's own URL in sync with the active tab so a reload restores
+    // exactly this session (or, for a blank New Chat tab, no session).
+    try {
+      const url = new URL(window.location.href);
+      if (sessionId) url.searchParams.set('sessionId', sessionId);
+      else url.searchParams.delete('sessionId');
+      window.history.replaceState(window.history.state, '', url.toString());
+    } catch {
+      /* non-browser / sandboxed context — URL sync is best-effort */
+    }
+
+    if (!sessionId) return;
 
     publishTopic(Topics.SessionChange, {
       cwd: initialCwd,
-      sessionId: activeTab.sessionId,
+      sessionId,
     });
   }, [activeTabId, tabs, initialCwd]);
 

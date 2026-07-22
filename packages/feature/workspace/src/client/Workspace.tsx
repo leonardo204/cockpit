@@ -524,6 +524,16 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   // Switch project/session (called from GlobalSessionMonitor)
   const handleSwitchProject = useCallback((cwd: string, sessionId: string) => {
+    // Projectless (legacy) recent session: it has no directory to host a chat,
+    // so there is no project iframe to switch to. Opening one anyway would push
+    // a phantom empty-cwd entry into projects.json and render a broken blank
+    // project + iframe. Handle the no-cwd case gracefully — do nothing harmful.
+    // The session still lives in the store and stays listed/searchable in the
+    // recent panel; it just can't be re-hosted without a working directory.
+    if (!cwd) {
+      console.warn('Cannot open a projectless session (no cwd):', sessionId);
+      return;
+    }
     // A jump from a completion toast or the global session monitor means the
     // user asked to be somewhere specific — never leave them on the home view.
     setShowHome(false);

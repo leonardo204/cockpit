@@ -89,7 +89,9 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
     onClose();
   };
 
-  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd;
+  // A projectless (legacy) session arrives with cwd === ''. It is still a valid
+  // recent session — show a placeholder here and let the row open by sessionId.
+  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd || t('sessions.noProject');
 
   const formatDate = (timestamp: number) => {
     const date = new Date(timestamp);
