@@ -1,47 +1,50 @@
 'use client';
 
 /**
- * The Claude account chip — sign-in status PLUS an account menu.
+ * The Claude account chip — sign-in status, WHO is signed in, and log in / out
+ * driven from inside the app.
  *
- * WHY IT LIVES HERE. The dev engine answers on the local Claude sign-in, and
- * the execution-mode row is the one place the user is already looking at that
- * choice. A sign-in warning anywhere else is a warning found only after the
- * failure it exists to prevent.
+ * WHY IT LIVES HERE. The dev engine answers on the local Claude sign-in, and the
+ * execution-mode row is the one place the user is already looking at that choice.
+ * A sign-in warning anywhere else is a warning found only after the failure it
+ * exists to prevent.
  *
  * WHAT THE CHIP SHOWS:
- *   ● Signed in    green   nothing to do — click for the account menu
- *   ● Signed out   amber   PLUS the fix inline (`claude login`), because the
- *                          whole point is the user does not yet know what to do.
- *                          Amber not red: nothing has failed, and a red alarm on
- *                          a working app trains people to ignore red.
+ *   ● Signed in    green   the account EMAIL (from `claude auth status`) + plan.
+ *                          Click for the account menu (org, plan, Log out).
+ *   ● Signed out   amber   PLUS a "Log in" action inline, because the whole point
+ *                          is the user does not yet know what to do. Amber not
+ *                          red: nothing has failed.
  *   ● Unknown      muted   we could not tell. Says so rather than guessing.
  *
- * THE ACCOUNT MENU (click the chip). Opens a small popover with:
- *   * WHICH account — as much as the credential file honestly carries. That file
- *     has NO email and NO account id; its only identity field is the SUBSCRIPTION
- *     tier (e.g. "Max"). We show that and never fabricate an email.
- *   * Log out — removes the OAuth credential file via /api/naby (`claude.logout`)
- *     and re-checks, so the chip flips to signed-out immediately.
- *   * Log in — `claude login` is an INTERACTIVE terminal/browser OAuth flow the
- *     app cannot drive silently. So the honest, robust thing: show the exact
- *     command with a Copy button and a Re-check. The user runs it in their
- *     terminal; the app picks up the new state on Re-check (or window focus).
+ * THE ACCOUNT MENU (click the chip):
+ *   * WHO — the real email and organisation from `claude auth status` (the
+ *     credential file has neither), plus the plan tier.
+ *   * Log out — runs `claude auth logout` via /api/naby and re-checks, so the
+ *     chip flips to signed-out immediately.
+ *   * Log in — POSTs `claude.login`, which spawns `claude auth login` so the
+ *     system browser opens for the OAuth flow. The app does NOT block on the
+ *     user: it then POLLS `claude auth status` (force re-check, ~2s for ~60s)
+ *     until the sign-in lands, showing a "waiting for browser sign-in…" state.
+ *     A copy of the exact command is offered as a fallback for a headless box.
  *
- * IT NEVER BLOCKS ANYTHING. Sending stays enabled while signed out: the check is
- * a heuristic over a credential file, and an app that refuses to send because
- * its heuristic is wrong is worse than one that lets the send fail with a clear
- * error. This is advice, not a gate.
+ * IT NEVER BLOCKS ANYTHING. Sending stays enabled while signed out: an app that
+ * refuses to send because its status probe is wrong is worse than one that lets
+ * the send fail with a clear error. This is advice, not a gate.
  *
  * NO SECRETS. Everything here comes from /api/naby's `claudeLogin` block, built
- * by the runtime from two expiry timestamps plus non-secret subscription labels.
- * No field on the wire could carry credential material, and Log out DELETES the
- * credential file without ever reading it.
+ * by the runtime from `claude auth status` — identity LABELS (email, org, plan)
+ * and a status word, never token material.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 type ClaudeAccount = {
+  /** The signed-in account's email, from `claude auth status`. */
+  email: string | null;
+  /** The organisation name, when reported. */
+  orgName: string | null;
   subscriptionType: string | null;
   rateLimitTier: string | null;
 };
@@ -56,17 +59,23 @@ type ClaudeLogin = {
    *  sign-in is then irrelevant and showing it would describe a capability the
    *  app does not have. */
   relevant: boolean;
-  /** Who is signed in, to the extent the file says so. NEVER an email. */
+  /** Who is signed in. Carries the real email from `claude auth status`. */
   account?: ClaudeAccount | null;
 };
 
-/** Deliberately unhurried: this covers only "the token expired while the user
- *  sat here", which takes hours. Focus is what catches a fresh `claude login`. */
+/** Deliberately unhurried background poll: this covers only "the token expired
+ *  while the user sat here", which takes hours. Focus + the login poll catch a
+ *  fresh sign-in far sooner. */
 const POLL_MS = 60_000;
 
-/** The exact command a signed-out user runs. One string, reused for the copy
- *  button and the inline hint so they can never drift apart. */
-const LOGIN_COMMAND = 'claude login';
+/** The interactive login poll: after launching the browser flow, re-check status
+ *  every this-often, giving up after `LOGIN_POLL_MAX` tries (~60s total). */
+const LOGIN_POLL_MS = 2_000;
+const LOGIN_POLL_MAX = 30;
+
+/** The exact command a signed-out user runs, and the copy-paste fallback for a
+ *  headless machine. One string so the button and the hint cannot drift apart. */
+const LOGIN_COMMAND = 'claude auth login';
 
 export function ClaudeLoginStatus() {
   const { t } = useTranslation();
@@ -74,23 +83,31 @@ export function ClaudeLoginStatus() {
   const [rechecking, setRechecking] = useState(false);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Guards against a state update on an unmounted component when a tab is
   // closed mid-request — every chat tab mounts one of these.
   const aliveRef = useRef(true);
   const rootRef = useRef<HTMLSpanElement>(null);
+  // A login poll in flight, so a second click (or unmount) can cancel it.
+  const loginPollRef = useRef(false);
 
-  const load = useCallback(async (force = false) => {
+  // Returns the freshly-fetched login so callers (the login poll) can inspect it
+  // without waiting for React state to settle.
+  const load = useCallback(async (force = false): Promise<ClaudeLogin | null> => {
     try {
       const res = await fetch(`/api/naby${force ? '?recheckLogin=1' : ''}`);
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const data = (await res.json()) as { claudeLogin?: ClaudeLogin };
       // An older server (or a build without the runtime) simply omits the
       // field; rendering nothing is the correct degradation.
       if (aliveRef.current && data.claudeLogin) setLogin(data.claudeLogin);
+      return data.claudeLogin ?? null;
     } catch {
       // A failed poll keeps the last known answer. The send path surfaces any
       // real failure with a far better message than a status dot could.
+      return null;
     }
   }, []);
 
@@ -110,6 +127,7 @@ export function ClaudeLoginStatus() {
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       aliveRef.current = false;
+      loginPollRef.current = false;
       clearInterval(id);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
@@ -148,15 +166,52 @@ export function ClaudeLoginStatus() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'claude.logout' }),
       });
-      // Whether it reported removed:true or "already gone", the truth is on disk
-      // now — a forced re-check reflects it (the runtime reset its cache on
-      // logout, so this is not racing a stale 10s answer).
+      // The runtime reset its cache on logout, so a forced re-check reflects the
+      // new (signed-out) truth rather than a stale 10s "signed in".
       if (res.ok) await load(true);
     } catch {
       // Leave the menu open on failure so the user can retry; the next re-check
       // or focus still corrects the displayed state.
     } finally {
       if (aliveRef.current) setBusy(false);
+    }
+  }, [load]);
+
+  // Log in: launch the browser OAuth flow server-side, then poll status until it
+  // flips to signed-in. The server does not block on the user, so neither do we —
+  // we poll and let the chip update the moment the sign-in lands.
+  const doLogin = useCallback(async () => {
+    setLoginError(null);
+    setLoggingIn(true);
+    loginPollRef.current = true;
+    try {
+      const res = await fetch('/api/naby', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'claude.login' }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (aliveRef.current) {
+          // The command is shown for copy-paste, so a spawn failure (headless /
+          // no CLI) is recoverable by the user.
+          setLoginError(body?.error ?? 'Could not start sign-in.');
+          setLoggingIn(false);
+        }
+        loginPollRef.current = false;
+        return;
+      }
+      // Poll `claude auth status` until the OAuth callback completes.
+      for (let i = 0; i < LOGIN_POLL_MAX && loginPollRef.current && aliveRef.current; i++) {
+        const st = await load(true);
+        if (st?.status === 'signed-in') break;
+        await new Promise((r) => setTimeout(r, LOGIN_POLL_MS));
+      }
+    } catch {
+      if (aliveRef.current) setLoginError('Could not start sign-in.');
+    } finally {
+      loginPollRef.current = false;
+      if (aliveRef.current) setLoggingIn(false);
     }
   }, [load]);
 
@@ -185,18 +240,22 @@ export function ClaudeLoginStatus() {
     : status === 'signed-out'
       ? 'bg-amber-500'
       : 'bg-muted-foreground/50';
-  const label = signedIn
-    ? t('claudeAccount.signedIn', { defaultValue: 'Claude: signed in' })
-    : status === 'signed-out'
-      ? t('claudeAccount.signedOut', { defaultValue: 'Claude: signed out' })
-      : t('claudeAccount.unknown', { defaultValue: 'Claude: unknown' });
 
-  // The subscription tier is the ONLY identity the credential file carries.
-  // Presented as "Max plan" when present; there is deliberately no email.
+  // Identity from `claude auth status`. The email is the primary identity now
+  // that we have it; the plan tier rides alongside as a short chip.
+  const email = login.account?.email ?? null;
+  const orgName = login.account?.orgName ?? null;
   const subscription = login.account?.subscriptionType ?? null;
   const planLabel = subscription
     ? `${subscription.charAt(0).toUpperCase()}${subscription.slice(1)}`
     : null;
+
+  // The chip's own label: the email when signed in and known, else a status word.
+  const label = signedIn
+    ? email ?? t('claudeAccount.signedIn', { defaultValue: 'Claude: signed in' })
+    : status === 'signed-out'
+      ? t('claudeAccount.signedOut', { defaultValue: 'Claude: signed out' })
+      : t('claudeAccount.unknown', { defaultValue: 'Claude: unknown' });
 
   return (
     <span
@@ -218,11 +277,13 @@ export function ClaudeLoginStatus() {
           className={`w-2 h-2 rounded-full flex-shrink-0 ${dotClass}`}
           data-testid="claude-login-dot"
         />
-        <span className={status === 'signed-out' ? 'text-amber-500' : 'text-muted-foreground'}>
+        <span
+          className={status === 'signed-out' ? 'text-amber-500' : 'text-muted-foreground'}
+          data-testid="claude-account-label"
+        >
           {label}
         </span>
-        {/* The plan label rides on the chip when signed in — it is the account
-            identity, short and non-secret. */}
+        {/* The plan label rides on the chip when signed in — short, non-secret. */}
         {signedIn && planLabel && (
           <span
             className="px-1 py-0.5 rounded bg-secondary text-foreground/80"
@@ -235,11 +296,22 @@ export function ClaudeLoginStatus() {
 
       {/* The remedy stays inline while signed out, not tooltip-only: a user who
           does not know they are signed out also does not know to hover. */}
-      {login.remedy && !open && (
+      {login.remedy && !open && !signedIn && (
         <span className="text-muted-foreground" data-testid="claude-login-remedy">
-          — {t('claudeAccount.runInTerminal', { defaultValue: 'run' })}{' '}
-          <code className="px-1 py-0.5 rounded bg-secondary text-foreground">{LOGIN_COMMAND}</code>{' '}
-          {t('claudeAccount.inATerminal', { defaultValue: 'in a terminal' })}
+          —{' '}
+          <button
+            type="button"
+            onClick={() => void doLogin()}
+            disabled={loggingIn}
+            className="underline hover:text-foreground disabled:opacity-50"
+            data-testid="claude-login-inline"
+          >
+            {loggingIn
+              ? t('claudeAccount.waitingForBrowser', {
+                  defaultValue: 'Waiting for browser sign-in…',
+                })
+              : t('claudeAccount.login', { defaultValue: 'Log in' })}
+          </button>
         </span>
       )}
 
@@ -249,25 +321,29 @@ export function ClaudeLoginStatus() {
           data-testid="claude-account-menu"
           className="absolute top-full left-0 mt-1 z-50 w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-3 flex flex-col gap-2"
         >
-          {/* WHO — identity to the extent the file says so. */}
+          {/* WHO — the real identity from `claude auth status`. */}
           <div className="flex flex-col gap-0.5">
             <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
               {t('claudeAccount.account', { defaultValue: 'Account' })}
             </span>
             <span className="text-foreground" data-testid="claude-account-identity">
               {signedIn
-                ? planLabel
-                  ? t('claudeAccount.planLine', {
-                      plan: planLabel,
-                      defaultValue: '{{plan}} plan',
-                    })
-                  : t('claudeAccount.signedInNoPlan', { defaultValue: 'Signed in' })
+                ? email ??
+                  (planLabel
+                    ? t('claudeAccount.planLine', { plan: planLabel, defaultValue: '{{plan}} plan' })
+                    : t('claudeAccount.signedInNoPlan', { defaultValue: 'Signed in' }))
                 : status === 'signed-out'
                   ? t('claudeAccount.notSignedIn', { defaultValue: 'Not signed in' })
                   : t('claudeAccount.statusUnknown', { defaultValue: 'Sign-in status unknown' })}
             </span>
-            {/* Honesty note: no email exists in the credential, so we say what
-                the identity is rather than imply there is more. */}
+            {/* Org + plan when signed in — the fuller identity the CLI reports. */}
+            {signedIn && (orgName || planLabel) && (
+              <span className="text-[11px] text-muted-foreground" data-testid="claude-account-org">
+                {[orgName, planLabel ? t('claudeAccount.planLine', { plan: planLabel, defaultValue: '{{plan}} plan' }) : null]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </span>
+            )}
             <span className="text-[11px] text-muted-foreground">{login.summary}</span>
           </div>
 
@@ -288,12 +364,30 @@ export function ClaudeLoginStatus() {
             </button>
           ) : (
             <div className="flex flex-col gap-1.5">
-              {/* Login is an interactive OAuth flow the app cannot run silently.
-                  The honest, robust path: show the command + copy it; the user
-                  runs it in a terminal and re-checks. */}
+              {/* Primary action: launch the browser OAuth flow from the app. */}
+              <button
+                type="button"
+                onClick={() => void doLogin()}
+                disabled={loggingIn}
+                data-testid="claude-account-login"
+                className="text-left px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50"
+              >
+                {loggingIn
+                  ? t('claudeAccount.waitingForBrowser', {
+                      defaultValue: 'Waiting for browser sign-in…',
+                    })
+                  : t('claudeAccount.login', { defaultValue: 'Log in' })}
+              </button>
+              {loginError && (
+                <span className="text-[11px] text-amber-500" data-testid="claude-account-login-error">
+                  {loginError}
+                </span>
+              )}
+              {/* Fallback: the exact command, for a headless box where no browser
+                  can open, or if the spawn was refused. */}
               <span className="text-[11px] text-muted-foreground">
-                {t('claudeAccount.loginInstructions', {
-                  defaultValue: 'Run this in a terminal, then re-check:',
+                {t('claudeAccount.orRunInTerminal', {
+                  defaultValue: 'Or run this in a terminal, then re-check:',
                 })}
               </span>
               <div className="flex items-center gap-1">

@@ -29,8 +29,9 @@
 import { Effect } from 'effect';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
+  claudeLogin,
   claudeLogout,
-  describeClaudeLogin,
+  describeClaudeLoginAsync,
   getCredentialBridge,
   isClaudeAgentSdkAvailable,
   loadMcpToolset,
@@ -105,9 +106,9 @@ export async function readNabyState(
    *  choice that cannot work — in a packaged app the Agent SDK is excluded. */
   devEngineAvailable: boolean;
   /** Whether the LOCAL Claude sign-in the dev engine runs on is present and
-   *  usable. NOT A SECRET and not derived from one: the runtime reads two
-   *  expiry timestamps and returns a status word plus a sentence — no token
-   *  material reaches this process boundary, let alone the renderer. */
+   *  usable — the answer of `claude auth status`, run by the runtime against a
+   *  de-shimmed `claude` binary. NOT A SECRET: the CLI reports identity LABELS
+   *  (email, org name, plan) and a status word, never token material. */
   claudeLogin: {
     status: string;
     summary: string;
@@ -115,10 +116,9 @@ export async function readNabyState(
     cliFound: boolean;
     checkedAt: number;
     relevant: boolean;
-    /** WHICH account is signed in, to the extent the credential file says so.
-     *  `null` when signed out/unknown or when the file carries no identity —
-     *  NEVER an email, because the OAuth file has none (see ClaudeLoginAccount).
-     *  No secret material: these are subscription/tier LABELS only. */
+    /** WHICH account is signed in. `email`/`orgName` are the REAL identity from
+     *  `claude auth status` (the credential file has neither); `null` when signed
+     *  out/unknown. Labels only, no secret material. */
     account: ClaudeLoginAccount | null;
   };
   /** The app-wide "Allow changes" gate policy (setting `gate.allowChanges`).
@@ -152,9 +152,10 @@ export async function readNabyState(
 
   return {
     devEngineAvailable: isClaudeAgentSdkAvailable(),
-    // Synchronous and cached in the runtime, so this adds nothing measurable to
-    // a request that already opened the store and resolved a credential.
-    claudeLogin: describeClaudeLogin(opts.recheckLogin ? { force: true } : {}),
+    // Runs `claude auth status` (against a de-shimmed binary) and is cached 10s
+    // in the runtime, so ordinary polls do not spawn a process — only a forced
+    // re-check (a user action or the post-login poll) bypasses the cache.
+    claudeLogin: await describeClaudeLoginAsync(opts.recheckLogin ? { force: true } : {}),
     // The gate policy is a single global setting. Default ON (allow) when unset —
     // the same default the engine applies, kept in one place here so the UI and
     // the engine can never disagree about what "unset" means.
@@ -183,13 +184,25 @@ export async function readNabyState(
 export type NabyAction =
   | { action: 'settings.set'; enginePreference?: string; selectedProvider?: string }
   | { action: 'gate.set'; allowChanges: boolean }
+  | { action: 'claude.login'; email?: string; console?: boolean }
   | { action: 'claude.logout' }
   | { action: 'mcp.upsert'; entry: unknown }
   | { action: 'mcp.remove'; name: string }
   | { action: 'mcp.test'; name: string };
 
 export type NabyActionResult =
-  | { ok: true; message?: string; tools?: string[]; allowChanges?: boolean; removed?: boolean }
+  | {
+      ok: true;
+      message?: string;
+      tools?: string[];
+      allowChanges?: boolean;
+      removed?: boolean;
+      /** `claude.login`: the flow was launched — the UI must now poll status. */
+      started?: boolean;
+      /** `claude.login`: the exact command, as a copy-paste fallback for a
+       *  headless machine where no browser can open. */
+      command?: string;
+    }
   | { ok: false; error: string };
 
 export async function runNabyAction(body: NabyAction): Promise<NabyActionResult> {
@@ -222,14 +235,26 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       return { ok: true, allowChanges: body.allowChanges };
     }
 
+    case 'claude.login': {
+      // Kick off the interactive browser OAuth by spawning `claude auth login`
+      // (detached — the runtime does not block on the user). Returns promptly
+      // with `started:true`; the UI then polls status (force re-check) until the
+      // sign-in lands. `command` is the copy-paste fallback for a headless box.
+      const result = claudeLogin({
+        ...(typeof body.email === 'string' ? { email: body.email } : {}),
+        ...(typeof body.console === 'boolean' ? { console: body.console } : {}),
+      });
+      if (!result.ok) return { ok: false, error: result.error };
+      return { ok: true, started: true, command: result.command };
+    }
+
     case 'claude.logout': {
-      // Sign out of the LOCAL Claude dev sign-in by removing its OAuth
-      // credential file (the runtime owns the path and the safety — see
-      // `claudeLogout`). No secret crosses this boundary: the file is deleted,
-      // never read. The runtime resets its login cache, so the next GET (or the
-      // UI's explicit re-check) reports signed-out immediately rather than a
-      // 10s-stale "signed in".
-      const result = claudeLogout();
+      // Sign out of the LOCAL Claude dev sign-in by running `claude auth logout`
+      // (a clean CLI logout — the runtime resolves a de-shimmed binary and owns
+      // the safety; see `claudeLogout`). No secret crosses this boundary. The
+      // runtime resets its login cache, so the next GET (or the UI's explicit
+      // re-check) reports signed-out immediately rather than a 10s-stale answer.
+      const result = await claudeLogout();
       if (!result.ok) return { ok: false, error: result.error };
       return { ok: true, removed: result.removed };
     }
