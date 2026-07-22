@@ -36,6 +36,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 // ---------------------------------------------------------------------------
 // The preload bridge (electron/preload.ts). Typed locally so this file compiles
@@ -155,6 +156,7 @@ function ProviderForm({
   onSaved: () => void;
   autoFocus?: boolean;
 }) {
+  const { t } = useTranslation();
   const [key, setKey] = useState('');
   const [model, setModel] = useState(row.model || row.defaultModel);
   const [config, setConfig] = useState<Record<string, string>>(() => {
@@ -250,7 +252,7 @@ function ProviderForm({
     <div className="space-y-2">
       <div>
         <label className="block text-xs font-medium text-foreground mb-1">
-          API key {row.stored && <span className="text-muted-foreground">— a key is already saved</span>}
+          {t('providerSetup.apiKey')} {row.stored && <span className="text-muted-foreground">{t('providerSetup.keyAlreadySaved')}</span>}
         </label>
         <input
           type="password"
@@ -262,14 +264,14 @@ function ProviderForm({
             setKey(e.target.value);
             setSaved(false);
           }}
-          placeholder={row.stored ? 'Paste a new key to replace the saved one' : 'Paste your API key'}
+          placeholder={row.stored ? t('providerSetup.pasteNewKey') : t('providerSetup.pasteKey')}
           className={inputClass}
         />
-        <p className="mt-1 text-xs text-muted-foreground">Where to find it: {row.keyHelp}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t('providerSetup.whereToFind', { help: row.keyHelp })}</p>
       </div>
 
       <div>
-        <label className="block text-xs font-medium text-foreground mb-1">Model</label>
+        <label className="block text-xs font-medium text-foreground mb-1">{t('providerSetup.model')}</label>
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
@@ -301,7 +303,7 @@ function ProviderForm({
             disabled={busy}
             className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
           >
-            Save it anyway — I accept the risk
+            {t('providerSetup.saveAnyway')}
           </button>
         </div>
       )}
@@ -314,7 +316,7 @@ function ProviderForm({
           disabled={!canSave || busy}
           className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
         >
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? t('providerSetup.saving') : t('providerSetup.save')}
         </button>
         {row.stored && (
           <button
@@ -322,12 +324,12 @@ function ProviderForm({
             disabled={busy}
             className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
           >
-            Remove key
+            {t('providerSetup.removeKey')}
           </button>
         )}
-        {saved && <span className="text-xs text-green-600 dark:text-green-400">Saved</span>}
+        {saved && <span className="text-xs text-green-600 dark:text-green-400">{t('providerSetup.saved')}</span>}
         {missing.length > 0 && (
-          <span className="text-xs text-muted-foreground">still needs: {missing.join(', ')}</span>
+          <span className="text-xs text-muted-foreground">{t('providerSetup.stillNeeds', { fields: missing.join(', ') })}</span>
         )}
       </div>
     </div>
@@ -339,12 +341,13 @@ function ProviderForm({
 // ---------------------------------------------------------------------------
 
 function SecurityBanner({ security }: { security: Security }) {
+  const { t } = useTranslation();
   if (security.secure) return null;
   return (
     <div className="rounded border border-amber-500/50 bg-amber-500/10 p-2">
       <p className="text-xs text-amber-600 dark:text-amber-400">
-        ⚠ Keys cannot be stored securely on this computer (credential store:{' '}
-        <code>{security.backend}</code>).{security.warning ? ` ${security.warning}` : ''}
+        ⚠ {t('providerSetup.insecurePre')}
+        <code>{security.backend}</code>{t('providerSetup.insecurePost')}{security.warning ? ` ${security.warning}` : ''}
       </p>
     </div>
   );
@@ -355,6 +358,7 @@ function SecurityBanner({ security }: { security: Security }) {
 // ---------------------------------------------------------------------------
 
 export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
+  const { t } = useTranslation();
   const { data, unavailable, reload } = useProviders(isOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -362,8 +366,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
     return (
       <div className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Provider keys are managed by the Naby desktop app. Running in a browser, keys come from
-          the environment instead.
+          {t('providerSetup.browserManaged')}
         </p>
         {/* Engine choice and MCP servers are runtime state, not keychain state,
             so they work here even without the desktop bridge. */}
@@ -372,13 +375,13 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
       </div>
     );
   }
-  if (!data) return <p className="text-xs text-muted-foreground">Loading…</p>;
+  if (!data) return <p className="text-xs text-muted-foreground">{t('providerSetup.loading')}</p>;
 
   return (
     <div className="space-y-2">
       <SecurityBanner security={data.security} />
       <NabyEngineSelector isOpen={isOpen} />
-      <p className="text-xs font-medium text-foreground pt-2">API keys</p>
+      <p className="text-xs font-medium text-foreground pt-2">{t('providerSetup.apiKeys')}</p>
       {data.providers.map((row) => (
         <div key={row.kind} className="border border-border rounded">
           <button
@@ -388,9 +391,9 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
             <span className="text-sm text-foreground">{row.label}</span>
             <span className="text-xs">
               {row.stored ? (
-                <span className="text-green-600 dark:text-green-400">key saved</span>
+                <span className="text-green-600 dark:text-green-400">{t('providerSetup.keySaved')}</span>
               ) : (
-                <span className="text-muted-foreground">not configured</span>
+                <span className="text-muted-foreground">{t('providerSetup.notConfigured')}</span>
               )}
             </span>
           </button>
@@ -422,6 +425,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
  * re-enterable from Settings → AI provider at any time.
  */
 export function NabyOnboardingWizard() {
+  const { t } = useTranslation();
   const [needed, setNeeded] = useState(false);
   const [checked, setChecked] = useState(false);
   const { data, reload } = useProviders(needed);
@@ -459,11 +463,9 @@ export function NabyOnboardingWizard() {
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background">
       <div className="w-full max-w-lg mx-4 rounded-lg border border-border bg-card p-5 space-y-4">
         <div>
-          <h1 className="text-lg font-medium text-foreground">Welcome to Naby</h1>
+          <h1 className="text-lg font-medium text-foreground">{t('providerSetup.welcome')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Naby talks to an AI provider on your behalf. Pick the one you have an account with and
-            paste its API key — that is the entire setup. The key is stored in this computer&apos;s
-            secure credential store and is only ever sent to the provider you choose.
+            {t('providerSetup.welcomeBody')}
           </p>
         </div>
 
@@ -479,11 +481,11 @@ export function NabyOnboardingWizard() {
               >
                 <span className="text-sm text-foreground">{row.label}</span>
                 {row.stored && (
-                  <span className="text-xs text-green-600 dark:text-green-400">key saved</span>
+                  <span className="text-xs text-green-600 dark:text-green-400">{t('providerSetup.keySaved')}</span>
                 )}
               </button>
             ))}
-            {!data && <p className="text-xs text-muted-foreground">Loading providers…</p>}
+            {!data && <p className="text-xs text-muted-foreground">{t('providerSetup.loadingProviders')}</p>}
           </div>
         )}
 
@@ -495,7 +497,7 @@ export function NabyOnboardingWizard() {
                 onClick={() => setChoice(null)}
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
-                ← choose a different provider
+                {t('providerSetup.chooseDifferent')}
               </button>
             </div>
             <ProviderForm
@@ -515,10 +517,10 @@ export function NabyOnboardingWizard() {
             onClick={() => void skip()}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
-            Skip for now
+            {t('providerSetup.skipForNow')}
           </button>
           <span className="text-xs text-muted-foreground">
-            You can change this later in Settings → AI provider.
+            {t('providerSetup.changeLater')}
           </span>
         </div>
       </div>
@@ -577,6 +579,7 @@ async function nabyPost(body: unknown): Promise<{ ok: boolean; error?: string; m
 }
 
 export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
+  const { t } = useTranslation();
   const [state, setState] = useState<NabyEngineState | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -614,8 +617,8 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
     [
       {
         id: 'auto',
-        label: 'Automatic',
-        hint: 'Use a provider you have set up; otherwise Claude (subscription), if available.',
+        label: t('providerSetup.automatic'),
+        hint: t('providerSetup.automaticHint'),
         onPick: () => void choose('', ''),
         active: pref === '' && selectedProvider === '',
       },
@@ -626,8 +629,8 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
     // on the local Claude sign-in (Agent SDK) and adds no per-message charge.
     options.push({
       id: 'dev-claude',
-      label: 'Claude (subscription)',
-      hint: 'Uses the Claude sign-in on this computer (Agent SDK). No API key, no per-message charge.',
+      label: t('providerSetup.claudeSubscription'),
+      hint: t('providerSetup.claudeSubscriptionHint'),
       onPick: () => void choose('dev-claude', ''),
       active: pref === 'dev-claude',
     });
@@ -638,8 +641,8 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
       id: p.id,
       label: p.label,
       hint: p.ready
-        ? `${p.model} — billed to your ${p.label} account.`
-        : `${p.model} — no API key saved yet, so this cannot answer.`,
+        ? t('providerSetup.billedHint', { model: p.model, label: p.label })
+        : t('providerSetup.noKeyHint', { model: p.model }),
       onPick: () => void choose('ai-sdk', p.id),
       active: pref === 'ai-sdk' && selectedProvider === p.id,
     });
@@ -647,7 +650,7 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium text-foreground">Which model answers</p>
+      <p className="text-xs font-medium text-foreground">{t('providerSetup.whichModel')}</p>
       <div className="space-y-1">
         {options.map((o) => (
           <button
@@ -662,7 +665,7 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
           >
             <div className="flex items-center justify-between">
               <span className="text-sm text-foreground">{o.label}</span>
-              {o.active && <span className="text-xs text-brand">selected</span>}
+              {o.active && <span className="text-xs text-brand">{t('providerSetup.selected')}</span>}
             </div>
             <p className="text-xs text-muted-foreground">{o.hint}</p>
           </button>
@@ -704,6 +707,7 @@ type McpRow = {
 };
 
 function McpAddForm({ onAdded }: { onAdded: () => void }) {
+  const { t } = useTranslation();
   const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
@@ -730,7 +734,7 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
           : { name: name.trim(), transport, url: url.trim() };
       const res = await nabyPost({ action: 'mcp.upsert', entry });
       if (!res.ok) {
-        setError(res.error ?? 'could not save');
+        setError(res.error ?? t('providerSetup.couldNotSave'));
         return;
       }
       setName('');
@@ -741,7 +745,7 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
     } finally {
       setBusy(false);
     }
-  }, [args, command, name, onAdded, transport, url]);
+  }, [args, command, name, onAdded, transport, url, t]);
 
   const canSave =
     name.trim().length > 0 &&
@@ -765,7 +769,7 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Name, e.g. filesystem"
+        placeholder={t('providerSetup.namePlaceholder')}
         className={inputClass}
       />
       {transport === 'stdio' ? (
@@ -773,13 +777,13 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
           <input
             value={command}
             onChange={(e) => setCommand(e.target.value)}
-            placeholder="Command, e.g. npx"
+            placeholder={t('providerSetup.commandPlaceholder')}
             className={inputClass}
           />
           <input
             value={args}
             onChange={(e) => setArgs(e.target.value)}
-            placeholder="Arguments, e.g. -y @modelcontextprotocol/server-filesystem /tmp"
+            placeholder={t('providerSetup.argsPlaceholder')}
             className={inputClass}
           />
         </>
@@ -787,7 +791,7 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://example.com/mcp"
+          placeholder={t('providerSetup.urlPlaceholder')}
           className={inputClass}
         />
       )}
@@ -797,16 +801,17 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
         disabled={!canSave || busy}
         className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
       >
-        {busy ? 'Saving…' : 'Add server'}
+        {busy ? t('providerSetup.saving') : t('providerSetup.addServer')}
       </button>
     </div>
   );
 }
 
 export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
+  const { t } = useTranslation();
   const [rows, setRows] = useState<McpRow[] | null>(null);
   const [adding, setAdding] = useState(false);
-  const [status, setStatus] = useState<Record<string, string>>({});
+  const [status, setStatus] = useState<Record<string, { text: string; ok: boolean }>>({});
 
   const reload = useCallback(async () => {
     const state = await nabyGet();
@@ -818,13 +823,15 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
   }, [isOpen, reload]);
 
   const test = useCallback(async (serverName: string) => {
-    setStatus((prev) => ({ ...prev, [serverName]: 'Connecting…' }));
+    setStatus((prev) => ({ ...prev, [serverName]: { text: t('providerSetup.connecting'), ok: true } }));
     const res = await nabyPost({ action: 'mcp.test', name: serverName });
     setStatus((prev) => ({
       ...prev,
-      [serverName]: res.ok ? (res.message ?? 'Connected.') : `Failed: ${res.error}`,
+      [serverName]: res.ok
+        ? { text: res.message ?? t('providerSetup.connected'), ok: true }
+        : { text: t('providerSetup.failed', { error: res.error }), ok: false },
     }));
-  }, []);
+  }, [t]);
 
   const remove = useCallback(
     async (serverName: string) => {
@@ -839,17 +846,16 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
   return (
     <div className="space-y-2 pt-2">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-foreground">MCP servers</p>
+        <p className="text-xs font-medium text-foreground">{t('providerSetup.mcpServers')}</p>
         <button
           onClick={() => setAdding((v) => !v)}
           className="text-xs text-muted-foreground hover:text-foreground"
         >
-          {adding ? 'cancel' : '+ add'}
+          {adding ? t('providerSetup.cancel') : t('providerSetup.add')}
         </button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Tools from these servers are offered to the model, and every call one makes is checked by
-        the approval gate before it runs — the same as Naby&apos;s own tools.
+        {t('providerSetup.mcpDescription')}
       </p>
 
       {adding && (
@@ -862,7 +868,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
       )}
 
       {rows.length === 0 && !adding && (
-        <p className="text-xs text-muted-foreground">No MCP servers configured.</p>
+        <p className="text-xs text-muted-foreground">{t('providerSetup.noMcpServers')}</p>
       )}
 
       {rows.map((row) => (
@@ -879,7 +885,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
                 <p className="text-xs text-muted-foreground">
                   {row.envKeys?.length ? `env: ${row.envKeys.join(', ')}` : ''}
                   {row.headerKeys?.length ? `headers: ${row.headerKeys.join(', ')}` : ''}
-                  {' (values hidden)'}
+                  {t('providerSetup.valuesHidden')}
                 </p>
               )}
             </div>
@@ -888,23 +894,23 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
                 onClick={() => void test(row.name)}
                 className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
               >
-                Test
+                {t('providerSetup.test')}
               </button>
               <button
                 onClick={() => void remove(row.name)}
                 className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-red-500"
               >
-                Remove
+                {t('providerSetup.remove')}
               </button>
             </div>
           </div>
           {status[row.name] && (
             <p
               className={`mt-1 text-xs ${
-                status[row.name]?.startsWith('Failed') ? 'text-red-500' : 'text-green-600 dark:text-green-400'
+                status[row.name]?.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'
               }`}
             >
-              {status[row.name]}
+              {status[row.name]?.text}
             </p>
           )}
         </div>

@@ -156,7 +156,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
           {/* AI provider Section (F1-04) */}
           <div>
-            <label className="block text-sm font-medium text-foreground mb-2">AI provider</label>
+            <label className="block text-sm font-medium text-foreground mb-2">{t('settings.aiProvider')}</label>
             <NabyProviderSettings isOpen={isOpen} />
           </div>
 
