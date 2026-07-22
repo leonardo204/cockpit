@@ -91,11 +91,46 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   }, [onPlanModeChange]);
   const isClaudeEngine = !engine || engine === 'claude';
   // Read-only engine identity for the status line, used as the FALLBACK before a
-  // turn has started. Naby is single-engine, so this is a constant; once a turn
-  // begins the server's `system/init` carries the RESOLVED model label as
-  // `event.model`, which useChatStream captures into `liveModel` and the status
-  // line displays in preference to this static string.
-  const engineLabel = 'Claude Agent SDK';
+  // turn has started. It must reflect WHICH engine the next turn will use — the
+  // user's selected provider — not a hardcoded string: showing "Claude Agent SDK"
+  // while Azure is selected reads as "my choice was ignored". We read the same
+  // /api/naby the settings modal uses (engine.id + selected provider label), so
+  // the header and the settings can never disagree. Once a turn begins, the
+  // server's system/init carries the RESOLVED model as event.model, which
+  // useChatStream captures into `liveModel` and the line prefers over this.
+  const [engineLabel, setEngineLabel] = useState('…');
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/naby');
+        if (!res.ok) return;
+        const s = (await res.json()) as {
+          engine?: { ok?: boolean; id?: string };
+          settings?: { selectedProvider?: string };
+          providers?: { id: string; label: string; model?: string }[];
+        };
+        if (!alive) return;
+        if (s.engine?.id === 'ai-sdk') {
+          const pid = s.settings?.selectedProvider;
+          const p = s.providers?.find((x) => x.id === pid) ?? s.providers?.find((x) => x.id);
+          setEngineLabel(p ? (p.model ? `${p.label} · ${p.model}` : p.label) : 'API provider');
+        } else if (s.engine?.id === 'dev-claude') {
+          setEngineLabel('Claude (subscription)');
+        } else {
+          setEngineLabel('No engine');
+        }
+      } catch {
+        /* leave the placeholder; the chat surfaces any real failure */
+      }
+    };
+    void load();
+    return () => {
+      alive = false;
+    };
+    // Re-read when the tab or the live model changes (a turn just resolved the
+    // engine) so a settings change is reflected on the next render/turn.
+  }, [sessionId, liveModel]);
   const messageListRef = useRef<MessageListHandle>(null);
   const handleSendRef = useRef<((message: string) => void) | null>(null);
 
