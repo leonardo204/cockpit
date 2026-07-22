@@ -607,24 +607,27 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
   const selectedProvider = state.settings.selectedProvider ?? '';
 
   // "Automatic" is first and is the default, because it is right for almost
-  // everyone: a configured provider answers, and if none is configured the dev
-  // engine picks up the slack rather than the app being unusable.
+  // everyone: a configured provider answers, and if none is configured the
+  // Claude subscription engine picks up the slack rather than the app being
+  // unusable.
   const options: { id: string; label: string; hint: string; onPick: () => void; active: boolean }[] =
     [
       {
         id: 'auto',
         label: 'Automatic',
-        hint: 'Use a provider you have set up; otherwise the development model, if available.',
+        hint: 'Use a provider you have set up; otherwise Claude (subscription), if available.',
         onPick: () => void choose('', ''),
         active: pref === '' && selectedProvider === '',
       },
     ];
 
   if (state.devEngineAvailable) {
+    // A first-class default provider, not a "development-only" fallback: it runs
+    // on the local Claude sign-in (Agent SDK) and adds no per-message charge.
     options.push({
       id: 'dev-claude',
-      label: 'Development model — no API key needed',
-      hint: 'Uses the Claude sign-in already on this computer. No per-message charge. Development builds only.',
+      label: 'Claude (subscription)',
+      hint: 'Uses the Claude sign-in on this computer (Agent SDK). No API key, no per-message charge.',
       onPick: () => void choose('dev-claude', ''),
       active: pref === 'dev-claude',
     });
