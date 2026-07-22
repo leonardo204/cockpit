@@ -15,7 +15,9 @@ interface SessionInfo {
   lastMessages: string[];
   /** Untruncated full-text corpus (title + summary + all user messages), lowercased. */
   searchText?: string;
-  engine?: 'claude' | 'claude2' | 'ollama' | 'codex' | 'kimi';
+  /** Engine that produced this session. Naby is single-engine; kept as a free
+   *  string only to tolerate values echoed by legacy on-disk transcripts. */
+  engine?: string;
 }
 
 interface ProjectSessionsModalProps {
@@ -209,19 +211,8 @@ export function ProjectSessionsModal({ isOpen, onClose, cwd, onSelectSession }: 
                   onClick={() => handleSessionClick(session)}
                   className="p-3 bg-secondary rounded border border-border hover:border-brand hover:shadow-md cursor-pointer transition-all"
                 >
-                  {/* Session Title + Engine Badge */}
+                  {/* Session Title */}
                   <div className="flex items-center gap-1.5 mb-1">
-                    {session.engine && session.engine !== 'claude' && (
-                      <span className={`shrink-0 px-1 py-0.5 text-[10px] leading-none font-medium rounded ${
-                        session.engine === 'claude2' ? 'bg-orange-500/15 text-orange-11' :
-                        session.engine === 'ollama' ? 'bg-blue-500/15 text-blue-11' :
-                        session.engine === 'codex' ? 'bg-green-500/15 text-green-11' :
-                        session.engine === 'kimi' ? 'bg-purple-500/15 text-purple-11' :
-                        'bg-muted text-muted-foreground'
-                      }`}>
-                        {session.engine}
-                      </span>
-                    )}
                     <h4 className="text-xs font-medium text-foreground truncate" title={session.title}>
                       {session.title}
                     </h4>

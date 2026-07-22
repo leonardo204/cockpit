@@ -28,9 +28,12 @@ describe('applyStreamEvent (#10 engine-agnostic reducer)', () => {
     expect(out[0].content).toBe('Hi');
   });
 
-  it('codex/kimi/ollama complete-text assistant is rendered (no deltas for them)', () => {
-    const out = reduce(seed(), [{ type: 'assistant', message: { content: [{ type: 'text', text: 'from codex' }] } }], 'codex');
-    expect(out[0].content).toBe('from codex');
+  it('non-synthetic complete-text assistant is NOT read (single-engine: text comes via deltas)', () => {
+    // The alt-engine (codex/kimi/ollama) complete-text path was removed with the
+    // engine picker. A plain assistant message carries no text into the bubble;
+    // only deltas and <synthetic> messages do.
+    const out = reduce(seed(), [{ type: 'assistant', message: { content: [{ type: 'text', text: 'ignored' }] } }]);
+    expect(out[0].content).toBe('');
   });
 
   it('synthetic message text is read regardless of engine', () => {

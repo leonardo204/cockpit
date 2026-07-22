@@ -82,8 +82,15 @@ export interface RateLimitInfo {
 // Chat engine / model selection types — used by useChatStream, ChatPanel,
 // MessageList, etc. Migrated here from useTabState so the types live with
 // the agent feature instead of a generic tab-state hook.
-export type ChatEngine = 'claude' | 'claude2' | 'codex' | 'kimi' | 'ollama' | 'deepseek';
-export type DeepseekModel = 'deepseek-v4-flash' | 'deepseek-v4-pro';
+// Naby is single-engine: every tab runs the one Naby engine (nabySpec via
+// /api/chat). The alternate engines (codex/kimi/ollama/deepseek) and the
+// upstream `claude2` leftover were removed with the engine picker, so this
+// collapses to a single value. `engine` on a tab is effectively always
+// undefined/'claude'; the type is kept (not deleted) so the residual read
+// sites — engine-status label, isClaudeEngine, session `engine` echo — still
+// compile. NOTE: dev-claude (ClaudeAgentSdkEngine) is a SEPARATE selectEngine
+// concept, NOT a ChatEngine value.
+export type ChatEngine = 'claude';
 // `ChatMode` ('sdk' | 'pty') used to live here. The PTY mode spawned the interactive
 // `claude` CLI with --dangerously-skip-permissions, bypassing the approval gate; it was
 // removed rather than repaired, so there is no longer a mode to select — the SDK path is

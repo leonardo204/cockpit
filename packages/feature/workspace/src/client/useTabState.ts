@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { usePageVisible, useWebSocket } from '@cockpit/shared-ui';
-import type { ChatEngine, DeepseekModel } from '@cockpit/feature-agent';
+import type { ChatEngine } from '@cockpit/feature-agent';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
 import { Effect } from 'effect';
@@ -25,8 +25,6 @@ export interface TabInfo {
   title: string;
   isLoading?: boolean;
   engine?: ChatEngine;
-  ollamaModel?: string;
-  deepseekModel?: DeepseekModel;
   planMode?: boolean;
 }
 
@@ -106,9 +104,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         )
       );
       if (data) {
-        const savedEngines: Record<string, string> = data.engines || {};
-        const savedOllamaModels: Record<string, string> = data.ollamaModels || {};
-        const savedDeepseekModels: Record<string, string> = data.deepseekModels || {};
         // NOTE: persisted session state may still carry a `chatModes` key written by
         // older builds (the removed SDK/PTY picker). It is simply not read — unknown
         // keys are ignored on load and dropped on the next save.
@@ -125,18 +120,14 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         // The one exception is an EXPLICIT open of a specific past session — a deep
         // link or a pick from the session browser — which arrives as initialSessionId.
         // That id is already seeded into the default tab (see the tabs initial state
-        // above); here we only carry over its saved per-session settings so the
-        // reopened session keeps its engine / model / plan-mode.
+        // above); here we only carry over its saved plan-mode. (Per-engine tab state
+        // was removed with the engine picker — Naby is single-engine.)
         if (initialSessionId) {
           setTabs((prev) =>
             prev.map((t) =>
               t.sessionId === initialSessionId
                 ? {
                     ...t,
-                    engine: (savedEngines[initialSessionId] as ChatEngine) || t.engine,
-                    ollamaModel: savedOllamaModels[initialSessionId] || t.ollamaModel,
-                    deepseekModel:
-                      (savedDeepseekModels[initialSessionId] as DeepseekModel) || t.deepseekModel,
                     planMode: savedPlanModes[initialSessionId] ?? t.planMode,
                   }
                 : t,
@@ -168,21 +159,10 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     const activeTab = tabs.find(t => t.id === activeTabId);
     const activeSessionId = activeTab?.sessionId;
 
-    // Build engine map for tabs that have a non-default engine
-    const engines: Record<string, string> = {};
-    const ollamaModels: Record<string, string> = {};
-    const deepseekModels: Record<string, string> = {};
+    // Per-session plan-mode map. (Per-engine tab state — engines / ollamaModels /
+    // deepseekModels — was removed with the engine picker; Naby is single-engine.)
     const planModes: Record<string, boolean> = {};
     for (const tab of tabs) {
-      if (tab.sessionId && tab.engine) {
-        engines[tab.sessionId] = tab.engine;
-      }
-      if (tab.sessionId && tab.ollamaModel) {
-        ollamaModels[tab.sessionId] = tab.ollamaModel;
-      }
-      if (tab.sessionId && tab.deepseekModel) {
-        deepseekModels[tab.sessionId] = tab.deepseekModel;
-      }
       // Persist the explicit value for sessions THIS tab has open, so switching
       // back to the default actually overrides a previously-saved non-default.
       // The server merge is a union — an absent key keeps the old value, which
@@ -207,9 +187,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         cwd: initialCwd,
         sessions: sessionIds,
         activeSessionId,
-        engines,
-        ollamaModels,
-        deepseekModels,
         planModes,
         ...(closedSessionIds.length ? { closedSessionIds } : {}),
       }).pipe(
@@ -316,15 +293,13 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   // - appendToEnd=true (new chats from "+" menu, opening existing sessions from sidebar):
   //   append to the end of all tabs
   // - appendToEnd=false (forked chats): insert to the right of current tab
-  const addTab = useCallback((cwd?: string, sessionId?: string, title?: string, engine?: ChatEngine, ollamaModel?: string, deepseekModel?: DeepseekModel, appendToEnd: boolean = false) => {
+  const addTab = useCallback((cwd?: string, sessionId?: string, title?: string, engine?: ChatEngine, appendToEnd: boolean = false) => {
     const newTab: TabInfo = {
       id: `tab-${Date.now()}`,
       cwd,
       sessionId,
       title: title || (sessionId ? `Session ${sessionId.slice(0, 6)}...` : 'New Chat'),
       engine,
-      ollamaModel,
-      deepseekModel,
     };
     setTabs((prev) => {
       if (appendToEnd) {
@@ -397,7 +372,7 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     if (existingTab) {
       setActiveTabId(existingTab.id);
     } else {
-      addTab(initialCwd, sid, title, undefined, undefined, undefined, true);
+      addTab(initialCwd, sid, title, undefined, true);
     }
   }, [tabs, initialCwd, addTab]);
 
@@ -406,27 +381,8 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   // undefined → the Naby `claude` path → /api/chat → nabySpec). dev/prod is
   // decided by whether an API key is configured, not by a per-tab choice.
   const handleNewTab = useCallback(() => {
-    addTab(initialCwd, undefined, undefined, undefined, undefined, undefined, true);
+    addTab(initialCwd, undefined, undefined, undefined, true);
   }, [initialCwd, addTab]);
-
-  // Update Ollama model for a tab (kept for sessions that still carry a saved
-  // ollama engine from before the picker was removed; ChatPanel wires this)
-  const updateTabOllamaModel = useCallback((tabId: string, model: string) => {
-    setTabs((prev) =>
-      prev.map((tab) =>
-        tab.id === tabId ? { ...tab, ollamaModel: model } : tab
-      )
-    );
-  }, []);
-
-  // Update DeepSeek model for a tab
-  const updateTabDeepseekModel = useCallback((tabId: string, model: DeepseekModel) => {
-    setTabs((prev) =>
-      prev.map((tab) =>
-        tab.id === tabId ? { ...tab, deepseekModel: model } : tab
-      )
-    );
-  }, []);
 
   // Update plan mode (read-only planning) for a tab
   const updateTabPlanMode = useCallback((tabId: string, planMode: boolean) => {
@@ -564,8 +520,6 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     handleNewTab,
     handleOpenSession,
     updateTabState,
-    updateTabOllamaModel,
-    updateTabDeepseekModel,
     updateTabPlanMode,
 
     // Drag operations

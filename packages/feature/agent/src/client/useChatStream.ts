@@ -10,7 +10,6 @@ import type {
   RateLimitInfo,
   ApiRetryInfo,
   ChatEngine,
-  DeepseekModel,
 } from './types';
 import i18n from '@cockpit/shared-i18n';
 import { useWebSocket } from '@cockpit/shared-ui';
@@ -37,8 +36,6 @@ interface UseChatStreamOptions {
   engine?: ChatEngine;
   /** Plan mode (claude engine only): read-only exploration that produces a plan without editing */
   planMode?: boolean;
-  ollamaModel?: string;
-  deepseekModel?: DeepseekModel;
   onSessionId: (sid: string) => void;
   onFetchTitle: (sid: string) => void;
   /**
@@ -80,7 +77,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, planMode, ollamaModel, deepseekModel, onSessionId, onFetchTitle, onRunComplete, onEngineModel }: UseChatStreamOptions
+  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -513,17 +510,13 @@ export function useChatStream(
       sawResultRef.current = false;
       turnActiveRef.current = false;
 
-      const isClaudeEngine = !engine || engine === 'claude' || engine === 'claude2';
+      const isClaudeEngine = !engine || engine === 'claude';
 
       const runId = genRunId();
 
       try {
-        // Ollama requires a model to be selected
-        if (engine === 'ollama' && !ollamaModel) {
-          throw new Error('Please select an Ollama model first (click the model picker above)');
-        }
-
-        const apiUrl = engine === 'codex' ? '/api/chat/codex' : engine === 'kimi' ? '/api/chat/kimi' : engine === 'ollama' ? '/api/chat/ollama' : engine === 'deepseek' ? '/api/chat/deepseek' : '/api/chat';
+        // Naby is single-engine: every run posts to /api/chat (the Naby engine).
+        const apiUrl = '/api/chat';
         // POST only STARTS the detached run and returns its runKey — no SSE body to read.
         // The ws consumer (above) tails /ws/session-stream and drives the UI from here.
         const response = await fetch(apiUrl, {
@@ -536,20 +529,11 @@ export function useChatStream(
             images: messageImages,
             cwd,
             language: i18n.language,
-            ...(engine === 'ollama' && ollamaModel && { model: ollamaModel }),
-            ...(engine === 'deepseek' && deepseekModel && { model: deepseekModel }),
-            ...(engine === 'claude2' && { engine: 'claude2' }),
             // Plan mode: only meaningful on a claude engine. When unchecked, omit → server
             // defaults to bypassPermissions.
             ...(usePlanMode && isClaudeEngine && { permissionMode: 'plan' }),
           }),
         });
-
-        if (response.status === 400 && engine === 'deepseek') {
-          // Surface the readable error (likely "API key is not configured")
-          const errBody = await response.json().catch(() => null);
-          throw new Error(errBody?.error || 'DeepSeek request failed');
-        }
 
         if (!response.ok) {
           throw new Error(i18n.t('chat.requestFailed', { defaultValue: 'Request failed' }));
@@ -590,7 +574,7 @@ export function useChatStream(
         setActiveRun(null);
       }
     },
-    [cwd, engine, planMode, ollamaModel, deepseekModel, setMessages, endRun]
+    [cwd, engine, planMode, setMessages, endRun]
   );
 
   return {

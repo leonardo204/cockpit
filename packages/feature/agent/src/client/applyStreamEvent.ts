@@ -48,9 +48,11 @@ export interface StreamEvent {
 export function applyStreamEvent(
   messages: ChatMessage[],
   ev: StreamEvent,
+  // `engine` is accepted for call-site compatibility (Naby is single-engine) but
+  // no longer branches anything — text handling is delta + synthetic only.
   opts: { engine?: string; assistantId: string }
-): ChatMessage[] {
-  const { engine, assistantId } = opts;
+):ChatMessage[] {
+  const { assistantId } = opts;
 
   // claude/deepseek/PTY: streamed text deltas
   if (ev.type === 'stream_event') {
@@ -62,8 +64,9 @@ export function applyStreamEvent(
     return messages;
   }
 
-  // complete assistant message: codex/kimi/ollama/synthetic carry text here (claude's
-  // text comes via deltas → skipped to avoid duplication); tool_use blocks for all engines
+  // complete assistant message: synthetic messages carry text here (the Naby
+  // engine's real text comes via deltas → skipped to avoid duplication);
+  // tool_use blocks are always read.
   if (ev.type === 'assistant') {
     const content = ev.message?.content;
     if (!Array.isArray(content)) return messages;
@@ -71,7 +74,7 @@ export function applyStreamEvent(
     let out = messages;
 
     const isSynthetic = ev.message?.model === '<synthetic>';
-    if (engine === 'codex' || engine === 'kimi' || engine === 'ollama' || isSynthetic) {
+    if (isSynthetic) {
       const newText = blocks.filter((b) => b.type === 'text' && b.text).map((b) => b.text).join('');
       if (newText) out = out.map((m) => (m.id === assistantId ? { ...m, content: (m.content || '') + newText } : m));
     }

@@ -47,8 +47,6 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     handleNewTab,
     handleOpenSession,
     updateTabState,
-    updateTabOllamaModel,
-    updateTabDeepseekModel,
     updateTabPlanMode,
     handleTabDragStart,
     handleTabDragOver,
@@ -215,10 +213,6 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                       cwd={tab.cwd}
                       sessionId={tab.sessionId}
                       engine={tab.engine}
-                      ollamaModel={tab.ollamaModel}
-                      onOllamaModelChange={updateTabOllamaModel}
-                      deepseekModel={tab.deepseekModel}
-                      onDeepseekModelChange={updateTabDeepseekModel}
                       planMode={tab.planMode}
                       onPlanModeChange={updateTabPlanMode}
                       isActive={tab.id === activeTabId}

@@ -8,8 +8,6 @@ export { ChatHeader } from './ChatHeader';
 export { TokenUsageBar } from './TokenUsageBar';
 export { MessageList, type MessageListHandle } from './MessageList';
 export { MessageBubble } from './MessageBubble';
-export { OllamaModelPicker } from './OllamaModelPicker';
-export { DeepseekConfigPicker } from './DeepseekConfigPicker';
 export { ProjectSessionsModal } from './ProjectSessionsModal';
 export { RecentSessionsModal } from './RecentSessionsModal';
 export { TodoViewerModal } from './TodoViewerModal';
@@ -56,5 +54,4 @@ export type {
   ApiRetryInfo,
   RateLimitInfo,
   ChatEngine,
-  DeepseekModel,
 } from './types';

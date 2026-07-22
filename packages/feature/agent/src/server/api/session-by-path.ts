@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as readline from 'readline';
 import { join } from 'path';
 import { Effect } from 'effect';
-import { getClaudeSessionPath, getClaude2SessionPath, findCodexSessionPath, findKimiSessionPath, getOllamaSessionPath, getDeepseekSessionPath } from '@cockpit/shared-utils';
+import { getClaudeSessionPath } from '@cockpit/shared-utils';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
   AppError,
@@ -247,7 +247,7 @@ export const POST = handler((req) =>
       );
     }
 
-    // Resolve session file across 6 engines (claude/claude2/deepseek/codex/kimi/ollama)
+    // Resolve the session's transcript file (single-engine: Claude Agent SDK path).
     const resolved = yield* Effect.sync(() => resolveSessionPath(cwd, sessionId));
     if (!resolved) {
       return yield* Effect.fail(
@@ -346,13 +346,7 @@ export const POST = handler((req) =>
     }
 
     const parseResult = yield* Effect.tryPromise({
-      try: async () => {
-        if (engine === 'codex') return parseCodexTranscriptFile(sessionPath);
-        if (engine === 'kimi') return parseKimiTranscriptFile(sessionPath);
-        // ollama writes Claude-style transcripts since v1.0.186; the AI SDK ModelMessage
-        // legacy fallback (v1.0.184–185 only) was removed.
-        return parseTranscriptFile(sessionPath, limit, beforeTurnIndex);
-      },
+      try: async () => parseTranscriptFile(sessionPath, limit, beforeTurnIndex),
       catch: (cause) =>
         new AppError({ message: 'parseTranscriptFile failed', cause }),
     });
@@ -368,9 +362,9 @@ export const POST = handler((req) =>
       totalTurns,
       hasMore,
       fingerprint,
-      // Authoritative engine for this session, resolved by file location across
-      // all 6 engines. Mobile (/m) uses this to send on the session's native
-      // engine — more reliable than the optional global-state engine field.
+      // Authoritative engine for this session. Naby is single-engine, so this is
+      // always 'claude'; retained in the response shape for the mobile (/m) client
+      // and any legacy readers.
       engine,
     });
   })
@@ -381,31 +375,15 @@ function resolveSessionPath(
   sessionId: string
 ): {
   sessionPath: string;
-  engine: 'claude' | 'claude2' | 'codex' | 'kimi' | 'ollama' | 'deepseek';
+  engine: 'claude';
 } | null {
+  // Naby is single-engine: sessions live under the Claude Agent SDK transcript
+  // path. The alt-engine (codex/kimi/ollama/deepseek) and claude2 resolution
+  // branches were removed with the engine picker — legacy sessions written by
+  // those engines no longer resolve here (accepted single-engine tradeoff).
   const sessionPath = getClaudeSessionPath(cwd, sessionId);
   if (fs.existsSync(sessionPath)) {
     return { sessionPath, engine: 'claude' };
-  }
-  const claude2Path = getClaude2SessionPath(cwd, sessionId);
-  if (fs.existsSync(claude2Path)) {
-    return { sessionPath: claude2Path, engine: 'claude2' };
-  }
-  const deepseekPath = getDeepseekSessionPath(cwd, sessionId);
-  if (fs.existsSync(deepseekPath)) {
-    return { sessionPath: deepseekPath, engine: 'deepseek' };
-  }
-  const codexPath = findCodexSessionPath(sessionId);
-  if (codexPath) {
-    return { sessionPath: codexPath, engine: 'codex' };
-  }
-  const kimiPath = findKimiSessionPath(sessionId);
-  if (kimiPath) {
-    return { sessionPath: kimiPath, engine: 'kimi' };
-  }
-  const ollamaPath = getOllamaSessionPath(cwd, sessionId);
-  if (fs.existsSync(ollamaPath)) {
-    return { sessionPath: ollamaPath, engine: 'ollama' };
   }
   return null;
 }
@@ -719,256 +697,3 @@ function convertToChatMessages(rawMessages: TranscriptMessage[]): ChatMessage[] 
 
   return chatMessages;
 }
-
-// ============================================
-// Codex session transcript parser
-// ============================================
-
-interface CodexPayload {
-  type?: string;
-  role?: string;
-  name?: string;
-  arguments?: string;
-  call_id?: string;
-  output?: string;
-  content?: Array<{ type?: string; text?: string }>;
-}
-
-async function parseCodexTranscriptFile(
-  filePath: string
-): Promise<{ messages: ChatMessage[]; title: string; usage?: TokenUsage }> {
-  const fileStream = fs.createReadStream(filePath);
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-  const messages: ChatMessage[] = [];
-  let currentAssistant: ChatMessage | null = null;
-  let title = 'Untitled Session';
-  let lastUsage: TokenUsage | undefined;
-  let msgCounter = 0;
-
-  const flushAssistant = () => {
-    if (currentAssistant) {
-      messages.push(currentAssistant);
-      currentAssistant = null;
-    }
-  };
-
-  const ensureAssistant = (timestamp?: string): ChatMessage => {
-    if (!currentAssistant) {
-      currentAssistant = {
-        id: `codex-assistant-${msgCounter++}`,
-        role: 'assistant',
-        content: '',
-        toolCalls: [],
-        timestamp,
-      };
-    }
-    return currentAssistant;
-  };
-
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    let entry: { timestamp?: string; type?: string; payload?: CodexPayload };
-    try {
-      entry = JSON.parse(line);
-    } catch { continue; }
-
-    const { type, payload, timestamp } = entry;
-    if (!payload) continue;
-
-    if (type === 'response_item') {
-      // User message
-      if (payload.type === 'message' && payload.role === 'user') {
-        const text = payload.content
-          ?.filter(c => c.type === 'input_text' && c.text)
-          .map(c => c.text!)
-          .join('') || '';
-        // Skip system/developer messages (permissions, AGENTS.md, env context)
-        if (!text || text.startsWith('<') || text.startsWith('#')) continue;
-
-        flushAssistant();
-        messages.push({
-          id: `codex-user-${msgCounter++}`,
-          role: 'user',
-          content: text,
-          timestamp,
-        });
-        // First real user message becomes the title
-        if (title === 'Untitled Session') {
-          title = text.slice(0, 80);
-        }
-      }
-
-      // Assistant text message
-      if (payload.type === 'message' && payload.role === 'assistant') {
-        const text = payload.content
-          ?.filter(c => c.type === 'output_text' && c.text)
-          .map(c => c.text!)
-          .join('') || '';
-        if (text) {
-          const assistant = ensureAssistant(timestamp);
-          assistant.content = (assistant.content || '') + text;
-        }
-      }
-
-      // Reasoning
-      if (payload.type === 'reasoning') {
-        // Skip reasoning for now (could render as collapsed block later)
-      }
-
-      // Tool call (function_call)
-      if (payload.type === 'function_call' && payload.name) {
-        const assistant = ensureAssistant(timestamp);
-        let input: Record<string, unknown> = {};
-        try { input = JSON.parse(payload.arguments || '{}'); } catch { /* */ }
-        assistant.toolCalls = assistant.toolCalls || [];
-        assistant.toolCalls.push({
-          id: payload.call_id || `tool-${msgCounter++}`,
-          name: payload.name === 'shell_command' ? 'Bash' : payload.name,
-          input,
-          isLoading: false,
-        });
-      }
-
-      // Tool result (function_call_output)
-      if (payload.type === 'function_call_output' && payload.call_id) {
-        const assistant = ensureAssistant(timestamp);
-        const tc = assistant.toolCalls?.find(t => t.id === payload.call_id);
-        if (tc) {
-          tc.result = payload.output || '';
-          tc.isLoading = false;
-        }
-      }
-    }
-
-    // Usage from response_completed or event_msg
-    if (type === 'response_completed') {
-      const usage = (payload as Record<string, unknown>).usage as TokenUsage | undefined;
-      if (usage) lastUsage = usage;
-      flushAssistant();
-    }
-  }
-
-  flushAssistant();
-
-  return { messages, title, usage: lastUsage };
-}
-
-// ============================================
-// Kimi session transcript parser (context.jsonl)
-// ============================================
-// Format: each line is {"role":"user"|"assistant"|"_system_prompt"|"_checkpoint", "content":[...], ...}
-
-async function parseKimiTranscriptFile(
-  filePath: string
-): Promise<{ messages: ChatMessage[]; title: string; usage?: TokenUsage }> {
-  const fileStream = fs.createReadStream(filePath);
-  const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
-
-  const messages: ChatMessage[] = [];
-  let title = 'Untitled Session';
-  let msgCounter = 0;
-
-  for await (const line of rl) {
-    if (!line.trim()) continue;
-    let entry: { role?: string; content?: string | Array<{ type?: string; text?: string; think?: string }>; id?: number };
-    try { entry = JSON.parse(line); } catch { continue; }
-
-    // Skip system prompts and checkpoints
-    if (!entry.role || entry.role.startsWith('_')) continue;
-
-    if (entry.role === 'user') {
-      // content can be a string or an array of blocks
-      const text = typeof entry.content === 'string'
-        ? entry.content
-        : Array.isArray(entry.content)
-          ? entry.content.filter(c => (c.type === 'input_text' || c.type === 'text') && c.text).map(c => c.text!).join('')
-          : '';
-      // Skip system-injected messages
-      if (!text || text.startsWith('<system') || text.startsWith('<environment') || text.startsWith('# AGENTS.md') || text.startsWith('<permissions')) continue;
-      messages.push({
-        id: `kimi-user-${msgCounter++}`,
-        role: 'user',
-        content: text,
-      });
-      if (title === 'Untitled Session') {
-        title = text.slice(0, 80);
-      }
-    }
-
-    if (entry.role === 'assistant') {
-      let text = '';
-      if (typeof entry.content === 'string') {
-        text = entry.content;
-      } else if (Array.isArray(entry.content)) {
-        for (const block of entry.content) {
-          if (block.type === 'text' && block.text) {
-            text += block.text;
-          }
-        }
-      }
-
-      // Extract tool calls
-      const newToolCalls: NonNullable<ChatMessage['toolCalls']> = [];
-      const entryToolCalls = (entry as Record<string, unknown>).tool_calls as Array<{ id?: string; function?: { name?: string; arguments?: string } }> | undefined;
-      if (entryToolCalls && Array.isArray(entryToolCalls)) {
-        for (const tc of entryToolCalls) {
-          if (tc.function?.name) {
-            let input: Record<string, unknown> = {};
-            try { input = JSON.parse(tc.function.arguments || '{}'); } catch { /* */ }
-            newToolCalls.push({
-              id: tc.id || `tool-${msgCounter++}`,
-              name: tc.function.name === 'Shell' ? 'Bash' : tc.function.name,
-              input,
-              isLoading: false,
-            });
-          }
-        }
-      }
-
-      // Merge into the last assistant message if it's part of a tool call chain
-      // (consecutive assistant messages without a user message in between)
-      const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-      if (lastMsg && lastMsg.role === 'assistant' && lastMsg.toolCalls && lastMsg.toolCalls.length > 0) {
-        // Append tool calls and text to existing bubble
-        if (newToolCalls.length > 0) {
-          lastMsg.toolCalls.push(...newToolCalls);
-        }
-        if (text) {
-          lastMsg.content = (lastMsg.content || '') + text;
-        }
-      } else if (text || newToolCalls.length > 0) {
-        // New assistant bubble
-        messages.push({
-          id: `kimi-assistant-${msgCounter++}`,
-          role: 'assistant',
-          content: text,
-          ...(newToolCalls.length > 0 ? { toolCalls: newToolCalls } : {}),
-        });
-      }
-    }
-
-    if (entry.role === 'tool') {
-      // Match tool result to the last assistant message's tool call
-      const toolCallId = (entry as Record<string, unknown>).tool_call_id as string | undefined;
-      if (toolCallId && messages.length > 0) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg.role === 'assistant' && lastMsg.toolCalls) {
-          const tc = lastMsg.toolCalls.find(t => t.id === toolCallId);
-          if (tc) {
-            let result = '';
-            if (typeof entry.content === 'string') {
-              result = entry.content;
-            } else if (Array.isArray(entry.content)) {
-              result = entry.content.filter(c => c.type === 'text' && c.text).map(c => c.text!).join('\n');
-            }
-            tc.result = result;
-          }
-        }
-      }
-    }
-  }
-
-  return { messages, title };
-}
-

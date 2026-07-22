@@ -3,10 +3,11 @@
  *
  * RE-BACKED ONTO THE NABY STORE (Phase C, part 1). The session list for a project
  * is now the set of sessions LINKED to that cwd in `app.db` (`SessionRef.cwd`),
- * not the per-project `~/.cockpit/projects/<enc>/session.json` file. The WIRE
- * CONTRACT is unchanged — the client still reads/writes
- * `{ sessions, activeSessionId?, engines?, ollamaModels?, deepseekModels?, planModes? }`
- * — so the running UI cannot tell the difference.
+ * not the per-project `~/.cockpit/projects/<enc>/session.json` file. The client
+ * reads/writes `{ sessions, activeSessionId?, planModes? }`. The per-engine maps
+ * (`engines` / `ollamaModels` / `deepseekModels`) were dropped with the engine
+ * picker — Naby is single-engine. A POST is tolerant of legacy clients that still
+ * send those keys (they are ignored), but the response no longer emits them.
  *
  * WHERE EACH FIELD LIVES NOW:
  *   - `sessions[]`       → `listSessionsByProject(cwd)` (MRU), the session→project
@@ -15,8 +16,6 @@
  *                          falling back to the MRU head.
  *   - `planModes`        → per-session Naby settings (`session.planMode.<id>`), so
  *                          the plan-mode checkbox still round-trips.
- *   - `engines` / `ollamaModels` / `deepseekModels` → the engine-picker was
- *                          removed; these are vestigial and return `{}`.
  *
  * UNION / NO-SHRINK is inherent here: a POST only ADDS links for the sessions the
  * tab lists and only REMOVES via `closedSessionIds` (deleteSession). Sessions a
@@ -34,9 +33,6 @@ export const dynamic = "force-dynamic"
 interface ProjectState {
   sessions: string[]
   activeSessionId?: string
-  engines?: Record<string, string>
-  ollamaModels?: Record<string, string>
-  deepseekModels?: Record<string, string>
   planModes?: Record<string, boolean>
 }
 
@@ -65,10 +61,6 @@ function readProjectState(cwd: string): ProjectState {
   return {
     sessions,
     ...(activeSessionId ? { activeSessionId } : {}),
-    // Vestigial (engine-picker removed) — returned empty to keep the shape.
-    engines: {},
-    ollamaModels: {},
-    deepseekModels: {},
     ...(Object.keys(planModes).length ? { planModes } : {}),
   }
 }

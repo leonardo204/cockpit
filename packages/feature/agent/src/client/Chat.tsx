@@ -19,13 +19,11 @@ import { useChatHistory } from './useChatHistory';
 import { useChatStream } from './useChatStream';
 import { MessageList, MessageListHandle } from './MessageList';
 import { ChatInput } from './ChatInput';
-import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, DeepseekModel, ToolCallInfo } from './types';
+import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
 import { AllowChangesToggle } from './AllowChangesToggle';
-import { OllamaModelPicker } from './OllamaModelPicker';
-import { DeepseekConfigPicker } from './DeepseekConfigPicker';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/Chat.tsx.
@@ -35,10 +33,6 @@ interface ChatProps {
   initialCwd?: string;
   initialSessionId?: string;
   engine?: ChatEngine;
-  ollamaModel?: string;
-  onOllamaModelChange?: (model: string) => void;
-  deepseekModel?: DeepseekModel;
-  onDeepseekModelChange?: (model: DeepseekModel) => void;
   planMode?: boolean;
   onPlanModeChange?: (planMode: boolean) => void;
   hideHeader?: boolean;
@@ -72,7 +66,7 @@ interface ChatProps {
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -95,23 +89,13 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     setLocalPlanMode(p);
     onPlanModeChange?.(p);
   }, [onPlanModeChange]);
-  const isClaudeEngine = !engine || engine === 'claude' || engine === 'claude2';
+  const isClaudeEngine = !engine || engine === 'claude';
   // Read-only engine identity for the status line, used as the FALLBACK before a
-  // turn has started. Derived from what the client already knows (the `engine`
-  // prop + the per-engine model the pickers own). Once a turn begins, the
-  // server's `system/init` carries the RESOLVED model label as `event.model`,
-  // which useChatStream now captures into `liveModel` and the status line
-  // displays in preference to this static string.
-  const engineLabel = useMemo(() => {
-    switch (engine) {
-      case 'claude2': return 'Claude Agent SDK (claude2)';
-      case 'codex': return 'Codex';
-      case 'kimi': return 'Kimi';
-      case 'ollama': return ollamaModel ? `Ollama · ${ollamaModel.replace(/:latest$/, '')}` : 'Ollama';
-      case 'deepseek': return deepseekModel ? `DeepSeek · ${deepseekModel}` : 'DeepSeek';
-      default: return 'Claude Agent SDK';
-    }
-  }, [engine, ollamaModel, deepseekModel]);
+  // turn has started. Naby is single-engine, so this is a constant; once a turn
+  // begins the server's `system/init` carries the RESOLVED model label as
+  // `event.model`, which useChatStream captures into `liveModel` and the status
+  // line displays in preference to this static string.
+  const engineLabel = 'Claude Agent SDK';
   const messageListRef = useRef<MessageListHandle>(null);
   const handleSendRef = useRef<((message: string) => void) | null>(null);
 
@@ -147,8 +131,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
     cwd: initialCwd,
     engine,
     planMode,
-    ollamaModel,
-    deepseekModel,
     onSessionId: setSessionId,
     onFetchTitle: fetchSessionTitle,
     onRunComplete: () => reconcileFromDiskRef.current?.(),
@@ -428,11 +410,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
         tabId,
         sessionId,
         engine,
-        ...(engine === 'ollama' && ollamaModel && { model: ollamaModel }),
-        ...(engine === 'deepseek' && deepseekModel && { model: deepseekModel }),
       });
     };
-  }, [onCreateScheduledTask, initialCwd, tabId, sessionId, engine, ollamaModel, deepseekModel]);
+  }, [onCreateScheduledTask, initialCwd, tabId, sessionId, engine]);
 
   return (
     <div className={`flex ${hideHeader && hideSidebar ? 'h-full' : 'h-screen'} bg-card`}>
@@ -456,7 +436,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
           />
         )}
 
-        {/* Engine status (claude/claude2 only). This slot used to hold an "Execution mode"
+        {/* Engine status. This slot used to hold an "Execution mode"
             SDK ↔ PTY picker. The PTY option spawned `claude --dangerously-skip-permissions`,
             a second execution path that bypassed the approval gate, so it was removed rather
             than repaired — there is now exactly one path and therefore nothing to pick. What
@@ -498,20 +478,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, ollamaModel,
                 files / run commands (still logged); OFF = read-only observation.
                 Global (not per-tab), so it owns its own read/write to /api/naby. */}
             <AllowChangesToggle />
-          </div>
-        )}
-
-        {/* Ollama model picker */}
-        {engine === 'ollama' && onOllamaModelChange && (
-          <div className="flex items-center px-3 py-1.5 border-b border-border bg-card/50">
-            <OllamaModelPicker currentModel={ollamaModel} onModelChange={onOllamaModelChange} />
-          </div>
-        )}
-
-        {/* DeepSeek API key + model picker */}
-        {engine === 'deepseek' && onDeepseekModelChange && (
-          <div className="flex items-center px-3 py-1.5 border-b border-border bg-card/50">
-            <DeepseekConfigPicker currentModel={deepseekModel} onModelChange={onDeepseekModelChange} />
           </div>
         )}
 

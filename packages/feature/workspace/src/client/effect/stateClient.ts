@@ -21,9 +21,9 @@ import { AppError } from "@cockpit/effect-core"
 export interface LoadedProjectState {
   sessions: string[]
   activeSessionId?: string
-  engines?: Record<string, string>
-  ollamaModels?: Record<string, string>
-  deepseekModels?: Record<string, string>
+  // Per-engine maps (engines / ollamaModels / deepseekModels) were removed with
+  // the engine picker — Naby is single-engine. The route may still echo empty
+  // ones for legacy wire compatibility; they are simply ignored.
   planModes?: Record<string, boolean>
 }
 
@@ -46,9 +46,6 @@ export interface ProjectStateSave {
   cwd: string
   sessions: string[]
   activeSessionId?: string
-  engines?: Record<string, string>
-  ollamaModels?: Record<string, string>
-  deepseekModels?: Record<string, string>
   planModes?: Record<string, boolean>
   /** sessions explicitly closed in THIS tab — the server removes them from the shared
    *  union (the only removal path; plain saves never shrink the set). */

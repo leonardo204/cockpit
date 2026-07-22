@@ -1,8 +1,7 @@
 import { existsSync } from 'fs';
 import {
   SCHEDULED_TASKS_FILE, readJsonFile, writeJsonFile, mutateJsonFile, withFileLock,
-  getClaudeSessionPath, getClaude2SessionPath, getOllamaSessionPath,
-  getDeepseekSessionPath, findCodexSessionPath, findKimiSessionPath,
+  getClaudeSessionPath,
 } from '@cockpit/shared-utils';
 import { updateGlobalState } from './state/globalState';
 import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from './sessionRunHub';
@@ -203,16 +202,12 @@ const dispatchEngineMessageEff = (
   });
 
 /**
- * resume-target session file per engine (used for the pre-flight existence
- * check). codex/kimi store sessions outside the cwd-encoded layout, so their
- * helpers glob by sessionId and return null when not found.
+ * resume-target session file for the pre-flight existence check. Naby is
+ * single-engine, so this always resolves the Claude Agent SDK transcript path.
+ * (The alt-engine — codex/kimi/ollama/deepseek/claude2 — path branches were
+ * removed with the engine picker.)
  */
-function sessionPathFor(engine: string, task: ScheduledTask): string | null {
-  if (engine === 'claude2') return getClaude2SessionPath(task.cwd, task.sessionId);
-  if (engine === 'ollama') return getOllamaSessionPath(task.cwd, task.sessionId);
-  if (engine === 'deepseek') return getDeepseekSessionPath(task.cwd, task.sessionId);
-  if (engine === 'codex') return findCodexSessionPath(task.sessionId);
-  if (engine === 'kimi') return findKimiSessionPath(task.sessionId);
+function sessionPathFor(_engine: string, task: ScheduledTask): string | null {
   return getClaudeSessionPath(task.cwd, task.sessionId);
 }
 

@@ -10,16 +10,13 @@ import { useChatStream } from '../useChatStream';
 import { useLiveStream } from '../useLiveStream';
 import { MessageList, type MessageListHandle } from '../MessageList';
 import { MobileChatInput } from './MobileChatInput';
-import type { ChatMessage, ChatEngine, DeepseekModel } from '../types';
+import type { ChatMessage, ChatEngine } from '../types';
 
-// Per-session engine + model, persisted by the desktop tab system in the
-// project's session.json. This is the same source useTabState resumes from —
-// the reliable way to send ollama on its original model (the transcript doesn't
-// record it, and the server otherwise falls back to a default).
+// Per-session engine, persisted by the desktop tab system. Naby is single-engine
+// (the ollama/deepseek per-model tab state was removed with the engine picker),
+// so this only carries the engine identity for display/streaming.
 interface ResolvedRun {
   engine?: ChatEngine;
-  ollamaModel?: string;
-  deepseekModel?: DeepseekModel;
 }
 
 // Mobile chat surface for /m. Reuses the proven streaming orchestration from
@@ -57,8 +54,6 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
         if (!res.ok) return null;
         return (await res.json()) as {
           engines?: Record<string, string>;
-          ollamaModels?: Record<string, string>;
-          deepseekModels?: Record<string, string>;
         };
       },
       catch: (cause) => new AppError({ message: 'loadProjectState failed', cause }),
@@ -68,8 +63,6 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
         const d = exit.value;
         setResolved({
           engine: d.engines?.[initialSessionId] as ChatEngine | undefined,
-          ollamaModel: d.ollamaModels?.[initialSessionId],
-          deepseekModel: d.deepseekModels?.[initialSessionId] as DeepseekModel | undefined,
         });
       }
     });
@@ -117,8 +110,6 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
     cwd,
     engine,
     planMode: false,
-    ollamaModel: resolved.ollamaModel,
-    deepseekModel: resolved.deepseekModel,
     onSessionId: setSessionId,
     onFetchTitle: noop,
     // Mirrors Chat.tsx: when a run this screen ORIGINATED ends, reconcile from disk so

@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import { Chat } from './Chat';
-import type { ChatEngine, DeepseekModel, ToolCallInfo } from './types';
+import type { ChatEngine, ToolCallInfo } from './types';
 
 // Migrated from src/components/project/ChatPanel.tsx.
 
@@ -15,10 +15,6 @@ interface ChatPanelProps {
   cwd?: string;
   sessionId?: string;
   engine?: ChatEngine;
-  ollamaModel?: string;
-  onOllamaModelChange?: (tabId: string, model: string) => void;
-  deepseekModel?: DeepseekModel;
-  onDeepseekModelChange?: (tabId: string, model: DeepseekModel) => void;
   planMode?: boolean;
   onPlanModeChange?: (tabId: string, planMode: boolean) => void;
   isActive?: boolean;
@@ -43,7 +39,7 @@ interface ChatPanelProps {
   onOpenSession?: (sessionId: string, title?: string) => void;
 }
 
-export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllamaModelChange, deepseekModel, onDeepseekModelChange, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onOpenNote, onCreateScheduledTask, onOpenSession }: ChatPanelProps) {
+export function ChatPanel({ tabId, cwd, sessionId, engine, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onOpenNote, onCreateScheduledTask, onOpenSession }: ChatPanelProps) {
   const handleLoadingChange = useCallback((isLoading: boolean) => {
     onStateChange(tabId, { isLoading });
   }, [tabId, onStateChange]);
@@ -56,14 +52,6 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllama
     onStateChange(tabId, { title });
   }, [tabId, onStateChange]);
 
-  const handleOllamaModelChange = useCallback((model: string) => {
-    onOllamaModelChange?.(tabId, model);
-  }, [tabId, onOllamaModelChange]);
-
-  const handleDeepseekModelChange = useCallback((model: DeepseekModel) => {
-    onDeepseekModelChange?.(tabId, model);
-  }, [tabId, onDeepseekModelChange]);
-
   const handlePlanModeChange = useCallback((p: boolean) => {
     onPlanModeChange?.(tabId, p);
   }, [tabId, onPlanModeChange]);
@@ -74,10 +62,6 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, ollamaModel, onOllama
       initialCwd={cwd}
       initialSessionId={sessionId}
       engine={engine}
-      ollamaModel={ollamaModel}
-      onOllamaModelChange={handleOllamaModelChange}
-      deepseekModel={deepseekModel}
-      onDeepseekModelChange={handleDeepseekModelChange}
       planMode={planMode}
       onPlanModeChange={handlePlanModeChange}
       hideHeader
