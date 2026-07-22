@@ -13,13 +13,13 @@
 
 import i18n from 'i18next';
 import en from '../locales/en.json';
-import zh from '../locales/zh.json';
+import ko from '../locales/ko.json';
 
 if (!i18n.isInitialized) {
   i18n.init({
     resources: {
       en: { translation: en },
-      zh: { translation: zh },
+      ko: { translation: ko },
     },
     lng: 'en',           // Fixed initial language; client detects in app/I18nProvider
     fallbackLng: 'en',

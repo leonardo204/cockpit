@@ -23,7 +23,7 @@ function broadcastToIframes(lang: string) {
 /** Resolve effective language: 'auto' → browser detection, otherwise use as-is */
 function resolveLanguage(setting: string): string {
   if (setting === 'auto' || !setting) {
-    return navigator.language.startsWith('zh') ? 'zh' : 'en';
+    return navigator.language.startsWith('ko') ? 'ko' : 'en';
   }
   return setting;
 }

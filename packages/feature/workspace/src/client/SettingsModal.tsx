@@ -27,7 +27,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const { theme, setTheme } = useTheme();
   const [appVersion, setAppVersion] = useState<string>('');
 
-  // Language: 'en', 'zh', or 'auto' (use browser detection)
+  // Language: 'en', 'ko', or 'auto' (use browser detection)
   const [language, setLanguageState] = useState<string>('auto');
 
   // Fetch current language setting from backend on open
@@ -48,7 +48,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     );
     // Apply immediately
     const effective = lang === 'auto'
-      ? (navigator.language.startsWith('zh') ? 'zh' : 'en')
+      ? (navigator.language.startsWith('ko') ? 'ko' : 'en')
       : lang;
     i18n.changeLanguage(effective);
   }, [i18n]);
@@ -133,7 +133,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               {[
                 { value: 'auto', label: t('settings.languageAuto'), icon: '🌐' },
                 { value: 'en', label: 'English', icon: '🇺🇸' },
-                { value: 'zh', label: '中文', icon: '🇨🇳' },
+                { value: 'ko', label: '한국어', icon: '🇰🇷' },
               ].map((option) => (
                 <button
                   key={option.value}

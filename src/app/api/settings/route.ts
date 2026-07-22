@@ -13,7 +13,7 @@ import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError } from "@cockpit/effect-core"
 
 interface Settings {
-  language?: string // 'en' | 'zh' | 'auto'
+  language?: string // 'en' | 'ko' | 'auto'
   [key: string]: unknown
 }
 

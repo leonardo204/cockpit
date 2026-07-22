@@ -14,10 +14,10 @@ import {
   readJsonFile,
 } from "@cockpit/shared-utils"
 import en from "@cockpit/shared-i18n/locales/en.json"
-import zh from "@cockpit/shared-i18n/locales/zh.json"
+import ko from "@cockpit/shared-i18n/locales/ko.json"
 import { handler, ok } from "@cockpit/effect-runtime/server"
 
-const locales: Record<string, typeof en> = { en, zh }
+const locales: Record<string, typeof en> = { en, ko }
 
 const pickFolder = (prompt: string, home: string): string => {
   if (isMac) {
@@ -54,7 +54,7 @@ export const GET = handler(() =>
     }).pipe(Effect.orElseSucceed(() => ({} as { language?: string })))
 
     const locale =
-      settings.language === "en" || settings.language === "zh"
+      settings.language === "en" || settings.language === "ko"
         ? settings.language
         : "en"
     const prompt = locales[locale].api.pickFolderPrompt

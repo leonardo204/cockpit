@@ -19,7 +19,7 @@ describe('classifyPath', () => {
 
   it('treats regular code and i18n locales as critical (null)', () => {
     expect(classifyPath('src/index.ts')).toBeNull();
-    expect(classifyPath('packages/shared/i18n/locales/zh.json')).toBeNull();
+    expect(classifyPath('packages/shared/i18n/locales/ko.json')).toBeNull();
     // "contests/" must not match the tests/ dir rule
     expect(classifyPath('src/contests/rank.ts')).toBeNull();
     // test-ish name without the .test./.spec. convention stays code
