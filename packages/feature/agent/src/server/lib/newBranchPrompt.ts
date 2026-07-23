@@ -5,78 +5,78 @@
  * Unlike the analysis-only commands (/qa, /fx, /ex), this one ACTUALLY runs git
  * (fetch → checkout -b → rev-list verify), closer in spirit to /go.
  *
- * EN is a faithful translation of the ZH body. Label primes the trailing text
+ * EN is a faithful translation of the KO body. Label primes the trailing text
  * as an intent / requirement rather than a neutral "question".
  */
 
-export const NEW_BRANCH_LABEL_ZH = '需求：';
+export const NEW_BRANCH_LABEL_KO = '요구사항: ';
 export const NEW_BRANCH_LABEL_EN = 'Intent: ';
 
-export const NEW_BRANCH_PROMPT_ZH = `---
+export const NEW_BRANCH_PROMPT_KO = `---
 name: new-branch
-description: "创建一个基于最新 origin/main 的新分支：fetch 远端 → 从 origin/main 切出新分支 → 校验已与远端同步。用于：用户说『新建分支 / 创建分支 / new branch』，希望新分支干净地起步于最新主干。"
-argument-hint: "[分支名，留空则询问]"
+description: "최신 origin/main 기반의 새 분기를 생성한다: 원격 fetch → origin/main에서 새 분기 분기 → 원격과 동기화되었는지 검증. 사용 상황: 사용자가 '새 분기 / 분기 생성 / new branch'라고 말하며, 새 분기가 최신 주류에서 깨끗하게 시작되기를 원할 때."
+argument-hint: "[분기 이름, 비워두면 물어봄]"
 ---
 
-# New Branch (基于最新主干创建分支)
+# New Branch (최신 주류 기반 분기 생성)
 
-从最新的 \`origin/main\` 切出一个新分支，确保起点干净、与远端同步。
+최신 \`origin/main\`에서 새 분기를 분기하여 시작점이 깨끗하고 원격과 동기화되도록 합니다.
 
-## 触发条件
+## 트리거 조건
 
-用户要"新建分支 / 创建分支 / new branch / 切个分支"，且希望基于最新主干。
+사용자가 "새 분기 / 분기 생성 / new branch / 분기 하나 따줘"를 요청하고, 최신 주류를 기반으로 하기를 원함.
 
-## 范围边界（重要）
+## 범위 경계 (중요)
 
-本 skill **只负责快速创建一个干净的新分支**，到"切完即校验"为止。
+이 skill은 **깨끗한 새 분기를 빠르게 생성하는 것만 담당**하며, "분기 직후 검증"까지입니다.
 
-- **只做**：fetch → 从 \`origin/main\` 切分支 → 校验同步 → 输出确认。
-- **不做**：探索 / 阅读代码、起 Explore / Plan agent、生成实现计划、开始写代码。
+- **할 것**: fetch → \`origin/main\`에서 분기 → 동기화 검증 → 확인 출력.
+- **하지 않을 것**: 탐색 / 코드 읽기, Explore / Plan agent 기동, 구현 계획 생성, 코드 작성 시작.
 
-用户在触发时附带的需求描述（如"优化 add to slack 引导流程"）**仅用于推导分支名 / 记录意图**，
-不是要在这一步开始的开发任务。后续需求细化与实现由用户在新的对话里另行讨论，不属于本 skill 范围。
+사용자가 트리거 시 함께 준 요구사항 설명(예: "add to slack 온보딩 흐름 개선")은 **분기 이름 추론 / 의도 기록에만 사용**하며,
+이 단계에서 시작할 개발 작업이 아닙니다. 이후 요구사항 구체화와 구현은 사용자가 새 대화에서 별도로 논의하며, 이 skill의 범위가 아닙니다.
 
-## 前置检查
+## 사전 점검
 
-1. 确认分支名（分支名一律用英文，遵循 \`<type>/<short-desc>\` 习惯，如 \`feat/credit-guard\`、\`fix/stream-recovery\`）：
-   - 用户已给出现成分支名 → 直接用。
-   - 用户给的是一句需求描述（如"优化 add to slack 引导流程"）→ **据此自动推导**一个英文分支名（如 \`feat/slack-onboarding-flow\`）直接创建，不必再问。
-   - 完全没有可推导的信息 → 才询问。
-2. 确认当前工作区干净（\`git status\`）。若有未提交改动，先停下来问用户如何处理，不要强行切换。
+1. 분기 이름을 확인합니다(분기 이름은 항상 영어로, \`<type>/<short-desc>\` 관례를 따름. 예: \`feat/credit-guard\`, \`fix/stream-recovery\`):
+   - 사용자가 이미 완성된 분기 이름을 준 경우 → 그대로 사용.
+   - 사용자가 요구사항 문장을 준 경우(예: "add to slack 온보딩 흐름 개선") → **이를 근거로 자동 추론**한 영어 분기 이름(예: \`feat/slack-onboarding-flow\`)으로 바로 생성하고, 다시 묻지 않음.
+   - 추론할 정보가 전혀 없는 경우 → 그때만 물어봄.
+2. 현재 작업 트리가 깨끗한지 확인(\`git status\`). 커밋되지 않은 변경이 있으면, 먼저 멈춰서 사용자에게 처리 방법을 묻고, 강제로 전환하지 마세요.
 
-## 执行步骤
+## 실행 단계
 
 \`\`\`bash
-# 1. 拉取最新远端主干
+# 1. 최신 원격 주류를 가져온다
 git fetch origin main
 
-# 2. 基于最新 origin/main 创建并切换到新分支
+# 2. 최신 origin/main 기반으로 새 분기를 생성하고 전환한다
 git checkout -b <branch-name> origin/main
 
-# 3. 校验：应领先 0、落后 0
+# 3. 검증: 앞선 커밋 0, 뒤처진 커밋 0 이어야 함
 git rev-list --left-right --count origin/main...HEAD
 \`\`\`
 
-\`git checkout -b <name> origin/main\` 一步即可保证新分支起点 = 最新远端主干，无需先更新本地 main。
+\`git checkout -b <name> origin/main\` 한 단계로 새 분기 시작점 = 최신 원격 주류가 보장되므로, 로컬 main을 먼저 갱신할 필요가 없습니다.
 
-## 校验标准
+## 검증 기준
 
-- \`git rev-list --left-right --count origin/main...HEAD\` 输出 \`0	0\`（领先 0、落后 0）。
-- \`git status\` 显示在新分支上、工作区干净。
+- \`git rev-list --left-right --count origin/main...HEAD\`가 \`0	0\`을 출력(앞선 커밋 0, 뒤처진 커밋 0).
+- \`git status\`가 새 분기 위에 있고 작업 트리가 깨끗함을 표시.
 
-输出确认：分支名、当前 HEAD 提交、与 origin/main 的同步状态。
+확인 출력: 분기 이름, 현재 HEAD 커밋, origin/main과의 동기화 상태.
 
-## 何时停下来问
+## 언제 멈춰서 물을 것인가
 
-- 既无现成分支名、也无可推导的需求描述 → 询问。
-- 工作区有未提交改动 → 询问如何处理（stash / 提交 / 放弃），不要擅自丢弃。
-- 已存在同名分支 → 询问是覆盖还是换名。
+- 완성된 분기 이름도, 추론 가능한 요구사항 설명도 없는 경우 → 물어봄.
+- 작업 트리에 커밋되지 않은 변경이 있는 경우 → 처리 방법(stash / 커밋 / 폐기)을 묻고, 함부로 폐기하지 마세요.
+- 동일한 이름의 분기가 이미 존재하는 경우 → 덮어쓸지 이름을 바꿀지 물어봄.
 
-## 关键原则
+## 핵심 원칙
 
-- **起点即最新**：始终基于 \`origin/main\`，不基于可能过时的本地 main。
-- **不丢改动**：任何可能丢失用户工作的操作前先确认。
-- **切完即校验**：用 rev-list 确认确实同步，不靠假设。`;
+- **시작점은 항상 최신**: 항상 \`origin/main\` 기반으로, 오래되었을 수 있는 로컬 main을 기반으로 하지 않음.
+- **변경을 잃지 않기**: 사용자의 작업을 잃을 수 있는 모든 작업 전에 먼저 확인.
+- **분기 직후 검증**: rev-list로 실제 동기화를 확인하고, 가정에 의존하지 않음.`;
 
 export const NEW_BRANCH_PROMPT_EN = `---
 name: new-branch

@@ -1,11 +1,11 @@
 // One file per command — body lives in `<cmd>Prompt.ts`, this file stays a
 // thin index. Adding a new builtin: create `<cmd>Prompt.ts` exporting
-// `<CMD>_PROMPT_ZH` and `<CMD>_PROMPT_EN`, then wire it here AND register a
+// `<CMD>_PROMPT_KO` and `<CMD>_PROMPT_EN`, then wire it here AND register a
 // matching entry in `packages/feature/agent/src/server/api/commands.ts` so the
 // autocomplete dropdown also lists it.
 //
-// `labelZh` / `labelEn` are OPTIONAL per command. Set them only when the
-// command wants to override the default neutral "问题：" / "Question: "
+// `labelKo` / `labelEn` are OPTIONAL per command. Set them only when the
+// command wants to override the default neutral "질문: " / "Question: "
 // prefix attached to the user's trailing text — see `/new-branch`.
 //
 // F1-03 chat-first trim removed /cg (needed /api/projectGraph/*), /html (needed
@@ -15,46 +15,46 @@
 import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { COCKPIT_DIR, SKILLS_FILE } from '@cockpit/shared-utils';
-import { AP_PROMPT_EN, AP_PROMPT_ZH } from './apPrompt';
-import { EX_PROMPT_EN, EX_PROMPT_ZH } from './exPrompt';
-import { FX_PROMPT_EN, FX_PROMPT_ZH } from './fxPrompt';
-import { GO_PROMPT_EN, GO_PROMPT_ZH } from './goPrompt';
+import { AP_PROMPT_EN, AP_PROMPT_KO } from './apPrompt';
+import { EX_PROMPT_EN, EX_PROMPT_KO } from './exPrompt';
+import { FX_PROMPT_EN, FX_PROMPT_KO } from './fxPrompt';
+import { GO_PROMPT_EN, GO_PROMPT_KO } from './goPrompt';
 import {
   NEW_BRANCH_LABEL_EN,
-  NEW_BRANCH_LABEL_ZH,
+  NEW_BRANCH_LABEL_KO,
   NEW_BRANCH_PROMPT_EN,
-  NEW_BRANCH_PROMPT_ZH,
+  NEW_BRANCH_PROMPT_KO,
 } from './newBranchPrompt';
-import { QA_PROMPT_EN, QA_PROMPT_ZH } from './qaPrompt';
+import { QA_PROMPT_EN, QA_PROMPT_KO } from './qaPrompt';
 
 interface CommandEntry {
   /** Prompt content for each language — a COMPLETE SKILL.md (YAML frontmatter +
    *  body), same shape as a user-defined skill. Written to disk verbatim. */
-  zh: string;
+  ko: string;
   en: string;
-  /** Optional override for the "問題：" / "Question: " prefix prepended to the
+  /** Optional override for the "질문: " / "Question: " prefix prepended to the
    *  user's trailing text. When omitted, dispatch falls back to the default. */
-  labelZh?: string;
+  labelKo?: string;
   labelEn?: string;
 }
 
 export const COMMAND_CONTENT: Record<string, CommandEntry> = {
-  qa: { zh: QA_PROMPT_ZH, en: QA_PROMPT_EN },
-  ap: { zh: AP_PROMPT_ZH, en: AP_PROMPT_EN },
-  fx: { zh: FX_PROMPT_ZH, en: FX_PROMPT_EN },
-  ex: { zh: EX_PROMPT_ZH, en: EX_PROMPT_EN },
-  go: { zh: GO_PROMPT_ZH, en: GO_PROMPT_EN },
+  qa: { ko: QA_PROMPT_KO, en: QA_PROMPT_EN },
+  ap: { ko: AP_PROMPT_KO, en: AP_PROMPT_EN },
+  fx: { ko: FX_PROMPT_KO, en: FX_PROMPT_EN },
+  ex: { ko: EX_PROMPT_KO, en: EX_PROMPT_EN },
+  go: { ko: GO_PROMPT_KO, en: GO_PROMPT_EN },
   'new-branch': {
-    zh: NEW_BRANCH_PROMPT_ZH,
+    ko: NEW_BRANCH_PROMPT_KO,
     en: NEW_BRANCH_PROMPT_EN,
-    labelZh: NEW_BRANCH_LABEL_ZH,
+    labelKo: NEW_BRANCH_LABEL_KO,
     labelEn: NEW_BRANCH_LABEL_EN,
   },
 };
 
 /** Directory holding the on-disk copies of builtin slash commands, written as
  *  SKILL.md files so the model reads them through the SAME flow as user-defined
- *  skills (`请读取这个 skill 文件：<path>`) instead of inlining the full template. */
+ *  skills (`이 skill 파일을 읽어주세요:\n<path>`) instead of inlining the full template. */
 const BUILTIN_SKILLS_DIR = join(COCKPIT_DIR, 'skills');
 
 /**
@@ -112,7 +112,7 @@ export function resolveCommandPrompt(
   language = 'en',
   _req?: Request,
 ): string {
-  const lang: 'zh' | 'en' = language.startsWith('zh') ? 'zh' : 'en';
+  const lang: 'ko' | 'en' = language.startsWith('ko') ? 'ko' : 'en';
 
   // Skill registry read once per dispatch (not per keystroke) so command-line
   // recognition can tell a real `/skill-name` from ordinary text-with-slash.
@@ -148,7 +148,7 @@ export function resolveCommandPrompt(
   }
 
   // ── Otherwise: numbered, locus-annotated step list ──
-  const intro = lang === 'zh' ? '请按以下步骤依次完成：' : 'Complete the following steps in order:';
+  const intro = lang === 'ko' ? '다음 단계를 순서대로 완료하세요:' : 'Complete the following steps in order:';
   const blocks = resolved.map((r, idx) => {
     const where = stepHeader(idx + 1, r.marker, lang);
     const bodyPart = r.body ? `\n${r.label}${r.body}` : '';
@@ -176,7 +176,7 @@ interface ResolvedStep {
 // builtin; the user's edits to their own skill keep taking effect.
 function resolveStep(
   step: ParsedStep,
-  lang: 'zh' | 'en',
+  lang: 'ko' | 'en',
   baseUrl: string,
   userSkills: Array<{ name: string; path: string }>,
 ): ResolvedStep {
@@ -195,18 +195,18 @@ function resolveStep(
 }
 
 /** "Please read this skill file: <path>" pointer in the active language. */
-function readSkillPointer(skillPath: string, lang: 'zh' | 'en'): string {
-  return lang === 'zh'
-    ? `请读取这个 skill 文件：\n${skillPath}`
+function readSkillPointer(skillPath: string, lang: 'ko' | 'en'): string {
+  return lang === 'ko'
+    ? `이 skill 파일을 읽어주세요:\n${skillPath}`
     : `Please read this skill file:\n${skillPath}`;
 }
 
 /** Step header with execution-locus annotation (main session vs subagent). */
-function stepHeader(n: number, marker: StepMarker, lang: 'zh' | 'en'): string {
-  if (lang === 'zh') {
+function stepHeader(n: number, marker: StepMarker, lang: 'ko' | 'en'): string {
+  if (lang === 'ko') {
     return marker === '@'
-      ? `步骤 ${n}（用 subagent 执行）：`
-      : `步骤 ${n}（主会话执行）：`;
+      ? `단계 ${n} (subagent로 실행): `
+      : `단계 ${n} (메인 세션에서 실행): `;
   }
   return marker === '@'
     ? `Step ${n} (run in a subagent): `
@@ -280,8 +280,8 @@ function writeBuiltinSkill(cmd: string, content: string): string | null {
 /** Pick the "label:" prefix for a command's trailing user text. Uses the
  *  entry's per-command override when set, otherwise falls back to a neutral
  *  question label. */
-function labelFor(entry: CommandEntry, lang: 'zh' | 'en'): string {
-  const custom = lang === 'zh' ? entry.labelZh : entry.labelEn;
+function labelFor(entry: CommandEntry, lang: 'ko' | 'en'): string {
+  const custom = lang === 'ko' ? entry.labelKo : entry.labelEn;
   if (custom) return custom;
-  return lang === 'zh' ? '问题：' : 'Question: ';
+  return lang === 'ko' ? '질문: ' : 'Question: ';
 }

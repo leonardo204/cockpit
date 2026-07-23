@@ -15,12 +15,14 @@
  *   /cr  — full code review (static triangulation + dynamic modelling)
  */
 
-export const FX_PROMPT_ZH = `---
+export const FX_PROMPT_KO = `---
 name: fx
-description: "进入 bug 证据链分析模式：只分析不修改代码，给出详细推理过程。"
+description: "버그 증거 사슬 분석 모드로 진입: 분석만 하고 코드는 수정하지 않으며, 상세한 추론 과정을 제시한다."
 ---
 
-进入bug证据链分析模式，只分析不修改代码，给出详细推理过程`;
+버그 증거 사슬 분석 모드로 진입합니다.
+분석만 하고, 코드는 수정하지 마세요.
+상세한 추론 과정을 제시하세요.`;
 
 export const FX_PROMPT_EN = `---
 name: fx

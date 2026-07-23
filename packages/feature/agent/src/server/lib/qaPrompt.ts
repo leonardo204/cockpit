@@ -15,15 +15,16 @@
  *   /cr  — full code review (static triangulation + dynamic modelling)
  */
 
-export const QA_PROMPT_ZH = `---
+export const QA_PROMPT_KO = `---
 name: qa
-description: "进入需求澄清讨论模式：理解并复述需求，对不明确点回问确认，只输出理解不改代码，遵循 KISS。"
+description: "요구사항 명확화 논의 모드로 진입: 요구사항을 이해하고 재진술하며, 모호한 점은 되물어 확인하고, 코드를 수정하지 않고 이해한 내용만 출력하며, KISS를 따른다."
 ---
 
-进入需求澄清讨论模式
-尝试理解用户的需求并给出你对需求的理解，有不明确的点需要向我确认，避免理解不一致而导致无效的代码修改
-遵循 KISS 原则
-输出理解，不改代码`;
+요구사항 명확화 모드로 진입합니다.
+사용자의 요구사항을 이해하고 이해한 내용을 진술하세요.
+불필요한 코드 변경을 피하기 위해 모호한 점은 되물어 확인하세요.
+KISS 원칙을 따르세요.
+이해한 내용만 출력하고, 코드는 수정하지 마세요.`;
 
 export const QA_PROMPT_EN = `---
 name: qa
