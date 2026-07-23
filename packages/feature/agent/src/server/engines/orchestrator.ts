@@ -29,10 +29,16 @@ export async function dispatchChat(
     return { ok: false, status: 409, error: 'session is already running' };
   }
 
-  // Resolve built-in slash commands (/qa, /fx, …) by language.
+  // Resolve slash commands (builtins /qa, /fx, … AND Naby-owned commands) by
+  // language. `cwd` scopes which owned commands apply (user-scope always + this
+  // project's project-scope commands); owned commands override a builtin of the
+  // same verb (Phase 1.6 HP-02). Expansion is provider-independent (above the
+  // engine seam), so it behaves identically on every engine.
   const rawPrompt = body.prompt;
   const prompt =
-    typeof rawPrompt === 'string' ? resolveCommandPrompt(rawPrompt, language, request) : rawPrompt;
+    typeof rawPrompt === 'string'
+      ? resolveCommandPrompt(rawPrompt, language, cwd)
+      : rawPrompt;
 
   // Allow images-only (no text).
   const hasContent = (prompt && typeof prompt === 'string') || (images && images.length > 0);

@@ -16,9 +16,10 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 interface CommandInfo {
   name: string;
   description: string;
-  // `'global' | 'project'` (`.claude/commands/*.md`) used to be valid sources;
-  // that mechanism was retired with Claude Code's commands convention.
-  source: 'builtin';
+  // 'builtin' = in-process bilingual command; 'user'/'project' = Naby-owned
+  // command from the /api/harness CRUD surface, badged distinctly (Phase 1.6
+  // HP-02). The old `.claude/commands/*.md` sources were retired.
+  source: 'builtin' | 'user' | 'project';
   argumentHint?: string;
 }
 
@@ -72,17 +73,19 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     adjustTextareaHeight();
   }, [input, adjustTextareaHeight]);
 
-  // Load command list (builtin only; project/global `.claude/commands/*.md`
-  // sourcing was retired with Claude Code's commands convention)
+  // Load command list: in-process builtins merged with Naby-owned enabled
+  // commands (Phase 1.6 HP-02). Passing `cwd` includes this project's
+  // project-scope owned commands; reloads when the active project changes so a
+  // freshly created command shows without reopening the tab.
   useEffect(() => {
-    BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>()).then((exit) => {
+    BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>(cwd)).then((exit) => {
       if (exit._tag === 'Success') {
         setCommands(exit.value as CommandInfo[]);
       } else {
         console.error('Failed to load commands:', exit.cause);
       }
     });
-  }, []);
+  }, [cwd]);
 
   // The line containing the caret — commands are line-led, so autocomplete keys
   // off the current line, not the whole (possibly multi-line) input.
@@ -274,6 +277,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     switch (source) {
       case 'builtin':
         return t('common.builtin');
+      case 'user':
+      case 'project':
+        return t('commandManager.badgeOwned');
     }
   };
 
@@ -281,6 +287,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     switch (source) {
       case 'builtin':
         return 'bg-brand/15 text-brand dark:bg-brand/25 dark:text-teal-11';
+      case 'user':
+      case 'project':
+        return 'bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400';
     }
   };
 

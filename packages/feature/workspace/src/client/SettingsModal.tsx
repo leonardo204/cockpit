@@ -19,6 +19,9 @@ import { NabyProviderSettings } from './NabyProviderSetup';
 // P15-06. The scoped-memory review + delete panel. Given the active session/cwd
 // so its `session`/`project` scopes are addressable; `user` scope needs neither.
 import { NabyMemoryReview } from './NabyMemoryReview';
+// HP-02. The Naby-owned command CRUD panel. Given the active cwd so its
+// `project` scope is addressable; `user` scope needs no key.
+import { NabyCommandManager } from './NabyCommandManager';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -178,6 +181,17 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
               {t('memoryReview.title')}
             </label>
             <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-border" />
+
+          {/* Command Section (HP-02) — create/edit/delete/enable owned commands. */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              {t('commandManager.title')}
+            </label>
+            <NabyCommandManager isOpen={isOpen} cwd={cwd} />
           </div>
 
           {/* Divider */}

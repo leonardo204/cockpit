@@ -65,16 +65,18 @@ export const saveAgentSettings = (
 ): Effect.Effect<unknown, AppError> => httpPutJson("/api/settings", body)
 
 // ─────────────────────────────────────────────────────────
-// /api/commands — builtin slash commands list.
-// (Previously also merged project/global `.claude/commands/*.md` entries;
-//  that convention is retired so the endpoint is now builtin-only and takes
-//  no parameters.)
+// /api/commands — slash command list: in-process builtins merged with
+// Naby-owned enabled commands (Phase 1.6 HP-02). Passing the active `cwd`
+// includes that project's project-scope owned commands alongside the always-on
+// user-scope ones; omitting it yields user-scope + builtins only.
 // ─────────────────────────────────────────────────────────
 
-export const loadSlashCommands = <T = unknown>(): Effect.Effect<
-  ReadonlyArray<T>,
-  AppError
-> => httpJson<ReadonlyArray<T>>("/api/commands")
+export const loadSlashCommands = <T = unknown>(
+  cwd?: string
+): Effect.Effect<ReadonlyArray<T>, AppError> =>
+  httpJson<ReadonlyArray<T>>(
+    cwd ? `/api/commands?cwd=${encodeURIComponent(cwd)}` : "/api/commands"
+  )
 
 // ─────────────────────────────────────────────────────────
 // /api/session-by-path (used inside Chat.tsx; complements the helper inside useChatHistory)

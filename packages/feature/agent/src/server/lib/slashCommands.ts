@@ -15,6 +15,12 @@
 import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { COCKPIT_DIR, SKILLS_FILE } from '@cockpit/shared-utils';
+import {
+  DEFAULT_USER_ID,
+  type HarnessItem,
+  type Store,
+} from '../../../../../../../dist/naby-runtime.mjs';
+import { getStore } from '../engines/naby';
 import { AP_PROMPT_EN, AP_PROMPT_KO } from './apPrompt';
 import { EX_PROMPT_EN, EX_PROMPT_KO } from './exPrompt';
 import { FX_PROMPT_EN, FX_PROMPT_KO } from './fxPrompt';
@@ -102,23 +108,66 @@ const COMMAND_LINE_RE = /^\s*([/@])([a-zA-Z][a-zA-Z0-9-]*)(?:\s+|$)/;
 // "pointer + label + body" output. Two+ commands, or any `@`, or leading
 // preamble text, switch to a numbered step list framed for sequential dispatch.
 //
+/** The store slice command expansion reads — an injectable seam (default
+ *  `getStore()`) so tests can drive owned-command override without a sqlite file. */
+export type CommandExpansionStore = Pick<Store, 'listHarness'>;
+
+/**
+ * Load enabled Naby-OWNED commands (Phase 1.6 HP-02) for the user scope (always)
+ * and, when a cwd is supplied, the project scope. Returned user-first,
+ * project-second so a later map upsert lets a project command override a
+ * user one of the same verb. Best-effort: a store hiccup must never break the
+ * builtin dispatcher, so each read is guarded.
+ */
+function loadOwnedCommands(cwd: string | undefined, store: CommandExpansionStore): HarnessItem[] {
+  const out: HarnessItem[] = [];
+  try {
+    out.push(...store.listHarness('user', DEFAULT_USER_ID, { kind: 'command', status: 'enabled' }));
+  } catch {
+    /* ignore — builtins still work */
+  }
+  if (cwd) {
+    try {
+      out.push(...store.listHarness('project', cwd, { kind: 'command', status: 'enabled' }));
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
+
+/** verb → template map for the enabled owned commands, project overriding user. */
+function ownedCommandMap(items: HarnessItem[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const item of items) {
+    if (item.kind === 'command' && item.command) map.set(item.name, item.command.template);
+  }
+  return map;
+}
+
 // `{{BASE_URL}}` placeholders are substituted at WRITE time with the loopback
 // base URL (http://localhost:<port>) — /cg's curl recipes are executed by the
 // agent on the server host, so loopback is always reachable and never needs a
-// token. `_req` is kept on the signature for call-site threading but is no
-// longer consulted for the base URL (see deriveBaseUrl).
+// token.
+//
+// `cwd` scopes which owned commands participate (user-scope always + that
+// project's project-scope commands). Owned commands OVERRIDE a builtin of the
+// same verb (Phase 1.6 HP-02). `store` is injectable for tests.
 export function resolveCommandPrompt(
   prompt: string,
   language = 'en',
-  _req?: Request,
+  cwd?: string,
+  store: CommandExpansionStore = getStore(),
 ): string {
   const lang: 'ko' | 'en' = language.startsWith('ko') ? 'ko' : 'en';
 
   // Skill registry read once per dispatch (not per keystroke) so command-line
   // recognition can tell a real `/skill-name` from ordinary text-with-slash.
   const userSkills = listUserSkills();
+  // Owned commands read once per dispatch — the override layer above builtins.
+  const owned = ownedCommandMap(loadOwnedCommands(cwd, store));
   const isKnown = (cmd: string) =>
-    !!COMMAND_CONTENT[cmd] || userSkills.some((s) => s.name === cmd);
+    owned.has(cmd) || !!COMMAND_CONTENT[cmd] || userSkills.some((s) => s.name === cmd);
 
   // ── Parse: find known command lines, split bodies between them ──
   const lines = prompt.split('\n');
@@ -139,7 +188,7 @@ export function resolveCommandPrompt(
   });
 
   const baseUrl = deriveBaseUrl();
-  const resolved = steps.map((s) => resolveStep(s, lang, baseUrl, userSkills));
+  const resolved = steps.map((s) => resolveStep(s, lang, baseUrl, userSkills, owned));
 
   // ── Single `/command`, no preamble → original compact output ──
   if (resolved.length === 1 && resolved[0].marker === '/' && !preamble) {
@@ -179,7 +228,18 @@ function resolveStep(
   lang: 'ko' | 'en',
   baseUrl: string,
   userSkills: Array<{ name: string; path: string }>,
+  owned: Map<string, string>,
 ): ResolvedStep {
+  // Owned commands (Phase 1.6 HP-02) take PRECEDENCE over both user skills and
+  // builtins of the same verb. The stored `command.template` is the full,
+  // provider-independent prompt body, so it is inlined directly (no SKILL.md
+  // file dependency) — expansion happens here, above the engine seam, so it is
+  // identical on all five providers and the dev engine. No mindset-primer label,
+  // matching the user-skill path; the trailing user text follows the template.
+  const ownedTemplate = owned.get(step.cmd);
+  if (ownedTemplate !== undefined) {
+    return { marker: step.marker, body: step.body, label: '', pointer: ownedTemplate };
+  }
   const skill = userSkills.find((s) => s.name === step.cmd);
   if (skill) {
     // User-skill invocations carry no mindset-primer label — matches the old
