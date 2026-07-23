@@ -27,6 +27,9 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+// Shared scope identity (icon/colour/label, selector, banner, row badge). Org is
+// UI-gated in there.
+import { ScopeBadge, ScopeHeader, ScopeSelector, projectName, type NabyScopeId } from './nabyScope';
 // Type-only import: erased at compile time, so no runtime/node code enters the
 // browser bundle. The shapes are the runtime's own (contract §3) — never
 // redefined here.
@@ -101,12 +104,16 @@ async function harnessPost(body: HarnessActionBody): Promise<{ ok: boolean; erro
 
 const CommandRow = memo(function CommandRow({
   item,
+  scope,
+  cwd,
   busy,
   onEdit,
   onToggle,
   onDelete,
 }: {
   item: HarnessItem;
+  scope: NabyScopeId;
+  cwd?: string;
   busy: boolean;
   onEdit: (id: string) => void;
   onToggle: (id: string, enabled: boolean) => void;
@@ -132,15 +139,19 @@ const CommandRow = memo(function CommandRow({
             </div>
           ) : null}
         </div>
-        <span
-          className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-            enabled
-              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-          }`}
-        >
-          {enabled ? t('commandManager.badgeEnabled') : t('commandManager.badgeDisabled')}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* Which scope this command lives in — global vs this project. */}
+          <ScopeBadge scope={scope} cwd={cwd} />
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+              enabled
+                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+            }`}
+          >
+            {enabled ? t('commandManager.badgeEnabled') : t('commandManager.badgeDisabled')}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-2">
@@ -174,10 +185,9 @@ const CommandRow = memo(function CommandRow({
 // The panel.
 // ---------------------------------------------------------------------------
 
-const SCOPE_OPTIONS: { scope: HarnessScope; labelKey: string }[] = [
-  { scope: 'user', labelKey: 'commandManager.scopeUser' },
-  { scope: 'project', labelKey: 'commandManager.scopeProject' },
-];
+// Commands are addressable by global (`user`) and this-project scope. Rendered
+// via the shared ScopeSelector.
+const COMMAND_SCOPES: NabyScopeId[] = ['user', 'project'];
 
 interface DraftState {
   id: string | null; // null = creating, non-null = editing that id
@@ -352,34 +362,35 @@ export function NabyCommandManager({
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">{t('commandManager.description')}</p>
 
-      {/* Scope filter */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+      {/* Scope filter + banner: whether these commands are global (every
+          project) or bound to this project. */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
           {t('commandManager.scope')}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {SCOPE_OPTIONS.map((o) => (
-            <button
-              key={o.scope}
-              onClick={() => setScope(o.scope)}
-              className={`text-xs px-2 py-1 rounded border transition-colors ${
-                scope === o.scope
-                  ? 'border-brand bg-brand/10 text-brand'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t(o.labelKey)}
-            </button>
-          ))}
-        </div>
+        <ScopeSelector
+          scopes={COMMAND_SCOPES}
+          value={scope as NabyScopeId}
+          onChange={(s) => setScope(s as HarnessScope)}
+        />
+        <ScopeHeader scope={scope as NabyScopeId} cwd={cwd} />
       </div>
 
       {/* Create / Edit form */}
       {available ? (
         draft ? (
           <div className="rounded-lg border border-brand/40 p-3 space-y-2 bg-brand/5">
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-              {draft.id === null ? t('commandManager.createTitle') : t('commandManager.editTitle')}
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {draft.id === null ? t('commandManager.createTitle') : t('commandManager.editTitle')}
+              </div>
+              {/* Make the SAVE TARGET scope explicit so a new command is never
+                  accidentally created global when the user meant this project. */}
+              <span className="text-[10px] text-muted-foreground">
+                {scope === 'user'
+                  ? t('scope.targetGlobal')
+                  : t('scope.targetProject', { name: projectName(cwd) || t('scope.noProject') })}
+              </span>
             </div>
             <div className="flex items-center gap-1">
               <span className="text-sm font-mono text-muted-foreground">/</span>
@@ -457,6 +468,8 @@ export function NabyCommandManager({
             <CommandRow
               key={item.id}
               item={item}
+              scope={scope as NabyScopeId}
+              cwd={cwd}
               busy={busy}
               onEdit={startEdit}
               onToggle={handleToggle}

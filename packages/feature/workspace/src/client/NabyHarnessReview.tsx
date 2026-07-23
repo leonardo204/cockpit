@@ -28,6 +28,10 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+// Shared scope identity. The org/team scope is UI-gated here via ScopeSelector +
+// visibleScopes — the store / server API / HP-08 org logic below are untouched,
+// only the org filter/target buttons are hidden until org infra exists.
+import { ScopeBadge, ScopeHeader, ScopeSelector, type NabyScopeId } from './nabyScope';
 // Type-only: erased at compile time, so no runtime/node code enters the browser
 // bundle. Shapes are the runtime's own (contract §3).
 import type {
@@ -190,11 +194,15 @@ function needsPhase25(item: HarnessItem): boolean {
 
 const HarnessRow = memo(function HarnessRow({
   item,
+  scope,
+  cwd,
   busy,
   onToggle,
   onDelete,
 }: {
   item: HarnessItem;
+  scope: NabyScopeId;
+  cwd?: string;
   busy: boolean;
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
@@ -246,15 +254,19 @@ const HarnessRow = memo(function HarnessRow({
             </div>
           ) : null}
         </div>
-        <span
-          className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-            enabled
-              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-              : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-          }`}
-        >
-          {enabled ? t('harnessReview.badgeEnabled') : t('harnessReview.badgeDisabled')}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* Which scope this item lives in — global vs this project. */}
+          <ScopeBadge scope={scope} cwd={cwd} />
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+              enabled
+                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+            }`}
+          >
+            {enabled ? t('harnessReview.badgeEnabled') : t('harnessReview.badgeDisabled')}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-2">
@@ -281,13 +293,11 @@ const HarnessRow = memo(function HarnessRow({
 // The panel.
 // ---------------------------------------------------------------------------
 
-const SCOPE_OPTIONS: { scope: HarnessScope; labelKey: string }[] = [
-  { scope: 'user', labelKey: 'harnessReview.scopeUser' },
-  { scope: 'project', labelKey: 'harnessReview.scopeProject' },
-  // HP-08: the team/org scope — a shared harness set imported here (disabled by
-  // default) is inherited by every user of this in-house build.
-  { scope: 'org', labelKey: 'harnessReview.scopeOrg' },
-];
+// The scopes harness items are addressable by, in display order. `org` (HP-08:
+// the team/org scope inherited by every user of an in-house build) is kept in
+// the list but UI-gated by the shared ScopeSelector / visibleScopes — hidden
+// until org infrastructure exists, never removed from the store/API.
+const HARNESS_SCOPES: NabyScopeId[] = ['user', 'project', 'org'];
 
 const KIND_FILTERS: { value: HarnessKind | 'all'; labelKey: string }[] = [
   { value: 'all', labelKey: 'harnessReview.kindAll' },
@@ -302,9 +312,9 @@ const STATUS_FILTERS: { value: HarnessStatus | 'all'; labelKey: string }[] = [
   { value: 'disabled', labelKey: 'harnessReview.statusDisabled' },
 ];
 
-// The scopes a set can be exported FROM / imported INTO. `org` is the team-shared
-// scope (HP-08); `project` needs an open project (cwd).
-const SET_SCOPES: { scope: HarnessScope; labelKey: string }[] = SCOPE_OPTIONS;
+// The scopes a set can be exported FROM / imported INTO — same list (and same
+// org UI-gating) as the review filter. `project` needs an open project (cwd).
+const SET_SCOPES: NabyScopeId[] = HARNESS_SCOPES;
 
 /** Resolve the wire scopeKey override for a scope: `project` carries the cwd,
  *  `user`/`org` are server-defaulted (omit). Returns null when project has no cwd
@@ -472,29 +482,19 @@ const HarnessSetTools = memo(function HarnessSetTools({
     }
   }, [loaded, importOverride, selectedIds, importScope, onImported, t]);
 
+  // Scope picker for export-from / import-into. Uses the shared selector so org
+  // stays UI-gated and each scope shows its icon/label; project is disabled when
+  // no project is open.
   const scopeButtons = (
     current: HarnessScope,
     set: (s: HarnessScope) => void,
   ) => (
-    <div className="flex flex-wrap gap-1.5">
-      {SET_SCOPES.map((o) => {
-        const disabled = o.scope === 'project' && !cwd;
-        return (
-          <button
-            key={o.scope}
-            onClick={() => set(o.scope)}
-            disabled={disabled}
-            className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-40 ${
-              current === o.scope
-                ? 'border-brand bg-brand/10 text-brand'
-                : 'border-border text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            {t(o.labelKey)}
-          </button>
-        );
-      })}
-    </div>
+    <ScopeSelector
+      scopes={SET_SCOPES}
+      value={current as NabyScopeId}
+      onChange={(s) => set(s as HarnessScope)}
+      isDisabled={(s) => s === 'project' && !cwd}
+    />
   );
 
   return (
@@ -639,11 +639,14 @@ const HarnessSetTools = memo(function HarnessSetTools({
               ))}
             </div>
 
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 {t('harnessSet.targetScope')}
               </div>
               {scopeButtons(importScope, setImportScope)}
+              {/* Spell out the landing scope so imported items are never dropped
+                  into the wrong place. */}
+              <ScopeHeader scope={importScope as NabyScopeId} cwd={cwd} />
             </div>
 
             <button
@@ -854,26 +857,18 @@ export function NabyHarnessReview({
       <p className="text-xs text-muted-foreground">{t('harnessReview.description')}</p>
       <p className="text-[11px] text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
 
-      {/* Scope filter */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+      {/* Scope filter + banner: whether these harness items are global (every
+          project) or bound to this project. */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
           {t('harnessReview.scope')}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {SCOPE_OPTIONS.map((o) => (
-            <button
-              key={o.scope}
-              onClick={() => setScope(o.scope)}
-              className={`text-xs px-2 py-1 rounded border transition-colors ${
-                scope === o.scope
-                  ? 'border-brand bg-brand/10 text-brand'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t(o.labelKey)}
-            </button>
-          ))}
-        </div>
+        <ScopeSelector
+          scopes={HARNESS_SCOPES}
+          value={scope as NabyScopeId}
+          onChange={(s) => setScope(s as HarnessScope)}
+        />
+        <ScopeHeader scope={scope as NabyScopeId} cwd={cwd} />
       </div>
 
       {/* Set export/import (HP-05 + HP-08 org). Available in every scope — the
@@ -1008,6 +1003,8 @@ export function NabyHarnessReview({
             <HarnessRow
               key={item.id}
               item={item}
+              scope={scope as NabyScopeId}
+              cwd={cwd}
               busy={busy}
               onToggle={handleToggle}
               onDelete={handleDelete}

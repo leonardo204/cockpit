@@ -37,6 +37,27 @@ interface SettingsModalProps {
   cwd?: string;
 }
 
+type SettingsSectionId =
+  | 'theme'
+  | 'language'
+  | 'provider'
+  | 'memory'
+  | 'commands'
+  | 'harness'
+  | 'about';
+
+// Left-nav sections. Each `labelKey` reuses an existing i18n string, so no new
+// nav copy is introduced. `icon` is decorative only.
+const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] = [
+  { id: 'theme', labelKey: 'settings.theme', icon: '🎨' },
+  { id: 'language', labelKey: 'settings.language', icon: '🌐' },
+  { id: 'provider', labelKey: 'settings.aiProvider', icon: '🤖' },
+  { id: 'memory', labelKey: 'memoryReview.title', icon: '🧠' },
+  { id: 'commands', labelKey: 'commandManager.title', icon: '⌘' },
+  { id: 'harness', labelKey: 'harnessReview.title', icon: '🧩' },
+  { id: 'about', labelKey: 'settings.about', icon: 'ℹ️' },
+];
+
 export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModalProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
@@ -55,6 +76,10 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
     });
   }, [isOpen]);
 
+  // Which section the left nav has selected — replaces the old single long
+  // scroll. Kept across opens so returning to Settings lands where you left.
+  const [section, setSection] = useState<SettingsSectionId>('theme');
+
   const handleLanguageChange = useCallback((lang: string) => {
     setLanguageState(lang);
     // Save to backend (fire-and-forget)
@@ -67,6 +92,17 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
       : lang;
     i18n.changeLanguage(effective);
   }, [i18n]);
+
+  // ESC closes the modal (kept from the old narrow modal's affordances). Only
+  // bound while open so it never swallows Escape for other surfaces.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   // Fetch app version
   useEffect(() => {
@@ -94,13 +130,16 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
         onClick={onClose}
       />
 
-      {/* Modal */}
-      <div className="relative bg-card rounded-lg shadow-xl w-full max-w-md mx-4 overflow-hidden">
+      {/* Panel — a wide, near-full-screen surface split into a left section nav
+          and a right content pane, so the (now many) sections no longer stack
+          into one long scroll. Sits within the shared z-50 modal layer. */}
+      <div className="relative bg-card rounded-lg shadow-xl w-full max-w-4xl h-[85vh] mx-4 flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <h2 className="text-sm font-medium text-foreground">{t('settings.title')}</h2>
           <button
             onClick={onClose}
+            aria-label={t('common.close')}
             className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -109,121 +148,134 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
           </button>
         </div>
 
-        {/* Content — scrolls: the AI provider section can expand past the
-            viewport on a short window, and a modal that clips its Save button
-            is worse than one that scrolls. */}
-        <div className="p-4 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* Theme Section */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('settings.theme')}
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {themeOptions.map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setTheme(option.value)}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border transition-colors ${
-                    theme === option.value
-                      ? 'border-brand bg-brand/10 text-brand'
-                      : 'border-border hover:border-slate-6 text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <span className="text-xl">{option.icon}</span>
-                  <span className="text-xs font-medium">{option.label}</span>
-                </button>
+        {/* Body: nav + content. Stacks on narrow windows (nav becomes a
+            horizontal strip), splits side-by-side from `sm` up. */}
+        <div className="flex flex-col sm:flex-row flex-1 min-h-0">
+          {/* Left section nav */}
+          <nav className="shrink-0 sm:w-48 border-b sm:border-b-0 sm:border-r border-border overflow-x-auto sm:overflow-y-auto">
+            <ul className="flex sm:flex-col p-2 gap-1">
+              {NAV_SECTIONS.map((s) => (
+                <li key={s.id} className="shrink-0">
+                  <button
+                    onClick={() => setSection(s.id)}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left whitespace-nowrap transition-colors ${
+                      section === s.id
+                        ? 'bg-brand/10 text-brand font-medium'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                    }`}
+                  >
+                    <span aria-hidden>{s.icon}</span>
+                    <span>{t(s.labelKey)}</span>
+                  </button>
+                </li>
               ))}
-            </div>
-          </div>
+            </ul>
+          </nav>
 
-          {/* Divider */}
-          <div className="border-t border-border" />
+          {/* Right content — only the selected section renders. Scrolls on its
+              own so a tall section (AI provider / harness) never clips its
+              controls. */}
+          <div className="flex-1 min-w-0 overflow-y-auto p-5">
+            {section === 'theme' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('settings.theme')}
+                </label>
+                <div className="grid grid-cols-3 gap-2 max-w-md">
+                  {themeOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => setTheme(option.value)}
+                      className={`flex flex-col items-center gap-1 p-3 rounded-lg border transition-colors ${
+                        theme === option.value
+                          ? 'border-brand bg-brand/10 text-brand'
+                          : 'border-border hover:border-slate-6 text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <span className="text-xl">{option.icon}</span>
+                      <span className="text-xs font-medium">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
-          {/* Language Section */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('settings.language')}
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { value: 'auto', label: t('settings.languageAuto'), icon: '🌐' },
-                { value: 'en', label: 'English', icon: '🇺🇸' },
-                { value: 'ko', label: '한국어', icon: '🇰🇷' },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => handleLanguageChange(option.value)}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-lg border transition-colors ${
-                    language === option.value
-                      ? 'border-brand bg-brand/10 text-brand'
-                      : 'border-border hover:border-slate-6 text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <span className="text-xl">{option.icon}</span>
-                  <span className="text-xs font-medium">{option.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+            {section === 'language' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('settings.language')}
+                </label>
+                <div className="grid grid-cols-3 gap-2 max-w-md">
+                  {[
+                    { value: 'auto', label: t('settings.languageAuto'), icon: '🌐' },
+                    { value: 'en', label: 'English', icon: '🇺🇸' },
+                    { value: 'ko', label: '한국어', icon: '🇰🇷' },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => handleLanguageChange(option.value)}
+                      className={`flex flex-col items-center gap-1 p-3 rounded-lg border transition-colors ${
+                        language === option.value
+                          ? 'border-brand bg-brand/10 text-brand'
+                          : 'border-border hover:border-slate-6 text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <span className="text-xl">{option.icon}</span>
+                      <span className="text-xs font-medium">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
-          {/* Divider */}
-          <div className="border-t border-border" />
+            {section === 'provider' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">{t('settings.aiProvider')}</label>
+                <NabyProviderSettings isOpen={isOpen} />
+              </div>
+            ) : null}
 
-          {/* AI provider Section (F1-04) */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">{t('settings.aiProvider')}</label>
-            <NabyProviderSettings isOpen={isOpen} />
-          </div>
+            {section === 'memory' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('memoryReview.title')}
+                </label>
+                <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
+              </div>
+            ) : null}
 
-          {/* Divider */}
-          <div className="border-t border-border" />
+            {section === 'commands' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('commandManager.title')}
+                </label>
+                <NabyCommandManager isOpen={isOpen} cwd={cwd} />
+              </div>
+            ) : null}
 
-          {/* Memory Section (P15-06) — review + delete what Naby has remembered. */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('memoryReview.title')}
-            </label>
-            <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
-          </div>
+            {section === 'harness' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('harnessReview.title')}
+                </label>
+                <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
+              </div>
+            ) : null}
 
-          {/* Divider */}
-          <div className="border-t border-border" />
-
-          {/* Command Section (HP-02) — create/edit/delete/enable owned commands. */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('commandManager.title')}
-            </label>
-            <NabyCommandManager isOpen={isOpen} cwd={cwd} />
-          </div>
-
-          {/* Divider */}
-          <div className="border-t border-border" />
-
-          {/* Harness Section (HP-04 + HP-06) — import ~/.claude / .claude and
-              review imported commands/skills/subagents (enable/delete/revert). */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('harnessReview.title')}
-            </label>
-            <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
-          </div>
-
-          {/* Divider */}
-          <div className="border-t border-border" />
-
-          {/* About Section */}
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-2">
-              {t('settings.about')}
-            </label>
-            <div className="text-xs text-muted-foreground space-y-1">
-              {/* APP_TITLE, not APP_NAME: the About box is exactly where a
-                  tester looks to confirm which build they are reporting on, and
-                  "Alpha" is the most important word there. */}
-              <p>{APP_TITLE}{appVersion ? ` · shell v${appVersion}` : ''}</p>
-              <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
-            </div>
+            {section === 'about' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('settings.about')}
+                </label>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  {/* APP_TITLE, not APP_NAME: the About box is exactly where a
+                      tester looks to confirm which build they are reporting on,
+                      and "Alpha" is the most important word there. */}
+                  <p>{APP_TITLE}{appVersion ? ` · shell v${appVersion}` : ''}</p>
+                  <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>

@@ -833,6 +833,23 @@
     "addServer": "Add server",
     "couldNotSave": "could not save"
   },
+  "scope": {
+    "global": "Global",
+    "globalFull": "Global (all projects)",
+    "globalDesc": "Shared across every project on this machine.",
+    "project": "This project",
+    "projectFull": "This project ({{name}})",
+    "projectDesc": "Only applies inside {{name}}.",
+    "session": "This session",
+    "sessionFull": "This session",
+    "sessionDesc": "Only the currently open session.",
+    "org": "Team",
+    "orgFull": "Team (organization)",
+    "orgDesc": "Shared with your whole organization.",
+    "noProject": "no project open",
+    "targetGlobal": "Saved to Global (all projects)",
+    "targetProject": "Saved to this project ({{name}})"
+  },
   "memoryReview": {
     "title": "Memory",
     "description": "What Naby has remembered about you, with where each memory came from. Delete anything wrong, and confirm proposed memories before they are allowed to shape a reply.",

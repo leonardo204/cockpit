@@ -833,6 +833,23 @@
     "addServer": "서버 추가",
     "couldNotSave": "저장할 수 없습니다"
   },
+  "scope": {
+    "global": "글로벌",
+    "globalFull": "글로벌 (모든 프로젝트)",
+    "globalDesc": "이 컴퓨터의 모든 프로젝트에서 공통으로 적용됩니다.",
+    "project": "이 프로젝트",
+    "projectFull": "이 프로젝트 ({{name}})",
+    "projectDesc": "{{name}} 안에서만 적용됩니다.",
+    "session": "현재 세션",
+    "sessionFull": "현재 세션",
+    "sessionDesc": "현재 열려 있는 세션에만 적용됩니다.",
+    "org": "팀",
+    "orgFull": "팀 (조직)",
+    "orgDesc": "조직 전체와 공유됩니다.",
+    "noProject": "열린 프로젝트 없음",
+    "targetGlobal": "글로벌(모든 프로젝트)에 저장됨",
+    "targetProject": "이 프로젝트({{name}})에 저장됨"
+  },
   "memoryReview": {
     "title": "기억",
     "description": "Naby가 당신에 대해 기억한 내용과 그 출처입니다. 잘못된 것은 삭제하고, 제안된 기억은 답변에 반영되기 전에 확인하세요.",

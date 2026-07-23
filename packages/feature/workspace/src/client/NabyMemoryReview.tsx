@@ -36,6 +36,9 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+// Shared scope identity: icon/colour/label per scope, the scope selector, the
+// full-scope banner, and the per-row scope badge. Org is UI-gated in there.
+import { ScopeBadge, ScopeHeader, ScopeSelector, type NabyScopeId } from './nabyScope';
 // Type-only import: erased at compile time, so no runtime/node code enters the
 // browser bundle. The shapes are the runtime's own (contract §3) — never
 // redefined here.
@@ -113,11 +116,15 @@ const TRUST_LABELS: Record<TrustTier, string> = {
 
 const MemoryRow = memo(function MemoryRow({
   item,
+  scope,
+  cwd,
   busy,
   onConfirm,
   onDelete,
 }: {
   item: MemoryItem;
+  scope: NabyScopeId;
+  cwd?: string;
   busy: boolean;
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
@@ -137,15 +144,19 @@ const MemoryRow = memo(function MemoryRow({
             {item.value}
           </div>
         </div>
-        <span
-          className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-            isProposed
-              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-              : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-          }`}
-        >
-          {isProposed ? t('memoryReview.badgeProposed') : t('memoryReview.badgeConfirmed')}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* Which scope this row lives in — global vs this project etc. */}
+          <ScopeBadge scope={scope} cwd={cwd} />
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+              isProposed
+                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+            }`}
+          >
+            {isProposed ? t('memoryReview.badgeProposed') : t('memoryReview.badgeConfirmed')}
+          </span>
+        </div>
       </div>
 
       {/* Provenance — the load-bearing part of a REVIEW surface. */}
@@ -188,12 +199,9 @@ const MemoryRow = memo(function MemoryRow({
 // The panel.
 // ---------------------------------------------------------------------------
 
-const SCOPE_OPTIONS: { scope: MemoryScope; labelKey: string }[] = [
-  { scope: 'user', labelKey: 'memoryReview.scopeUser' },
-  { scope: 'session', labelKey: 'memoryReview.scopeSession' },
-  { scope: 'project', labelKey: 'memoryReview.scopeProject' },
-  { scope: 'org', labelKey: 'memoryReview.scopeOrg' },
-];
+// The scopes memory is addressable by, in display order. `org` is present but
+// UI-gated by the shared ScopeSelector (hidden until org infra exists).
+const MEMORY_SCOPES: NabyScopeId[] = ['user', 'session', 'project', 'org'];
 
 const STATUS_OPTIONS: { value: MemoryStatus | 'all'; labelKey: string }[] = [
   { value: 'all', labelKey: 'memoryReview.statusAll' },
@@ -314,26 +322,18 @@ export function NabyMemoryReview({
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">{t('memoryReview.description')}</p>
 
-      {/* Scope filter */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+      {/* Scope filter + banner: which memories you are looking at (global vs
+          this project vs this session), stated plainly. */}
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
           {t('memoryReview.scope')}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {SCOPE_OPTIONS.map((o) => (
-            <button
-              key={o.scope}
-              onClick={() => setScope(o.scope)}
-              className={`text-xs px-2 py-1 rounded border transition-colors ${
-                scope === o.scope
-                  ? 'border-brand bg-brand/10 text-brand'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t(o.labelKey)}
-            </button>
-          ))}
-        </div>
+        <ScopeSelector
+          scopes={MEMORY_SCOPES}
+          value={scope}
+          onChange={(s) => setScope(s as MemoryScope)}
+        />
+        <ScopeHeader scope={scope} cwd={cwd} />
       </div>
 
       {/* Status filter */}
@@ -378,6 +378,8 @@ export function NabyMemoryReview({
             <MemoryRow
               key={item.id}
               item={item}
+              scope={scope as NabyScopeId}
+              cwd={cwd}
               busy={busy}
               onConfirm={handleConfirm}
               onDelete={handleDelete}
