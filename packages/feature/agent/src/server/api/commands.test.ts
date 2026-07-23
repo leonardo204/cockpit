@@ -53,6 +53,26 @@ describe('mergeCommands', () => {
     expect(dup.description).toBe('project dup');
   });
 
+  it('badges an org-scope owned command as "org" (HP-08 inheritance)', () => {
+    const out = mergeCommands(BUILTINS, [
+      ownedCommand({ name: 'onboard', scope: 'org', scopeKey: 'default', description: 'team onboard' }),
+    ]);
+    const org = out.find((c) => c.name === '/onboard')!;
+    expect(org.source).toBe('org');
+    expect(org.description).toBe('team onboard');
+  });
+
+  it('a project-scope command overrides an org-scope one of the same verb', () => {
+    // input order user → org → project (as loadOwnedCommands returns)
+    const out = mergeCommands(BUILTINS, [
+      ownedCommand({ name: 'dup', scope: 'org', scopeKey: 'default', description: 'org dup' }),
+      ownedCommand({ name: 'dup', scope: 'project', scopeKey: '/w', description: 'project dup' }),
+    ]);
+    const dup = out.find((c) => c.name === '/dup')!;
+    expect(dup.source).toBe('project');
+    expect(dup.description).toBe('project dup');
+  });
+
   it('carries argumentHint through and falls back to it for description', () => {
     const out = mergeCommands([], [
       ownedCommand({ name: 'x', description: undefined, command: { template: 't', argumentHint: '<arg>' } }),
@@ -78,6 +98,17 @@ describe('listCommands (store-backed)', () => {
     const out = listCommands(null, store);
     expect(out.some((c) => c.name === '/ship')).toBe(true);
     expect(out.some((c) => c.name === '/qa')).toBe(true); // builtin retained
+  });
+
+  it('includes org-scope owned commands even without a cwd (HP-08 inheritance)', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [],
+      ['org:default']: [ownedCommand({ name: 'onboard', scope: 'org', scopeKey: 'default' })],
+    });
+    const out = listCommands(null, store);
+    const onboard = out.find((c) => c.name === '/onboard')
+    expect(onboard).toBeDefined()
+    expect(onboard?.source).toBe('org')
   });
 
   it('includes project-scope owned commands only when a cwd is given', () => {

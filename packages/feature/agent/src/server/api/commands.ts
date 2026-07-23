@@ -32,12 +32,18 @@ export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
 // `source` widens beyond 'builtin' to badge Naby-owned rows in the dropdown.
+// 'org' is a team-shared (in-house) command inherited from the org scope (HP-08).
 export interface CommandInfo {
   name: string
   description: string
-  source: "builtin" | "user" | "project"
+  source: "builtin" | "user" | "org" | "project"
   argumentHint?: string
 }
+
+// HP-08: the single in-house org key. Kept in sync with the harness route's
+// DEFAULT_ORG_ID so org-scope palette reads and org-scope harness writes address
+// the same rows.
+const DEFAULT_ORG_ID = "default"
 
 const BUILTIN_COMMANDS: CommandInfo[] = [
   { name: "/qa", description: "Enter requirements clarification mode", source: "builtin" },
@@ -50,15 +56,23 @@ const BUILTIN_COMMANDS: CommandInfo[] = [
 
 type CommandStore = Pick<Store, "listHarness">
 
-/** Read enabled owned commands for the user scope (always) and, when a cwd is
- *  given, the project scope. Best-effort: a store hiccup must never break the
- *  builtin dropdown, so each read is guarded and returns [] on failure. */
+/** Read enabled owned commands for the user scope (always), the org scope
+ *  (always — a team-shared set inherited from the in-house org, HP-08), and,
+ *  when a cwd is given, the project scope. Order is user → org → project so the
+ *  more specific scope wins on a verb clash (a plain map upsert in mergeCommands).
+ *  Best-effort: a store hiccup must never break the builtin dropdown, so each
+ *  read is guarded and returns [] on failure. */
 function loadOwnedCommands(cwd: string | null, store: CommandStore): HarnessItem[] {
   const out: HarnessItem[] = []
   try {
     out.push(...store.listHarness("user", DEFAULT_USER_ID, { kind: "command", status: "enabled" }))
   } catch {
     /* ignore — fall back to builtins only */
+  }
+  try {
+    out.push(...store.listHarness("org", DEFAULT_ORG_ID, { kind: "command", status: "enabled" }))
+  } catch {
+    /* ignore — org may be empty on a single-user build */
   }
   if (cwd) {
     try {
@@ -88,7 +102,7 @@ export function mergeCommands(builtins: CommandInfo[], owned: HarnessItem[]): Co
     upsert({
       name: `/${item.name}`,
       description: item.description ?? item.command.argumentHint ?? "",
-      source: item.scope === "project" ? "project" : "user",
+      source: item.scope === "project" ? "project" : item.scope === "org" ? "org" : "user",
       ...(item.command.argumentHint ? { argumentHint: item.command.argumentHint } : {}),
     })
   }

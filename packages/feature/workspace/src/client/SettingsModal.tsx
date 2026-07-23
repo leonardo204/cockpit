@@ -22,6 +22,9 @@ import { NabyMemoryReview } from './NabyMemoryReview';
 // HP-02. The Naby-owned command CRUD panel. Given the active cwd so its
 // `project` scope is addressable; `user` scope needs no key.
 import { NabyCommandManager } from './NabyCommandManager';
+// HP-04 + HP-06. The `~/.claude` importer + import review panel (all kinds).
+// Given the active cwd so its `project`-scope `.claude` is importable.
+import { NabyHarnessReview } from './NabyHarnessReview';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -192,6 +195,18 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
               {t('commandManager.title')}
             </label>
             <NabyCommandManager isOpen={isOpen} cwd={cwd} />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-border" />
+
+          {/* Harness Section (HP-04 + HP-06) — import ~/.claude / .claude and
+              review imported commands/skills/subagents (enable/delete/revert). */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              {t('harnessReview.title')}
+            </label>
+            <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
           </div>
 
           {/* Divider */}

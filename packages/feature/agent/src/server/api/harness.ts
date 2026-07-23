@@ -28,19 +28,46 @@ import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
   DEFAULT_USER_ID,
   type HarnessItem,
+  type HarnessKind,
   type HarnessScope,
+  type HarnessSet,
   type HarnessStatus,
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
+import {
+  importClaudeHarness,
+  type HarnessImportSummary,
+} from '../lib/harnessImporter';
 
 // The slice of the store this route touches. Named so the handlers depend on an
 // injectable seam (default `getStore()`), keeping the list/action logic unit-
 // testable against a fake store without opening a real sqlite file.
 type HarnessStore = Pick<
   Store,
-  'listHarness' | 'putHarnessItem' | 'getHarnessItem' | 'setHarnessEnabled' | 'removeHarness'
+  | 'listHarness'
+  | 'putHarnessItem'
+  | 'getHarnessItem'
+  | 'setHarnessEnabled'
+  | 'removeHarness'
+  // HP-05: set export/import — serialize a scope's enabled items into a portable
+  // HarnessSet, and merge an incoming set through the same gate (contract §5/§6).
+  | 'exportHarnessSet'
+  | 'importHarnessSet'
 >;
+
+// Injectable deps for the actions that reach beyond the store (the filesystem
+// importer). Default binds the real `~/.claude` importer; tests pass a fake so
+// the action wiring is exercised without touching a disk.
+export interface HarnessActionDeps {
+  importClaude: (args: { scope: HarnessScope; scopeKey: string; cwd?: string }) => HarnessImportSummary;
+}
+
+function defaultDeps(store: HarnessStore): HarnessActionDeps {
+  return {
+    importClaude: (args) => importClaudeHarness({ ...args, store }),
+  };
+}
 
 // The store is opened on demand, so this must run on the node runtime and must
 // never be statically rendered.
@@ -56,6 +83,16 @@ export const dynamic = 'force-dynamic';
 // in-house rollout though single-user builds have no local org id.
 const HARNESS_SCOPES: readonly HarnessScope[] = ['user', 'project', 'org'];
 const HARNESS_STATUSES: readonly HarnessStatus[] = ['enabled', 'disabled'];
+const HARNESS_KINDS: readonly HarnessKind[] = ['command', 'skill', 'subagent'];
+
+// HP-08: the single-tenant in-house org key. The runtime does not (yet) export a
+// DEFAULT_ORG_ID constant, so the shell owns one stable value — every `org`-scope
+// read/write keys on it. This makes the "team-shared harness set" a real, keyable
+// scope for a single in-house deployment; a true multi-org build would resolve
+// this from the signed-in org instead of a constant (org-set signing is an open
+// question, contract §7). Kept in sync with the org skill-injection key the
+// runtime already reads (skill-inject opts.orgId).
+const DEFAULT_ORG_ID = 'default';
 
 // A command verb: a letter then letters/digits/hyphens (/qa, /new-branch). Kept
 // in sync with the server dispatcher (slashCommands' COMMAND_LINE_RE) and the
@@ -69,6 +106,35 @@ function isScope(v: unknown): v is HarnessScope {
 
 function isStatus(v: unknown): v is HarnessStatus {
   return typeof v === 'string' && (HARNESS_STATUSES as readonly string[]).includes(v);
+}
+
+function isKind(v: unknown): v is HarnessKind {
+  return typeof v === 'string' && (HARNESS_KINDS as readonly string[]).includes(v);
+}
+
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
+}
+
+/**
+ * Shape-guard for an uploaded HarnessSet (HP-05). The set arrives off the wire
+ * (a teammate's file) so it is UNTRUSTED structurally — we validate the envelope
+ * before handing it to the store, whose gate then handles the *content* trust
+ * (external ⇒ disabled). We check only the fields the merge reads: name/version
+ * and an `items` array of objects carrying a `kind` and `name`; the store
+ * re-derives provenance/status, so a malformed provenance in the file cannot
+ * smuggle an item to `enabled`.
+ */
+function isHarnessSet(v: unknown): v is HarnessSet {
+  if (!v || typeof v !== 'object') return false;
+  const s = v as Record<string, unknown>;
+  if (typeof s.name !== 'string' || typeof s.version !== 'string') return false;
+  if (!Array.isArray(s.items)) return false;
+  return s.items.every((it) => {
+    if (!it || typeof it !== 'object') return false;
+    const row = it as Record<string, unknown>;
+    return isKind(row.kind) && typeof row.name === 'string';
+  });
 }
 
 /**
@@ -93,6 +159,10 @@ function normalizeVerb(raw: unknown): string | null {
  */
 function resolveScopeKey(scope: HarnessScope, scopeKey: string | null | undefined): string | null {
   if (scope === 'user') return scopeKey && scopeKey.length > 0 ? scopeKey : DEFAULT_USER_ID;
+  // `org` resolves to the single in-house org constant when the caller omits a
+  // key (HP-08), exactly like `user` — a team-shared set is addressable without
+  // the client knowing the org id. `project` still requires its own key (cwd).
+  if (scope === 'org') return scopeKey && scopeKey.length > 0 ? scopeKey : DEFAULT_ORG_ID;
   return scopeKey && scopeKey.length > 0 ? scopeKey : null;
 }
 
@@ -115,6 +185,10 @@ export function listHarnessCommands(
     scope: string | null;
     scopeKey: string | null;
     status: string | null;
+    /** Omitted => 'command' (backward compat with the HP-02 palette UI). An
+     *  explicit kind filters to it; the sentinel 'all' returns EVERY kind, which
+     *  the HP-06 review UI needs to inspect imported skills/subagents too. */
+    kind?: string | null;
   },
   store: HarnessStore = getStore(),
 ): { ok: true; data: HarnessListResult } | { ok: false; error: string } {
@@ -124,13 +198,26 @@ export function listHarnessCommands(
   if (params.status !== null && !isStatus(params.status)) {
     return { ok: false, error: `status must be one of ${HARNESS_STATUSES.join(', ')}` };
   }
+  // Resolve the kind filter. Default (undefined/null) preserves the original
+  // command-only behavior; 'all' clears the filter; anything else is validated.
+  const rawKind = params.kind ?? undefined;
+  let kindFilter: HarnessKind | undefined;
+  if (rawKind === undefined || rawKind === null) {
+    kindFilter = 'command';
+  } else if (rawKind === 'all') {
+    kindFilter = undefined;
+  } else if (isKind(rawKind)) {
+    kindFilter = rawKind;
+  } else {
+    return { ok: false, error: `kind must be one of ${HARNESS_KINDS.join(', ')}, or 'all'` };
+  }
   const scopeKey = resolveScopeKey(params.scope, params.scopeKey);
   if (scopeKey === null) {
     return { ok: false, error: `scopeKey is required for ${params.scope} scope` };
   }
 
   const items = store.listHarness(params.scope, scopeKey, {
-    kind: 'command',
+    ...(kindFilter ? { kind: kindFilter } : {}),
     ...(params.status ? { status: params.status as HarnessStatus } : {}),
   });
   return { ok: true, data: { scope: params.scope, scopeKey, items } };
@@ -162,15 +249,75 @@ export type HarnessAction =
       argumentHint?: string;
     }
   | { action: 'delete'; id: string }
-  | { action: 'setEnabled'; id: string; enabled: boolean };
+  | { action: 'setEnabled'; id: string; enabled: boolean }
+  | {
+      // HP-04: import a scope's on-disk `~/.claude` / `.claude` harness
+      // (commands/skills/subagents) through the gate — everything lands disabled.
+      action: 'import';
+      scope: HarnessScope;
+      scopeKey?: string;
+      cwd?: string;
+    }
+  | {
+      // HP-06: roll back a whole import by its origin prefix (the `.claude` base
+      // the items were read from). Every EXTERNAL item whose provenance.origin
+      // starts with the prefix is removed. Scoped so it can never reach across to
+      // another project's rows.
+      action: 'revertOrigin';
+      scope: HarnessScope;
+      scopeKey?: string;
+      originPrefix: string;
+    }
+  | {
+      // HP-05: serialize a scope's ENABLED items (optionally a subset by id) into
+      // a portable, named/versioned HarnessSet the client downloads as JSON. The
+      // set is the interchange document a teammate/another machine imports.
+      action: 'exportSet';
+      scope: HarnessScope;
+      scopeKey?: string;
+      name: string;
+      version: string;
+      ids?: string[];
+    }
+  | {
+      // HP-05: merge an uploaded HarnessSet into a target scope through the gate.
+      // Everything lands DISABLED (external), `ids` selects a subset (item-level
+      // pick), and a conflict never overwrites an ENABLED local item — the store
+      // lands it under a distinct name instead (contract §5). `into` may be `org`
+      // for a team-shared set (HP-08).
+      action: 'importSet';
+      set: HarnessSet;
+      scope: HarnessScope;
+      scopeKey?: string;
+      ids?: string[];
+    };
+
+// A conflict the merge resolved by landing an incoming item under a DISTINCT name
+// because a local ENABLED item already owns the original (scope,scopeKey,kind,name)
+// — surfaced so the review UI can tell the user "this arrived as a separate
+// candidate, your local one was not overwritten" (contract §5 acceptance).
+export interface HarnessImportSetConflict {
+  kind: HarnessKind;
+  requestedName: string;
+  landedName: string;
+}
 
 export type HarnessActionResult =
-  | { ok: true; item?: HarnessItem }
+  | {
+      ok: true;
+      item?: HarnessItem;
+      summary?: HarnessImportSummary;
+      removed?: number;
+      set?: HarnessSet;
+      landed?: HarnessItem[];
+      conflicts?: HarnessImportSetConflict[];
+    }
   | { ok: false; error: string };
 
 export function runHarnessAction(
   body: HarnessAction,
   store: HarnessStore = getStore(),
+  deps: HarnessActionDeps = defaultDeps(store),
 ): HarnessActionResult {
   switch (body.action) {
     case 'create': {
@@ -296,6 +443,142 @@ export function runHarnessAction(
       return { ok: true };
     }
 
+    case 'import': {
+      if (!isScope(body.scope)) {
+        return { ok: false, error: `scope must be one of ${HARNESS_SCOPES.join(', ')}` };
+      }
+      const scopeKey = resolveScopeKey(body.scope, body.scopeKey ?? body.cwd ?? null);
+      if (scopeKey === null) {
+        return { ok: false, error: `scopeKey is required for ${body.scope} scope` };
+      }
+      try {
+        // The importer walks the `.claude` base, drops hooks, and pushes every
+        // command/skill/subagent through the gate — external, so all land
+        // DISABLED (contract §4 invariant 1). The summary carries what landed +
+        // the hooks-skipped count for the review UI.
+        const summary = deps.importClaude({
+          scope: body.scope,
+          scopeKey,
+          ...(body.cwd ? { cwd: body.cwd } : {}),
+        });
+        return { ok: true, summary };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case 'revertOrigin': {
+      if (!isScope(body.scope)) {
+        return { ok: false, error: `scope must be one of ${HARNESS_SCOPES.join(', ')}` };
+      }
+      if (typeof body.originPrefix !== 'string' || body.originPrefix.length === 0) {
+        return { ok: false, error: 'originPrefix is required' };
+      }
+      const scopeKey = resolveScopeKey(body.scope, body.scopeKey ?? null);
+      if (scopeKey === null) {
+        return { ok: false, error: `scopeKey is required for ${body.scope} scope` };
+      }
+      // Remove every EXTERNAL row in this scope whose origin sits under the given
+      // base. Deleting by id (not the store's exact origin selector) lets one
+      // click undo a whole `~/.claude` import whose files each have a distinct
+      // origin path, while staying scoped so it can never cross into another
+      // project's rows. Only external provenance is touched — a user-authored row
+      // that happens to share a path is never swept up.
+      const rows = store.listHarness(body.scope, scopeKey);
+      let removed = 0;
+      for (const row of rows) {
+        const origin = row.provenance.origin;
+        if (
+          row.provenance.source === 'external' &&
+          typeof origin === 'string' &&
+          origin.startsWith(body.originPrefix)
+        ) {
+          store.removeHarness({ id: row.id });
+          removed += 1;
+        }
+      }
+      return { ok: true, removed };
+    }
+
+    case 'exportSet': {
+      if (!isScope(body.scope)) {
+        return { ok: false, error: `scope must be one of ${HARNESS_SCOPES.join(', ')}` };
+      }
+      const scopeKey = resolveScopeKey(body.scope, body.scopeKey ?? null);
+      if (scopeKey === null) {
+        return { ok: false, error: `scopeKey is required for ${body.scope} scope` };
+      }
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (name.length === 0) {
+        return { ok: false, error: 'name is required' };
+      }
+      const version = typeof body.version === 'string' ? body.version.trim() : '';
+      if (version.length === 0) {
+        return { ok: false, error: 'version is required' };
+      }
+      if (body.ids !== undefined && !isStringArray(body.ids)) {
+        return { ok: false, error: 'ids must be an array of strings' };
+      }
+      try {
+        // The store serializes only ENABLED rows (contract §6) — a subset when
+        // `ids` is given. The resulting HarnessSet is the JSON the client
+        // downloads; the store stamps the manifest counts + createdAt.
+        const set = store.exportHarnessSet(body.scope, scopeKey, {
+          name,
+          version,
+          ...(body.ids ? { ids: body.ids } : {}),
+        });
+        return { ok: true, set };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case 'importSet': {
+      if (!isScope(body.scope)) {
+        return { ok: false, error: `scope must be one of ${HARNESS_SCOPES.join(', ')}` };
+      }
+      const scopeKey = resolveScopeKey(body.scope, body.scopeKey ?? null);
+      if (scopeKey === null) {
+        return { ok: false, error: `scopeKey is required for ${body.scope} scope` };
+      }
+      if (!isHarnessSet(body.set)) {
+        return { ok: false, error: 'set must be a HarnessSet with { name, version, items[] }' };
+      }
+      if (body.ids !== undefined && !isStringArray(body.ids)) {
+        return { ok: false, error: 'ids must be an array of strings' };
+      }
+      // The subset the merge will consider, in the SAME order the store iterates
+      // (set.items filtered by ids) — so we can zip landed rows back to their
+      // source item to detect conflicts by a changed landing name.
+      const idFilter = body.ids ? new Set(body.ids) : undefined;
+      const selected = body.set.items.filter((it) => !idFilter || idFilter.has(it.id));
+      try {
+        // Every item passes the gate: external ⇒ DISABLED, provenance
+        // origin:'set:<name>@<version>'. A conflict with a local ENABLED row lands
+        // under a distinct name rather than overwriting (contract §5).
+        const landed = store.importHarnessSet(
+          body.set,
+          { scope: body.scope, scopeKey },
+          body.ids ? { ids: body.ids } : undefined,
+        );
+        const conflicts: HarnessImportSetConflict[] = [];
+        for (let i = 0; i < landed.length; i += 1) {
+          const src = selected[i];
+          if (src && landed[i].name !== src.name) {
+            conflicts.push({
+              kind: landed[i].kind,
+              requestedName: src.name,
+              landedName: landed[i].name,
+            });
+          }
+        }
+        return { ok: true, landed, conflicts };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
     default:
       return { ok: false, error: 'unknown action' };
   }
@@ -313,6 +596,7 @@ export const GET = handler((request) =>
         scope: params.get('scope'),
         scopeKey: params.get('scopeKey'),
         status: params.get('status'),
+        kind: params.get('kind'),
       }),
     );
     if (!result.ok) {
