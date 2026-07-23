@@ -16,13 +16,22 @@ import {
 // Electron main process), so the section renders itself as unavailable when
 // `window.naby` is absent — i.e. in the plain browser dev server.
 import { NabyProviderSettings } from './NabyProviderSetup';
+// P15-06. The scoped-memory review + delete panel. Given the active session/cwd
+// so its `session`/`project` scopes are addressable; `user` scope needs neither.
+import { NabyMemoryReview } from './NabyMemoryReview';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** The session currently in view, so the Memory section can address
+   *  `session`-scoped memory. Absent = no active session (its scope shows an
+   *  unavailable notice). */
+  sessionId?: string;
+  /** The active project's cwd, addressing `project`-scoped memory. */
+  cwd?: string;
 }
 
-export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModalProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [appVersion, setAppVersion] = useState<string>('');
@@ -158,6 +167,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           <div>
             <label className="block text-sm font-medium text-foreground mb-2">{t('settings.aiProvider')}</label>
             <NabyProviderSettings isOpen={isOpen} />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-border" />
+
+          {/* Memory Section (P15-06) — review + delete what Naby has remembered. */}
+          <div>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              {t('memoryReview.title')}
+            </label>
+            <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
           </div>
 
           {/* Divider */}

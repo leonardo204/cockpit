@@ -699,6 +699,16 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        // Active project cwd + its current session, so the Memory section
+        // (P15-06) can address `session`/`project`-scoped memory. Read from the
+        // ref at render time — the modal only reloads while open, so the value
+        // captured when it opens is the right one. `user` scope needs neither.
+        cwd={projects[activeIndex]?.cwd}
+        sessionId={
+          projects[activeIndex]?.cwd
+            ? projectSessionIdsRef.current.get(projects[activeIndex].cwd)
+            : undefined
+        }
       />
 
       {/* Token Stats Modal */}
