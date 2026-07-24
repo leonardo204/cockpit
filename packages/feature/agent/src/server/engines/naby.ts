@@ -63,6 +63,7 @@ import {
   AiSdkEngine,
   buildToolset,
   ClaudeAgentSdkEngine,
+  CHATGPT_OAUTH_DEFAULT_MODEL,
   CHATGPT_OAUTH_LABEL,
   CHATGPT_OAUTH_PROVIDER_ID,
   DEV_ENGINE_LABEL,
@@ -376,7 +377,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               });
               return;
             }
-            const model = requestedModel || 'gpt-5-codex';
+            const model = requestedModel || CHATGPT_OAUTH_DEFAULT_MODEL;
             const profile: ProviderProfile = {
               id: CHATGPT_OAUTH_PROVIDER_ID,
               label: CHATGPT_OAUTH_LABEL,
