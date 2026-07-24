@@ -62,6 +62,7 @@ import { dirname, join } from 'node:path';
 import {
   AiSdkEngine,
   buildToolset,
+  isMcpEntryActive,
   ClaudeAgentSdkEngine,
   CHATGPT_OAUTH_DEFAULT_MODEL,
   CHATGPT_OAUTH_LABEL,
@@ -434,7 +435,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
         // ---- runtime construction ----------------------------------------
         const outbox = new Outbox();
-        const builtin = buildToolset(outbox);
+        // Pass the store so the agent gets `naby_add_mcp` — it can register an MCP
+        // server the user asks for (as a PROPOSAL; a human approves it in Settings
+        // before it runs — makeAddMcp). Without a store the tool is simply absent.
+        const builtin = buildToolset(outbox, store);
 
         // ---- MCP tools (F1-08) -------------------------------------------
         //
@@ -452,7 +456,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // unreachable MCP server must not stop the user from chatting.
         let mcp: McpLoadResult | undefined;
         try {
-          mcp = await loadMcpToolset(store.listMcpEntries());
+          // Only ACTIVE servers become tools — an agent-proposed one
+          // (status:'proposed') is stored and shown in Settings but never loaded
+          // until the user approves it (isMcpEntryActive / mcp.approve).
+          mcp = await loadMcpToolset(store.listMcpEntries().filter(isMcpEntryActive));
           for (const failure of mcp.failures) {
             console.warn(`[engine:naby] MCP server "${failure.name}" unavailable: ${failure.message}`);
           }

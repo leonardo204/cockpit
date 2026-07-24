@@ -828,6 +828,10 @@
     "add": "+ add",
     "mcpDescription": "Tools from these servers are offered to the model, and every call one makes is checked by the approval gate before it runs — the same as Naby's own tools.",
     "noMcpServers": "No MCP servers configured.",
+    "mcpProposed": "proposed",
+    "mcpProposedHint": "The assistant added this server. Review it and approve to let it run.",
+    "mcpApprove": "approve",
+    "mcpReject": "reject",
     "valuesHidden": " (values hidden)",
     "connecting": "Connecting…",
     "connected": "Connected.",
@@ -838,7 +842,12 @@
     "commandPlaceholder": "Command, e.g. npx",
     "argsPlaceholder": "Arguments, e.g. -y @modelcontextprotocol/server-filesystem /tmp",
     "urlPlaceholder": "https://example.com/mcp",
+    "headersPlaceholder": "Headers, one per line — e.g. Authorization: Bearer sk-...",
+    "envPlaceholder": "Env vars, one per line — e.g. API_TOKEN=sk-...",
+    "secretReentry": "Secret values are hidden — re-enter them to keep them, or leave blank to clear.",
     "addServer": "Add server",
+    "saveChanges": "Save changes",
+    "edit": "edit",
     "couldNotSave": "could not save"
   },
   "chatgptOauth": {

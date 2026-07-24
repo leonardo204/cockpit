@@ -828,6 +828,10 @@
     "add": "+ 추가",
     "mcpDescription": "이 서버들의 도구가 모델에 제공되며, 도구가 호출될 때마다 실행 전에 승인 게이트에서 검사됩니다 — Naby 자체 도구와 동일합니다.",
     "noMcpServers": "설정된 MCP 서버가 없습니다.",
+    "mcpProposed": "제안됨",
+    "mcpProposedHint": "어시스턴트가 이 서버를 추가했습니다. 확인 후 승인하면 실행됩니다.",
+    "mcpApprove": "승인",
+    "mcpReject": "거절",
     "valuesHidden": " (값 숨김)",
     "connecting": "연결 중…",
     "connected": "연결됨.",
@@ -838,7 +842,12 @@
     "commandPlaceholder": "명령어, 예: npx",
     "argsPlaceholder": "인자, 예: -y @modelcontextprotocol/server-filesystem /tmp",
     "urlPlaceholder": "https://example.com/mcp",
+    "headersPlaceholder": "헤더, 한 줄에 하나 — 예: Authorization: Bearer sk-...",
+    "envPlaceholder": "환경변수, 한 줄에 하나 — 예: API_TOKEN=sk-...",
+    "secretReentry": "비밀 값은 숨겨져 있습니다 — 유지하려면 다시 입력하고, 비우면 삭제됩니다.",
     "addServer": "서버 추가",
+    "saveChanges": "변경 저장",
+    "edit": "수정",
     "couldNotSave": "저장할 수 없습니다"
   },
   "chatgptOauth": {

@@ -737,17 +737,54 @@ type McpRow = {
   timeoutMs?: number;
   envKeys?: string[];
   headerKeys?: string[];
+  /** 'proposed' = added by the chat agent, awaiting the user's approval before it
+   *  runs; absent/'enabled' = active. */
+  status?: 'enabled' | 'proposed';
 };
 
-function McpAddForm({ onAdded }: { onAdded: () => void }) {
+/** Parse a "Key<sep>Value" textarea (one per line) into a record; blank/keyless
+ *  lines are skipped. Used for headers (":") and env ("="). */
+function parseKeyVals(text: string, sep: ':' | '='): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const i = line.indexOf(sep);
+    if (i < 0) continue;
+    const k = line.slice(0, i).trim();
+    const v = line.slice(i + 1).trim();
+    if (k) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function McpAddForm({
+  onAdded,
+  onCancel,
+  initial,
+}: {
+  onAdded: () => void;
+  onCancel?: () => void;
+  /** When present the form EDITS this server (upsert replaces by name). Secret
+   *  VALUES are redacted server-side, so the header/env textarea is pre-seeded
+   *  with the KEY names only (blank values) — the user re-enters any secret. */
+  initial?: McpRow;
+}) {
   const { t } = useTranslation();
-  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>('stdio');
-  const [name, setName] = useState('');
-  const [command, setCommand] = useState('');
-  const [args, setArgs] = useState('');
-  const [url, setUrl] = useState('');
+  const [transport, setTransport] = useState<'stdio' | 'http' | 'sse'>(initial?.transport ?? 'stdio');
+  const [name, setName] = useState(initial?.name ?? '');
+  const [command, setCommand] = useState(initial?.command ?? '');
+  const [args, setArgs] = useState((initial?.args ?? []).join(' '));
+  const [url, setUrl] = useState(initial?.url ?? '');
+  // Seed secret editors with the known KEY names so the user sees what to fill;
+  // values are never returned by the server, so they start blank.
+  const [headersText, setHeadersText] = useState(
+    (initial?.headerKeys ?? []).map((k) => `${k}: `).join('\n'),
+  );
+  const [envText, setEnvText] = useState((initial?.envKeys ?? []).map((k) => `${k}=`).join('\n'));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const editing = !!initial;
 
   const submit = useCallback(async () => {
     setBusy(true);
@@ -763,8 +800,14 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
               // a full shell-quoting parser here would be a lie anyway since
               // the command is spawned without a shell.
               ...(args.trim() ? { args: args.trim().split(/\s+/) } : {}),
+              ...(parseKeyVals(envText, '=') ? { env: parseKeyVals(envText, '=') } : {}),
             }
-          : { name: name.trim(), transport, url: url.trim() };
+          : {
+              name: name.trim(),
+              transport,
+              url: url.trim(),
+              ...(parseKeyVals(headersText, ':') ? { headers: parseKeyVals(headersText, ':') } : {}),
+            };
       const res = await nabyPost({ action: 'mcp.upsert', entry });
       if (!res.ok) {
         setError(res.error ?? t('providerSetup.couldNotSave'));
@@ -774,11 +817,13 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
       setCommand('');
       setArgs('');
       setUrl('');
+      setHeadersText('');
+      setEnvText('');
       onAdded();
     } finally {
       setBusy(false);
     }
-  }, [args, command, name, onAdded, transport, url, t]);
+  }, [args, command, name, onAdded, transport, url, headersText, envText, t]);
 
   const canSave =
     name.trim().length > 0 &&
@@ -787,15 +832,15 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
   return (
     <div className="space-y-2 border border-border rounded p-2">
       <div className="flex gap-1">
-        {(['stdio', 'http', 'sse'] as const).map((t) => (
+        {(['stdio', 'http', 'sse'] as const).map((tp) => (
           <button
-            key={t}
-            onClick={() => setTransport(t)}
+            key={tp}
+            onClick={() => setTransport(tp)}
             className={`px-2 py-1 text-xs rounded border ${
-              transport === t ? 'border-brand text-brand' : 'border-border text-muted-foreground'
+              transport === tp ? 'border-brand text-brand' : 'border-border text-muted-foreground'
             }`}
           >
-            {t}
+            {tp}
           </button>
         ))}
       </div>
@@ -803,7 +848,10 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder={t('providerSetup.namePlaceholder')}
-        className={inputClass}
+        // Renaming would create a second entry (upsert is keyed by name), so the
+        // name is fixed while editing.
+        readOnly={editing}
+        className={`${inputClass} ${editing ? 'opacity-60' : ''}`}
       />
       {transport === 'stdio' ? (
         <>
@@ -819,23 +867,56 @@ function McpAddForm({ onAdded }: { onAdded: () => void }) {
             placeholder={t('providerSetup.argsPlaceholder')}
             className={inputClass}
           />
+          <textarea
+            value={envText}
+            onChange={(e) => setEnvText(e.target.value)}
+            placeholder={t('providerSetup.envPlaceholder')}
+            rows={2}
+            className={`${inputClass} font-mono`}
+          />
         </>
       ) : (
-        <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder={t('providerSetup.urlPlaceholder')}
-          className={inputClass}
-        />
+        <>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={t('providerSetup.urlPlaceholder')}
+            className={inputClass}
+          />
+          <textarea
+            value={headersText}
+            onChange={(e) => setHeadersText(e.target.value)}
+            placeholder={t('providerSetup.headersPlaceholder')}
+            rows={2}
+            className={`${inputClass} font-mono`}
+          />
+        </>
       )}
+      {editing && (initial?.headerKeys?.length || initial?.envKeys?.length) ? (
+        <p className="text-xs text-amber-600 dark:text-amber-400">{t('providerSetup.secretReentry')}</p>
+      ) : null}
       {error && <p className="text-xs text-red-500">{error}</p>}
-      <button
-        onClick={() => void submit()}
-        disabled={!canSave || busy}
-        className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
-      >
-        {busy ? t('providerSetup.saving') : t('providerSetup.addServer')}
-      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => void submit()}
+          disabled={!canSave || busy}
+          className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
+        >
+          {busy
+            ? t('providerSetup.saving')
+            : editing
+              ? t('providerSetup.saveChanges')
+              : t('providerSetup.addServer')}
+        </button>
+        {onCancel && (
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
+          >
+            {t('providerSetup.cancel')}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -844,6 +925,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<McpRow[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<McpRow | null>(null);
   const [status, setStatus] = useState<Record<string, { text: string; ok: boolean }>>({});
 
   const reload = useCallback(async () => {
@@ -874,6 +956,14 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
     [reload],
   );
 
+  const approve = useCallback(
+    async (serverName: string) => {
+      await nabyPost({ action: 'mcp.approve', name: serverName });
+      await reload();
+    },
+    [reload],
+  );
+
   if (!rows) return null;
 
   return (
@@ -891,12 +981,24 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
         {t('providerSetup.mcpDescription')}
       </p>
 
-      {adding && (
+      {adding && !editing && (
         <McpAddForm
           onAdded={() => {
             setAdding(false);
             void reload();
           }}
+          onCancel={() => setAdding(false)}
+        />
+      )}
+
+      {editing && (
+        <McpAddForm
+          initial={editing}
+          onAdded={() => {
+            setEditing(null);
+            void reload();
+          }}
+          onCancel={() => setEditing(null)}
         />
       )}
 
@@ -905,10 +1007,24 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
       )}
 
       {rows.map((row) => (
-        <div key={row.name} className="border border-border rounded px-2 py-1.5">
+        <div
+          key={row.name}
+          className={`rounded px-2 py-1.5 border ${
+            row.status === 'proposed'
+              ? 'border-amber-500/60 border-dashed bg-amber-500/5'
+              : 'border-border'
+          }`}
+        >
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-sm text-foreground truncate">{row.name}</p>
+              <p className="text-sm text-foreground truncate flex items-center gap-1.5">
+                {row.name}
+                {row.status === 'proposed' && (
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-px">
+                    {t('providerSetup.mcpProposed')}
+                  </span>
+                )}
+              </p>
               <p className="text-xs text-muted-foreground truncate">
                 {row.transport === 'stdio'
                   ? `${row.command ?? ''} ${(row.args ?? []).join(' ')}`.trim()
@@ -923,6 +1039,14 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {row.status === 'proposed' && (
+                <button
+                  onClick={() => void approve(row.name)}
+                  className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10"
+                >
+                  {t('providerSetup.mcpApprove')}
+                </button>
+              )}
               <button
                 onClick={() => void test(row.name)}
                 className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
@@ -930,13 +1054,27 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
                 {t('providerSetup.test')}
               </button>
               <button
+                onClick={() => {
+                  setAdding(false);
+                  setEditing(row);
+                }}
+                className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
+              >
+                {t('providerSetup.edit')}
+              </button>
+              <button
                 onClick={() => void remove(row.name)}
                 className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-red-500"
               >
-                {t('providerSetup.remove')}
+                {row.status === 'proposed' ? t('providerSetup.mcpReject') : t('providerSetup.remove')}
               </button>
             </div>
           </div>
+          {row.status === 'proposed' && (
+            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              {t('providerSetup.mcpProposedHint')}
+            </p>
+          )}
           {status[row.name] && (
             <p
               className={`mt-1 text-xs ${

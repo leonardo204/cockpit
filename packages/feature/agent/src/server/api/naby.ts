@@ -318,6 +318,11 @@ export type NabyAction =
   | { action: 'chatgpt-oauth.signout' }
   | { action: 'mcp.upsert'; entry: unknown }
   | { action: 'mcp.remove'; name: string }
+  // Approve an agent-proposed MCP server (status:'proposed' -> 'enabled'). A
+  // human-only action — the HITL step that lets a credential-bearing, agent-added
+  // server actually run. Status-only: it re-reads the STORED entry (secrets
+  // intact) so approval never needs the redacted UI to resend them.
+  | { action: 'mcp.approve'; name: string }
   | { action: 'mcp.test'; name: string };
 
 export type NabyActionResult =
@@ -463,6 +468,20 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         return { ok: false, error: 'name is required' };
       }
       store.removeMcpEntry(body.name);
+      return { ok: true };
+    }
+
+    case 'mcp.approve': {
+      // THE HITL STEP. Flip an agent-proposed server to active. Reads the stored
+      // entry (secrets intact, server-side) and rewrites only its status, so the
+      // redacted UI never has to round-trip the env/headers it cannot see. Reject
+      // is just `mcp.remove`.
+      if (typeof body.name !== 'string' || !body.name) {
+        return { ok: false, error: 'name is required' };
+      }
+      const stored = store.listMcpEntries().find((e) => e.name === body.name);
+      if (!stored) return { ok: false, error: `no MCP server named "${body.name}"` };
+      store.upsertMcpEntry({ ...stored, status: 'enabled' });
       return { ok: true };
     }
 
