@@ -90,17 +90,22 @@ type EngineSwitcherProps = {
    *  itself from. `engineId` is 'dev-claude' | 'ai-sdk' (or null before a read);
    *  `selectedProvider` is the provider profile id under 'ai-sdk'. */
   onActiveEngine?: (active: { engineId: string | null; selectedProvider: string | null }) => void;
+  /** The user PICKED an engine here (not a passive poll). The host uses this to
+   *  drop a mid-conversation "switched" notice; fired on the click, before the
+   *  new selection has propagated, so the host debounces to read final values. */
+  onUserSelect?: () => void;
 };
 
-/** The selected engine's short label, from the same fields the Settings selector
- *  reads. Kept in sync with NabyEngineSelector's option labels by construction. */
+/** The selected engine's PROVIDER label — never the model, which now has its own
+ *  chip beside this one. From the same fields the Settings selector reads, so the
+ *  header and Settings never disagree. */
 function selectedLabel(state: NabyEngineState | null): string {
   if (!state) return '…';
   const id = state.engine?.id;
   if (id === 'ai-sdk') {
     const pid = state.settings?.selectedProvider;
     const p = state.providers?.find((x) => x.id === pid) ?? state.providers?.[0];
-    return p ? (p.model ? `${p.label} · ${p.model}` : p.label) : 'API provider';
+    return p ? p.label : 'API provider';
   }
   if (id === 'dev-claude') return 'Claude (subscription)';
   return 'No engine';
@@ -117,7 +122,7 @@ type Option = {
   onPick: (() => void) | null;
 };
 
-export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActiveEngine }: EngineSwitcherProps) {
+export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActiveEngine, onUserSelect }: EngineSwitcherProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<NabyEngineState | null>(null);
   const [open, setOpen] = useState(false);
@@ -187,6 +192,9 @@ export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActi
   // so the chip relabels immediately, and close the popover.
   const choose = useCallback(
     async (enginePreference: string, selectedProvider: string) => {
+      // A user pick (every choose() call comes from an option click) — let the
+      // host post a mid-conversation switch notice once the change propagates.
+      onUserSelect?.();
       setBusy(true);
       try {
         await fetch('/api/naby', {
@@ -202,20 +210,19 @@ export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActi
         }
       }
     },
-    [load],
+    [load, onUserSelect],
   );
 
-  // The chip prefers the live-resolved model once a turn has started; before
-  // that, the selected engine's label from /api/naby. The ChatGPT subscription
-  // provider carries a long dev-caveat label meant for the Settings card, so the
-  // chip shows its clean short name instead of "…caveat) · gpt-5-codex".
+  // The chip shows the PROVIDER that answers — NOT the model, which now lives in
+  // the ModelSwitcher chip beside this one. (`liveModel` is still consumed below
+  // for the thinking-bubble name and the re-fetch trigger, just not shown here.)
+  // The ChatGPT subscription provider carries a long dev-caveat label meant for
+  // the Settings card, so the chip shows its clean short name instead.
   const chatgptSelected =
     state?.engine?.id === 'ai-sdk' && state?.settings.selectedProvider === CHATGPT_OAUTH_ID;
-  const chipLabel =
-    liveModel ??
-    (chatgptSelected
-      ? t('chatgptOauth.title', { defaultValue: 'ChatGPT (subscription)' })
-      : selectedLabel(state));
+  const chipLabel = chatgptSelected
+    ? t('chatgptOauth.title', { defaultValue: 'ChatGPT (subscription)' })
+    : selectedLabel(state);
 
   // The short brand name of whoever answers this turn, derived from the SAME
   // fields the chip reads. A provider's `id` IS its kind in /api/naby (profiles

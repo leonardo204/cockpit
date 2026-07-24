@@ -42,6 +42,7 @@ import {
   toSelectOptions,
   validateMcpEntry,
   writeSettings,
+  CHATGPT_OAUTH_DEFAULT_MODEL,
   CHATGPT_OAUTH_LABEL,
   CHATGPT_OAUTH_PROVIDER_ID,
   getChatgptOauthBridge,
@@ -56,6 +57,35 @@ import { getStore } from '../engines/naby';
 // so this must run on the node runtime and must never be statically rendered.
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// ---------------------------------------------------------------------------
+// Model switcher persistence (shell-side, no runtime-bundle change)
+// ---------------------------------------------------------------------------
+//
+// The bottom-bar ModelSwitcher persists its pick under a per-engine SCOPE, using
+// the generic setting store directly (the same escape hatch `gate.allowChanges`
+// uses), so it never needs a new key in the runtime's typed `writeSettings`. The
+// scope is 'dev-claude' for the Claude subscription and the ChatGPT provider id
+// for the dev ChatGPT subscription — the only two engines with a per-turn model
+// choice. A metered API-key provider's model is a profile setting, not a pick.
+
+/** The engine scopes that expose a per-turn model pick. Mirrors modelCatalog.ts. */
+const MODEL_SCOPES: readonly string[] = ['dev-claude', CHATGPT_OAUTH_PROVIDER_ID];
+
+/** The setting key a scope's picked model lives under. */
+function modelSettingKey(scope: string): string {
+  return `model.selected:${scope}`;
+}
+
+/** Read every persisted model pick (absent scope = no pick). */
+function readSelectedModels(store: { getSetting(k: string): string | undefined }): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const scope of MODEL_SCOPES) {
+    const v = store.getSetting(modelSettingKey(scope))?.trim();
+    if (v) out[scope] = v;
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Redaction
@@ -187,6 +217,11 @@ export async function readNabyState(
   /** Configured providers, for the selection UI. NO SECRETS: `ready` is the
    *  result of a credential resolution, never the credential. */
   providers: { id: string; label: string; model: string; ready: boolean }[];
+  /** The bottom-bar ModelSwitcher's persisted pick per engine SCOPE ('dev-claude'
+   *  for the Claude subscription, the ChatGPT provider id for the dev ChatGPT
+   *  subscription). A scope is absent when the user has picked nothing (the
+   *  engine's own default answers). A model slug is not a secret. */
+  selectedModels: Record<string, string>;
   usage: ReturnType<typeof summarizeSessionUsage> | null;
   mcp: RedactedMcpEntry[];
 }> {
@@ -227,7 +262,7 @@ export async function readNabyState(
       id: CHATGPT_OAUTH_PROVIDER_ID,
       label: CHATGPT_OAUTH_LABEL,
       // The engine's default subscription model when the turn requests none.
-      model: 'gpt-5-codex',
+      model: CHATGPT_OAUTH_DEFAULT_MODEL,
       ready: getChatgptTokenSource() != null,
     });
   }
@@ -245,6 +280,11 @@ export async function readNabyState(
     // the same default the engine applies, kept in one place here so the UI and
     // the engine can never disagree about what "unset" means.
     gate: { allowChanges: (store.getSetting('gate.allowChanges') ?? 'true') !== 'false' },
+    // The bottom-bar model picks, one per engine scope. Persisted shell-side via
+    // the generic setting store (the `gate.allowChanges` precedent) so it needs
+    // no runtime-bundle change; read here for the two scopes that expose a
+    // per-turn model choice — the Claude subscription and the dev ChatGPT one.
+    selectedModels: readSelectedModels(store),
     providers,
     engine: selection.ok
       ? {
@@ -269,6 +309,8 @@ export async function readNabyState(
 export type NabyAction =
   | { action: 'settings.set'; enginePreference?: string; selectedProvider?: string }
   | { action: 'gate.set'; allowChanges: boolean }
+  // The bottom-bar ModelSwitcher's pick for one engine scope. `model` '' clears it.
+  | { action: 'model.set'; providerId: string; model: string }
   | { action: 'claude.login'; email?: string; console?: boolean }
   | { action: 'claude.logout' }
   // CO-06 — the DEV-ONLY ChatGPT sign-in, mirroring `claude.login`/`claude.logout`.
@@ -325,6 +367,24 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       store.setSetting('gate.allowChanges', body.allowChanges ? 'true' : 'false');
       return { ok: true, allowChanges: body.allowChanges };
+    }
+
+    case 'model.set': {
+      // THE BOTTOM-BAR MODEL PICK for one engine scope. Stored under a per-scope
+      // key so switching engines never carries a model onto an engine that lacks
+      // it; the client also threads the pick into the turn payload, so this is the
+      // durable copy that survives a reload. An unknown scope is rejected rather
+      // than silently written — only the two engines with a per-turn choice.
+      if (typeof body.providerId !== 'string' || !MODEL_SCOPES.includes(body.providerId)) {
+        return { ok: false, error: `unknown model scope "${String(body.providerId)}"` };
+      }
+      if (typeof body.model !== 'string') {
+        return { ok: false, error: 'model must be a string' };
+      }
+      // '' clears the pick (back to the engine default); the store keeps '' and
+      // readSelectedModels trims it out, so an absent scope reads as "no pick".
+      store.setSetting(modelSettingKey(body.providerId), body.model);
+      return { ok: true };
     }
 
     case 'claude.login': {

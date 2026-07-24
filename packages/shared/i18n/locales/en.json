@@ -463,6 +463,7 @@
     "planModeDesc": "read-only · plan first, no edits",
     "planModeOn": "Plan mode on — read-only; send a task to get a plan",
     "planModeOff": "Plan mode off",
+    "engineSwitched": "Switched · {{target}}",
     "planModeHint": "Plan mode: read-only exploration that produces a plan without editing. Uncheck and resend to implement.",
     "allowChanges": "Allow changes",
     "allowChangesOn": "full access",
@@ -505,6 +506,10 @@
     "manageInSettings": "Manage in Settings",
     "chatgptHint": "Answers on your signed-in ChatGPT subscription. No per-message charge.",
     "chatgptSignInNeeded": "Sign in with ChatGPT in Settings to use this."
+  },
+  "modelSwitcher": {
+    "label": "Model",
+    "title": "Which model"
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",

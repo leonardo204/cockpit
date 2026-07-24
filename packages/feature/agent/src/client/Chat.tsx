@@ -25,6 +25,8 @@ import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
 import { ChatgptLoginStatus } from './ChatgptLoginStatus';
 import { EngineSwitcher } from './EngineSwitcher';
+import { ModelSwitcher } from './ModelSwitcher';
+import { modelScopeFor, modelLabel } from './modelCatalog';
 import { AllowChangesToggle } from './AllowChangesToggle';
 import { deriveEngineName, accountChipForEngine } from './engineName';
 import { useTranslation } from 'react-i18next';
@@ -105,6 +107,59 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     (active: { engineId: string | null; selectedProvider: string | null }) => setActiveEngine(active),
     [],
   );
+  // The model the bottom-bar <ModelSwitcher/> has picked for the active engine.
+  // Kept in a ref (read at send time via getModel — no per-send re-render, and the
+  // switch-notice effect reads the current label from it too). '' = no override
+  // (the engine's own default answers).
+  const selectedModelRef = useRef<string>('');
+  const handleModelChange = useCallback((model: string) => {
+    selectedModelRef.current = model;
+  }, []);
+  const getModel = useCallback(() => selectedModelRef.current, []);
+
+  // — Mid-conversation switch notice (IDE-style). When the user PICKS a different
+  // engine or model while a conversation is underway, drop a muted one-line
+  // "Switched · <engine> · <model>" chip into the transcript. Fires only on an
+  // explicit user pick (EngineSwitcher/ModelSwitcher call onUserSelect), never on
+  // passive state reconciliation, and only once a conversation has started.
+  // Debounced because an engine switch updates the engine AND then the model in
+  // two ticks — the debounce collapses them into a single notice with final
+  // values, read from refs at fire time.
+  const switchNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportedEngineNameRef = useRef<string | null>(reportedEngineName);
+  reportedEngineNameRef.current = reportedEngineName;
+  const activeEngineRef = useRef(activeEngine);
+  activeEngineRef.current = activeEngine;
+  const hasMessagesRef = useRef(false);
+  hasMessagesRef.current = messages.length > 0;
+  const handleUserSwitch = useCallback(() => {
+    if (switchNoticeTimerRef.current) clearTimeout(switchNoticeTimerRef.current);
+    switchNoticeTimerRef.current = setTimeout(() => {
+      switchNoticeTimerRef.current = null;
+      if (!hasMessagesRef.current) return; // only mid-conversation
+      const engineName = reportedEngineNameRef.current ?? deriveEngineName({ liveModel: null });
+      const scope = modelScopeFor(
+        activeEngineRef.current?.engineId ?? null,
+        activeEngineRef.current?.selectedProvider ?? null,
+      );
+      const modelLbl = scope ? modelLabel(scope, selectedModelRef.current) : '';
+      const target = modelLbl ? `${engineName} · ${modelLbl}` : engineName;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `notice-${Date.now()}`,
+          role: 'system',
+          content: t('chat.engineSwitched', { target, defaultValue: `Switched · ${target}` }),
+          systemEvent: { kind: 'meta' },
+        },
+      ]);
+    }, 140);
+  }, [t, setMessages]);
+  useEffect(() => {
+    return () => {
+      if (switchNoticeTimerRef.current) clearTimeout(switchNoticeTimerRef.current);
+    };
+  }, []);
   // Which sign-in chip the bottom bar shows, from the resolved engine identity.
   // Pure + unit-tested in engineName.ts so the three engine-name call sites agree.
   const accountChip = accountChipForEngine(
@@ -169,6 +224,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onFetchTitle: fetchSessionTitle,
     onRunComplete: () => reconcileFromDiskRef.current?.(),
     onEngineModel: setLiveModel,
+    getModel,
   });
 
   // ! prefix: first line is command, subsequent lines are user notes, supports images
@@ -479,7 +535,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             so a pick takes effect on the next message — no reload). */}
         {isClaudeEngine && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50">
-            <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} onEngineName={handleEngineName} onActiveEngine={handleActiveEngine} />
+            <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} onEngineName={handleEngineName} onActiveEngine={handleActiveEngine} onUserSelect={handleUserSwitch} />
+            {/* The model chip sits BETWEEN the engine and the account chip — it
+                picks WHICH model the selected engine uses (Claude aliases /
+                ChatGPT slugs). Self-hides for a metered API-key provider, which
+                has no per-turn model choice. */}
+            <ModelSwitcher activeEngine={activeEngine} onModelChange={handleModelChange} onUserSelect={handleUserSwitch} />
             {/* The account chip is ENGINE-AWARE: exactly one sign-in shows,
                 matching the engine that will answer.
                   • ChatGPT subscription  → the ChatGPT chip (dev-seal gated; it

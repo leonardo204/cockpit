@@ -54,6 +54,14 @@ interface UseChatStreamOptions {
    * instead of only the static engine name. Read-only; may fire every turn.
    */
   onEngineModel?: (model: string) => void;
+  /**
+   * The model the user picked in the bottom-bar ModelSwitcher for the active
+   * engine, read fresh at send time. Returns '' (or undefined) when no override
+   * is chosen → the turn omits `model` and the engine's own default answers.
+   * A GETTER (not a value) so a mid-session model switch takes effect on the
+   * next send without re-creating handleSend.
+   */
+  getModel?: () => string | undefined;
 }
 
 interface UseChatStreamReturn {
@@ -77,7 +85,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel }: UseChatStreamOptions
+  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, getModel }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -103,6 +111,11 @@ export function useChatStream(
   // the whole stream handler every render.
   const onEngineModelRef = useRef(onEngineModel);
   onEngineModelRef.current = onEngineModel;
+  // Same indirection for the model getter: read the CURRENT pick at send time
+  // without listing it in handleSend's deps (a switch mid-session must not
+  // re-create the send closure, and the ModelSwitcher may hand a fresh getter).
+  const getModelRef = useRef(getModel);
+  getModelRef.current = getModel;
 
   // #10 R5/#7: connection watchdog. The detached run is driven entirely by /ws/session-stream;
   // if that socket never connects (ws server down, upgrade rejected), no event ever arrives and
@@ -529,6 +542,13 @@ export function useChatStream(
             images: messageImages,
             cwd,
             language: i18n.language,
+            // The bottom-bar ModelSwitcher's pick for the active engine, read
+            // fresh here. Empty/undefined → omit so the engine's own default
+            // answers (DispatchParams.model → requestedModel on the server).
+            ...(() => {
+              const m = getModelRef.current?.();
+              return m ? { model: m } : {};
+            })(),
             // Plan mode: only meaningful on a claude engine. When unchecked, omit → server
             // defaults to bypassPermissions.
             ...(usePlanMode && isClaudeEngine && { permissionMode: 'plan' }),
