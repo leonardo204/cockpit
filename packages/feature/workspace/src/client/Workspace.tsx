@@ -244,6 +244,12 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       if (event.data?.type === 'OPEN_TOKEN_STATS') {
         setIsTokenStatsOpen(true);
       }
+      // Open the app Settings modal — asked for from inside a project iframe
+      // (the engine switcher's "Manage in Settings", the chat header gear). The
+      // modal itself is this parent window's, so the iframe can only request it.
+      if (event.data?.type === 'OPEN_SETTINGS') {
+        setIsSettingsOpen(true);
+      }
       // Open project notes
       if (event.data?.type === 'OPEN_NOTE' && event.data?.cwd) {
         const cwd = event.data.cwd;

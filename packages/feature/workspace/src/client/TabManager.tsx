@@ -173,6 +173,15 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     );
   }, [initialCwd]);
 
+  // Open the app Settings modal. It lives in the PARENT window (Workspace), so —
+  // like the note modal above — the request crosses the iframe boundary over the
+  // bus rather than being handled here. No cwd needed: Settings is app-wide.
+  const handleOpenSettings = useCallback(() => {
+    BrowserRuntime.runFork(
+      Effect.flatMap(IframeBus, (bus) => bus.publish(Topics.OpenSettings, {}))
+    );
+  }, []);
+
   return (
     <ChatProvider>
     <div className="flex h-screen bg-card">
@@ -221,6 +230,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                       onOpenNote={initialCwd ? handleOpenNote : undefined}
                       onCreateScheduledTask={createScheduledTask}
                       onOpenSession={handleOpenSession}
+                      onOpenSettings={handleOpenSettings}
                     />
                   </div>
                 ))}

@@ -23,8 +23,10 @@ import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } fro
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
+import { ChatgptLoginStatus } from './ChatgptLoginStatus';
 import { EngineSwitcher } from './EngineSwitcher';
 import { AllowChangesToggle } from './AllowChangesToggle';
+import { deriveEngineName, accountChipForEngine } from './engineName';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/Chat.tsx.
@@ -81,6 +83,37 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // session arrives; until then <EngineSwitcher/> shows the SELECTED engine's
   // label instead. Passed to the switcher, which prefers this once present.
   const [liveModel, setLiveModel] = useState<string | null>(null);
+  // Short name of the engine that answers (Claude / GPT / Gemini / ChatGPT / AI),
+  // shown in the MessageList "… is thinking" bubble instead of a hardcoded
+  // "Claude". <EngineSwitcher/> is the single owner of the /api/naby engine read,
+  // so it reports the provider-kind-precise name here; when the switcher is not
+  // mounted (header hidden / non-claude engine) we fall back to sniffing the
+  // live-resolved model, and finally to a generic "AI".
+  const [reportedEngineName, setReportedEngineName] = useState<string | null>(null);
+  // Stable identity: <EngineSwitcher/> reports on every engine-name change, and a
+  // fresh callback each render would re-fire its report effect needlessly.
+  const handleEngineName = useCallback((name: string) => setReportedEngineName(name), []);
+  // Which account chip the bottom bar shows is decided by the RESOLVED engine,
+  // reported by <EngineSwitcher/> (the single owner of the /api/naby read). The
+  // two sign-ins never sit side by side — the bar shows the ONE that matches the
+  // engine that will answer: Claude for the dev-claude subscription, ChatGPT for
+  // the ai-sdk + openai-chatgpt-oauth subscription, and no chip for a plain
+  // API-key provider (a key is not an account login). Null until the first read;
+  // we default to the Claude chip then (it self-hides when not relevant).
+  const [activeEngine, setActiveEngine] = useState<{ engineId: string | null; selectedProvider: string | null } | null>(null);
+  const handleActiveEngine = useCallback(
+    (active: { engineId: string | null; selectedProvider: string | null }) => setActiveEngine(active),
+    [],
+  );
+  // Which sign-in chip the bottom bar shows, from the resolved engine identity.
+  // Pure + unit-tested in engineName.ts so the three engine-name call sites agree.
+  const accountChip = accountChipForEngine(
+    activeEngine ?? { engineId: null, selectedProvider: null },
+  );
+  const thinkingName = useMemo(
+    () => reportedEngineName ?? deriveEngineName({ liveModel }),
+    [reportedEngineName, liveModel],
+  );
   // Plan mode (per-tab): controlled by TabInfo.planMode (persisted); falls back to
   // local state when no prop (standalone use). Read-only exploration that produces a
   // plan without editing — only meaningful on a claude engine.
@@ -446,12 +479,23 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             so a pick takes effect on the next message — no reload). */}
         {isClaudeEngine && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50">
-            <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} />
-            {/* Whether the local Claude sign-in this engine depends on actually
-                exists. Placed immediately after the status because that is where
-                the user is looking — and because a logged-out machine otherwise
-                fails only at send time, with an error that does not say what to do. */}
-            <ClaudeLoginStatus />
+            <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} onEngineName={handleEngineName} onActiveEngine={handleActiveEngine} />
+            {/* The account chip is ENGINE-AWARE: exactly one sign-in shows,
+                matching the engine that will answer.
+                  • ChatGPT subscription  → the ChatGPT chip (dev-seal gated; it
+                    self-hides in a packaged build regardless).
+                  • a plain API-key provider (Azure/OpenAI/…) → no chip: a key is
+                    not an account login.
+                  • otherwise (Claude subscription, or before the first read) →
+                    the Claude chip, which self-hides when the dev engine is not
+                    part of this build. Placed here because this is where the user
+                    is already looking, and a logged-out machine otherwise fails
+                    only at send time with an error that does not say what to do. */}
+            {accountChip === 'chatgpt' ? (
+              <ChatgptLoginStatus />
+            ) : accountChip === 'claude' ? (
+              <ClaudeLoginStatus />
+            ) : null}
             {/* Plan mode: read-only exploration → produces a plan without editing.
                 Plan-only — uncheck and resend to actually implement. */}
             <label
@@ -499,6 +543,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             onFork={handleFork}
             isActive={isActive}
             onApprovePlan={handleApprovePlan}
+            thinkingName={thinkingName}
           />
         )}
 

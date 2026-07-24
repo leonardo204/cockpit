@@ -37,9 +37,13 @@ interface ChatPanelProps {
     cron?: string;
   }) => void;
   onOpenSession?: (sessionId: string, title?: string) => void;
+  // Host-handled: open the app Settings modal (AI provider surface). Bridged up
+  // to the parent window by TabManager, since the modal lives there, not in the
+  // per-project iframe this panel renders in.
+  onOpenSettings?: () => void;
 }
 
-export function ChatPanel({ tabId, cwd, sessionId, engine, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onOpenNote, onCreateScheduledTask, onOpenSession }: ChatPanelProps) {
+export function ChatPanel({ tabId, cwd, sessionId, engine, planMode, onPlanModeChange, isActive, refreshSignal, onStateChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSettings }: ChatPanelProps) {
   const handleLoadingChange = useCallback((isLoading: boolean) => {
     onStateChange(tabId, { isLoading });
   }, [tabId, onStateChange]);
@@ -74,6 +78,7 @@ export function ChatPanel({ tabId, cwd, sessionId, engine, planMode, onPlanModeC
       onOpenNote={onOpenNote}
       onCreateScheduledTask={onCreateScheduledTask}
       onOpenSession={onOpenSession}
+      onOpenSettings={onOpenSettings}
     />
   );
 }

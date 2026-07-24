@@ -40,9 +40,10 @@
  * separate concern — the local Claude sign-in — and stays where it is.)
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { deriveEngineName } from './engineName';
 
 type NabyProvider = { id: string; label: string; model: string; ready: boolean };
 
@@ -51,7 +52,19 @@ type NabyEngineState = {
   settings: { enginePreference?: string; selectedProvider?: string };
   devEngineAvailable: boolean;
   providers: NabyProvider[];
+  /** CO-06 — the DEV-ONLY ChatGPT sign-in, read from the SAME GET (not the
+   *  preload bridge, which the iframe cannot reach). `signedIn` is the
+   *  authoritative "is the owner signed in right now" answer the server reads
+   *  from the vault; it refines the seal-gated ChatGPT row's selectability. */
+  chatgptLogin?: { available: boolean; signedIn: boolean };
 };
+
+/** The provider id of the DEV-ONLY ChatGPT subscription provider. `/api/naby`
+ *  surfaces it in `providers` only when the dev seal is open, and a provider's
+ *  id IS its kind — the same string engineName.ts maps to "ChatGPT". Kept as a
+ *  local literal (mirroring NabyProviderSetup's CHATGPT_OAUTH_KIND) so this pure
+ *  client file needs no import from the server-only runtime bundle. */
+const CHATGPT_OAUTH_ID = 'openai-chatgpt-oauth';
 
 /** Background poll: covers a settings change made elsewhere (the Settings modal,
  *  another tab) landing on this chip without a manual refresh. Unhurried on
@@ -65,6 +78,18 @@ type EngineSwitcherProps = {
   /** Host-handled: open the app Settings modal (AI provider surface) for key
    *  entry / the full configuration a not-configured provider needs. */
   onOpenSettings?: () => void;
+  /** Reports the short name of the engine that will answer (Claude / GPT /
+   *  Gemini / ChatGPT / AI) up to the host. This chip is the single owner of the
+   *  /api/naby engine read, so it also owns deriving that name — the "thinking"
+   *  bubble in the message list labels the turn with whoever actually answers. */
+  onEngineName?: (name: string) => void;
+  /** Reports the RESOLVED engine identity up to the host so Chat can SWITCH which
+   *  account chip the bottom bar shows (Claude vs ChatGPT vs none). This chip is
+   *  the single owner of the /api/naby engine read, so it is the one place that
+   *  knows the current engine id + selected provider — the same fields it labels
+   *  itself from. `engineId` is 'dev-claude' | 'ai-sdk' (or null before a read);
+   *  `selectedProvider` is the provider profile id under 'ai-sdk'. */
+  onActiveEngine?: (active: { engineId: string | null; selectedProvider: string | null }) => void;
 };
 
 /** The selected engine's short label, from the same fields the Settings selector
@@ -92,7 +117,7 @@ type Option = {
   onPick: (() => void) | null;
 };
 
-export function EngineSwitcher({ liveModel, onOpenSettings }: EngineSwitcherProps) {
+export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActiveEngine }: EngineSwitcherProps) {
   const { t } = useTranslation();
   const [state, setState] = useState<NabyEngineState | null>(null);
   const [open, setOpen] = useState(false);
@@ -106,6 +131,9 @@ export function EngineSwitcher({ liveModel, onOpenSettings }: EngineSwitcherProp
       const res = await fetch('/api/naby');
       if (!res.ok) return;
       const data = (await res.json()) as NabyEngineState;
+      // `chatgptLogin.signedIn` rides in the SAME GET, so the ChatGPT row's
+      // ready-state tracks a sign-in/out done in Settings without a manual
+      // refresh — and it works inside the iframe, unlike the old preload probe.
       if (aliveRef.current) setState(data);
     } catch {
       // Keep the last known label; the send path surfaces any real failure with
@@ -178,8 +206,45 @@ export function EngineSwitcher({ liveModel, onOpenSettings }: EngineSwitcherProp
   );
 
   // The chip prefers the live-resolved model once a turn has started; before
-  // that, the selected engine's label from /api/naby.
-  const chipLabel = liveModel ?? selectedLabel(state);
+  // that, the selected engine's label from /api/naby. The ChatGPT subscription
+  // provider carries a long dev-caveat label meant for the Settings card, so the
+  // chip shows its clean short name instead of "…caveat) · gpt-5-codex".
+  const chatgptSelected =
+    state?.engine?.id === 'ai-sdk' && state?.settings.selectedProvider === CHATGPT_OAUTH_ID;
+  const chipLabel =
+    liveModel ??
+    (chatgptSelected
+      ? t('chatgptOauth.title', { defaultValue: 'ChatGPT (subscription)' })
+      : selectedLabel(state));
+
+  // The short brand name of whoever answers this turn, derived from the SAME
+  // fields the chip reads. A provider's `id` IS its kind in /api/naby (profiles
+  // are stored id:kind), so the selected provider's id feeds the kind mapping;
+  // 'automatic' (no explicit selection) resolves to the first provider, matching
+  // selectedLabel's fallback. Reported up so the "thinking" bubble can name it.
+  const engineName = useMemo(() => {
+    const id = state?.engine?.id;
+    const providerKind =
+      id === 'ai-sdk'
+        ? state?.providers.find((p) => p.id === state?.settings.selectedProvider)?.id ??
+          state?.providers[0]?.id ??
+          null
+        : null;
+    return deriveEngineName({ engineId: id ?? null, providerKind, liveModel });
+  }, [state, liveModel]);
+
+  useEffect(() => {
+    onEngineName?.(engineName);
+  }, [engineName, onEngineName]);
+
+  // Report the resolved engine identity up so Chat can switch the bottom-bar
+  // account chip. Keyed on the two primitive fields (not a fresh object) so it
+  // fires only on an actual engine/provider change, not every render.
+  const activeEngineId = state?.engine?.id ?? null;
+  const activeSelectedProvider = state?.settings.selectedProvider ?? null;
+  useEffect(() => {
+    onActiveEngine?.({ engineId: activeEngineId, selectedProvider: activeSelectedProvider });
+  }, [activeEngineId, activeSelectedProvider, onActiveEngine]);
 
   // Build the option list exactly as NabyEngineSelector does, so the two agree.
   const pref = state?.settings.enginePreference ?? '';
@@ -209,6 +274,30 @@ export function EngineSwitcher({ liveModel, onOpenSettings }: EngineSwitcherProp
     });
   }
   for (const p of state?.providers ?? []) {
+    if (p.id === CHATGPT_OAUTH_ID) {
+      // DEV-ONLY ChatGPT subscription. Ready is the AUTHORITATIVE sign-in from
+      // the server's `chatgptLogin` block (read from the vault) when present, else
+      // the coarse provider `ready`. A clean subscription label/hint replaces the
+      // long dev-caveat label and the "billed" wording that only fits a metered
+      // key. Picking it is the exact same action the Settings card's "use for
+      // chats" runs.
+      const ready = state?.chatgptLogin ? state.chatgptLogin.available && state.chatgptLogin.signedIn : p.ready;
+      options.push({
+        id: p.id,
+        label: t('chatgptOauth.title', { defaultValue: 'ChatGPT (subscription)' }),
+        hint: ready
+          ? t('engineSwitcher.chatgptHint', {
+              defaultValue: 'Answers on your signed-in ChatGPT subscription. No per-message charge.',
+            })
+          : t('engineSwitcher.chatgptSignInNeeded', {
+              defaultValue: 'Sign in with ChatGPT in Settings to use this.',
+            }),
+        active: pref === 'ai-sdk' && selectedProvider === p.id,
+        selectable: ready,
+        onPick: ready ? () => void choose('ai-sdk', p.id) : null,
+      });
+      continue;
+    }
     options.push({
       id: p.id,
       label: p.label,

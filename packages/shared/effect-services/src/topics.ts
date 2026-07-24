@@ -96,6 +96,11 @@ export const Topics = {
   OpenProject: defineTopic<OpenProjectPayload>("open-project"),
   SessionComplete: defineTopic<SessionCompletePayload>("session-complete"),
   OpenTokenStats: defineTopic<Record<string, never>>("open-token-stats"),
+  // "Open the app Settings modal." The modal is a PARENT-window view (Workspace),
+  // but the engine switcher / chat header that ask for it live inside the
+  // per-project iframe, so the request crosses the frame boundary like the other
+  // parent-owned modals (token stats, notes). legacyType → "OPEN_SETTINGS".
+  OpenSettings: defineTopic<Record<string, never>>("open-settings"),
   PinnedSessionsChanged: defineTopic<Record<string, never>>(
     "pinned-sessions-changed"
   ),

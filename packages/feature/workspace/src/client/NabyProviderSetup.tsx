@@ -71,15 +71,6 @@ type OnboardingState = {
   security: Security;
 };
 
-/** CO-05 — DEV-ONLY ChatGPT subscription sign-in status. Labels only; `available`
- *  reflects the dev seal on the main side (false in every official build). */
-type ChatgptOauthStatus = {
-  available: boolean;
-  signedIn: boolean;
-  email: string | null;
-  accountId: string | null;
-};
-
 type NabyBridge = {
   credentials: {
     status: (providerId: string) => Promise<Result<{ stored: boolean; backend: string; secure: boolean }>>;
@@ -98,18 +89,13 @@ type NabyBridge = {
     state: () => Promise<Result<OnboardingState>>;
     complete: () => Promise<Result<void>>;
   };
-  /** CO-05, DEV-ONLY. Absent in an official build's bridge shape is fine — the
-   *  card guards on it and simply renders nothing. */
-  chatgptOauth?: {
-    status: () => Promise<Result<ChatgptOauthStatus>>;
-    signIn: () => Promise<Result<ChatgptOauthStatus>>;
-    signOut: () => Promise<Result<ChatgptOauthStatus>>;
-  };
 };
 
-/** The provider kind of the DEV-ONLY ChatGPT subscription provider. It is
- *  rendered by a DEDICATED sign-in card (not the generic paste-a-key form), so
- *  it is filtered out of the generic provider list below. */
+/** The provider kind of the DEV-ONLY ChatGPT subscription provider. It signs in
+ *  by OAuth, not an API key, so it is filtered out of the "API keys" paste-a-key
+ *  list. In the engine selector it appears exactly like Claude (subscription):
+ *  a plain selectable "which model answers" row. Account management (sign in /
+ *  out) lives ONLY in the session bottom bar (ChatgptLoginStatus), never here. */
 const CHATGPT_OAUTH_KIND = 'openai-chatgpt-oauth';
 
 declare global {
@@ -375,140 +361,6 @@ function SecurityBanner({ security }: { security: Security }) {
 }
 
 // ---------------------------------------------------------------------------
-// CO-05 — DEV-ONLY ChatGPT subscription sign-in card
-// ---------------------------------------------------------------------------
-//
-// A DEDICATED surface, not a generic paste-a-key row: the ChatGPT subscription
-// provider authenticates by an interactive OAuth sign-in, not an API key, so it
-// gets a sign-in / sign-out card instead of the ProviderForm.
-//
-// SEAL-GATED, TWICE. It renders nothing unless the desktop bridge is present AND
-// `status().available` is true — and `available` is the dev seal on the Electron
-// main side (`isChatgptOauthEnabled()`), so an official build (flag off) never
-// shows it. The copy states "dev only · subscription · ToS caution" and makes no
-// claim of OpenAI endorsement.
-
-function ChatgptOauthCard({ isOpen, onSelected }: { isOpen: boolean; onSelected?: () => void }) {
-  const { t } = useTranslation();
-  const [status, setStatus] = useState<ChatgptOauthStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState(false);
-
-  const api = typeof window !== 'undefined' ? window.naby?.chatgptOauth : undefined;
-
-  const reload = useCallback(async () => {
-    if (!api) return;
-    const res = await api.status();
-    if (res.ok) setStatus(res.value);
-  }, [api]);
-
-  useEffect(() => {
-    if (isOpen) void reload();
-  }, [isOpen, reload]);
-
-  const signIn = useCallback(async () => {
-    if (!api) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api.signIn();
-      if (res.ok) setStatus(res.value);
-      else setError(res.error.message);
-    } finally {
-      setBusy(false);
-    }
-  }, [api]);
-
-  const signOut = useCallback(async () => {
-    if (!api) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api.signOut();
-      if (res.ok) setStatus(res.value);
-      else setError(res.error.message);
-      setSelected(false);
-    } finally {
-      setBusy(false);
-    }
-  }, [api]);
-
-  // Reuse the existing provider-selection flow (settings.set) so a signed-in
-  // subscription answers the next turn — the same path the engine selector uses.
-  const useForChats = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await nabyPost({
-        action: 'settings.set',
-        enginePreference: 'ai-sdk',
-        selectedProvider: CHATGPT_OAUTH_KIND,
-      });
-      if (res.ok) {
-        setSelected(true);
-        onSelected?.();
-      } else {
-        setError(res.error ?? t('chatgptOauth.selectFailed'));
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, [onSelected, t]);
-
-  // No bridge, or the dev seal is closed: render nothing at all.
-  if (!api || !status || !status.available) return null;
-
-  return (
-    <div className="rounded border border-amber-500/40 bg-amber-500/5 p-2 space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium text-foreground">{t('chatgptOauth.title')}</span>
-        <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-0.5">
-          {t('chatgptOauth.devBadge')}
-        </span>
-      </div>
-      <p className="text-xs text-muted-foreground">{t('chatgptOauth.description')}</p>
-
-      {status.signedIn ? (
-        <div className="space-y-2">
-          <p className="text-xs text-green-600 dark:text-green-400">
-            {status.email
-              ? t('chatgptOauth.signedInAs', { email: status.email })
-              : t('chatgptOauth.signedIn')}
-          </p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => void useForChats()}
-              disabled={busy}
-              className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
-            >
-              {selected ? t('chatgptOauth.selected') : t('chatgptOauth.useForChats')}
-            </button>
-            <button
-              onClick={() => void signOut()}
-              disabled={busy}
-              className="px-3 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
-            >
-              {t('chatgptOauth.signOut')}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          onClick={() => void signIn()}
-          disabled={busy}
-          className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
-        >
-          {busy ? t('chatgptOauth.signingIn') : t('chatgptOauth.signIn')}
-        </button>
-      )}
-
-      {error && <p className="text-xs text-red-500">{error}</p>}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Settings section
 // ---------------------------------------------------------------------------
 
@@ -536,8 +388,10 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
     <div className="space-y-2">
       <SecurityBanner security={data.security} />
       <NabyEngineSelector isOpen={isOpen} />
-      {/* CO-05 dev-only card; renders nothing unless the dev seal is open. */}
-      <ChatgptOauthCard isOpen={isOpen} onSelected={() => void reload()} />
+      {/* The ChatGPT (subscription) engine appears inside the selector above,
+          exactly like Claude (subscription). Account sign in / out lives in the
+          session bottom bar, so there is no account UI here. The paste-a-key
+          list below deliberately excludes it — it is an OAuth sign-in, not a key. */}
       <p className="text-xs font-medium text-foreground pt-2">{t('providerSetup.apiKeys')}</p>
       {data.providers
         .filter((row) => row.kind !== CHATGPT_OAUTH_KIND)
@@ -800,6 +654,22 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
   }
 
   for (const p of state.providers) {
+    if (p.id === CHATGPT_OAUTH_KIND) {
+      // The DEV-ONLY ChatGPT subscription is a subscription engine, mirrored on
+      // Claude (subscription) above: a plain selectable "which model answers"
+      // row, NOT a metered "billed" key. It appears only because the server
+      // included it in `providers` (dev seal open); a shipped build never does.
+      // Selecting it is enough here — sign in / out happens in the session
+      // bottom bar (ChatgptLoginStatus), exactly as Claude's does.
+      options.push({
+        id: p.id,
+        label: t('chatgptOauth.title'),
+        hint: t('providerSetup.chatgptSubscriptionHint'),
+        onPick: () => void choose('ai-sdk', p.id),
+        active: pref === 'ai-sdk' && selectedProvider === p.id,
+      });
+      continue;
+    }
     options.push({
       id: p.id,
       label: p.label,

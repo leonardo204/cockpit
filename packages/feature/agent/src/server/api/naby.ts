@@ -42,6 +42,11 @@ import {
   toSelectOptions,
   validateMcpEntry,
   writeSettings,
+  CHATGPT_OAUTH_LABEL,
+  CHATGPT_OAUTH_PROVIDER_ID,
+  getChatgptOauthBridge,
+  getChatgptTokenSource,
+  isChatgptOauthEnabled,
   type ClaudeLoginAccount,
   type McpEntry,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -78,6 +83,55 @@ function redactEntry(entry: McpEntry): RedactedMcpEntry {
   return headers && Object.keys(headers).length > 0
     ? { ...rest, headerKeys: Object.keys(headers) }
     : rest;
+}
+
+// ---------------------------------------------------------------------------
+// CO-06 — the DEV-ONLY ChatGPT subscription sign-in, over HTTP (not IPC)
+// ---------------------------------------------------------------------------
+
+/**
+ * The ChatGPT sign-in status the GET reports, the exact HTTP MIRROR of what the
+ * preload `window.naby.chatgptOauth.status()` bridge used to answer over IPC.
+ *
+ * WHY IT MOVED TO THE SERVER. The chat bottom bar renders inside the project
+ * IFRAME, where `window.naby` does not exist — so the IPC-based chip could never
+ * even read its status there and thus never appeared. This block lets the chip
+ * read status the SAME way `claudeLogin` (above) does: a plain `/api/naby` fetch,
+ * which works identically in the iframe. `available` is the dev seal; the rest is
+ * read from the vault through the in-process account bridge the Electron main
+ * process installs at boot (electron/boot.ts, `installChatgptOauthBridge`).
+ *
+ * NO TOKEN MATERIAL. `email`/`accountId` are identity LABELS from the JWT; the
+ * access/refresh tokens never leave the main process.
+ */
+export type ChatgptLoginState = {
+  /** The dev seal (`isChatgptOauthEnabled()`). False in every packaged build, so
+   *  the chip renders nothing there. */
+  available: boolean;
+  signedIn: boolean;
+  email: string | null;
+  accountId: string | null;
+};
+
+async function readChatgptLogin(): Promise<ChatgptLoginState> {
+  // Sealed out of official builds — same discipline as the dedicated sign-in
+  // card and `describeProviders`. With the flag off there is nothing to sign in.
+  if (!isChatgptOauthEnabled()) {
+    return { available: false, signedIn: false, email: null, accountId: null };
+  }
+  // The vault lives in the main process; the account bridge is the in-process
+  // seam it installs (boot.ts). Absent under a plain browser dev server / before
+  // boot wired it — report available-but-signed-out rather than fail.
+  const bridge = getChatgptOauthBridge();
+  if (!bridge) return { available: true, signedIn: false, email: null, accountId: null };
+  try {
+    const s = await bridge.status();
+    return { available: true, signedIn: s.signedIn, email: s.email, accountId: s.accountId };
+  } catch {
+    // A failed probe keeps the chip in a safe signed-out state; the send path
+    // surfaces any real failure with a clearer message than a dot could.
+    return { available: true, signedIn: false, email: null, accountId: null };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +175,11 @@ export async function readNabyState(
      *  out/unknown. Labels only, no secret material. */
     account: ClaudeLoginAccount | null;
   };
+  /** CO-06 — the DEV-ONLY ChatGPT subscription sign-in, the HTTP mirror of the
+   *  former preload bridge so the chat bottom-bar chip works inside the iframe.
+   *  `available` is the dev seal; `signedIn`/`email` come from the vault via the
+   *  in-process account bridge. Labels only, never token material. */
+  chatgptLogin: ChatgptLoginState;
   /** The app-wide "Allow changes" gate policy (setting `gate.allowChanges`).
    *  `true` (the default when unset) = the agent may edit files / run commands;
    *  `false` = read-only observation. Not a secret. */
@@ -150,12 +209,38 @@ export async function readNabyState(
     }),
   );
 
+  // CO-05 — the DEV-ONLY ChatGPT subscription provider is not a stored credential
+  // profile (it authenticates by OAuth, not an API key), so it never comes back
+  // from `listProfiles()` above. Surface it here so the selection UIs that read
+  // this GET — the header EngineSwitcher and the chip's own label/engine-name
+  // derivation — can see the provider that a signed-in owner has just chosen.
+  //
+  // SEAL-GATED: added only when the dev seal is open (`isChatgptOauthEnabled`).
+  // With the seal closed — every official/packaged build — it is absent, exactly
+  // like the dedicated sign-in card, so it never appears anywhere in a shipped
+  // app. `ready` reflects that the vault-backed token SOURCE was installed at
+  // boot (the mechanism exists); the header refines selectability against the
+  // authoritative `chatgptOauth.status().signedIn` from the preload bridge, the
+  // one place that knows whether the owner is actually signed in right now.
+  if (isChatgptOauthEnabled()) {
+    providers.push({
+      id: CHATGPT_OAUTH_PROVIDER_ID,
+      label: CHATGPT_OAUTH_LABEL,
+      // The engine's default subscription model when the turn requests none.
+      model: 'gpt-5-codex',
+      ready: getChatgptTokenSource() != null,
+    });
+  }
+
   return {
     devEngineAvailable: isClaudeAgentSdkAvailable(),
     // Runs `claude auth status` (against a de-shimmed binary) and is cached 10s
     // in the runtime, so ordinary polls do not spawn a process — only a forced
     // re-check (a user action or the post-login poll) bypasses the cache.
     claudeLogin: await describeClaudeLoginAsync(opts.recheckLogin ? { force: true } : {}),
+    // CO-06 — read from the vault through the in-process account bridge (the exact
+    // sibling of claudeLogin's `claude auth status` read). Seal-gated inside.
+    chatgptLogin: await readChatgptLogin(),
     // The gate policy is a single global setting. Default ON (allow) when unset —
     // the same default the engine applies, kept in one place here so the UI and
     // the engine can never disagree about what "unset" means.
@@ -186,6 +271,9 @@ export type NabyAction =
   | { action: 'gate.set'; allowChanges: boolean }
   | { action: 'claude.login'; email?: string; console?: boolean }
   | { action: 'claude.logout' }
+  // CO-06 — the DEV-ONLY ChatGPT sign-in, mirroring `claude.login`/`claude.logout`.
+  | { action: 'chatgpt-oauth.signin' }
+  | { action: 'chatgpt-oauth.signout' }
   | { action: 'mcp.upsert'; entry: unknown }
   | { action: 'mcp.remove'; name: string }
   | { action: 'mcp.test'; name: string };
@@ -202,6 +290,10 @@ export type NabyActionResult =
       /** `claude.login`: the exact command, as a copy-paste fallback for a
        *  headless machine where no browser can open. */
       command?: string;
+      /** `chatgpt-oauth.signin`/`signout`: the fresh sign-in status once the flow
+       *  resolves, so the chip updates without waiting for the next GET poll
+       *  (mirrors the old preload bridge, which resolved with the new status). */
+      chatgpt?: ChatgptLoginState;
     }
   | { ok: false; error: string };
 
@@ -257,6 +349,46 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       const result = await claudeLogout();
       if (!result.ok) return { ok: false, error: result.error };
       return { ok: true, removed: result.removed };
+    }
+
+    case 'chatgpt-oauth.signin': {
+      // The HTTP mirror of `chatgpt-oauth:signin` (the old IPC channel). Runs the
+      // browser PKCE flow on the main side through the in-process account bridge
+      // and resolves with LABELS only once the token set is stored in the vault.
+      // Seal-gated exactly like the Claude actions: refused when the flag is off.
+      if (!isChatgptOauthEnabled()) {
+        return { ok: false, error: 'ChatGPT subscription sign-in is a dev-only, flag-sealed feature.' };
+      }
+      const bridge = getChatgptOauthBridge();
+      if (!bridge) {
+        return { ok: false, error: 'ChatGPT subscription sign-in is not available in this build.' };
+      }
+      try {
+        const s = await bridge.signIn();
+        return {
+          ok: true,
+          chatgpt: { available: true, signedIn: s.signedIn, email: s.email, accountId: s.accountId },
+        };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Could not sign in.' };
+      }
+    }
+
+    case 'chatgpt-oauth.signout': {
+      // Clear the stored token set (idempotent). No secret crosses this boundary.
+      // With the seal closed there is nothing stored — report signed-out cleanly.
+      if (!isChatgptOauthEnabled()) {
+        return { ok: true, chatgpt: { available: false, signedIn: false, email: null, accountId: null } };
+      }
+      const bridge = getChatgptOauthBridge();
+      if (bridge) {
+        try {
+          await bridge.signOut();
+        } catch {
+          // A failed clear leaves the vault as-is; the next GET corrects the chip.
+        }
+      }
+      return { ok: true, chatgpt: { available: true, signedIn: false, email: null, accountId: null } };
     }
 
     case 'mcp.upsert': {

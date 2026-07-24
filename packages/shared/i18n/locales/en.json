@@ -419,7 +419,7 @@
     "startConversation": "Start a conversation",
     "loadMoreHistory": "Load more...",
     "scrollUpForMore": "↑ Scroll up to load more history",
-    "claudeThinking": "Claude is thinking...",
+    "thinking": "{{name}} is thinking...",
     "jumpToStart": "Jump to start",
     "jumpToLatest": "Jump to latest",
     "copyMessage": "Copy message",
@@ -502,7 +502,9 @@
     "automaticHint": "Use a provider you have set up; otherwise Claude (subscription), if available.",
     "devClaudeHint": "Uses the Claude sign-in on this computer (Agent SDK). No API key, no per-message charge.",
     "notConfigured": "not configured",
-    "manageInSettings": "Manage in Settings"
+    "manageInSettings": "Manage in Settings",
+    "chatgptHint": "Answers on your signed-in ChatGPT subscription. No per-message charge.",
+    "chatgptSignInNeeded": "Sign in with ChatGPT in Settings to use this."
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",
@@ -812,6 +814,7 @@
     "automaticHint": "Use a provider you have set up; otherwise Claude (subscription), if available.",
     "claudeSubscription": "Claude (subscription)",
     "claudeSubscriptionHint": "Uses the Claude sign-in on this computer (Agent SDK). No API key, no per-message charge.",
+    "chatgptSubscriptionHint": "Answers on your signed-in ChatGPT subscription. No per-message charge.",
     "billedHint": "{{model}} — billed to your {{label}} account.",
     "noKeyHint": "{{model}} — no API key saved yet, so this cannot answer.",
     "selected": "selected",
@@ -844,7 +847,13 @@
     "signedInAs": "Signed in as {{email}}",
     "useForChats": "Use ChatGPT for chats",
     "selected": "Selected for chats",
-    "selectFailed": "Could not select this provider"
+    "selectFailed": "Could not select this provider",
+    "badge": "ChatGPT",
+    "loggingOut": "Signing out…",
+    "waitingForBrowser": "Waiting for browser sign-in…",
+    "signInFailed": "Could not sign in.",
+    "account": "Account",
+    "notSignedIn": "Not signed in"
   },
   "scope": {
     "global": "Global",
