@@ -833,6 +833,19 @@
     "addServer": "서버 추가",
     "couldNotSave": "저장할 수 없습니다"
   },
+  "chatgptOauth": {
+    "title": "ChatGPT (구독)",
+    "devBadge": "개발 전용 · 구독 · ToS 주의",
+    "description": "종량제 API 키 대신 로그인한 ChatGPT 구독으로 대화에 응답합니다. 개발용 편의 기능이며, 비공식 ChatGPT 백엔드(ToS 회색지대)를 사용하고 배포 빌드에는 절대 포함되지 않습니다. OpenAI가 승인한 기능이 아닙니다.",
+    "signIn": "ChatGPT로 로그인",
+    "signingIn": "로그인 중…",
+    "signOut": "로그아웃",
+    "signedIn": "로그인됨.",
+    "signedInAs": "{{email}}(으)로 로그인됨",
+    "useForChats": "채팅에 ChatGPT 사용",
+    "selected": "채팅에 선택됨",
+    "selectFailed": "이 공급자를 선택할 수 없습니다"
+  },
   "scope": {
     "global": "글로벌",
     "globalFull": "글로벌 (모든 프로젝트)",

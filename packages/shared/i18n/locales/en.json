@@ -833,6 +833,19 @@
     "addServer": "Add server",
     "couldNotSave": "could not save"
   },
+  "chatgptOauth": {
+    "title": "ChatGPT (subscription)",
+    "devBadge": "Dev only · subscription · ToS caution",
+    "description": "Answer chats on your signed-in ChatGPT subscription instead of a metered API key. Developer convenience only — it uses the unofficial ChatGPT backend (a ToS grey zone) and is never part of a shipped build. Not endorsed by OpenAI.",
+    "signIn": "Sign in with ChatGPT",
+    "signingIn": "Signing in…",
+    "signOut": "Sign out",
+    "signedIn": "Signed in.",
+    "signedInAs": "Signed in as {{email}}",
+    "useForChats": "Use ChatGPT for chats",
+    "selected": "Selected for chats",
+    "selectFailed": "Could not select this provider"
+  },
   "scope": {
     "global": "Global",
     "globalFull": "Global (all projects)",

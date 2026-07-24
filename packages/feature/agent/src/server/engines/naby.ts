@@ -63,7 +63,11 @@ import {
   AiSdkEngine,
   buildToolset,
   ClaudeAgentSdkEngine,
+  CHATGPT_OAUTH_LABEL,
+  CHATGPT_OAUTH_PROVIDER_ID,
   DEV_ENGINE_LABEL,
+  getChatgptTokenSource,
+  isChatgptOauthEnabled,
   loadMcpToolset,
   makeGate,
   phase1HarnessFloor,
@@ -306,9 +310,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         } else {
           // The user's stored choice (F1-08) rides in as options, so the
           // selection policy itself stays in the runtime and testable.
+          const settings = readSettings(store);
           const selection = await selectEngine({
             requestedModel,
-            ...toSelectOptions(readSettings(store)),
+            ...toSelectOptions(settings),
           });
           if (!selection.ok) {
             // preflight normally catches this; belt-and-braces for the
@@ -339,6 +344,58 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // rather than becoming a made-up string.
             modelForEngine = selection.model ?? requestedModel;
             modelLabel = modelForEngine ?? 'claude (local sign-in)';
+            console.log(`[engine:naby] ${selection.summary}`);
+          } else if (
+            isChatgptOauthEnabled() &&
+            settings.selectedProvider === CHATGPT_OAUTH_PROVIDER_ID
+          ) {
+            // DEV-ONLY (CO-05), flag-sealed. The ChatGPT subscription provider
+            // answers through AiSdkEngine like a metered provider, but its
+            // credential is a live OAuth token SOURCE — injected by the Electron
+            // main process into the runtime seam (boot.ts). No api key is read
+            // on this path; the transport pulls a fresh token per request and
+            // refreshes/rotates behind a 401. A missing sign-in surfaces as
+            // "sign in again" at turn time (the source throws), which is exactly
+            // the right message rather than a spurious "no key". Live queries
+            // still need the owner's ChatGPT sign-in (CO-06).
+            const source = getChatgptTokenSource();
+            if (!source) {
+              const message =
+                'ChatGPT subscription sign-in is not initialized. Open Settings → AI provider and sign in with ChatGPT first.';
+              ctx.emit({ type: 'error', error: message, session_id: sessionId });
+              ctx.emit({
+                type: 'result',
+                subtype: 'error_during_execution',
+                session_id: sessionId,
+                is_error: true,
+                result: message,
+                usage: toSdkUsage(undefined),
+                total_cost_usd: 0,
+                duration_ms: Date.now() - startedAt,
+                num_turns: 0,
+              });
+              return;
+            }
+            const model = requestedModel || 'gpt-5-codex';
+            const profile: ProviderProfile = {
+              id: CHATGPT_OAUTH_PROVIDER_ID,
+              label: CHATGPT_OAUTH_LABEL,
+              kind: 'openai-chatgpt-oauth',
+              config: { kind: 'openai-chatgpt-oauth' },
+              model,
+              credentialRef: 'chatgpt-oauth',
+            };
+            modelLabel = model;
+            modelForEngine = model;
+            providerId = CHATGPT_OAUTH_PROVIDER_ID;
+            engineId = 'ai-sdk';
+            // Subscription turn — no invented per-message dollar bill (F1-07),
+            // the same treatment the Claude dev engine gets.
+            costBasis = 'subscription';
+            const base = makeModelResolver([profile], () => ({ kind: 'chatgpt-oauth', source }));
+            engine = new AiSdkEngine({
+              resolveModel: (selectionArg) => base(selectionArg.providerId, selectionArg.model),
+            });
             console.log(`[engine:naby] ${selection.summary}`);
           } else {
             const resolved = await resolveProvider(requestedModel);
