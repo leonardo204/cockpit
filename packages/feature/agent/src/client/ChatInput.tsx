@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useLayoutEffect, useRef, KeyboardEvent, ClipboardEvent, useCallback, useMemo, memo } from 'react';
-import type { ImageInfo, ChatEngine } from './types';
+import { useState, useEffect, useLayoutEffect, useRef, KeyboardEvent, ClipboardEvent, ChangeEvent, DragEvent, useCallback, useMemo, memo } from 'react';
+import type { ImageInfo, ImageMediaType, ChatEngine } from './types';
 import { toast } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
 import { ImagePreview } from '@cockpit/shared-ui';
@@ -11,7 +11,79 @@ import { loadSlashCommands } from './effect/agentClient';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+// A hard guard on the ORIGINAL file, only to avoid decoding an absurd blob into
+// memory — the effective size is set by the downscale below, not this.
+const MAX_IMAGE_SIZE = 25 * 1024 * 1024; // 25MB
+// Long-edge cap. Both Claude and OpenAI resize a larger image down to about this
+// before the model sees it, so capping here is LOSSLESS to the model while cutting
+// the upload from megabytes to tens of KB. We never upscale.
+const MAX_IMAGE_EDGE = 1568;
+// WebP keeps screenshot text crisp and supports transparency, and compresses
+// photos hard; 0.9 leaves no visible degradation.
+const IMAGE_ENCODE_QUALITY = 0.9;
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+const stripDataUrlPrefix = (dataUrl: string) => dataUrl.replace(/^data:[^;]+;base64,/, '');
+
+/**
+ * Downscale + re-encode an image to shrink the upload WITHOUT model-visible quality
+ * loss: cap the long edge at MAX_IMAGE_EDGE (the point both vision APIs downscale to
+ * anyway) and re-encode to high-quality WebP. Animated GIFs pass through untouched
+ * (a canvas would flatten the animation). If the re-encode is not actually smaller
+ * (already-tiny image, no downscale), the original is kept. Throws on decode/encode
+ * failure so the caller can fall back to the raw file.
+ */
+async function prepareImage(
+  file: File,
+  fallbackType: ImageMediaType,
+): Promise<{ data: string; preview: string; media_type: ImageMediaType }> {
+  if (file.type === 'image/gif') {
+    const dataUrl = await blobToDataUrl(file);
+    return { data: stripDataUrlPrefix(dataUrl), preview: dataUrl, media_type: 'image/gif' };
+  }
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    bitmap.close?.();
+    throw new Error('no 2d context');
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+
+  let blob = await canvasToBlob(canvas, 'image/webp', IMAGE_ENCODE_QUALITY);
+  let outType: ImageMediaType = 'image/webp';
+  if (!blob) {
+    blob = await canvasToBlob(canvas, 'image/jpeg', IMAGE_ENCODE_QUALITY);
+    outType = 'image/jpeg';
+  }
+  if (!blob) throw new Error('encode failed');
+
+  // No downscale AND the re-encode didn't help -> keep the smaller original.
+  if (scale === 1 && blob.size >= file.size) {
+    const dataUrl = await blobToDataUrl(file);
+    return { data: stripDataUrlPrefix(dataUrl), preview: dataUrl, media_type: fallbackType };
+  }
+  const dataUrl = await blobToDataUrl(blob);
+  return { data: stripDataUrlPrefix(dataUrl), preview: dataUrl, media_type: outType };
+}
 
 interface CommandInfo {
   name: string;
@@ -227,47 +299,86 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     }
   }, [showCommands, filteredCommands, selectedIndex, handleSelectCommand, handleSend]);
 
-  const handlePaste = useCallback((e: ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    const supportedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
-
-    for (const item of Array.from(items)) {
-      const mediaType = supportedTypes.find((t) => item.type === t);
-      if (mediaType) {
-        e.preventDefault();
-
-        const file = item.getAsFile();
-        if (!file) continue;
-
-        // Check file size
-        if (file.size > MAX_IMAGE_SIZE) {
-          alert(t('chat.imageSizeLimit', { size: (file.size / 1024 / 1024).toFixed(2) }));
-          continue;
-        }
-
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const dataUrl = event.target?.result as string;
-          if (!dataUrl) return;
-
-          // Extract base64 portion from data URL (compatible with all MIME types)
-          const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
-
-          const newImage: ImageInfo = {
-            id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-            data: base64Data,
-            preview: dataUrl,
-            media_type: mediaType,
-          };
-
-          setImages((prev) => [...prev, newImage]);
-        };
-        reader.readAsDataURL(file);
+  // Capture one image File into state. Shared by paste, the file picker, and
+  // drag-drop. The image is DOWNSCALED + re-encoded on the client (prepareImage)
+  // so a multi-MB photo uploads as tens of KB with no model-visible quality loss.
+  // Unsupported types are ignored; a decode failure falls back to the raw file.
+  const addImageFile = useCallback(
+    async (file: File) => {
+      const supportedTypes: ImageMediaType[] = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+      const mediaType = supportedTypes.find((t) => file.type === t);
+      if (!mediaType) return;
+      if (file.size > MAX_IMAGE_SIZE) {
+        alert(t('chat.imageSizeLimit', { size: (file.size / 1024 / 1024).toFixed(2) }));
+        return;
       }
+      const push = (data: string, preview: string, media_type: ImageMediaType) =>
+        setImages((prev) => [
+          ...prev,
+          { id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`, data, preview, media_type },
+        ]);
+      try {
+        const prepared = await prepareImage(file, mediaType);
+        push(prepared.data, prepared.preview, prepared.media_type);
+      } catch {
+        // Fallback: send the original untouched rather than lose the attachment.
+        const dataUrl = await blobToDataUrl(file);
+        push(dataUrl.replace(/^data:[^;]+;base64,/, ''), dataUrl, mediaType);
+      }
+    },
+    [t],
+  );
+
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      let handled = false;
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            addImageFile(file);
+            handled = true;
+          }
+        }
+      }
+      if (handled) e.preventDefault();
+    },
+    [addImageFile],
+  );
+
+  // File-picker: a hidden <input type="file"> the attach button triggers.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const onPickFiles = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (files) for (const f of Array.from(files)) addImageFile(f);
+      e.target.value = ''; // allow re-picking the same file
+    },
+    [addImageFile],
+  );
+
+  // Drag-and-drop onto the composer.
+  const [dragOver, setDragOver] = useState(false);
+  const onDrop = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      setDragOver(false);
+      const files = e.dataTransfer?.files;
+      if (files) for (const f of Array.from(files)) addImageFile(f);
+    },
+    [addImageFile],
+  );
+  const onDragOver = useCallback((e: DragEvent) => {
+    if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) {
+      e.preventDefault();
+      setDragOver(true);
     }
-  }, [t]);
+  }, []);
+  const onDragLeave = useCallback((e: DragEvent) => {
+    if (e.currentTarget === e.target) setDragOver(false);
+  }, []);
 
   const handleRemoveImage = useCallback((id: string) => {
     setImages((prev) => prev.filter((img) => img.id !== id));
@@ -294,7 +405,17 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
   };
 
   return (
-    <div className="border-t border-border bg-card relative">
+    <div
+      className={`border-t bg-card relative ${dragOver ? 'border-brand ring-1 ring-brand/40' : 'border-border'}`}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-brand/5 text-xs text-brand">
+          {t('chat.dropImage', { defaultValue: 'Drop image to attach' })}
+        </div>
+      )}
       <ImagePreview images={images} onRemove={handleRemoveImage} disabled={disabled} />
 
       {/* Command candidate list */}
@@ -341,6 +462,29 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
       )}
 
       <div className="flex gap-2 items-end p-4">
+        {/* Attach image: opens the file picker (paste and drag-drop also work). */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          multiple
+          className="hidden"
+          onChange={onPickFiles}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled}
+          className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all disabled:opacity-40"
+          title={t('chat.attachImage', { defaultValue: 'Attach image' })}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+            <circle cx="8.5" cy="8.5" r="1.5" strokeWidth={2} />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15l-5-5L5 21" />
+          </svg>
+        </button>
+
         {/* User messages list button */}
         {onShowUserMessages && (
           <button

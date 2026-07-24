@@ -45,7 +45,9 @@
  * all, it only translates the events streaming out.
  *
  * MILESTONE LIMITATIONS (deliberate, tracked)
- *   - `ctx.images` are ignored (the runtime's RuntimeMessage is text-only).
+ *   - `ctx.images` are forwarded to runTurn (multimodal input): the runtime
+ *     attaches them to the user message and each engine builds a native image
+ *     block. They are transient — not persisted to the transcript.
  *   - The gate runs the Phase-1 harness-observation FLOOR (not the full Phase 2
  *     policy): it allows read-only inspection + delegation + skills + our own
  *     runtime tools and DENIES filesystem mutation / shell exec — from the main
@@ -618,6 +620,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             sessionId,
             model: { providerId, ...(modelForEngine ? { model: modelForEngine } : {}) },
             userText: ctx.prompt ?? '',
+            // Multimodal input: hand this turn's images to the runtime, which
+            // attaches them (transiently) to the user message so each engine can
+            // build a native image block. ImageData -> RuntimeImage (drop the
+            // 'base64' discriminant the runtime does not need).
+            ...(ctx.images && ctx.images.length > 0
+              ? { images: ctx.images.map((im) => ({ media_type: im.media_type, data: im.data })) }
+              : {}),
             toolSchemas,
             gate,
             executors,
