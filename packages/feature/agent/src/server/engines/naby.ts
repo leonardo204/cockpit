@@ -131,6 +131,7 @@ import {
   sendFinalReport,
 } from '../lib/telegramEscalation';
 import { canLearn, learningInstruction } from '../lib/learning';
+import { runNestedTurn } from '../lib/delegation';
 import {
   canCheckIn,
   checkinInstruction,
@@ -659,6 +660,44 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 },
               })
             : undefined;
+        // Phase 2.5 M4b: SUBAGENTS ON AN ENGINE WITH NO NATIVE ONES. dev-claude
+        // maps SubagentSpec onto the Agent SDK's own `agents` (delegated through
+        // its gated Task tool), so it needs nothing here. The AI-SDK engine had no
+        // equivalent and simply ignored the specs — the same imported subagents
+        // were reachable on one engine and invisible on the other, which is exactly
+        // the provider-dependence the runtime exists to prevent. `naby_delegate`
+        // closes that: the subagent runs as a nested turn behind THIS turn's gate.
+        //
+        // The sink is built even when the roster is empty; `canDelegate` inside
+        // buildToolset decides whether the tool is actually offered, so a turn never
+        // advertises delegation it cannot perform.
+        const nativeSubagents = engineId === 'dev-claude';
+        const delegationSink = nativeSubagents
+          ? undefined
+          : {
+              subagents: gatherSubagents(store, projectCwd),
+              // The user's own turn. A nested run gets depth + 1, which is what the
+              // runtime's cap counts against.
+              depth: 0,
+              run: (input: { spec: SubagentSpec; task: string }) =>
+                runNestedTurn(
+                  {
+                    store,
+                    engine,
+                    model: { providerId, ...(modelForEngine ? { model: modelForEngine } : {}) },
+                    // THE PARENT'S GATE, passed down unchanged — see lib/delegation.
+                    gate,
+                    toolSchemas,
+                    executors,
+                    signal: ctx.signal,
+                    ...(projectCwd ? { cwd: projectCwd } : {}),
+                    onSession: (childId, spec) =>
+                      console.log(`[engine:naby] delegated to @${spec.name} in session ${childId}`),
+                  },
+                  input,
+                ),
+            };
+
         const builtin = buildToolset(
           outbox,
           store,
@@ -672,6 +711,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               }
             : undefined,
           checkinSink,
+          delegationSink,
         );
 
         // ---- MCP tools (F1-08) -------------------------------------------
