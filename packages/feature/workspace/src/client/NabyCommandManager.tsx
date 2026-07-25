@@ -360,7 +360,9 @@ export function NabyCommandManager({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">{t('commandManager.description')}</p>
+      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+        {t('commandManager.description')}
+      </p>
 
       {/* Scope filter + banner: whether these commands are global (every
           project) or bound to this project. */}

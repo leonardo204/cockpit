@@ -901,7 +901,7 @@
   },
   "memoryReview": {
     "title": "Memory",
-    "description": "What Naby has remembered about you, with where each memory came from. Delete anything wrong, and confirm proposed memories before they are allowed to shape a reply.",
+    "description": "Things Naby has remembered about you from your chats. Delete anything wrong; items marked \"proposed\" only start shaping replies once you confirm them.",
     "scope": "Scope",
     "scopeUser": "You",
     "scopeSession": "This session",
@@ -942,7 +942,7 @@
   },
   "commandManager": {
     "title": "Commands",
-    "description": "Your own slash commands. Create a verb that expands to a prompt template — it appears in the chat command menu and works the same on every provider and the dev engine.",
+    "description": "Your own \"/\" shortcuts. Save a prompt you use a lot under a short name, then call it in chat as /name — it shows up in the command menu and works the same on every engine.",
     "scope": "Scope",
     "scopeUser": "You",
     "scopeProject": "This project",
@@ -979,7 +979,8 @@
   },
   "harnessReview": {
     "title": "Harness",
-    "description": "Import and review commands, skills, and subagents. Imported items come from an external source, so they arrive disabled — review each and enable the ones you trust.",
+    "description": "Bring in and manage skills, subagents, and commands made elsewhere (for example a Claude config folder). Imported items arrive turned OFF for safety — switch on only the ones you want to use.",
+    "advancedSets": "Advanced — share a set (export / import a bundle)",
     "reviewNote": "Imported items are disabled until you review and enable them.",
     "scope": "Scope",
     "scopeUser": "You (~/.claude)",

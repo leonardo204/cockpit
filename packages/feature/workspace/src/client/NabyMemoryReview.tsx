@@ -320,7 +320,9 @@ export function NabyMemoryReview({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">{t('memoryReview.description')}</p>
+      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+        {t('memoryReview.description')}
+      </p>
 
       {/* Scope filter + banner: which memories you are looking at (global vs
           this project vs this session), stated plainly. */}

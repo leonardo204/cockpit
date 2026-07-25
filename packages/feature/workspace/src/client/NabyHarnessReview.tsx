@@ -854,8 +854,10 @@ export function NabyHarnessReview({
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">{t('harnessReview.description')}</p>
-      <p className="text-[11px] text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
+      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed space-y-1">
+        <p>{t('harnessReview.description')}</p>
+        <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
+      </div>
 
       {/* Scope filter + banner: whether these harness items are global (every
           project) or bound to this project. */}
@@ -871,9 +873,17 @@ export function NabyHarnessReview({
         <ScopeHeader scope={scope as NabyScopeId} cwd={cwd} />
       </div>
 
-      {/* Set export/import (HP-05 + HP-08 org). Available in every scope — the
-          bundle tools manage their own from/into scope selectors. */}
-      <HarnessSetTools cwd={cwd} onImported={onSetImported} />
+      {/* Set export/import (HP-05 + HP-08 org) is an ADVANCED, power-user surface
+          (sharing a bundle with a team). Tucked into a collapsed <details> so the
+          default view stays simple: intro → import from .claude → the list. */}
+      <details className="rounded-lg border border-border">
+        <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
+          {t('harnessReview.advancedSets', { defaultValue: 'Advanced — share a set (export / import a bundle)' })}
+        </summary>
+        <div className="p-1">
+          <HarnessSetTools cwd={cwd} onImported={onSetImported} />
+        </div>
+      </details>
 
       {/* Import from ~/.claude / .claude (HP-04). Filesystem import only makes
           sense for user/project — the org scope is populated by a set import. */}
