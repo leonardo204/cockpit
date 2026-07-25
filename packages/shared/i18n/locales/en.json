@@ -321,6 +321,14 @@
     }
   },
   "fileBrowser": {
+    "panelTitle": "Files",
+    "toggle": "Toggle file browser",
+    "hint": "Drag a row into the message box for its path, or ⌘/Ctrl-click for @path. Drop files here to copy them in.",
+    "loading": "Loading…",
+    "loadError": "Could not read this folder.",
+    "empty": "Empty",
+    "copyDone": "Copied {{count}} item(s).",
+    "copyError": "Could not copy the files.",
     "directoryTree": "Tree",
     "searchTab": "Search",
     "recentTab": "Recent",
@@ -448,6 +456,8 @@
     "imageSizeLimit": "Image is too large to load (max 25MB), current: {{size}}MB",
     "attachImage": "Attach image",
     "dropImage": "Drop image to attach",
+    "dropPath": "Drop to insert file path",
+    "dropOsFiles": "Drop: images attach · other files insert their path",
     "stageAll": "Stage all files (git add -A)",
     "viewGitChanges": "View Git changes",
     "viewAllComments": "View all comments",
@@ -507,7 +517,8 @@
     "notConfigured": "not configured",
     "manageInSettings": "Manage in Settings",
     "chatgptHint": "Answers on your signed-in ChatGPT subscription. No per-message charge.",
-    "chatgptSignInNeeded": "Sign in with ChatGPT in Settings to use this."
+    "chatgptSignInNeeded": "Sign in with ChatGPT in Settings to use this.",
+    "chatgptSelectThenSignIn": "Select to switch here, then sign in from the ChatGPT chip in the chat bar."
   },
   "modelSwitcher": {
     "label": "Model",

@@ -119,8 +119,9 @@ import { ensureCockpitImport } from './cockpitImport';
  *   NABY_HOME      our own home dir; db is <NABY_HOME>/app.db
  *   COCKPIT_HOME   the shell's home dir, when running inside cockpit
  *   default        ~/.naby/app.db
- * In the packaged app this becomes Electron's `userData` (contract §6), which
- * is passed in as NABY_HOME rather than compiled in here.
+ * The packaged app (and `npm run electron:dev`) passes NABY_HOME/NABY_DB_PATH =
+ * ~/.naby so every launch mode shares one store; this default already resolves to
+ * the same ~/.naby/app.db, so the plain `cockpit` CLI lands there too.
  */
 function resolveDbPath(): string {
   const explicit = process.env.NABY_DB_PATH;

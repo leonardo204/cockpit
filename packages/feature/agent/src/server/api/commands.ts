@@ -24,6 +24,7 @@ import { handler } from "@cockpit/effect-runtime/server"
 import {
   DEFAULT_USER_ID,
   type HarnessItem,
+  type HarnessKind,
   type Store,
 } from "../../../../../../../dist/naby-runtime.mjs"
 import { getStore } from "../engines/naby"
@@ -37,7 +38,25 @@ export interface CommandInfo {
   name: string
   description: string
   source: "builtin" | "user" | "org" | "project"
+  // Which owned-harness kind this row is (undefined for a builtin). The "/" menu
+  // now unifies command/skill/subagent into ONE palette (Claude-Code-style UX):
+  // a skill invocation injects its instructions, a subagent injection adopts its
+  // persona — both handled in slashCommands.resolveCommandPrompt. MCP is
+  // deliberately NOT here: an MCP server is a tool provider, not a prompt.
+  kind?: HarnessKind
   argumentHint?: string
+}
+
+// Cross-kind precedence when the same verb exists as more than one kind: a
+// command wins over a skill wins over a subagent. Combined with scope precedence
+// (project > org > user) into a single rank so the merge is order-independent.
+const KIND_RANK: Record<HarnessKind, number> = { command: 3, skill: 2, subagent: 1 }
+// Display grouping only (does not affect override precedence): commands first,
+// then skills, then subagents.
+const KIND_ORDER: Record<HarnessKind, number> = { command: 0, skill: 1, subagent: 2 }
+
+function scopeRank(source: CommandInfo["source"]): number {
+  return source === "project" ? 3 : source === "org" ? 2 : source === "user" ? 1 : 0
 }
 
 // HP-08: the single in-house org key. Kept in sync with the harness route's
@@ -64,19 +83,22 @@ type CommandStore = Pick<Store, "listHarness">
  *  read is guarded and returns [] on failure. */
 function loadOwnedCommands(cwd: string | null, store: CommandStore): HarnessItem[] {
   const out: HarnessItem[] = []
+  // Load EVERY enabled owned kind (command/skill/subagent) — the "/" palette now
+  // unifies all three. One read per scope (kind-agnostic) so a store that filters
+  // only on status still returns them all.
   try {
-    out.push(...store.listHarness("user", DEFAULT_USER_ID, { kind: "command", status: "enabled" }))
+    out.push(...store.listHarness("user", DEFAULT_USER_ID, { status: "enabled" }))
   } catch {
     /* ignore — fall back to builtins only */
   }
   try {
-    out.push(...store.listHarness("org", DEFAULT_ORG_ID, { kind: "command", status: "enabled" }))
+    out.push(...store.listHarness("org", DEFAULT_ORG_ID, { status: "enabled" }))
   } catch {
     /* ignore — org may be empty on a single-user build */
   }
   if (cwd) {
     try {
-      out.push(...store.listHarness("project", cwd, { kind: "command", status: "enabled" }))
+      out.push(...store.listHarness("project", cwd, { status: "enabled" }))
     } catch {
       /* ignore */
     }
@@ -90,21 +112,47 @@ function loadOwnedCommands(cwd: string | null, store: CommandStore): HarnessItem
  *  the right precedence. Builtin order is preserved; new owned verbs append. */
 export function mergeCommands(builtins: CommandInfo[], owned: HarnessItem[]): CommandInfo[] {
   const byVerb = new Map<string, CommandInfo>()
+  const rankOf = new Map<string, number>()
   const order: string[] = []
-  const upsert = (info: CommandInfo) => {
+  // Rank-guarded upsert: a new row replaces an existing one only when its rank is
+  // >= the incumbent's, so precedence (kind × scope) is order-independent and a
+  // builtin (rank 0) is always overridden by any owned row of the same verb.
+  const upsert = (info: CommandInfo, rank: number) => {
     const verb = info.name.replace(/^\//, "")
-    if (!byVerb.has(verb)) order.push(verb)
-    byVerb.set(verb, info)
+    const prev = rankOf.get(verb)
+    if (prev === undefined) order.push(verb)
+    if (prev === undefined || rank >= prev) {
+      byVerb.set(verb, info)
+      rankOf.set(verb, rank)
+    }
   }
-  for (const b of builtins) upsert(b)
-  for (const item of owned) {
-    if (item.kind !== "command" || !item.command) continue
-    upsert({
-      name: `/${item.name}`,
-      description: item.description ?? item.command.argumentHint ?? "",
-      source: item.scope === "project" ? "project" : item.scope === "org" ? "org" : "user",
-      ...(item.command.argumentHint ? { argumentHint: item.command.argumentHint } : {}),
-    })
+  for (const b of builtins) upsert(b, 0)
+  // Sort by kind for display grouping only (command → skill → subagent); the rank
+  // guard, not this order, decides who wins a verb clash.
+  const sorted = [...owned].sort((a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9))
+  for (const item of sorted) {
+    const payloadOk =
+      item.kind === "command"
+        ? !!item.command
+        : item.kind === "skill"
+          ? !!item.skill
+          : item.kind === "subagent"
+            ? !!item.subagent
+            : false
+    if (!payloadOk) continue
+    const source: CommandInfo["source"] =
+      item.scope === "project" ? "project" : item.scope === "org" ? "org" : "user"
+    const argumentHint = item.kind === "command" ? item.command?.argumentHint : undefined
+    upsert(
+      {
+        name: `/${item.name}`,
+        description: item.description ?? argumentHint ?? "",
+        source,
+        kind: item.kind,
+        ...(argumentHint ? { argumentHint } : {}),
+      },
+      KIND_RANK[item.kind] * 10 + scopeRank(source),
+    )
   }
   return order.map((verb) => byVerb.get(verb)!)
 }

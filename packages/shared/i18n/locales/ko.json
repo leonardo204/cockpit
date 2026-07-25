@@ -321,6 +321,14 @@
     }
   },
   "fileBrowser": {
+    "panelTitle": "파일",
+    "toggle": "파일 브라우저 토글",
+    "hint": "행을 메시지 입력창으로 드래그하면 경로가, ⌘/Ctrl+클릭하면 @경로가 삽입됩니다. 파일을 여기에 놓으면 프로젝트로 복사됩니다.",
+    "loading": "불러오는 중…",
+    "loadError": "이 폴더를 읽을 수 없습니다.",
+    "empty": "비어 있음",
+    "copyDone": "{{count}}개 항목을 복사했습니다.",
+    "copyError": "파일을 복사하지 못했습니다.",
     "directoryTree": "트리",
     "searchTab": "검색",
     "recentTab": "최근",
@@ -448,6 +456,8 @@
     "imageSizeLimit": "이미지가 너무 커서 불러올 수 없습니다 (최대 25MB), 현재: {{size}}MB",
     "attachImage": "이미지 첨부",
     "dropImage": "이미지를 놓아 첨부",
+    "dropPath": "놓으면 파일 경로 삽입",
+    "dropOsFiles": "놓기: 이미지는 첨부 · 그 외 파일은 경로 삽입",
     "stageAll": "모든 파일 스테이징 (git add -A)",
     "viewGitChanges": "Git 변경 사항 보기",
     "viewAllComments": "모든 코멘트 보기",
@@ -507,7 +517,8 @@
     "notConfigured": "설정 안 됨",
     "manageInSettings": "설정에서 관리",
     "chatgptHint": "로그인한 ChatGPT 구독으로 응답합니다. 메시지당 과금 없음.",
-    "chatgptSignInNeeded": "사용하려면 설정에서 ChatGPT에 로그인하세요."
+    "chatgptSignInNeeded": "사용하려면 설정에서 ChatGPT에 로그인하세요.",
+    "chatgptSelectThenSignIn": "선택해 여기로 전환한 뒤, 채팅 바의 ChatGPT 칩에서 로그인하세요."
   },
   "modelSwitcher": {
     "label": "모델",

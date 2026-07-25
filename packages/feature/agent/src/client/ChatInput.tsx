@@ -8,6 +8,13 @@ import { ImagePreview } from '@cockpit/shared-ui';
 import { ScheduleTaskPopover } from './ScheduleTaskPopover';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSlashCommands } from './effect/agentClient';
+import {
+  FILE_REF_MIME,
+  setActiveFileRefInserter,
+  clearActiveFileRefInserter,
+  osFilePath,
+  quotePath,
+} from './fileRefBus';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
@@ -88,10 +95,14 @@ async function prepareImage(
 interface CommandInfo {
   name: string;
   description: string;
-  // 'builtin' = in-process bilingual command; 'user'/'project' = Naby-owned
-  // command from the /api/harness CRUD surface, badged distinctly (Phase 1.6
-  // HP-02). The old `.claude/commands/*.md` sources were retired.
-  source: 'builtin' | 'user' | 'project';
+  // 'builtin' = in-process bilingual command; 'user'/'org'/'project' = Naby-owned
+  // harness row from the /api/harness CRUD surface, badged distinctly (Phase 1.6).
+  // The old `.claude/commands/*.md` sources were retired.
+  source: 'builtin' | 'user' | 'org' | 'project';
+  // Which owned-harness kind this row is (undefined for a builtin). The "/" menu
+  // unifies command/skill/subagent into one palette, so the row shows a small
+  // kind glyph to keep them distinguishable.
+  kind?: 'command' | 'skill' | 'subagent';
   argumentHint?: string;
 }
 
@@ -99,6 +110,10 @@ interface ChatInputProps {
   onSend: (message: string, images?: ImageInfo[]) => void;
   disabled?: boolean;
   cwd?: string;
+  /** Only the active tab's input registers as the file-reference insertion
+   *  target, so a modifier-click in the file browser never lands in a hidden
+   *  tab's textarea. Defaults true for standalone use. */
+  isActive?: boolean;
   engine?: ChatEngine;
   onShowUserMessages?: () => void;
   onOpenNote?: () => void;
@@ -113,7 +128,7 @@ interface ChatInputProps {
   }) => void;
 }
 
-export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine: _engine, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
   // Caret offset into `input`; drives line-aware command autocomplete.
@@ -126,6 +141,42 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const commandListRef = useRef<HTMLDivElement>(null);
 
+  // Latest input/caret in refs so the file-reference inserter (registered once
+  // for the active tab) always splices at the current position without a stale
+  // closure and without churning its identity every keystroke.
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  const caretRef = useRef(caret);
+  caretRef.current = caret;
+
+  // Splice text at the current caret (used by drag-drop and the file browser's
+  // ⌘/Ctrl-click). Stable identity so registration below never re-runs.
+  const insertAtCaret = useCallback((text: string) => {
+    const prev = inputRef.current;
+    const pos = Math.min(caretRef.current, prev.length);
+    const next = prev.slice(0, pos) + text + prev.slice(pos);
+    const newPos = pos + text.length;
+    setInput(next);
+    setCaret(newPos);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(newPos, newPos);
+      }
+    });
+  }, []);
+
+  // Register as the file-reference target only while this tab is active, so a
+  // modifier-click in the file browser inserts into the visible input, never a
+  // hidden tab's. Cleanup relinquishes only if still the registrant (tab-switch
+  // race guard).
+  useEffect(() => {
+    if (!isActive) return;
+    setActiveFileRefInserter(insertAtCaret);
+    return () => clearActiveFileRefInserter(insertAtCaret);
+  }, [isActive, insertAtCaret]);
+
   // Auto-adjust textarea height
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -133,8 +184,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
 
     // Reset height to get the correct scrollHeight
     textarea.style.height = 'auto';
-    // Set new height: min 38px (single line), max 200px (approx 8-10 lines)
-    const minHeight = 38;
+    // Floor at ~3 lines like a normal LLM composer, so the multi-line placeholder
+    // hint is never clipped/scrolled; grow up to ~10 lines, then scroll.
+    const minHeight = 76;
     const maxHeight = 200;
     const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight));
     textarea.style.height = `${newHeight}px`;
@@ -361,23 +413,55 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
 
   // Drag-and-drop onto the composer.
   const [dragOver, setDragOver] = useState(false);
+  // Which kind of drag is hovering, so the overlay names the right action:
+  // 'os' = files from Finder/Explorer (images attach, others → path);
+  // 'ref' = a row from the in-app file browser (→ relative path).
+  const [dragKind, setDragKind] = useState<'os' | 'ref' | null>(null);
   const onDrop = useCallback(
     (e: DragEvent) => {
       e.preventDefault();
       setDragOver(false);
+      setDragKind(null);
+      // Files dragged from the OS (Finder/Explorer): a supported image ATTACHES
+      // (multimodal, unchanged); any other file inserts its ABSOLUTE path at the
+      // caret so the agent can read it. A drop can mix both.
       const files = e.dataTransfer?.files;
-      if (files) for (const f of Array.from(files)) addImageFile(f);
+      if (files && files.length > 0) {
+        const supportedImage = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+        const paths: string[] = [];
+        for (const f of Array.from(files)) {
+          if (supportedImage.has(f.type)) {
+            addImageFile(f);
+            continue;
+          }
+          const p = osFilePath(f);
+          if (p) paths.push(quotePath(p));
+        }
+        if (paths.length > 0) insertAtCaret(`${paths.join(' ')} `);
+        return;
+      }
+      // A file/folder dragged from the in-app file browser → insert its cwd-
+      // relative path at the caret. Trailing space so the next keystroke is not
+      // glued to the path.
+      const ref = e.dataTransfer?.getData(FILE_REF_MIME) ?? '';
+      if (ref) insertAtCaret(ref.endsWith(' ') ? ref : `${ref} `);
     },
-    [addImageFile],
+    [addImageFile, insertAtCaret],
   );
   const onDragOver = useCallback((e: DragEvent) => {
-    if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) {
+    const types = Array.from(e.dataTransfer?.types ?? []);
+    const isRef = types.includes(FILE_REF_MIME);
+    if (types.includes('Files') || isRef) {
       e.preventDefault();
       setDragOver(true);
+      setDragKind(isRef ? 'ref' : 'os');
     }
   }, []);
   const onDragLeave = useCallback((e: DragEvent) => {
-    if (e.currentTarget === e.target) setDragOver(false);
+    if (e.currentTarget === e.target) {
+      setDragOver(false);
+      setDragKind(null);
+    }
   }, []);
 
   const handleRemoveImage = useCallback((id: string) => {
@@ -389,6 +473,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
       case 'builtin':
         return t('common.builtin');
       case 'user':
+      case 'org':
       case 'project':
         return t('commandManager.badgeOwned');
     }
@@ -399,8 +484,22 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
       case 'builtin':
         return 'bg-brand/15 text-brand dark:bg-brand/25 dark:text-teal-11';
       case 'user':
+      case 'org':
       case 'project':
         return 'bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400';
+    }
+  };
+
+  // A small glyph so a unified "/" list still tells command / skill / subagent
+  // apart at a glance. Commands (the default) get none to stay uncluttered.
+  const getKindGlyph = (kind: CommandInfo['kind']) => {
+    switch (kind) {
+      case 'skill':
+        return '🧩';
+      case 'subagent':
+        return '🤖';
+      default:
+        return null;
     }
   };
 
@@ -413,7 +512,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
     >
       {dragOver && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-brand/5 text-xs text-brand">
-          {t('chat.dropImage', { defaultValue: 'Drop image to attach' })}
+          {dragKind === 'ref'
+            ? t('chat.dropPath', { defaultValue: 'Drop to insert file path' })
+            : t('chat.dropOsFiles', { defaultValue: 'Drop: images attach · other files insert their path' })}
         </div>
       )}
       <ImagePreview images={images} onRemove={handleRemoveImage} disabled={disabled} />
@@ -445,6 +546,11 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
                     <span className="font-mono text-sm font-medium text-foreground">
                       {(commandQuery?.marker ?? '/') + cmd.name.slice(1)}
                     </span>
+                    {getKindGlyph(cmd.kind) && (
+                      <span className="text-xs" title={cmd.kind}>
+                        {getKindGlyph(cmd.kind)}
+                      </span>
+                    )}
                     <span className="flex-1 text-sm text-muted-foreground truncate">
                       {t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })}
                     </span>
@@ -461,96 +567,104 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, engine
         </div>
       )}
 
-      <div className="flex gap-2 items-end p-4">
-        {/* Attach image: opens the file picker (paste and drag-drop also work). */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          multiple
-          className="hidden"
-          onChange={onPickFiles}
-        />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={disabled}
-          className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all disabled:opacity-40"
-          title={t('chat.attachImage', { defaultValue: 'Attach image' })}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
-            <circle cx="8.5" cy="8.5" r="1.5" strokeWidth={2} />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15l-5-5L5 21" />
-          </svg>
-        </button>
+      {/* Composer box: textarea on top, action toolbar beneath — so a taller
+          (3-line) input keeps the controls anchored to the bottom-left like a
+          normal LLM input, instead of the icons floating beside a tall field. */}
+      <div className="p-4">
+        <div className="flex flex-col rounded-lg border border-border bg-card focus-within:ring-2 focus-within:ring-ring">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={(e) => {
+              setInput(e.target.value);
+              setCaret(e.target.selectionStart ?? e.target.value.length);
+            }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={disabled ? t('chat.placeholderDisabled') : t('chat.placeholder')}
+            rows={3}
+            className="w-full resize-none px-4 pt-3 pb-1 bg-transparent border-0 focus:outline-none text-foreground placeholder-slate-9"
+          />
 
-        {/* User messages list button */}
-        {onShowUserMessages && (
-          <button
-            onClick={onShowUserMessages}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all"
-            title={t('chat.userMessages')}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-        )}
-
-        {/* Project notes button */}
-        {onOpenNote && (
-          <button
-            onClick={onOpenNote}
-            className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all"
-            title={t('chat.projectNotes')}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-          </button>
-        )}
-
-        {/* Scheduled task button */}
-        {onCreateScheduledTask && (
-          <div className="relative">
+          {/* Action toolbar */}
+          <div className="flex items-center gap-1 px-2 pb-2">
+            {/* Attach image: opens the file picker (paste and drag-drop also work). */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              className="hidden"
+              onChange={onPickFiles}
+            />
             <button
-              onClick={() => setShowScheduler(!showScheduler)}
-              className={`p-2 rounded-lg transition-all ${
-                showScheduler
-                  ? 'text-brand bg-brand/10'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95'
-              }`}
-              title={t('chat.scheduledTasks')}
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={disabled}
+              className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all disabled:opacity-40"
+              title={t('chat.attachImage', { defaultValue: 'Attach image' })}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="10" strokeWidth={2} />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2" />
+                <rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2} />
+                <circle cx="8.5" cy="8.5" r="1.5" strokeWidth={2} />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15l-5-5L5 21" />
               </svg>
             </button>
-            {showScheduler && (
-              <ScheduleTaskPopover
-                onClose={() => setShowScheduler(false)}
-                onCreate={onCreateScheduledTask}
-              />
+
+            {/* User messages list button */}
+            {onShowUserMessages && (
+              <button
+                onClick={onShowUserMessages}
+                className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all"
+                title={t('chat.userMessages')}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+            )}
+
+            {/* Project notes button */}
+            {onOpenNote && (
+              <button
+                onClick={onOpenNote}
+                className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95 rounded-lg transition-all"
+                title={t('chat.projectNotes')}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </button>
+            )}
+
+            {/* Scheduled task button */}
+            {onCreateScheduledTask && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowScheduler(!showScheduler)}
+                  className={`p-2 rounded-lg transition-all ${
+                    showScheduler
+                      ? 'text-brand bg-brand/10'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-accent active:bg-muted active:scale-95'
+                  }`}
+                  title={t('chat.scheduledTasks')}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" strokeWidth={2} />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6l4 2" />
+                  </svg>
+                </button>
+                {showScheduler && (
+                  <ScheduleTaskPopover
+                    onClose={() => setShowScheduler(false)}
+                    onCreate={onCreateScheduledTask}
+                  />
+                )}
+              </div>
             )}
           </div>
-        )}
-
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setCaret(e.target.selectionStart ?? e.target.value.length);
-          }}
-          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={disabled ? t('chat.placeholderDisabled') : t('chat.placeholder')}
-          rows={1}
-          className="flex-1 resize-none px-4 py-2 border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ring bg-card text-foreground placeholder-slate-9"
-        />
+        </div>
       </div>
 
     </div>

@@ -12,13 +12,18 @@ import { Topics } from '@cockpit/effect-services';
 
 interface TabManagerTopBarProps {
   initialCwd?: string;
+  /** Whether the right-side file browser is open (drives the toggle's active
+   *  styling). */
+  filesOpen?: boolean;
+  /** Toggle the file browser. Absent (undefined) with no project → button hidden. */
+  onToggleFiles?: () => void;
 }
 
 // ============================================
 // TabManagerTopBar
 // ============================================
 
-export function TabManagerTopBar({ initialCwd }: TabManagerTopBarProps) {
+export function TabManagerTopBar({ initialCwd, filesOpen, onToggleFiles }: TabManagerTopBarProps) {
   const { t } = useTranslation();
   return (
     <div className="border-b border-border bg-card shrink-0">
@@ -68,6 +73,21 @@ export function TabManagerTopBar({ initialCwd }: TabManagerTopBarProps) {
 
         {/* Right: session-related */}
         <div className="flex items-center gap-2">
+          {/* Toggle the right-side file browser (VSCode-style). */}
+          {onToggleFiles && (
+            <button
+              onClick={onToggleFiles}
+              className={`p-2 rounded-lg transition-colors hover:bg-accent ${
+                filesOpen ? 'text-brand bg-accent' : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={t('fileBrowser.toggle', { defaultValue: 'Toggle file browser' })}
+              aria-pressed={filesOpen}
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+            </button>
+          )}
           {/* Reload current project */}
           <button
             onClick={() => window.location.reload()}

@@ -28,6 +28,36 @@ function owned(name: string, template: string, scope: 'user' | 'project' = 'user
   } as HarnessItem;
 }
 
+function ownedSkill(name: string, instructions: string): HarnessItem {
+  return {
+    id: `id-${name}`,
+    scope: 'user',
+    scopeKey: DEFAULT_USER_ID,
+    kind: 'skill',
+    name,
+    status: 'enabled',
+    provenance: { source: 'user' },
+    skill: { instructions },
+    createdAt: 1,
+    updatedAt: 1,
+  } as HarnessItem;
+}
+
+function ownedSubagent(name: string, systemPrompt: string): HarnessItem {
+  return {
+    id: `id-${name}`,
+    scope: 'user',
+    scopeKey: DEFAULT_USER_ID,
+    kind: 'subagent',
+    name,
+    status: 'enabled',
+    provenance: { source: 'user' },
+    subagent: { systemPrompt },
+    createdAt: 1,
+    updatedAt: 1,
+  } as HarnessItem;
+}
+
 describe('resolveCommandPrompt — owned commands (Phase 1.6 HP-02)', () => {
   it('leaves ordinary text untouched', () => {
     const out = resolveCommandPrompt('just a message', 'en', undefined, fakeStore());
@@ -73,5 +103,39 @@ describe('resolveCommandPrompt — owned commands (Phase 1.6 HP-02)', () => {
     const out = resolveCommandPrompt('/qa 안녕', 'ko', undefined, fakeStore());
     // ko pointer copy differs from en ("이 skill 파일을 읽어주세요")
     expect(out).toContain('이 skill 파일을 읽어주세요');
+  });
+
+  it('expands an owned SKILL invoked via "/" by inlining its instructions', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [ownedSkill('summarize', 'SUMMARIZE THE DOC')],
+    });
+    const out = resolveCommandPrompt('/summarize this', 'en', undefined, store);
+    expect(out).toBe('SUMMARIZE THE DOC\n\nthis');
+    expect(out).not.toContain('SKILL.md'); // inlined, not a file pointer
+  });
+
+  it('expands an owned SUBAGENT invoked via "/" as a persona directive (en/ko)', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('reviewer', 'You are a strict code reviewer.')],
+    });
+    const en = resolveCommandPrompt('/reviewer check', 'en', undefined, store);
+    expect(en).toContain('Adopt the following persona');
+    expect(en).toContain('You are a strict code reviewer.');
+    expect(en.endsWith('check')).toBe(true);
+
+    const ko = resolveCommandPrompt('/reviewer 확인', 'ko', undefined, store);
+    expect(ko).toContain('다음 페르소나로');
+    expect(ko).toContain('You are a strict code reviewer.');
+  });
+
+  it('a command wins a verb clash over a skill of the same name', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [
+        ownedSkill('dup', 'SKILL BODY'),
+        owned('dup', 'COMMAND BODY'),
+      ],
+    });
+    const out = resolveCommandPrompt('/dup x', 'en', undefined, store);
+    expect(out).toBe('COMMAND BODY\n\nx');
   });
 });

@@ -282,26 +282,36 @@ export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActi
   }
   for (const p of state?.providers ?? []) {
     if (p.id === CHATGPT_OAUTH_ID) {
-      // DEV-ONLY ChatGPT subscription. Ready is the AUTHORITATIVE sign-in from
-      // the server's `chatgptLogin` block (read from the vault) when present, else
-      // the coarse provider `ready`. A clean subscription label/hint replaces the
-      // long dev-caveat label and the "billed" wording that only fits a metered
-      // key. Picking it is the exact same action the Settings card's "use for
-      // chats" runs.
-      const ready = state?.chatgptLogin ? state.chatgptLogin.available && state.chatgptLogin.signedIn : p.ready;
+      // DEV-ONLY ChatGPT subscription. SELECTION IS DECOUPLED FROM SIGN-IN, exactly
+      // like the Claude (subscription) row above: that row is selectable whenever
+      // the dev engine is AVAILABLE (not whenever Claude is signed in), and login
+      // happens afterwards from the bottom-bar account chip. We mirror that here so
+      // the two subscription engines behave identically.
+      //
+      // The seal (`chatgptLogin.available`, i.e. isChatgptOauthEnabled on the
+      // server) is what gates the ROW's existence; `p.ready` is the older coarse
+      // signal used only if a pre-`chatgptLogin` server ever answers. `signedIn`
+      // now refines the HINT, never the selectability — the runtime's selectEngine
+      // resolves ChatGPT to `ai-sdk` without a credential, so picking it while
+      // signed out simply flips the account chip to the ChatGPT sign-in below,
+      // which is where the owner then logs in (a missing sign-in surfaces at send
+      // time, never as an un-clickable row here). Picking it is the exact same
+      // action the Settings card runs, so header and Settings stay in sync.
+      const seal = state?.chatgptLogin ? state.chatgptLogin.available : p.ready;
+      const signedIn = state?.chatgptLogin?.signedIn ?? false;
       options.push({
         id: p.id,
         label: t('chatgptOauth.title', { defaultValue: 'ChatGPT (subscription)' }),
-        hint: ready
+        hint: signedIn
           ? t('engineSwitcher.chatgptHint', {
               defaultValue: 'Answers on your signed-in ChatGPT subscription. No per-message charge.',
             })
-          : t('engineSwitcher.chatgptSignInNeeded', {
-              defaultValue: 'Sign in with ChatGPT in Settings to use this.',
+          : t('engineSwitcher.chatgptSelectThenSignIn', {
+              defaultValue: 'Select to switch here, then sign in from the ChatGPT chip in the chat bar.',
             }),
         active: pref === 'ai-sdk' && selectedProvider === p.id,
-        selectable: ready,
-        onPick: ready ? () => void choose('ai-sdk', p.id) : null,
+        selectable: seal,
+        onPick: seal ? () => void choose('ai-sdk', p.id) : null,
       });
       continue;
     }

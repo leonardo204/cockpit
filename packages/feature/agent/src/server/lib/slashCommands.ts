@@ -18,6 +18,7 @@ import { COCKPIT_DIR, SKILLS_FILE } from '@cockpit/shared-utils';
 import {
   DEFAULT_USER_ID,
   type HarnessItem,
+  type HarnessKind,
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
@@ -112,23 +113,33 @@ const COMMAND_LINE_RE = /^\s*([/@])([a-zA-Z][a-zA-Z0-9-]*)(?:\s+|$)/;
  *  `getStore()`) so tests can drive owned-command override without a sqlite file. */
 export type CommandExpansionStore = Pick<Store, 'listHarness'>;
 
+/** The in-house org scopeKey — kept in sync with commands.ts / harness.ts so the
+ *  palette listing and the dispatcher expand the SAME org rows (HP-08). */
+const DEFAULT_ORG_ID = 'default';
+
 /**
- * Load enabled Naby-OWNED commands (Phase 1.6 HP-02) for the user scope (always)
- * and, when a cwd is supplied, the project scope. Returned user-first,
- * project-second so a later map upsert lets a project command override a
- * user one of the same verb. Best-effort: a store hiccup must never break the
- * builtin dispatcher, so each read is guarded.
+ * Load enabled Naby-OWNED harness items (Phase 1.6) for the user scope (always),
+ * the org scope (always — team-shared HP-08), and, when a cwd is supplied, the
+ * project scope. ALL kinds (command/skill/subagent) are loaded: the "/" palette
+ * unifies them, so the dispatcher must be able to expand each. Returned
+ * user→org→project so a later, more-specific scope wins a verb clash. Best-effort:
+ * a store hiccup must never break the builtin dispatcher, so each read is guarded.
  */
 function loadOwnedCommands(cwd: string | undefined, store: CommandExpansionStore): HarnessItem[] {
   const out: HarnessItem[] = [];
   try {
-    out.push(...store.listHarness('user', DEFAULT_USER_ID, { kind: 'command', status: 'enabled' }));
+    out.push(...store.listHarness('user', DEFAULT_USER_ID, { status: 'enabled' }));
   } catch {
     /* ignore — builtins still work */
   }
+  try {
+    out.push(...store.listHarness('org', DEFAULT_ORG_ID, { status: 'enabled' }));
+  } catch {
+    /* ignore — org may be empty on a single-user build */
+  }
   if (cwd) {
     try {
-      out.push(...store.listHarness('project', cwd, { kind: 'command', status: 'enabled' }));
+      out.push(...store.listHarness('project', cwd, { status: 'enabled' }));
     } catch {
       /* ignore */
     }
@@ -136,11 +147,43 @@ function loadOwnedCommands(cwd: string | undefined, store: CommandExpansionStore
   return out;
 }
 
-/** verb → template map for the enabled owned commands, project overriding user. */
-function ownedCommandMap(items: HarnessItem[]): Map<string, string> {
-  const map = new Map<string, string>();
+/** One resolved owned entry: which kind it is and the raw body to expand
+ *  (command template | skill instructions | subagent system prompt). */
+interface OwnedEntry {
+  kind: HarnessKind;
+  body: string;
+}
+
+// Cross-kind precedence (command > skill > subagent) × scope precedence
+// (project > org > user), folded into one rank so the map build is
+// order-independent — mirrors commands.ts.mergeCommands.
+const OWNED_KIND_RANK: Record<HarnessKind, number> = { command: 3, skill: 2, subagent: 1 };
+function ownedScopeRank(scope: HarnessItem['scope']): number {
+  return scope === 'project' ? 3 : scope === 'org' ? 2 : 1;
+}
+
+/** Pull the kind-appropriate expansion body from an owned item, or null when its
+ *  payload is missing (a malformed row must not shadow a builtin). */
+function ownedBody(item: HarnessItem): string | null {
+  if (item.kind === 'command') return item.command?.template ?? null;
+  if (item.kind === 'skill') return item.skill?.instructions ?? null;
+  if (item.kind === 'subagent') return item.subagent?.systemPrompt ?? null;
+  return null;
+}
+
+/** verb → resolved owned entry, higher-rank kind/scope winning a clash. */
+function ownedCommandMap(items: HarnessItem[]): Map<string, OwnedEntry> {
+  const map = new Map<string, OwnedEntry>();
+  const rankOf = new Map<string, number>();
   for (const item of items) {
-    if (item.kind === 'command' && item.command) map.set(item.name, item.command.template);
+    const body = ownedBody(item);
+    if (body === null) continue;
+    const rank = OWNED_KIND_RANK[item.kind] * 10 + ownedScopeRank(item.scope);
+    const prev = rankOf.get(item.name);
+    if (prev === undefined || rank >= prev) {
+      map.set(item.name, { kind: item.kind, body });
+      rankOf.set(item.name, rank);
+    }
   }
   return map;
 }
@@ -228,17 +271,26 @@ function resolveStep(
   lang: 'ko' | 'en',
   baseUrl: string,
   userSkills: Array<{ name: string; path: string }>,
-  owned: Map<string, string>,
+  owned: Map<string, OwnedEntry>,
 ): ResolvedStep {
-  // Owned commands (Phase 1.6 HP-02) take PRECEDENCE over both user skills and
-  // builtins of the same verb. The stored `command.template` is the full,
-  // provider-independent prompt body, so it is inlined directly (no SKILL.md
-  // file dependency) — expansion happens here, above the engine seam, so it is
-  // identical on all five providers and the dev engine. No mindset-primer label,
-  // matching the user-skill path; the trailing user text follows the template.
-  const ownedTemplate = owned.get(step.cmd);
-  if (ownedTemplate !== undefined) {
-    return { marker: step.marker, body: step.body, label: '', pointer: ownedTemplate };
+  // Owned harness items (Phase 1.6) take PRECEDENCE over both user skills and
+  // builtins of the same verb. The stored body is the full, provider-independent
+  // prompt text, so it is inlined directly (no SKILL.md file dependency) —
+  // expansion happens here, above the engine seam, so it is identical on all five
+  // providers and the dev engine. No mindset-primer label, matching the
+  // user-skill path; the trailing user text follows the body.
+  //   - command : the template IS the prompt body → inline as-is.
+  //   - skill   : the SKILL instructions are directives → inline as-is (an
+  //               explicit "/" invocation activates the skill now, on top of the
+  //               automatic trigger-based injection the runtime already does).
+  //   - subagent: real subagent orchestration is Phase 2.5; until then a "/"
+  //               invocation makes the MAIN session adopt the persona by framing
+  //               its systemPrompt as a persona directive for this conversation.
+  const ownedEntry = owned.get(step.cmd);
+  if (ownedEntry !== undefined) {
+    const pointer =
+      ownedEntry.kind === 'subagent' ? framePersona(ownedEntry.body, lang) : ownedEntry.body;
+    return { marker: step.marker, body: step.body, label: '', pointer };
   }
   const skill = userSkills.find((s) => s.name === step.cmd);
   if (skill) {
@@ -252,6 +304,16 @@ function resolveStep(
   // On write failure, inline the content so the command never silently no-ops.
   const pointer = skillPath ? readSkillPointer(skillPath, lang) : content;
   return { marker: step.marker, body: step.body, label: labelFor(entry, lang), pointer };
+}
+
+/** Frame a subagent's system prompt as a persona directive for the MAIN session.
+ *  Real subagent orchestration is Phase 2.5; until then, invoking `/persona`
+ *  makes the current session adopt the persona for this conversation — a real
+ *  behavior change, never a silent no-op. */
+function framePersona(systemPrompt: string, lang: 'ko' | 'en'): string {
+  return lang === 'ko'
+    ? `다음 페르소나로 이번 대화에 응답하세요:\n\n${systemPrompt}`
+    : `Adopt the following persona for this conversation:\n\n${systemPrompt}`;
 }
 
 /** "Please read this skill file: <path>" pointer in the active language. */

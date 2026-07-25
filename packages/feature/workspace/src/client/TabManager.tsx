@@ -19,6 +19,7 @@ import { PanelPortalProvider } from '@cockpit/shared-ui';
 import { useTabState } from './useTabState';
 import { TabManagerTopBar } from './TabManagerTopBar';
 import { TabBar } from './TabBar';
+import { FileBrowserPanel } from './FileBrowserPanel';
 import { ChatPanel } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
 import { useScheduledTasks } from '@cockpit/feature-agent';
@@ -77,6 +78,8 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
 
   // UI state
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
+  // Right-side file browser (VSCode-style). Project-scoped, so it needs a cwd.
+  const [isFilesOpen, setIsFilesOpen] = useState(false);
   // Forced chat refresh signal: bumped when a SWITCH_SESSION jump targets a session whose
   // tab already exists. Activating an already-active tab produces no isActive rising edge
   // in Chat, so without this a jump from the scheduled-tasks / recent / pinned panels would
@@ -188,7 +191,11 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar - always visible */}
-        <TabManagerTopBar initialCwd={initialCwd} />
+        <TabManagerTopBar
+          initialCwd={initialCwd}
+          filesOpen={isFilesOpen}
+          onToggleFiles={initialCwd ? () => setIsFilesOpen((v) => !v) : undefined}
+        />
 
         {/* Tab bar + Chat */}
         <div className="flex-1 flex flex-col overflow-hidden">
@@ -239,6 +246,13 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
           </PanelPortalProvider>
         </div>
       </div>
+
+      {/* Right-side file browser (VSCode-style). Sibling of the chat column so it
+          is stable across chat-tab switches; only mounted while toggled open and
+          a project cwd exists. */}
+      {initialCwd && isFilesOpen && (
+        <FileBrowserPanel cwd={initialCwd} onClose={() => setIsFilesOpen(false)} />
+      )}
 
       {/* Project Sessions Modal */}
       {initialCwd && (

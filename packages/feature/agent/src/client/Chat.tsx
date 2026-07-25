@@ -18,6 +18,7 @@ import { useChatContextOptional } from './ChatContext';
 import { useChatHistory } from './useChatHistory';
 import { useChatStream } from './useChatStream';
 import { MessageList, MessageListHandle } from './MessageList';
+import { FILE_REF_MIME, insertFileRef, osFilePath, quotePath } from './fileRefBus';
 import { ChatInput } from './ChatInput';
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
@@ -178,6 +179,34 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     setLocalPlanMode(p);
     onPlanModeChange?.(p);
   }, [onPlanModeChange]);
+
+  // Dropping files onto the CONVERSATION area inserts their reference into the
+  // input (via the active-input channel): OS files (Finder/Explorer) → absolute
+  // path; an in-app file-browser row → its cwd-relative path. Unlike the input
+  // itself, the messages area never attaches images — a drop here always becomes
+  // a path, matching "drop on the conversation → path".
+  const handleConversationDragOver = useCallback((e: React.DragEvent) => {
+    const types = Array.from(e.dataTransfer?.types ?? []);
+    if (types.includes('Files') || types.includes(FILE_REF_MIME)) e.preventDefault();
+  }, []);
+  const handleConversationDrop = useCallback((e: React.DragEvent) => {
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      e.preventDefault();
+      const paths: string[] = [];
+      for (const f of Array.from(files)) {
+        const p = osFilePath(f);
+        if (p) paths.push(quotePath(p));
+      }
+      if (paths.length > 0) insertFileRef(`${paths.join(' ')} `);
+      return;
+    }
+    const ref = e.dataTransfer?.getData(FILE_REF_MIME) ?? '';
+    if (ref) {
+      e.preventDefault();
+      insertFileRef(ref.endsWith(' ') ? ref : `${ref} `);
+    }
+  }, []);
   const isClaudeEngine = !engine || engine === 'claude';
   // The engine identity for this row is now owned by <EngineSwitcher/>: it reads
   // the same /api/naby the settings modal uses (engine.id + selected provider
@@ -583,7 +612,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           </div>
         )}
 
-        {/* Messages */}
+        {/* Messages — dropping a file here inserts its path into the input. */}
+        <div
+          className="flex-1 flex flex-col min-h-0 overflow-hidden"
+          onDragOver={handleConversationDragOver}
+          onDrop={handleConversationDrop}
+        >
         {isLoadingHistory ? (
           <div className="flex-1 flex items-center justify-center">
             <span className="text-muted-foreground">{t('sessions.loadingHistory')}</span>
@@ -607,6 +641,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             thinkingName={thinkingName}
           />
         )}
+        </div>
 
         {/* Token Usage Display */}
         {tokenUsage && <TokenUsageBar tokenUsage={tokenUsage} rateLimitInfo={rateLimitInfo} />}
@@ -618,6 +653,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           // (viewer) — one active run per session; a concurrent send would 409.
           disabled={isLoading || liveRunning}
           cwd={initialCwd}
+          isActive={isActive}
           engine={engine}
           onShowUserMessages={handleShowUserMessages}
           onOpenNote={onOpenNote}
