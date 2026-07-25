@@ -64,37 +64,82 @@ export function redactToken(token: string): string {
 
 // -- pure message helpers (unit-tested) -------------------------------------
 
-/** Callback data for an approval button. Telegram caps callback_data at 64
- *  bytes, so the approvalId (`<sessionId>:<toolCallId>`) must fit — it does
- *  (uuid-ish + short id). Format: `nbapv:<decision>:<approvalId>`. */
-export function buildCallbackData(decision: 'allow' | 'deny', approvalId: string): string {
-  return `nbapv:${decision}:${approvalId}`;
+/** Telegram's hard limit on callback_data. A button whose data exceeds it makes
+ *  the whole sendMessage fail, so nothing may be embedded here that can grow. */
+export const CALLBACK_DATA_MAX_BYTES = 64;
+
+/**
+ * Callback data for an approval button: `nbapv:<decision>:<ref>`.
+ *
+ * `ref` is a SHORT OPAQUE TOKEN, not the approvalId. The first version embedded
+ * the id (`<sessionId>:<toolCallId>`) directly, on the assumption it would fit —
+ * and measured, it does not: with an Agent-SDK UUID session id the data reaches 78
+ * bytes and Telegram rejects the send outright, so the buttons never appear and
+ * the escalation silently degrades to "answer in the app". The caller now mints a
+ * short ref and keeps the mapping, which is bounded by construction.
+ */
+export function buildCallbackData(decision: 'allow' | 'deny', ref: string): string {
+  return `nbapv:${decision}:${ref}`;
 }
 
-/** Parse an approval callback_data back into its decision + approvalId, or
- *  undefined when it is not one of ours. */
+/** Parse an approval callback_data back into its decision + ref, or undefined when
+ *  it is not one of ours. */
 export function parseCallbackData(
   data: string | undefined,
-): { decision: 'allow' | 'deny'; approvalId: string } | undefined {
+): { decision: 'allow' | 'deny'; ref: string } | undefined {
   if (!data) return undefined;
   const m = data.match(/^nbapv:(allow|deny):(.+)$/);
   if (!m) return undefined;
-  return { decision: m[1] as 'allow' | 'deny', approvalId: m[2]! };
+  return { decision: m[1] as 'allow' | 'deny', ref: m[2]! };
+}
+
+/** Callback data for a check-in option button: `nbchk:<index>:<ref>`. The index is
+ *  0-based into the options as they were shown. */
+export function buildCheckinCallbackData(index: number, ref: string): string {
+  return `nbchk:${index}:${ref}`;
+}
+
+/** Parse a check-in callback_data, or undefined when it is not one of ours. */
+export function parseCheckinCallbackData(
+  data: string | undefined,
+): { chosen: number; ref: string } | undefined {
+  if (!data) return undefined;
+  const m = data.match(/^nbchk:(\d{1,2}):(.+)$/);
+  if (!m) return undefined;
+  return { chosen: Number(m[1]), ref: m[2]! };
 }
 
 /** An inline keyboard with Approve / Deny buttons carrying an approval's
  *  callback data — the bidirectional escalation control. */
-export function buildApprovalKeyboard(approvalId: string): {
+export function buildApprovalKeyboard(ref: string): {
   inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
 } {
   return {
     inline_keyboard: [
       [
-        { text: '✅ Approve', callback_data: buildCallbackData('allow', approvalId) },
-        { text: '❌ Deny', callback_data: buildCallbackData('deny', approvalId) },
+        { text: '✅ Approve', callback_data: buildCallbackData('allow', ref) },
+        { text: '❌ Deny', callback_data: buildCallbackData('deny', ref) },
       ],
     ],
   };
+}
+
+/** Buttons for a check-in's options, numbered so a phone screen stays readable
+ *  and a bare "2" reply means the same thing as tapping. Two per row: the option
+ *  labels are sentences, and three across truncates them to uselessness. */
+export function buildCheckinKeyboard(
+  ref: string,
+  optionCount: number,
+): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < optionCount; i += 2) {
+    const row = [{ text: `${i + 1}`, callback_data: buildCheckinCallbackData(i, ref) }];
+    if (i + 1 < optionCount) {
+      row.push({ text: `${i + 2}`, callback_data: buildCheckinCallbackData(i + 1, ref) });
+    }
+    rows.push(row);
+  }
+  return { inline_keyboard: rows };
 }
 
 /** Classify a free-text reply as approve / deny, or undefined when ambiguous.
@@ -115,6 +160,21 @@ export function classifyTextReply(text: string | undefined): 'allow' | 'deny' | 
   if (REPLY_ALLOW.has(first)) return 'allow';
   if (REPLY_DENY.has(first)) return 'deny';
   return undefined;
+}
+
+/** Classify a free-text reply as a check-in OPTION NUMBER (1-based on screen,
+ *  0-based here), or undefined when it is not a plain number in range.
+ *
+ *  Deliberately strict: only a bare number counts. Accepting "the first one" or
+ *  "b" would mean guessing at a decision the whole check-in exists because the
+ *  agent could not guess — and a wrong guess here is recorded as the user's own
+ *  answer, which is worse than not understanding the reply. */
+export function classifyNumericReply(text: string | undefined, optionCount: number): number | undefined {
+  if (!text) return undefined;
+  const m = text.trim().match(/^([1-9]\d?)[.)]?$/);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return n >= 1 && n <= optionCount ? n - 1 : undefined;
 }
 
 // -- Telegram Bot API IO (thin wrappers) ------------------------------------

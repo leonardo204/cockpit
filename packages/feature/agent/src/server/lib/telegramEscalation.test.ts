@@ -2,6 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   truncate,
   formatApprovalMessage,
+  formatCheckinMessage,
+  escalateCheckin,
+  finishCheckinEscalation,
   formatFinalReport,
   interpretUpdate,
   pickTextReplyTarget,
@@ -12,6 +15,7 @@ import {
   TELEGRAM_OFFSET_KEY,
 } from './telegramEscalation';
 import { registerApproval, hasPendingApproval } from './approvalRegistry';
+import { registerCheckin, hasPendingCheckin } from './checkinRegistry';
 import type { TelegramUpdate } from './telegram';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +54,25 @@ describe('telegramEscalation — message formatting (P3-M3b)', () => {
     expect(msg).toContain('…');
   });
 
+  it('numbers the check-in options so a button and a bare reply mean the same thing', () => {
+    const msg = formatCheckinMessage({
+      question: 'Migrate the column, or add a new one?',
+      options: ['migrate in place', 'add a new column'],
+      agentName: 'nabi',
+      cwd: '/repo',
+    });
+    expect(msg).toContain('@nabi');
+    expect(msg).toContain('Migrate the column');
+    expect(msg).toContain('1. migrate in place');
+    expect(msg).toContain('2. add a new column');
+    expect(msg).toContain('/repo');
+    // THE RECOMMENDATION IS ABSENT ON PURPOSE. The in-app prompt hides it until
+    // after the answer so the meter measures knowledge rather than how agreeable
+    // the UI is; leaking it to a phone would reopen that hole where the user is
+    // least able to think it over.
+    expect(msg.toLowerCase()).not.toContain('recommend');
+  });
+
   it('reports success with the answer, failure with the error', () => {
     const ok = formatFinalReport({ ok: true, text: 'all done', agentName: 'nabi', durationMs: 4200, numTurns: 3 });
     expect(ok).toContain('✅');
@@ -80,46 +103,69 @@ describe('telegramEscalation — message formatting (P3-M3b)', () => {
 });
 
 describe('telegramEscalation — update interpretation', () => {
-  const watched = (id: string) => id === 'sess:tc1';
+  // The bridge resolves a short ref to the id it names; an unknown ref is a stale
+  // or foreign button, which the caller acknowledges rather than acts on.
+  const ctx = { idForRef: (r: string) => (r === 'r1' ? 'sess:tc1' : undefined), pendingOptionCount: 0 };
+  const withOptions = { ...ctx, pendingOptionCount: 3 };
 
-  it('reads one of our buttons as a decision for its approval', () => {
+  it('reads one of our approval buttons as a decision for its approval', () => {
     const u: TelegramUpdate = {
       update_id: 5,
-      callback_query: { id: 'cq1', data: 'nbapv:allow:sess:tc1' },
+      callback_query: { id: 'cq1', data: 'nbapv:allow:r1' },
     };
-    expect(interpretUpdate(u, watched)).toEqual({
-      kind: 'callback',
+    expect(interpretUpdate(u, ctx)).toEqual({
+      kind: 'approvalCallback',
       callbackQueryId: 'cq1',
-      approvalId: 'sess:tc1',
+      id: 'sess:tc1',
       decision: 'allow',
-      watched: true,
     });
   });
 
-  it('still acknowledges a button whose approval is no longer pending', () => {
+  it('still surfaces a button whose question is no longer pending, without an id', () => {
     const u: TelegramUpdate = {
       update_id: 6,
-      callback_query: { id: 'cq2', data: 'nbapv:deny:sess:gone' },
+      callback_query: { id: 'cq2', data: 'nbapv:deny:rgone' },
     };
-    const seen = interpretUpdate(u, watched);
-    expect(seen).toMatchObject({ kind: 'callback', watched: false, decision: 'deny' });
+    const seen = interpretUpdate(u, ctx);
+    expect(seen).toEqual({ kind: 'approvalCallback', callbackQueryId: 'cq2', decision: 'deny' });
+  });
+
+  it('reads a check-in button as an option index', () => {
+    const u: TelegramUpdate = { update_id: 12, callback_query: { id: 'cq3', data: 'nbchk:1:r1' } };
+    expect(interpretUpdate(u, ctx)).toEqual({
+      kind: 'checkinCallback',
+      callbackQueryId: 'cq3',
+      id: 'sess:tc1',
+      chosen: 1,
+    });
   });
 
   it('ignores a foreign callback and ordinary chatter', () => {
-    expect(interpretUpdate({ update_id: 7, callback_query: { id: 'x', data: 'other:allow:a' } }, watched)).toBeUndefined();
-    expect(interpretUpdate({ update_id: 8, message: { text: 'what is up' } }, watched)).toBeUndefined();
-    expect(interpretUpdate({ update_id: 9 }, watched)).toBeUndefined();
+    expect(interpretUpdate({ update_id: 7, callback_query: { id: 'x', data: 'other:allow:a' } }, ctx)).toBeUndefined();
+    expect(interpretUpdate({ update_id: 8, message: { text: 'what is up' } }, ctx)).toBeUndefined();
+    expect(interpretUpdate({ update_id: 9 }, ctx)).toBeUndefined();
   });
 
-  it('reads a bare yes/no reply as a decision without an approvalId', () => {
-    expect(interpretUpdate({ update_id: 10, message: { text: '승인' } }, watched)).toEqual({
-      kind: 'text',
+  it('reads a bare yes/no reply as an approval decision', () => {
+    expect(interpretUpdate({ update_id: 10, message: { text: '승인' } }, ctx)).toEqual({
+      kind: 'approvalText',
       decision: 'allow',
     });
-    expect(interpretUpdate({ update_id: 11, message: { text: 'no' } }, watched)).toEqual({
-      kind: 'text',
+    expect(interpretUpdate({ update_id: 11, message: { text: 'no' } }, ctx)).toEqual({
+      kind: 'approvalText',
       decision: 'deny',
     });
+  });
+
+  it('reads a bare number as a check-in answer, but only when one is pending', () => {
+    expect(interpretUpdate({ update_id: 13, message: { text: '2' } }, withOptions)).toEqual({
+      kind: 'checkinText',
+      chosen: 1,
+    });
+    // Out of the offered range, or nothing pending: a number means nothing and is
+    // NOT reinterpreted as an approval.
+    expect(interpretUpdate({ update_id: 14, message: { text: '9' } }, withOptions)).toBeUndefined();
+    expect(interpretUpdate({ update_id: 15, message: { text: '2' } }, ctx)).toBeUndefined();
   });
 
   it('applies a bare reply to the NEWEST pending approval, or none', () => {
@@ -162,14 +208,20 @@ const READY = {
 
 /** Fake Bot API. `updateQueue` is drained one poll at a time, so the loop sees an
  *  empty backlog first (the drain) and the queued update next. */
-function stubTelegram(updateQueue: TelegramUpdate[][]) {
+/** A queued batch may be a THUNK, so a test can echo back the short ref that the
+ *  escalation actually minted — the ref is process-local and not knowable before
+ *  the send. */
+type Batch = TelegramUpdate[] | (() => TelegramUpdate[]);
+
+function stubTelegram(updateQueue: Batch[]) {
   const calls: Call[] = [];
   const fetchMock = vi.fn(async (input: unknown, init?: { body?: string }) => {
     const url = String(input);
     calls.push({ url, body: init?.body ? JSON.parse(init.body) : undefined });
     const reply = (json: unknown) => ({ ok: true, status: 200, json: async () => json });
     if (url.includes('/getUpdates')) {
-      const batch = updateQueue.shift() ?? [];
+      const next = updateQueue.shift();
+      const batch = typeof next === 'function' ? next() : (next ?? []);
       return reply({ ok: true, result: batch });
     }
     if (url.includes('/sendMessage')) return reply({ ok: true, result: { message_id: 1 } });
@@ -188,7 +240,13 @@ describe('telegramEscalation — bridge (send → poll → resolveApproval)', ()
     const approvalId = 'sess-btn:tc1';
     const { calls } = stubTelegram([
       [], // the drain poll
-      [{ update_id: 42, callback_query: { id: 'cq1', data: `nbapv:allow:${approvalId}` } }],
+      // Pressed AFTER the send, so it carries the ref the bridge actually minted.
+      () => [
+        {
+          update_id: 42,
+          callback_query: { id: 'cq1', data: `nbapv:allow:${pendingEscalations()[0]!.ref}` },
+        },
+      ],
     ]);
     const store = fakeStore({ ...READY });
 
@@ -202,12 +260,14 @@ describe('telegramEscalation — bridge (send → poll → resolveApproval)', ()
     expect(ask).toBeDefined();
     const askBody = ask!.body as { text: string; reply_markup: { inline_keyboard: { callback_data: string }[][] } };
     expect(askBody.text).toContain('Bash');
-    expect(askBody.reply_markup.inline_keyboard[0][0].callback_data).toBe(`nbapv:allow:${approvalId}`);
+    // Keyed by a short ref, not the id: `nbapv:allow:<id>` would be 78 bytes
+    // with a UUID session and Telegram would reject the whole send.
+    expect(askBody.reply_markup.inline_keyboard[0][0].callback_data).toMatch(/^nbapv:allow:r[0-9a-z]+$/);
 
     await vi.waitFor(() => expect(decided).toEqual({ behavior: 'allow' }), { timeout: 4000 });
     // Settled, unwatched, acknowledged, and reported back to the chat.
     expect(hasPendingApproval(approvalId)).toBe(false);
-    expect(pendingEscalations().some((w) => w.approvalId === approvalId)).toBe(false);
+    expect(pendingEscalations().some((w) => w.id === approvalId)).toBe(false);
     expect(calls.some((c) => c.url.includes('/answerCallbackQuery'))).toBe(true);
     expect(
       calls.filter((c) => c.url.includes('/sendMessage')).some((c) => String((c.body as { text: string }).text).includes('✅ Approved')),
@@ -232,12 +292,111 @@ describe('telegramEscalation — bridge (send → poll → resolveApproval)', ()
     expect(decided?.reason).toMatch(/Telegram/);
   });
 
+  it('a check-in option button resolves the paused check-in and confirms in chat', async () => {
+    const checkinId = 'sess-chk:tc1';
+    const { calls } = stubTelegram([
+      [],
+      () => [
+        {
+          update_id: 91,
+          callback_query: { id: 'cq9', data: `nbchk:1:${pendingEscalations()[0]!.ref}` },
+        },
+      ],
+    ]);
+    const store = fakeStore({ ...READY });
+
+    let answered: { chosen: number } | undefined;
+    registerCheckin(checkinId, (a) => void (answered = a), 1);
+
+    await escalateCheckin({
+      store,
+      checkinId,
+      question: 'Migrate the column, or add a new one?',
+      options: ['migrate in place', 'add a new column'],
+      now: 1,
+      agentName: 'nabi',
+    });
+
+    const ask = calls.find((c) => c.url.includes('/sendMessage'));
+    const askBody = ask!.body as { text: string; reply_markup: { inline_keyboard: { text: string }[][] } };
+    expect(askBody.text).toContain('1. migrate in place');
+    expect(askBody.reply_markup.inline_keyboard.flat().map((b) => b.text)).toEqual(['1', '2']);
+
+    await vi.waitFor(() => expect(answered).toEqual({ chosen: 1 }), { timeout: 4000 });
+    expect(hasPendingCheckin(checkinId)).toBe(false);
+    expect(pendingEscalations().some((w) => w.id === checkinId)).toBe(false);
+    // The chat is told which option won, by number AND text — a bare "2" on a
+    // phone is meaningless a day later.
+    expect(
+      calls
+        .filter((c) => c.url.includes('/sendMessage'))
+        .some((c) => String((c.body as { text: string }).text).includes('2. add a new column')),
+    ).toBe(true);
+  });
+
+  it('a bare number answers the newest pending check-in', async () => {
+    const checkinId = 'sess-num:tc2';
+    stubTelegram([[], [{ update_id: 92, message: { text: '1' } }]]);
+    const store = fakeStore({ ...READY });
+    let answered: { chosen: number } | undefined;
+    registerCheckin(checkinId, (a) => void (answered = a), 2);
+    await escalateCheckin({ store, checkinId, question: 'A or B?', options: ['a', 'b'], now: 2 });
+    await vi.waitFor(() => expect(answered).toEqual({ chosen: 0 }), { timeout: 4000 });
+  });
+
+  it('an out-of-range option is refused rather than recorded as an answer', async () => {
+    const checkinId = 'sess-bad:tc3';
+    const { calls } = stubTelegram([
+      [],
+      () => [
+        {
+          update_id: 93,
+          // Only two options were offered; index 7 can only come from a tampered
+          // or stale button, and must NOT become the user's recorded choice.
+          callback_query: { id: 'cq7', data: `nbchk:7:${pendingEscalations()[0]!.ref}` },
+        },
+      ],
+      [],
+    ]);
+    const store = fakeStore({ ...READY });
+    let answered: unknown;
+    registerCheckin(checkinId, (a) => void (answered = a), 3);
+    await escalateCheckin({ store, checkinId, question: 'A or B?', options: ['a', 'b'], now: 3 });
+    await vi.waitFor(
+      () => expect(calls.some((c) => c.url.includes('/answerCallbackQuery'))).toBe(true),
+      { timeout: 4000 },
+    );
+    expect(answered).toBeUndefined();
+    // Still waiting — the in-app prompt (and the TTL) still governs it.
+    expect(hasPendingCheckin(checkinId)).toBe(true);
+    await finishCheckinEscalation({ store, checkinId });
+  });
+
+  it('closes a check-in in chat when the app answered first', async () => {
+    const checkinId = 'sess-appchk:tc4';
+    const { calls } = stubTelegram([[], []]);
+    const store = fakeStore({ ...READY });
+    registerCheckin(checkinId, () => {}, 4);
+    await escalateCheckin({ store, checkinId, question: 'A or B?', options: ['a', 'b'], now: 4 });
+    await finishCheckinEscalation({ store, checkinId, chosen: 0 });
+    expect(pendingEscalations().some((w) => w.id === checkinId)).toBe(false);
+    expect(
+      calls
+        .filter((c) => c.url.includes('/sendMessage'))
+        .some((c) => String((c.body as { text: string }).text).includes('answered in the app')),
+    ).toBe(true);
+    // A second call is a no-op: the loop and the turn must never double-report.
+    const before = calls.length;
+    await finishCheckinEscalation({ store, checkinId, chosen: 0 });
+    expect(calls).toHaveLength(before);
+  });
+
   it('does not escalate (and does not watch) when Telegram is not configured', async () => {
     const { calls } = stubTelegram([[]]);
     const store = fakeStore({ 'telegram.enabled': 'false' });
     await escalateApproval({ store, approvalId: 'sess-off:tc1', toolName: 'Bash', now: 3 });
     expect(calls).toHaveLength(0);
-    expect(pendingEscalations().some((w) => w.approvalId === 'sess-off:tc1')).toBe(false);
+    expect(pendingEscalations().some((w) => w.id === 'sess-off:tc1')).toBe(false);
   });
 
   it('stops watching and says so when the app answered first', async () => {
@@ -246,10 +405,10 @@ describe('telegramEscalation — bridge (send → poll → resolveApproval)', ()
     const store = fakeStore({ ...READY });
     registerApproval(approvalId, () => {}, 4);
     await escalateApproval({ store, approvalId, toolName: 'Edit', now: 4 });
-    expect(pendingEscalations().some((w) => w.approvalId === approvalId)).toBe(true);
+    expect(pendingEscalations().some((w) => w.id === approvalId)).toBe(true);
 
     await finishEscalation({ store, approvalId, decision: 'deny', reason: 'approval request timed out' });
-    expect(pendingEscalations().some((w) => w.approvalId === approvalId)).toBe(false);
+    expect(pendingEscalations().some((w) => w.id === approvalId)).toBe(false);
     const texts = calls.filter((c) => c.url.includes('/sendMessage')).map((c) => (c.body as { text: string }).text);
     expect(texts.some((t) => t.includes('❌ Denied') && t.includes('Edit') && t.includes('timed out'))).toBe(true);
 

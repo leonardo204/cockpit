@@ -37,12 +37,16 @@
 
 import type { GateDecision, Store } from '../../../../../../../dist/naby-runtime.mjs';
 import { resolveApproval } from './approvalRegistry';
+import { resolveCheckin } from './checkinRegistry';
 import {
   answerCallbackQuery,
   buildApprovalKeyboard,
+  buildCheckinKeyboard,
+  classifyNumericReply,
   classifyTextReply,
   isTelegramReady,
   parseCallbackData,
+  parseCheckinCallbackData,
   pollTelegramUpdates,
   readTelegramConfig,
   sendTelegramMessage,
@@ -92,6 +96,27 @@ export function formatApprovalMessage(opts: {
   const input = formatInputPreview(opts.input);
   if (input) lines.push('', input);
   lines.push('', 'Approve or deny below (or reply yes / no).');
+  return lines.join('\n');
+}
+
+/** Prefix of the in-chat confirmation after a check-in is answered. */
+export const CHECKIN_ANSWERED = '🦋 Chose';
+
+/** The check-in as it reads on a phone: the question, then the numbered options.
+ *  The numbers are the whole interface — they match the buttons AND a bare "2"
+ *  reply, so the user can answer either way without being told which. */
+export function formatCheckinMessage(opts: {
+  question: string;
+  options: readonly string[];
+  agentName?: string;
+  cwd?: string;
+}): string {
+  const who = opts.agentName ? `@${opts.agentName}` : 'naby';
+  const lines = [`🤔 ${who} is asking how to proceed`, '', truncate(opts.question, INPUT_PREVIEW_CHARS)];
+  if (opts.cwd) lines.push('', `Dir: ${opts.cwd}`);
+  lines.push('');
+  opts.options.forEach((o, i) => lines.push(`${i + 1}. ${truncate(o, INPUT_PREVIEW_CHARS)}`));
+  lines.push('', 'Tap a number below (or just reply with it).');
   return lines.join('\n');
 }
 
@@ -158,30 +183,59 @@ export function formatFinalReport(opts: FinalReport): string {
  *    reply): ignored on purpose, never guessed at. */
 export function interpretUpdate(
   update: TelegramUpdate,
-  isWatched: (approvalId: string) => boolean,
+  ctx: {
+    /** Short token → the id it names, or undefined for a stale/foreign button. */
+    idForRef: (ref: string) => string | undefined;
+    /** How many options the newest pending CHECK-IN offered, for a numeric reply.
+     *  0 when none is pending, which makes every number ambiguous and ignored. */
+    pendingOptionCount: number;
+  },
 ):
-  | { kind: 'callback'; callbackQueryId: string; approvalId: string; decision: 'allow' | 'deny'; watched: boolean }
-  | { kind: 'text'; decision: 'allow' | 'deny' }
+  | { kind: 'approvalCallback'; callbackQueryId: string; id?: string; decision: 'allow' | 'deny' }
+  | { kind: 'checkinCallback'; callbackQueryId: string; id?: string; chosen: number }
+  | { kind: 'approvalText'; decision: 'allow' | 'deny' }
+  | { kind: 'checkinText'; chosen: number }
   | undefined {
   if (update.callback_query) {
-    const parsed = parseCallbackData(update.callback_query.data);
-    if (!parsed) return undefined;
-    return {
-      kind: 'callback',
-      callbackQueryId: update.callback_query.id,
-      approvalId: parsed.approvalId,
-      decision: parsed.decision,
-      watched: isWatched(parsed.approvalId),
-    };
+    const approval = parseCallbackData(update.callback_query.data);
+    if (approval) {
+      return {
+        kind: 'approvalCallback',
+        callbackQueryId: update.callback_query.id,
+        ...(idForRefSafe(ctx, approval.ref) ? { id: idForRefSafe(ctx, approval.ref)! } : {}),
+        decision: approval.decision,
+      };
+    }
+    const checkin = parseCheckinCallbackData(update.callback_query.data);
+    if (checkin) {
+      return {
+        kind: 'checkinCallback',
+        callbackQueryId: update.callback_query.id,
+        ...(idForRefSafe(ctx, checkin.ref) ? { id: idForRefSafe(ctx, checkin.ref)! } : {}),
+        chosen: checkin.chosen,
+      };
+    }
+    return undefined;
   }
-  const decision = classifyTextReply(update.message?.text);
-  return decision ? { kind: 'text', decision } : undefined;
+  const text = update.message?.text;
+  // A NUMBER is checked first and only against a pending check-in's option count:
+  // "1" is a plausible answer to a choice and meaningless as an approval, while
+  // "yes" is the reverse. Neither is ever guessed into the other's slot.
+  const chosen = classifyNumericReply(text, ctx.pendingOptionCount);
+  if (chosen !== undefined) return { kind: 'checkinText', chosen };
+  const decision = classifyTextReply(text);
+  return decision ? { kind: 'approvalText', decision } : undefined;
+}
+
+/** Tiny helper so the branches above read straight. */
+function idForRefSafe(ctx: { idForRef: (ref: string) => string | undefined }, ref: string): string | undefined {
+  return ctx.idForRef(ref);
 }
 
 /** Which pending approval a bare "yes" answers: the most recently escalated one —
  *  the message the user is looking at. Undefined when nothing is pending, so an
  *  unsolicited "yes" resolves nothing. */
-export function pickTextReplyTarget<T extends { approvalId: string; escalatedAt: number }>(
+export function pickTextReplyTarget<T extends { escalatedAt: number }>(
   watching: Iterable<T>,
 ): T | undefined {
   let best: T | undefined;
@@ -201,15 +255,33 @@ export function telegramDecision(decision: 'allow' | 'deny'): GateDecision {
 
 // -- the shared state (globalThis-pinned, see header) -------------------------
 
+/** One question the bridge is waiting on. TWO KINDS through one loop: an approval
+ *  is allow/deny about a tool, a check-in is a choice among ways to do the work.
+ *  They share the poll loop, the watermark and the backlog drain — running a second
+ *  loop would mean two `getUpdates` in flight, which Telegram answers with a 409
+ *  and which would break both. */
 type Watched = {
-  approvalId: string;
-  toolName: string;
+  /** The registry id the resolver is keyed by (approvalId / checkinId). */
+  id: string;
+  /** Short opaque token embedded in callback_data — see `mintRef`. */
+  ref: string;
+  /** What to call it in the confirmation message. */
+  label: string;
   /** caller's clock — this module never reads the time itself. */
   escalatedAt: number;
-};
+} & (
+  | { kind: 'approval' }
+  | { kind: 'checkin'; options: string[] }
+);
 
 type BridgeState = {
   watching: Map<string, Watched>;
+  /** Short token → watched id. THE REASON IT EXISTS: Telegram caps callback_data
+   *  at 64 bytes and an id of the form `<sessionId>:<toolCallId>` measures 78 with
+   *  a UUID session — the send fails outright and the buttons never appear. A
+   *  bounded token keeps the data small whatever the ids grow into. */
+  refs: Map<string, string>;
+  refSeq: number;
   offset: number;
   /** whether the loop already drained the pre-existing backlog this process. */
   drained: boolean;
@@ -219,11 +291,42 @@ type BridgeState = {
 const g = globalThis as unknown as { __nabyTelegramBridge?: BridgeState };
 const state: BridgeState =
   g.__nabyTelegramBridge ??
-  (g.__nabyTelegramBridge = { watching: new Map(), offset: 0, drained: false, loopRunning: false });
+  (g.__nabyTelegramBridge = {
+    watching: new Map(),
+    refs: new Map(),
+    refSeq: 0,
+    offset: 0,
+    drained: false,
+    loopRunning: false,
+  });
+
+/** A short token for one escalation. Process-local and monotonic — it only has to
+ *  be unique among what is currently being watched, and a button from a previous
+ *  process is answered with "no longer waiting" either way. */
+function mintRef(id: string): string {
+  state.refSeq += 1;
+  const ref = `r${state.refSeq.toString(36)}`;
+  state.refs.set(ref, id);
+  return ref;
+}
+
+/** Forget a watch and its token together, so the map cannot outlive the loop. */
+function unwatch(id: string): Watched | undefined {
+  const w = state.watching.get(id);
+  if (!w) return undefined;
+  state.watching.delete(id);
+  state.refs.delete(w.ref);
+  return w;
+}
 
 /** Test/diagnostic view of what the bridge is waiting on. */
 export function pendingEscalations(): Watched[] {
   return [...state.watching.values()];
+}
+
+/** Resolve a callback's short token back to the id it names. */
+function idForRef(ref: string): string | undefined {
+  return state.refs.get(ref);
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -266,10 +369,13 @@ export async function escalateApproval(opts: {
     return;
   }
   // Watch BEFORE sending: the answer can arrive between the send returning and
-  // this line, and an unwatched approvalId would be dropped.
+  // this line, and an unwatched id would be dropped.
+  const ref = mintRef(opts.approvalId);
   state.watching.set(opts.approvalId, {
-    approvalId: opts.approvalId,
-    toolName: opts.toolName,
+    kind: 'approval',
+    id: opts.approvalId,
+    ref,
+    label: opts.toolName,
     escalatedAt: opts.now,
   });
   ensureListener(opts.store);
@@ -281,12 +387,12 @@ export async function escalateApproval(opts: {
       ...(opts.agentName ? { agentName: opts.agentName } : {}),
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
     }),
-    { replyMarkup: buildApprovalKeyboard(opts.approvalId) },
+    { replyMarkup: buildApprovalKeyboard(ref) },
   );
   if (!sent.ok) {
     // Could not ask remotely — stop watching so the loop can exit; the in-app
     // prompt (and the TTL) still governs this approval.
-    state.watching.delete(opts.approvalId);
+    unwatch(opts.approvalId);
     console.warn(`[telegram] escalation send failed: ${sent.error}`);
     return;
   }
@@ -306,16 +412,87 @@ export async function finishEscalation(opts: {
   decision: 'allow' | 'deny';
   reason?: string;
 }): Promise<void> {
-  const watched = state.watching.get(opts.approvalId);
+  const watched = unwatch(opts.approvalId);
   if (!watched) return;
-  state.watching.delete(opts.approvalId);
   const cfg = readTelegramConfig(opts.store);
   if (!isTelegramReady(cfg)) return;
   const mark = opts.decision === 'allow' ? '✅ Approved' : '❌ Denied';
   // The reason (a policy deny, an abort, the TTL) is the informative part when
   // there is one; without one the decision came from the in-app buttons.
   const detail = opts.reason ? ` — ${opts.reason}` : ' — answered in the app';
-  await sendTelegramMessage(cfg, `${mark}: ${watched.toolName}${detail}`);
+  await sendTelegramMessage(cfg, `${mark}: ${watched.label}${detail}`);
+}
+
+/** Escalate a paused CHECK-IN to Telegram: send the question with numbered
+ *  buttons and start watching. Fire-and-forget for the same reason as an approval —
+ *  the in-app prompt is already up, so a Telegram failure must degrade to
+ *  "answer in the app". Never throws. */
+export async function escalateCheckin(opts: {
+  store: Store;
+  checkinId: string;
+  question: string;
+  options: readonly string[];
+  agentName?: string;
+  cwd?: string;
+  /** caller's clock (this module keeps no clock of its own). */
+  now: number;
+}): Promise<void> {
+  const cfg = readTelegramConfig(opts.store);
+  if (!isTelegramReady(cfg)) {
+    console.log('[telegram] check-in escalation skipped: Telegram not configured — answer in the app');
+    return;
+  }
+  const ref = mintRef(opts.checkinId);
+  state.watching.set(opts.checkinId, {
+    kind: 'checkin',
+    id: opts.checkinId,
+    ref,
+    // The question, shortened — it is what the confirmation message names.
+    label: truncate(opts.question, 60),
+    options: [...opts.options],
+    escalatedAt: opts.now,
+  });
+  ensureListener(opts.store);
+  const sent = await sendTelegramMessage(
+    cfg,
+    formatCheckinMessage({
+      question: opts.question,
+      options: opts.options,
+      ...(opts.agentName ? { agentName: opts.agentName } : {}),
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    }),
+    { replyMarkup: buildCheckinKeyboard(ref, opts.options.length) },
+  );
+  if (!sent.ok) {
+    unwatch(opts.checkinId);
+    console.warn(`[telegram] check-in escalation send failed: ${sent.error}`);
+    return;
+  }
+  console.log(`[telegram] escalated check-in (${opts.checkinId}, ${opts.options.length} options)`);
+}
+
+/** The check-in was settled by someone OTHER than Telegram (the in-app prompt, an
+ *  abort, or the TTL). Stop watching and tell the chat, so live buttons on a phone
+ *  are not the last word the user sees.
+ *
+ *  A no-op when the id is not watched — exactly the case when the loop itself
+ *  answered it, so the two paths never double-report. */
+export async function finishCheckinEscalation(opts: {
+  store: Store;
+  checkinId: string;
+  /** The option index the user picked, or -1 / undefined when nobody answered. */
+  chosen?: number;
+}): Promise<void> {
+  const watched = unwatch(opts.checkinId);
+  if (!watched || watched.kind !== 'checkin') return;
+  const cfg = readTelegramConfig(opts.store);
+  if (!isTelegramReady(cfg)) return;
+  const option =
+    opts.chosen !== undefined && opts.chosen >= 0 ? watched.options[opts.chosen] : undefined;
+  const detail = option
+    ? `${opts.chosen! + 1}. ${option} — answered in the app`
+    : 'no longer waiting — answered in the app, or it expired';
+  await sendTelegramMessage(cfg, `${CHECKIN_ANSWERED} ${detail}`);
 }
 
 /** Report a finished turn to the chat (the second half of escalation). Awaited by
@@ -389,49 +566,93 @@ async function runListener(store: Store): Promise<void> {
  *  (which calls finishEscalation) sees nothing left to report — this path already
  *  confirmed in-chat. */
 async function handleUpdate(cfg: TelegramConfig, update: TelegramUpdate): Promise<void> {
-  const seen = interpretUpdate(update, (id) => state.watching.has(id));
+  const newestCheckin = pickTextReplyTarget(
+    [...state.watching.values()].filter((w): w is Watched & { kind: 'checkin' } => w.kind === 'checkin'),
+  );
+  const seen = interpretUpdate(update, {
+    idForRef,
+    pendingOptionCount: newestCheckin?.options.length ?? 0,
+  });
   if (!seen) return;
 
-  if (seen.kind === 'callback') {
-    if (!seen.watched) {
-      // A button from a turn that has already moved on (answered in the app,
-      // timed out, or a server restart). Acknowledge so the spinner stops and
-      // say so, rather than silently doing nothing.
+  // -- a button from a question that has already moved on ---------------------
+  // (answered in the app, timed out, or a server restart lost the map).
+  // Acknowledge so the spinner stops and SAY so, rather than doing nothing.
+  if (seen.kind === 'approvalCallback' || seen.kind === 'checkinCallback') {
+    const watched = seen.id ? state.watching.get(seen.id) : undefined;
+    if (!watched) {
       await answerCallbackQuery(cfg, seen.callbackQueryId, 'This request is no longer waiting.');
       return;
     }
-    const watched = state.watching.get(seen.approvalId)!;
-    state.watching.delete(seen.approvalId);
-    const resolved = resolveApproval(seen.approvalId, telegramDecision(seen.decision));
-    await answerCallbackQuery(
-      cfg,
-      seen.callbackQueryId,
-      resolved
-        ? seen.decision === 'allow'
-          ? 'Approved'
-          : 'Denied'
-        : 'This request is no longer waiting.',
-    );
-    if (resolved) {
-      await sendTelegramMessage(
+    if (seen.kind === 'approvalCallback' && watched.kind === 'approval') {
+      unwatch(watched.id);
+      const resolved = resolveApproval(watched.id, telegramDecision(seen.decision));
+      await answerCallbackQuery(
         cfg,
-        `${seen.decision === 'allow' ? '✅ Approved' : '❌ Denied'}: ${watched.toolName}`,
+        seen.callbackQueryId,
+        resolved ? (seen.decision === 'allow' ? 'Approved' : 'Denied') : 'This request is no longer waiting.',
       );
-      console.log(`[telegram] ${seen.decision} from button → ${seen.approvalId}`);
+      if (resolved) {
+        await sendTelegramMessage(
+          cfg,
+          `${seen.decision === 'allow' ? '✅ Approved' : '❌ Denied'}: ${watched.label}`,
+        );
+        console.log(`[telegram] ${seen.decision} from button → ${watched.id}`);
+      }
+      return;
+    }
+    if (seen.kind === 'checkinCallback' && watched.kind === 'checkin') {
+      // An out-of-range index can only come from a tampered or stale button; it
+      // must not be recorded as the user's answer.
+      const option = watched.options[seen.chosen];
+      if (option === undefined) {
+        await answerCallbackQuery(cfg, seen.callbackQueryId, 'That option is no longer valid.');
+        return;
+      }
+      unwatch(watched.id);
+      const resolved = resolveCheckin(watched.id, { chosen: seen.chosen });
+      await answerCallbackQuery(
+        cfg,
+        seen.callbackQueryId,
+        resolved ? `Chose ${seen.chosen + 1}` : 'This request is no longer waiting.',
+      );
+      if (resolved) {
+        await sendTelegramMessage(cfg, `${CHECKIN_ANSWERED} ${seen.chosen + 1}. ${option}`);
+        console.log(`[telegram] check-in option ${seen.chosen + 1} from button → ${watched.id}`);
+      }
+      return;
+    }
+    // A button of one kind pressed against a watch of the other: only possible
+    // from a stale message after a restart reused a token. Say so, change nothing.
+    await answerCallbackQuery(cfg, seen.callbackQueryId, 'This request is no longer waiting.');
+    return;
+  }
+
+  // -- a bare number answers the newest pending CHECK-IN ----------------------
+  if (seen.kind === 'checkinText') {
+    if (!newestCheckin) return;
+    const option = newestCheckin.options[seen.chosen];
+    if (option === undefined) return;
+    unwatch(newestCheckin.id);
+    if (resolveCheckin(newestCheckin.id, { chosen: seen.chosen })) {
+      await sendTelegramMessage(cfg, `${CHECKIN_ANSWERED} ${seen.chosen + 1}. ${option}`);
+      console.log(`[telegram] check-in option ${seen.chosen + 1} from reply → ${newestCheckin.id}`);
     }
     return;
   }
 
-  // A bare yes/no answers the newest pending approval.
-  const target = pickTextReplyTarget(state.watching.values());
+  // -- a bare yes/no answers the newest pending APPROVAL ----------------------
+  const target = pickTextReplyTarget(
+    [...state.watching.values()].filter((w) => w.kind === 'approval'),
+  );
   if (!target) return;
-  state.watching.delete(target.approvalId);
-  const resolved = resolveApproval(target.approvalId, telegramDecision(seen.decision));
+  unwatch(target.id);
+  const resolved = resolveApproval(target.id, telegramDecision(seen.decision));
   if (resolved) {
     await sendTelegramMessage(
       cfg,
-      `${seen.decision === 'allow' ? '✅ Approved' : '❌ Denied'}: ${target.toolName}`,
+      `${seen.decision === 'allow' ? '✅ Approved' : '❌ Denied'}: ${target.label}`,
     );
-    console.log(`[telegram] ${seen.decision} from reply → ${target.approvalId}`);
+    console.log(`[telegram] ${seen.decision} from reply → ${target.id}`);
   }
 }

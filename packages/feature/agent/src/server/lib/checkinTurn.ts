@@ -93,6 +93,13 @@ export interface CheckinTurnDeps {
   ttlMs: number;
   /** Injected so this module needs no clock of its own (and a test can pin it). */
   now: () => number;
+  /** P3-M3b's channel, for a check-in: send the question to Telegram too, and
+   *  close it there when it is settled elsewhere. Absent = in-app only. Injected
+   *  rather than imported so this module stays testable without the bridge. */
+  escalate?: {
+    send(input: { checkinId: string; question: string; options: readonly string[] }): void;
+    finish(input: { checkinId: string; chosen?: number }): void;
+  };
 }
 
 /**
@@ -121,6 +128,14 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
           clearTimeout(timer);
           deps.signal.removeEventListener('abort', onAbort);
           unregisterCheckin(checkinId);
+          // P3-M3b: if the question ALSO went out over Telegram, close it there.
+          // A no-op when Telegram is what answered (the bridge unwatches first),
+          // so the user never gets a duplicate — and is never left holding live
+          // buttons for a decision already made in the app, aborted, or expired.
+          deps.escalate?.finish({
+            checkinId,
+            ...(answer.chosen >= 0 ? { chosen: answer.chosen } : {}),
+          });
           // Tell the UI the prompt is done so the options stop being clickable,
           // whichever way it ended.
           deps.emit({
@@ -146,6 +161,19 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
           options: question.options,
           recommended: question.recommended,
           session_id: deps.sessionId,
+        });
+        // Deliberately not awaited, like the approval path: the in-app prompt is
+        // already up and the turn is already suspended on this promise, so a slow
+        // or failing Telegram send must delay neither.
+        //
+        // AND THE RECOMMENDATION IS NOT SENT. The in-app prompt hides it until
+        // after the answer so the meter measures knowledge rather than how
+        // agreeable the UI is; leaking it to the phone would reopen exactly that
+        // hole on the surface where the user is least able to think it over.
+        deps.escalate?.send({
+          checkinId,
+          question: question.question,
+          options: question.options,
         });
       });
     },

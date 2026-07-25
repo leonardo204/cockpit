@@ -125,6 +125,8 @@ import { ensureCockpitImport } from './cockpitImport';
 import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
 import {
   escalateApproval,
+  escalateCheckin,
+  finishCheckinEscalation,
   finishEscalation,
   sendFinalReport,
 } from '../lib/telegramEscalation';
@@ -634,6 +636,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 signal: ctx.signal,
                 ttlMs: APPROVAL_TTL_MS,
                 now: () => Date.now(),
+                // P3-M3b's channel, for check-ins too: an agent set to escalate
+                // sends its question to the phone as numbered buttons. `escalation`
+                // is resolved below, so it is read through a getter-free closure
+                // here — the sink is built before that line and only CALLS these
+                // once a check-in actually happens.
+                escalate: {
+                  send: (input) => {
+                    if (!escalateToTelegram) return;
+                    void escalateCheckin({
+                      store,
+                      ...input,
+                      now: Date.now(),
+                      ...(routedAgent ? { agentName: routedAgent.name } : {}),
+                      ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+                    });
+                  },
+                  finish: (input) => {
+                    if (!escalateToTelegram) return;
+                    void finishCheckinEscalation({ store, ...input });
+                  },
+                },
               })
             : undefined;
         const builtin = buildToolset(

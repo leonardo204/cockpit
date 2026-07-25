@@ -45,6 +45,17 @@ type GrowthWire = {
   tripwires: number;
   excluded: number;
   blockedByTripwire?: boolean;
+  brier?: number;
+  brierSamples: number;
+  ask?: {
+    precision: number;
+    recall: number;
+    warrantedAsks: number;
+    unnecessaryAsks: number;
+    missedAsks: number;
+    correctSilences: number;
+    samples: number;
+  };
   ledgerRows: number;
   change: {
     direction: 'up' | 'down' | 'flat';
@@ -288,6 +299,49 @@ export function GrowthPanel({ agentId }: { agentId: string }) {
           })}
         </dd>
       </dl>
+
+      {/* the second tier. Shown as SENTENCES, not scores: "Brier 0.09" means
+          nothing to a person deciding whether to delegate, while "it is right
+          about as often as it says it is" does. */}
+      {g.brier !== undefined || g.ask ? (
+        <div className="space-y-1 border-t border-border pt-2">
+          <div className="text-[10px] font-medium text-muted-foreground">
+            {t('growth.secondTier', { defaultValue: 'Two other things worth knowing' })}
+          </div>
+          {g.brier !== undefined ? (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {/* 0.25 is what an agent scores by always saying "50% sure", so it is
+                  the line where stated confidence starts carrying information. */}
+              {g.brier < 0.25
+                ? t('growth.calibrationGood', {
+                    defaultValue:
+                      'When it says how sure it is, that number is worth reading — it has been about as right as it claimed, across {{count}} answer(s).',
+                    count: g.brierSamples,
+                  })
+                : t('growth.calibrationPoor', {
+                    defaultValue:
+                      'How sure it says it is does not track how often it is right yet ({{count}} answer(s)). Read the recommendation, not its confidence.',
+                    count: g.brierSamples,
+                  })}
+            </p>
+          ) : null}
+          {g.ask ? (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {/* The PAIR, never precision alone: a flawless agent scores 0
+                  precision because every ask turned out to be unnecessary, and
+                  showing that number by itself would read as a failing grade. */}
+              {t('growth.askQuality', {
+                defaultValue:
+                  'Of the times it asked, {{warranted}} of {{asked}} turned out to be worth asking. It acted alone {{silent}} time(s) without needing a fix, and {{missed}} time(s) you had to correct it.',
+                warranted: g.ask.warrantedAsks,
+                asked: g.ask.warrantedAsks + g.ask.unnecessaryAsks,
+                silent: g.ask.correctSilences,
+                missed: g.ask.missedAsks,
+              })}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* per-task-type: trust is graduated, not global */}
       {g.byTaskType.length > 0 ? (
