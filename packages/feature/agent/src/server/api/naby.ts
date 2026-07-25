@@ -56,6 +56,7 @@ import {
   type PolicyRule,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
+import { resolveApproval } from '../lib/approvalRegistry';
 
 // The store is opened on demand and the MCP test path spawns child processes,
 // so this must run on the node runtime and must never be statically rendered.
@@ -332,7 +333,19 @@ export type NabyAction =
   // user scope (server-defaulted); required (a cwd) for project.
   | { action: 'policy.list'; scope?: string; scopeKey?: string }
   | { action: 'policy.put'; scope?: string; scopeKey?: string; toolPattern: string; effect: string }
-  | { action: 'policy.remove'; id: string };
+  | { action: 'policy.remove'; id: string }
+  // Phase 2 (M2) — resolve a pending tool-approval prompt, settling the paused
+  // turn. `remember` persists a matching policy rule so future calls skip the
+  // prompt (scope/scopeKey/toolPattern describe the rule to write).
+  | {
+      action: 'approval.resolve';
+      approvalId: string;
+      decision: string;
+      remember?: boolean;
+      scope?: string;
+      scopeKey?: string;
+      toolPattern?: string;
+    };
 
 export type NabyActionResult =
   | {
@@ -352,6 +365,9 @@ export type NabyActionResult =
       chatgpt?: ChatgptLoginState;
       /** `policy.*`: the scope's rules after the operation. */
       rules?: PolicyRule[];
+      /** `approval.resolve`: whether a pending prompt was actually settled (false
+       *  if it had already timed out / the turn was gone). */
+      resolved?: boolean;
     }
   | { ok: false; error: string };
 
@@ -431,6 +447,34 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
       store.removePolicyRule(body.id);
       return { ok: true };
+    }
+
+    case 'approval.resolve': {
+      if (typeof body.approvalId !== 'string' || !body.approvalId) {
+        return { ok: false, error: 'approvalId is required' };
+      }
+      if (body.decision !== 'allow' && body.decision !== 'deny') {
+        return { ok: false, error: "decision must be 'allow' or 'deny'" };
+      }
+      const gateDecision =
+        body.decision === 'allow'
+          ? ({ behavior: 'allow' } as const)
+          : ({ behavior: 'deny', reason: 'you denied this tool call' } as const);
+      const resolved = resolveApproval(body.approvalId, gateDecision);
+      // Remember: persist a rule so this tool no longer prompts in that scope.
+      const pattern = typeof body.toolPattern === 'string' ? body.toolPattern.trim() : '';
+      if (body.remember && pattern) {
+        const r = resolvePolicyScope(body.scope, body.scopeKey);
+        if (r.ok) {
+          store.putPolicyRule({
+            scope: r.scope,
+            scopeKey: r.scopeKey,
+            toolPattern: pattern,
+            effect: body.decision,
+          });
+        }
+      }
+      return { ok: true, resolved };
     }
 
     case 'model.set': {

@@ -41,6 +41,12 @@ export function useLiveStream(
   };
 
   const apply = (ev: StreamEvent) => {
+    // Phase 2 (M2): a viewed/resumed turn's tool-approval prompt. Re-dispatch as a
+    // DOM event for <ToolApprovalPrompt>, mirroring useChatStream.
+    if (ev.type === 'approval_request' || ev.type === 'approval_resolved') {
+      window.dispatchEvent(new CustomEvent(`naby:${ev.type}`, { detail: ev }));
+      return;
+    }
     if (ev.type === 'system' && ev.subtype === 'init') {
       turnActive.current = true;
       newPlaceholder(); // turn-start → new assistant bubble

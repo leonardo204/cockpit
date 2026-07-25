@@ -83,7 +83,7 @@ export function NabyPolicyManager({ isOpen, cwd }: { isOpen: boolean; cwd?: stri
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pattern, setPattern] = useState('');
-  const [effect, setEffect] = useState<'allow' | 'deny'>('deny');
+  const [effect, setEffect] = useState<'allow' | 'deny' | 'ask'>('ask');
 
   const scopeKey = scope === 'project' ? cwd : undefined;
   const available = scope !== 'project' || !!cwd;
@@ -179,9 +179,10 @@ export function NabyPolicyManager({ isOpen, cwd }: { isOpen: boolean; cwd?: stri
             </label>
             <select
               value={effect}
-              onChange={(e) => setEffect(e.target.value as 'allow' | 'deny')}
+              onChange={(e) => setEffect(e.target.value as 'allow' | 'deny' | 'ask')}
               className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground"
             >
+              <option value="ask">{t('policyManager.effect_ask', { defaultValue: 'Ask each time' })}</option>
               <option value="deny">{t('policyManager.effect_deny', { defaultValue: 'Block' })}</option>
               <option value="allow">{t('policyManager.effect_allow', { defaultValue: 'Allow' })}</option>
             </select>

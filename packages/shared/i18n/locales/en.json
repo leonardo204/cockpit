@@ -330,7 +330,7 @@
     "toolPlaceholder": "e.g. Bash, Write, mcp__jira__*",
     "effect_allow": "Allow",
     "effect_deny": "Block",
-    "effect_ask": "Ask",
+    "effect_ask": "Ask each time",
     "add": "Add",
     "remove": "Remove",
     "added": "Rule saved.",
@@ -1472,5 +1472,13 @@
       "Swallow",
       "Penguin"
     ]
+  },
+  "toolApproval": {
+    "title": "Allow the agent to run this tool?",
+    "allowOnce": "Allow once",
+    "denyOnce": "Deny once",
+    "alwaysAllow": "Always allow",
+    "alwaysBlock": "Always block",
+    "more": "+{{count}} more waiting"
   }
 }

@@ -91,7 +91,9 @@ import {
   type EngineEvent,
   type Executor,
   type Gate,
+  type GateDecision,
   type GateLogEntry,
+  type ToolCall,
   type McpLoadResult,
   type ModelResolver,
   type PolicyRule,
@@ -111,6 +113,7 @@ import {
 export type { Project, RuntimeMessage, SessionRef, Store };
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
 import { ensureCockpitImport } from './cockpitImport';
+import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -140,6 +143,10 @@ let sharedStore: Store | undefined;
 /** The in-house org scopeKey — kept in sync with commands.ts / harness.ts (HP-08)
  *  so policy rules key on the same org rows. */
 const DEFAULT_ORG_ID = 'default';
+
+/** How long a tool-approval prompt waits for the user before auto-denying, so a
+ *  turn can never hang forever on an unanswered prompt (Phase 2 M2). */
+const APPROVAL_TTL_MS = 10 * 60 * 1000;
 
 /** Gather the policy rules that apply to a turn: user + org (always) and the
  *  project scope when a cwd is set. Order is irrelevant — realPolicy resolves
@@ -562,7 +569,49 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ? () => ({ behavior: 'allow' as const })
           : phase1HarnessFloor(runtimeToolNames);
         const policyRules = gatherPolicyRules(getStore(), projectCwd);
-        const gated = makeGate(realPolicy({ rules: policyRules, fallback: baseline }));
+        // Phase 2 (M2): an 'ask' rule SUSPENDS the turn here on a promise, emits an
+        // `approval_request` RunEvent for the UI, and resumes when the user resolves
+        // it (POST /api/naby {approval.resolve}) — or denies on abort/timeout. The
+        // gate is already async, so the whole turn naturally pauses at this call.
+        const requestApproval = (call: ToolCall): Promise<GateDecision> => {
+          const approvalId = `${sessionId}:${call.toolCallId}`;
+          return new Promise<GateDecision>((resolve) => {
+            let settled = false;
+            const settle = (d: GateDecision) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              ctx.signal.removeEventListener('abort', onAbort);
+              unregisterApproval(approvalId);
+              // Tell the UI the prompt is resolved (buttons off) before the turn
+              // moves on. Reconciled against the tool_use/tool_result that follows.
+              ctx.emit({
+                type: 'approval_resolved',
+                approvalId,
+                decision: d.behavior,
+                session_id: sessionId,
+              });
+              resolve(d);
+            };
+            const onAbort = () =>
+              settle({ behavior: 'deny', reason: 'turn was stopped before approval' });
+            const timer = setTimeout(
+              () => settle({ behavior: 'deny', reason: 'approval request timed out' }),
+              APPROVAL_TTL_MS,
+            );
+            if (ctx.signal.aborted) return onAbort();
+            ctx.signal.addEventListener('abort', onAbort);
+            registerApproval(approvalId, settle, Date.now());
+            ctx.emit({
+              type: 'approval_request',
+              approvalId,
+              tool_name: call.toolName,
+              input: call.input,
+              session_id: sessionId,
+            });
+          });
+        };
+        const gated = makeGate(realPolicy({ rules: policyRules, fallback: baseline, requestApproval }));
         // Thin observer around the runtime's gate. The decision is still made
         // (and logged) by makeGate; this only reports it. Because it sits on
         // the return path, an observation is proof the gate ran — and the

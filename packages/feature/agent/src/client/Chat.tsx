@@ -19,6 +19,7 @@ import { useChatHistory } from './useChatHistory';
 import { useChatStream } from './useChatStream';
 import { MessageList, MessageListHandle } from './MessageList';
 import { FILE_REF_MIME, insertFileRef, osFilePath, quotePath } from './fileRefBus';
+import { ToolApprovalPrompt } from './ToolApprovalPrompt';
 import { ChatInput } from './ChatInput';
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
@@ -645,6 +646,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
 
         {/* Token Usage Display */}
         {tokenUsage && <TokenUsageBar tokenUsage={tokenUsage} rateLimitInfo={rateLimitInfo} />}
+
+        {/* Phase 2 (M2): a paused tool call awaiting the user's Allow/Deny. */}
+        <ToolApprovalPrompt sessionId={sessionId ?? undefined} cwd={initialCwd} />
 
         {/* Input */}
         <ChatInput

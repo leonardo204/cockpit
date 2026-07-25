@@ -204,6 +204,14 @@ export function useChatStream(
   const handleStreamEvent = useCallback((event: Record<string, unknown>, messageId: string) => {
     const eventType = event.type as string;
 
+    // Phase 2 (M2): a paused turn's tool-approval prompt. Re-dispatch as a DOM
+    // event so the self-contained <ToolApprovalPrompt> can render the prompt and
+    // POST the decision, without threading approval state through this reducer.
+    if (eventType === 'approval_request' || eventType === 'approval_resolved') {
+      window.dispatchEvent(new CustomEvent(`naby:${eventType}`, { detail: event }));
+      return;
+    }
+
     // Handle session_id + turn boundary. Each turn (including a follow-up turn the SDK auto-runs
     // after a background task completes) starts with a system.init.
     if (eventType === 'system' && event.subtype === 'init') {

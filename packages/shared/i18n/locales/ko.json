@@ -330,7 +330,7 @@
     "toolPlaceholder": "예: Bash, Write, mcp__jira__*",
     "effect_allow": "허용",
     "effect_deny": "차단",
-    "effect_ask": "확인",
+    "effect_ask": "매번 확인",
     "add": "추가",
     "remove": "삭제",
     "added": "규칙을 저장했어요.",
@@ -1472,5 +1472,13 @@
       "제비",
       "펭귄"
     ]
+  },
+  "toolApproval": {
+    "title": "에이전트가 이 도구를 실행하도록 허용할까요?",
+    "allowOnce": "이번만 허용",
+    "denyOnce": "이번만 거부",
+    "alwaysAllow": "항상 허용",
+    "alwaysBlock": "항상 차단",
+    "more": "+{{count}}개 대기 중"
   }
 }
