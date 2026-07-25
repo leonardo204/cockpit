@@ -18,6 +18,7 @@ import { toast } from '@cockpit/shared-ui';
 import type { Agent } from '../../../../../../dist/naby-runtime.mjs';
 import { GrowthPanel } from './GrowthPanel';
 import { AgentExportButton } from './AgentExportButton';
+import { AgentImportButton } from './AgentImportButton';
 
 type Escalation = 'inline' | 'telegram' | 'both';
 type MemoryScope = 'session' | 'project' | 'user' | 'org';
@@ -227,6 +228,9 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
             'Your naby agents. The built-in persona learns how you work and can act on your behalf; add custom agents for focused jobs. Address one in the composer with @name.',
         })}
       </p>
+
+      {/* Import — panel-level, not per agent: it CREATES one. */}
+      <AgentImportButton onImported={() => void reload()} />
 
       {/* Editor */}
       {form ? (

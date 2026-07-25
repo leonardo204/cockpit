@@ -372,6 +372,23 @@
     "saved": "Both files were saved.",
     "failed": "Could not prepare the export."
   },
+  "agentImport": {
+    "button": "Import an agent…",
+    "title": "This file was written somewhere else. Here is what it carries.",
+    "renamed": "\"{{from}}\" is taken here, so it comes in under a new name. Nothing is overwritten.",
+    "facts": "{{count}} learned fact(s), which go into this agent's own instructions — not into naby's memory of you",
+    "ledger": "{{count}} row(s) of growth record",
+    "claimed": "The file says it reached \"{{stage}}\" — that is its claim, and nothing here acts on it.",
+    "trustLabel": "This is my own export.",
+    "trustOn": "The growth record counts, and the stage is recomputed from it — not from what the file claims.",
+    "trustOff": "The record is kept but does not count: the agent starts over here and cannot be called with @ until it earns it.",
+    "promptWarning": "This agent's instructions look like they contain a credential. Read them before importing.",
+    "skipped": "{{count}} thing(s) this machine will not take",
+    "confirm": "Import",
+    "cancel": "Cancel",
+    "done": "Imported @{{name}} with {{count}} learned fact(s) in its instructions.",
+    "failed": "That file could not be read."
+  },
   "telegramSettings": {
     "title": "Telegram escalation",
     "description": "How an agent reaches you when it hits a critical decision, and where it sends its final report. naby uses its OWN dedicated bot — create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",

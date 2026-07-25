@@ -50,6 +50,7 @@ import {
   isChatgptOauthEnabled,
   DEFAULT_USER_ID,
   BUILTIN_PERSONA_ID,
+  parseAgentSidecar,
   type ClaudeLoginAccount,
   type McpEntry,
   type HarnessScope,
@@ -66,7 +67,12 @@ import { resolveApproval } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
 import { exportAgent } from '../lib/agentExport';
-import type { AgentExportResult } from '../../../../../../../dist/naby-runtime.mjs';
+import { applyAgentImport } from '../lib/agentImport';
+import type {
+  AgentExportResult,
+  AgentImportPlan,
+  AgentImportReport,
+} from '../../../../../../../dist/naby-runtime.mjs';
 import { resolveMaxSteps } from '../lib/autonomy';
 import {
   readTelegramConfig,
@@ -402,6 +408,11 @@ export type NabyAction =
   // it returns the two files' contents and a report of what was dropped, and
   // writes nothing. The user sees the report and decides whether to save.
   | { action: 'agent.export'; agentId: string; cwd?: string }
+  // Phase 3 (P3-M7) — bring an agent in. TWO PHASES: without `apply` it only
+  // parses and reports (writes nothing), so the user sees what a foreign file
+  // carries before it lands. `trustLedger` is their answer to "is this your own
+  // export?" — the only thing that lets the imported growth record count.
+  | { action: 'agent.import'; sidecar: string; apply?: boolean; trustLedger?: boolean }
   | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string };
 
 export type NabyActionResult =
@@ -437,6 +448,13 @@ export type NabyActionResult =
       growth?: GrowthReport;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
+      /** `agent.import`: what the file carries (preview) and what landed (apply). */
+      import?: {
+        report: AgentImportReport;
+        origin: AgentImportPlan['origin'];
+        applied: boolean;
+        ledgerWritten?: number;
+      };
     }
   | { ok: false; error: string };
 
@@ -718,6 +736,45 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           ...(typeof body.cwd === 'string' && body.cwd ? { cwd: body.cwd } : {}),
           now: Date.now(),
         }),
+      };
+    }
+
+    // Phase 3 (P3-M7) — parse a sidecar, and only write when told to. The parse
+    // is where every trust rule lives (runtime `agent-import.ts`); this decides
+    // nothing about the file's contents, it just reports and then applies.
+    case 'agent.import': {
+      if (typeof body.sidecar !== 'string' || !body.sidecar.trim()) {
+        return { ok: false, error: 'sidecar is required' };
+      }
+      const parsed = parseAgentSidecar(body.sidecar, {
+        trustLedger: body.trustLedger === true,
+        // Read fresh so a name minted between the preview and the apply is still
+        // seen — the rename has to be right at the moment of writing.
+        existingNames: store.listAgents().map((a) => a.name),
+        now: Date.now(),
+      });
+      if (!parsed.ok) return { ok: false, error: parsed.problems.join('; ') };
+
+      // PREVIEW: report and stop. Nothing is written, so the user can decline
+      // after seeing what a colleague's file actually contains.
+      if (body.apply !== true) {
+        return {
+          ok: true,
+          import: { report: parsed.plan.report, origin: parsed.plan.origin, applied: false },
+        };
+      }
+
+      const outcome = applyAgentImport(store, parsed.plan);
+      return {
+        ok: true,
+        agents: store.listAgents(),
+        agent: outcome.agent,
+        import: {
+          report: parsed.plan.report,
+          origin: parsed.plan.origin,
+          applied: true,
+          ledgerWritten: outcome.ledgerWritten,
+        },
       };
     }
 

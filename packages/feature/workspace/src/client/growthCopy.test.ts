@@ -58,6 +58,7 @@ const SOURCES = [
   // the user what is about to leave their machine, and an English fallback there
   // would be worse than in the panel, not better.
   'feature/workspace/src/client/AgentExportButton.tsx',
+  'feature/workspace/src/client/AgentImportButton.tsx',
 ];
 
 describe('growth, check-in and export copy is complete in every locale', () => {
@@ -92,6 +93,12 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         ['agentExport.droppedSession', ['{{count}}']],
         ['agentExport.droppedSecret', ['{{count}}']],
         ['agentExport.redacted', ['{{count}}']],
+        ['agentImport.renamed', ['{{from}}']],
+        ['agentImport.facts', ['{{count}}']],
+        ['agentImport.ledger', ['{{count}}']],
+        ['agentImport.claimed', ['{{stage}}']],
+        ['agentImport.skipped', ['{{count}}']],
+        ['agentImport.done', ['{{name}}', '{{count}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');
