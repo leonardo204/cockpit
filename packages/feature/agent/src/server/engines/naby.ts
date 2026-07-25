@@ -127,6 +127,7 @@ import {
   finishEscalation,
   sendFinalReport,
 } from '../lib/telegramEscalation';
+import { canLearn, learningInstruction } from '../lib/learning';
 import {
   autonomyInstruction,
   continuationPrompt,
@@ -549,12 +550,53 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           }
         }
 
+        // ---- @agent routing, resolved early (Phase 3, P3-M2) --------------
+        //
+        // When the prompt begins with `@<name>` and <name> resolves to a
+        // registered naby agent, route THIS turn to that agent: adopt its system
+        // prompt (its persona), strip the `@name` off the task text, and (if set)
+        // prefer its model and restrict it to its allowed tools. The command
+        // expander already declined to expand an `@<registeredAgent>` line
+        // (slashCommands collision rule), so the address survives to here.
+        //
+        // Resolved HERE, before the toolset, because P3-M4's learning sink needs
+        // the agent's `memoryScope` as the default scope for what it captures.
+        // Everything else derived from the agent stays below the toolset.
+        const addressed = parseAgentAddress(ctx.prompt ?? '');
+        const routedAgent: Agent | undefined = addressed
+          ? store.getAgentByName(addressed.name)
+          : undefined;
+
         // ---- runtime construction ----------------------------------------
         const outbox = new Outbox();
         // Pass the store so the agent gets `naby_add_mcp` — it can register an MCP
         // server the user asks for (as a PROPOSAL; a human approves it in Settings
         // before it runs — makeAddMcp). Without a store the tool is simply absent.
-        const builtin = buildToolset(outbox, store);
+        //
+        // P3-M4a: the LEARNING sink adds `naby_remember`, so the agent can write
+        // down what it learned about the user. Built per turn because it carries
+        // this turn's scope keys (session id, project cwd) — scope→key resolution
+        // lives in the runtime (contract §2), not here. Like the MCP tool, every
+        // capture lands as a PROPOSAL, so it cannot shape an answer until the user
+        // confirms it in the memory review UI.
+        //
+        // ONLY FOR A ROUTED AGENT. A plain chat turn does not get the tool at all:
+        // learning is what an *agent* does on its user's behalf, and a turn with no
+        // agent has no memoryScope to write to. This also keeps a normal turn's
+        // tool list byte-for-byte what it was before M4.
+        const builtin = buildToolset(
+          outbox,
+          store,
+          routedAgent
+            ? {
+                putMemory: (req) => store.putMemory(req),
+                sessionId,
+                ...(projectCwd ? { cwd: projectCwd } : {}),
+                userId: DEFAULT_USER_ID,
+                defaultScope: routedAgent.memoryScope,
+              }
+            : undefined,
+        );
 
         // ---- MCP tools (F1-08) -------------------------------------------
         //
@@ -594,20 +636,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ...(mcp?.executors ?? {}),
         };
 
-        // ---- @agent routing (Phase 3, P3-M2) -----------------------------
+        // ---- @agent routing, continued (Phase 3, P3-M2) -------------------
         //
-        // When the prompt begins with `@<name>` and <name> resolves to a
-        // registered naby agent, route THIS turn to that agent: adopt its
-        // system prompt (its persona), strip the `@name` off the task text, and
-        // (if set) prefer its model and restrict it to its allowed tools. The
-        // command expander already declined to expand an `@<registeredAgent>`
-        // line (slashCommands collision rule), so the address survives to here.
-        // Memory injection (wired below) then folds the agent's learned memory
-        // into the same turn. Autonomy (maxSteps / telegram escalation) is P3-M3.
-        const addressed = parseAgentAddress(ctx.prompt ?? '');
-        const routedAgent: Agent | undefined = addressed
-          ? store.getAgentByName(addressed.name)
-          : undefined;
+        // `routedAgent` was resolved ABOVE the toolset (the learning sink needs
+        // its memory scope); everything derived from it is here.
         if (addressed && !routedAgent) {
           // `@something` that is not a registered agent: leave the prompt intact
           // (it may be prose, or a harness `@verb` the expander already handled).
@@ -651,8 +683,23 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         if (autonomous) {
           console.log(`[engine:naby] autonomy: up to ${maxSteps} steps (@${routedAgent?.name})`);
         }
+        // Phase 3 P3-M4b: TELL THE AGENT TO LEARN. Only when `naby_remember` can
+        // actually land this turn — a routed agent whose allowlist (if any)
+        // includes the tool. Instructing an agent to call a tool its own gate
+        // would deny is the "silent half-run" the skill injection also refuses.
+        const learns = canLearn(routedAgent);
+        if (learns) {
+          console.log(
+            `[engine:naby] learning: on (@${routedAgent?.name}, scope=${routedAgent?.memoryScope})`,
+          );
+        }
         const turnSystem =
-          [routedAgent?.systemPrompt, shellNote, autonomous ? autonomyInstruction(maxSteps) : undefined]
+          [
+            routedAgent?.systemPrompt,
+            shellNote,
+            autonomous ? autonomyInstruction(maxSteps) : undefined,
+            learns && routedAgent ? learningInstruction(routedAgent) : undefined,
+          ]
             .filter(Boolean)
             .join('\n\n') || undefined;
 
