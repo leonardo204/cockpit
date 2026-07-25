@@ -65,6 +65,8 @@ import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
+import { exportAgent } from '../lib/agentExport';
+import type { AgentExportResult } from '../../../../../../../dist/naby-runtime.mjs';
 import { resolveMaxSteps } from '../lib/autonomy';
 import {
   readTelegramConfig,
@@ -396,6 +398,10 @@ export type NabyAction =
   // per-task-type breakdown); `checkin.resolve` settles a paused check-in the way
   // `approval.resolve` settles a paused tool approval.
   | { action: 'growth.get'; agentId?: string }
+  // Phase 3 (P3-M6) — package a grown agent for another environment. READ-ONLY:
+  // it returns the two files' contents and a report of what was dropped, and
+  // writes nothing. The user sees the report and decides whether to save.
+  | { action: 'agent.export'; agentId: string; cwd?: string }
   | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string };
 
 export type NabyActionResult =
@@ -429,6 +435,8 @@ export type NabyActionResult =
       chatId?: string;
       /** `growth.get`: the full trust-meter reading for one agent. */
       growth?: GrowthReport;
+      /** `agent.export`: both files' contents plus what was left out. */
+      export?: AgentExportResult;
     }
   | { ok: false; error: string };
 
@@ -692,6 +700,25 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'growth.get': {
       const agentId = typeof body.agentId === 'string' && body.agentId ? body.agentId : BUILTIN_PERSONA_ID;
       return { ok: true, growth: growthReport(store, agentId) };
+    }
+
+    // Phase 3 (P3-M6) — build the export pair. Nothing is written and nothing
+    // leaves the machine here: the client shows the report first and only then
+    // offers to save, because "it exported fine" is not informed consent about
+    // a file containing what naby learned about its user.
+    case 'agent.export': {
+      if (typeof body.agentId !== 'string' || !body.agentId) {
+        return { ok: false, error: 'agentId is required' };
+      }
+      const target = store.getAgent(body.agentId);
+      if (!target) return { ok: false, error: 'no such agent' };
+      return {
+        ok: true,
+        export: exportAgent(store, target, {
+          ...(typeof body.cwd === 'string' && body.cwd ? { cwd: body.cwd } : {}),
+          now: Date.now(),
+        }),
+      };
     }
 
     case 'model.set': {

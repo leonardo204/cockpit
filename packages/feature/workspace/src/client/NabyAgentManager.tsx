@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import type { Agent } from '../../../../../../dist/naby-runtime.mjs';
 import { GrowthPanel } from './GrowthPanel';
+import { AgentExportButton } from './AgentExportButton';
 
 type Escalation = 'inline' | 'telegram' | 'both';
 type MemoryScope = 'session' | 'project' | 'user' | 'org';
@@ -78,11 +79,14 @@ function toForm(a: Agent): Form {
 const AgentRow = memo(function AgentRow({
   agent,
   busy,
+  cwd,
   onEdit,
   onRemove,
 }: {
   agent: Agent;
   busy: boolean;
+  /** Lets an export also carry this project's memory scope. */
+  cwd?: string;
   onEdit: (a: Agent) => void;
   onRemove: (a: Agent) => void;
 }) {
@@ -142,11 +146,16 @@ const AgentRow = memo(function AgentRow({
       </div>
     </div>
     {showGrowth ? <GrowthPanel agentId={agent.id} /> : null}
+    {/* Its own line: the confirm step expands into a panel, which would break the
+        header's flex row. */}
+    <div className="mt-2">
+      <AgentExportButton agentId={agent.id} {...(cwd ? { cwd } : {})} />
+    </div>
     </div>
   );
 });
 
-export function NabyAgentManager({ isOpen }: { isOpen: boolean; cwd?: string }) {
+export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: string }) {
   const { t } = useTranslation();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -355,6 +364,7 @@ export function NabyAgentManager({ isOpen }: { isOpen: boolean; cwd?: string }) 
               key={a.id}
               agent={a}
               busy={busy}
+              {...(cwd ? { cwd } : {})}
               onEdit={(x) => setForm(toForm(x))}
               onRemove={(x) => void remove(x)}
             />

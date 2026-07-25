@@ -54,9 +54,13 @@ const DYNAMIC_KEYS = [
 const SOURCES = [
   'feature/workspace/src/client/GrowthPanel.tsx',
   'feature/agent/src/client/CheckinPrompt.tsx',
+  // P3-M6: the export confirmation is the same kind of surface — it explains to
+  // the user what is about to leave their machine, and an English fallback there
+  // would be worse than in the panel, not better.
+  'feature/workspace/src/client/AgentExportButton.tsx',
 ];
 
-describe('growth + check-in copy is complete in every locale', () => {
+describe('growth, check-in and export copy is complete in every locale', () => {
   for (const locale of LOCALES) {
     it(`${locale}: every key the panel and the prompt ask for exists`, () => {
       const d = dict(locale);
@@ -81,6 +85,13 @@ describe('growth + check-in copy is complete in every locale', () => {
         ['growth.eggHint', ['{{needed}}']],
         ['growth.tripwireBlocked', ['{{count}}']],
         ['growth.axis.hitRateValue', ['{{hits}}', '{{trials}}']],
+        ['agentExport.included', ['{{count}}']],
+        ['agentExport.ledger', ['{{count}}']],
+        ['agentExport.stage', ['{{stage}}']],
+        ['agentExport.droppedProposed', ['{{count}}']],
+        ['agentExport.droppedSession', ['{{count}}']],
+        ['agentExport.droppedSecret', ['{{count}}']],
+        ['agentExport.redacted', ['{{count}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');

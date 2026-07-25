@@ -355,6 +355,23 @@
     "empty": "No agents yet.",
     "error": "Something went wrong."
   },
+  "agentExport": {
+    "button": "Export",
+    "title": "These files contain what naby has learned about you.",
+    "included": "{{count}} confirmed thing(s) it learned",
+    "ledger": "{{count}} row(s) of growth record",
+    "stage": "Reached the \"{{stage}}\" stage here — recorded as history, and it grants nothing where the file lands.",
+    "withheld": "Left out",
+    "droppedProposed": "{{count}} unreviewed note(s) stay behind",
+    "droppedSession": "{{count}} conversation-only note(s) stay behind",
+    "droppedSecret": "{{count}} credential-shaped note(s) stay behind",
+    "redacted": "{{count}} place(s) in the record are masked",
+    "promptWarning": "This agent's own instructions look like they contain a credential. It is not removed — that would change how the agent behaves — so check it before saving.",
+    "save": "Save both files",
+    "cancel": "Cancel",
+    "saved": "Both files were saved.",
+    "failed": "Could not prepare the export."
+  },
   "telegramSettings": {
     "title": "Telegram escalation",
     "description": "How an agent reaches you when it hits a critical decision, and where it sends its final report. naby uses its OWN dedicated bot — create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",
