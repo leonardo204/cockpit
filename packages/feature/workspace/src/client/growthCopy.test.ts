@@ -43,6 +43,12 @@ function literalKeys(relPath: string): string[] {
 
 /** The keys built by template interpolation, spelled out so they are covered too. */
 const DYNAMIC_KEYS = [
+  // The interview's labels are looked up from ids the SERVER sends, so they are
+  // spelled out here rather than being visible as literals in the component.
+  ...['address', 'language', 'style', 'rule'].flatMap((q) => [
+    `bootstrap.q.${q}`,
+    `bootstrap.q.${q}Hint`,
+  ]),
   ...(['egg', 'larva', 'pupa', 'butterfly'] as const).flatMap((s) => [
     `growth.stage.${s}`,
     `growth.meaning.${s}`,
@@ -59,6 +65,8 @@ const SOURCES = [
   // would be worse than in the panel, not better.
   'feature/workspace/src/client/AgentExportButton.tsx',
   'feature/workspace/src/client/AgentImportButton.tsx',
+  // P15-07: the cold-start interview is the very first Korean a new user reads.
+  'feature/workspace/src/client/BootstrapCard.tsx',
 ];
 
 describe('growth, check-in and export copy is complete in every locale', () => {
@@ -102,6 +110,8 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         ['agentImport.claimed', ['{{stage}}']],
         ['agentImport.skipped', ['{{count}}']],
         ['agentImport.done', ['{{name}}', '{{count}}']],
+        ['bootstrap.saved', ['{{count}}']],
+        ['bootstrap.savedWithSkips', ['{{count}}', '{{skipped}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');

@@ -51,6 +51,10 @@ import {
   DEFAULT_USER_ID,
   BUILTIN_PERSONA_ID,
   parseAgentSidecar,
+  BOOTSTRAP_DONE_KEY,
+  BOOTSTRAP_QUESTIONS,
+  answersToMemory,
+  shouldOfferBootstrap,
   type ClaudeLoginAccount,
   type McpEntry,
   type HarnessScope,
@@ -413,6 +417,12 @@ export type NabyAction =
   // carries before it lands. `trustLedger` is their answer to "is this your own
   // export?" — the only thing that lets the imported growth record count.
   | { action: 'agent.import'; sidecar: string; apply?: boolean; trustLedger?: boolean }
+  // Phase 1.5 (P15-07) — the cold-start interview. `bootstrap.get` says whether to
+  // offer it and what to ask; `bootstrap.save` writes the answers as CONFIRMED
+  // user-tier memory (the user typed them, which is what that tier means).
+  // `dismiss` closes it for good without storing anything.
+  | { action: 'bootstrap.get' }
+  | { action: 'bootstrap.save'; answers?: Record<string, string>; dismiss?: boolean }
   | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string };
 
 export type NabyActionResult =
@@ -448,6 +458,15 @@ export type NabyActionResult =
       growth?: GrowthReport;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
+      /** `bootstrap.get`/`save`: whether to offer the interview and what happened. */
+      bootstrap?: {
+        offer: boolean;
+        questions: typeof BOOTSTRAP_QUESTIONS;
+        /** Answers already stored, so the form opens pre-filled rather than blank. */
+        existing: Record<string, string>;
+        stored?: number;
+        skipped?: Array<{ id: string; reason: string }>;
+      };
       /** `agent.import`: what the file carries (preview) and what landed (apply). */
       import?: {
         report: AgentImportReport;
@@ -774,6 +793,64 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           origin: parsed.plan.origin,
           applied: true,
           ledgerWritten: outcome.ledgerWritten,
+        },
+      };
+    }
+
+    // Phase 1.5 (P15-07) — cold start. Read-only.
+    case 'bootstrap.get': {
+      const existingRows = store.getScopedMemory('user', DEFAULT_USER_ID);
+      const existing: Record<string, string> = {};
+      for (const q of BOOTSTRAP_QUESTIONS) {
+        const row = existingRows.find((m) => m.key === q.id);
+        if (row) existing[q.id] = row.value;
+      }
+      return {
+        ok: true,
+        bootstrap: {
+          offer: shouldOfferBootstrap({
+            doneFlag: store.getSetting(BOOTSTRAP_DONE_KEY),
+            existingKeys: Object.keys(existing),
+          }),
+          questions: BOOTSTRAP_QUESTIONS,
+          existing,
+        },
+      };
+    }
+
+    // Writes the answers, then records the interview as done EITHER WAY: a user
+    // who answered one question and a user who dismissed it both mean "stop
+    // asking", and re-offering a form someone closed is how a first run turns
+    // annoying.
+    case 'bootstrap.save': {
+      let stored = 0;
+      let skipped: Array<{ id: string; reason: string }> = [];
+      if (!body.dismiss && body.answers && typeof body.answers === 'object') {
+        const plan = answersToMemory(body.answers as Record<string, string>, {
+          userId: DEFAULT_USER_ID,
+          now: Date.now(),
+        });
+        skipped = plan.skipped;
+        for (const write of plan.writes) {
+          try {
+            store.putMemory(write);
+            stored += 1;
+          } catch (e) {
+            // A gate refusal is information, not a crash — and there is no reason
+            // one bad answer should lose the others.
+            skipped.push({ id: write.key, reason: e instanceof Error ? e.message : String(e) });
+          }
+        }
+      }
+      store.setSetting(BOOTSTRAP_DONE_KEY, 'true');
+      return {
+        ok: true,
+        bootstrap: {
+          offer: false,
+          questions: BOOTSTRAP_QUESTIONS,
+          existing: {},
+          stored,
+          skipped,
         },
       };
     }

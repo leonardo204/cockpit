@@ -49,6 +49,7 @@ import type {
   MemoryType,
   TrustTier,
 } from '../../../../../../dist/naby-runtime.mjs';
+import { BootstrapCard } from './BootstrapCard';
 
 // ---------------------------------------------------------------------------
 // Wire helpers — the same shape/style as NabyProviderSetup's nabyGet/nabyPost.
@@ -323,6 +324,10 @@ export function NabyMemoryReview({
       <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
         {t('memoryReview.description')}
       </p>
+
+      {/* P15-07: the cold-start interview, shown only while it still has anything
+          to ask. It writes CONFIRMED user memory, so the list below refreshes. */}
+      <BootstrapCard isOpen={isOpen} onSaved={() => void reload()} />
 
       {/* Scope filter + banner: which memories you are looking at (global vs
           this project vs this session), stated plainly. */}

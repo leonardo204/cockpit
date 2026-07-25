@@ -1045,6 +1045,25 @@
     "sessionUnavailable": "Open a session to review its memory.",
     "refresh": "Refresh"
   },
+  "bootstrap": {
+    "title": "Tell naby four things and it starts out knowing you",
+    "body": "Every field is optional, and you can change any of it later in this list. Blank answers are not stored.",
+    "save": "Save",
+    "later": "Not now",
+    "saved": "Saved {{count}} thing(s) about you.",
+    "savedWithSkips": "Saved {{count}}. {{skipped}} could not be stored.",
+    "failed": "That could not be saved.",
+    "q": {
+      "address": "What should naby call you?",
+      "addressHint": "e.g. Jihoon, or just \"you\"",
+      "language": "Which language should it answer in?",
+      "languageHint": "e.g. Korean, English for code comments",
+      "style": "How do you want work done?",
+      "styleHint": "e.g. conclusion first, then the reasoning",
+      "rule": "Anything it should never do?",
+      "ruleHint": "e.g. never touch files outside the project"
+    }
+  },
   "commandManager": {
     "title": "Commands",
     "description": "Your own \"/\" shortcuts. Save a prompt you use a lot under a short name, then call it in chat as /name — it shows up in the command menu and works the same on every engine.",
