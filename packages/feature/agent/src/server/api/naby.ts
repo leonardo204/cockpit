@@ -49,11 +49,17 @@ import {
   getChatgptTokenSource,
   isChatgptOauthEnabled,
   DEFAULT_USER_ID,
+  BUILTIN_PERSONA_ID,
   type ClaudeLoginAccount,
   type McpEntry,
   type HarnessScope,
   type PolicyEffect,
   type PolicyRule,
+  type Agent,
+  type AgentInput,
+  type AgentKind,
+  type AgentEscalation,
+  type MemoryScope,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
@@ -345,7 +351,25 @@ export type NabyAction =
       scope?: string;
       scopeKey?: string;
       toolPattern?: string;
-    };
+    }
+  // Phase 3 (P3-M1) — the naby agent layer (built-in persona + custom agents),
+  // addressed by `@`. `agent.put` upserts (omit `id` to create a custom agent,
+  // supply one to edit); the built-in persona is editable but never deletable.
+  | { action: 'agent.list' }
+  | {
+      action: 'agent.put';
+      id?: string;
+      name: string;
+      kind?: string;
+      description?: string;
+      systemPrompt: string;
+      model?: string;
+      toolRefs?: string[];
+      memoryScope?: string;
+      escalation?: string;
+      maxSteps?: number;
+    }
+  | { action: 'agent.remove'; id: string };
 
 export type NabyActionResult =
   | {
@@ -368,6 +392,10 @@ export type NabyActionResult =
       /** `approval.resolve`: whether a pending prompt was actually settled (false
        *  if it had already timed out / the turn was gone). */
       resolved?: boolean;
+      /** `agent.*`: the full agent list after the operation (persona first). */
+      agents?: Agent[];
+      /** `agent.put`: the agent that was created/updated. */
+      agent?: Agent;
     }
   | { ok: false; error: string };
 
@@ -447,6 +475,70 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
       store.removePolicyRule(body.id);
       return { ok: true };
+    }
+
+    case 'agent.list': {
+      return { ok: true, agents: store.listAgents() };
+    }
+
+    case 'agent.put': {
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (!name) return { ok: false, error: 'name is required' };
+      // The name is the @-routing handle — it must address unambiguously, so no
+      // whitespace (a turn line is parsed as `@name <rest>`).
+      if (/\s/.test(name)) return { ok: false, error: 'name cannot contain spaces' };
+      const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.trim() : '';
+      if (!systemPrompt) return { ok: false, error: 'systemPrompt is required' };
+
+      // Only the built-in persona row is kind='persona'; every user-created agent
+      // is 'custom'. Editing the persona (its well-known id) keeps it a persona;
+      // any other put is forced to 'custom' so users cannot mint extra personas.
+      const kind: AgentKind = body.id === BUILTIN_PERSONA_ID ? 'persona' : 'custom';
+
+      const memoryScope: MemoryScope =
+        body.memoryScope === 'session' ||
+        body.memoryScope === 'project' ||
+        body.memoryScope === 'user' ||
+        body.memoryScope === 'org'
+          ? body.memoryScope
+          : 'user';
+
+      const escalation: AgentEscalation =
+        body.escalation === 'telegram' || body.escalation === 'both' || body.escalation === 'inline'
+          ? body.escalation
+          : 'inline';
+
+      const input: AgentInput = {
+        ...(typeof body.id === 'string' && body.id ? { id: body.id } : {}),
+        name,
+        kind,
+        ...(typeof body.description === 'string' && body.description.trim()
+          ? { description: body.description.trim() }
+          : {}),
+        systemPrompt,
+        ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model.trim() } : {}),
+        ...(Array.isArray(body.toolRefs) ? { toolRefs: body.toolRefs.filter((r) => typeof r === 'string') } : {}),
+        memoryScope,
+        autonomy: {
+          escalation,
+          ...(typeof body.maxSteps === 'number' && body.maxSteps > 0 ? { maxSteps: body.maxSteps } : {}),
+        },
+      };
+
+      try {
+        const agent = store.putAgent(input);
+        return { ok: true, agent, agents: store.listAgents() };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case 'agent.remove': {
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      // The store no-ops a persona delete (undeletable); reflect that to the UI so
+      // it never shows a "removed" persona.
+      store.removeAgent(body.id);
+      return { ok: true, agents: store.listAgents() };
     }
 
     case 'approval.resolve': {

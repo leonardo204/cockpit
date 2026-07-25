@@ -28,6 +28,10 @@ import { NabyHarnessReview } from './NabyHarnessReview';
 // Phase 2 (M1). Tool-execution policy rules. Given the active cwd so its
 // project-scope rules are editable.
 import { NabyPolicyManager } from './NabyPolicyManager';
+// Phase 3 (P3-M1). The naby agent layer: built-in persona + custom agents. The
+// Memory review moves UNDER this section (an agent's learned memory), and the
+// former standalone Commands section folds into Harness.
+import { NabyAgentManager } from './NabyAgentManager';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -44,20 +48,23 @@ type SettingsSectionId =
   | 'theme'
   | 'language'
   | 'provider'
-  | 'memory'
-  | 'commands'
+  | 'agents'
   | 'harness'
   | 'permissions'
   | 'about';
 
 // Left-nav sections. Each `labelKey` reuses an existing i18n string, so no new
 // nav copy is introduced. `icon` is decorative only.
+//
+// Phase 3 (P3-M1) reorg: `agents` is the naby agent layer (persona + memory);
+// `harness` now owns command/skill/subagent (the old standalone `memory` and
+// `commands` sections were folded in — memory under Agents, commands under
+// Harness) so the two-layer model (`@` agents / `/` harness) shows in Settings.
 const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] = [
   { id: 'theme', labelKey: 'settings.theme', icon: '🎨' },
   { id: 'language', labelKey: 'settings.language', icon: '🌐' },
   { id: 'provider', labelKey: 'settings.aiProvider', icon: '🤖' },
-  { id: 'memory', labelKey: 'memoryReview.title', icon: '🧠' },
-  { id: 'commands', labelKey: 'commandManager.title', icon: '⌘' },
+  { id: 'agents', labelKey: 'agentManager.title', icon: '🧑‍🚀' },
   { id: 'harness', labelKey: 'harnessReview.title', icon: '🧩' },
   { id: 'permissions', labelKey: 'policyManager.title', icon: '🛡️' },
   { id: 'about', labelKey: 'settings.about', icon: 'ℹ️' },
@@ -240,30 +247,39 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
               </div>
             ) : null}
 
-            {section === 'memory' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('memoryReview.title')}
-                </label>
-                <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
-              </div>
-            ) : null}
-
-            {section === 'commands' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('commandManager.title')}
-                </label>
-                <NabyCommandManager isOpen={isOpen} cwd={cwd} />
+            {section === 'agents' ? (
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    {t('agentManager.title', { defaultValue: 'Agents' })}
+                  </label>
+                  <NabyAgentManager isOpen={isOpen} cwd={cwd} />
+                </div>
+                {/* Memory lives with the agents (their learned memory), P3-M1 reorg. */}
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    {t('memoryReview.title')}
+                  </label>
+                  <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
+                </div>
               </div>
             ) : null}
 
             {section === 'harness' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('harnessReview.title')}
-                </label>
-                <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    {t('harnessReview.title')}
+                  </label>
+                  <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
+                </div>
+                {/* Commands folded into Harness (command/skill/subagent), P3-M1 reorg. */}
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    {t('commandManager.title')}
+                  </label>
+                  <NabyCommandManager isOpen={isOpen} cwd={cwd} />
+                </div>
               </div>
             ) : null}
 

@@ -85,6 +85,7 @@ import {
   readSettings,
   resolveProviderCredential,
   runTurn,
+  seedBuiltinPersona,
   selectEngine,
   SqliteStore,
   toSelectOptions,
@@ -232,6 +233,10 @@ export function getStore(): Store {
     // Runs here — inside the once-per-process init — so it happens exactly once
     // and before any route reads projects out of the store.
     ensureCockpitImport(sharedStore);
+    // Phase 3 P3-M1: ensure the naby agent layer has its built-in PERSONA — the
+    // agent that learns the user and (P3-M2+) acts on their behalf. Idempotent:
+    // seeds exactly one persona and never overwrites the user's later edits.
+    seedBuiltinPersona(sharedStore);
   }
   return sharedStore;
 }
