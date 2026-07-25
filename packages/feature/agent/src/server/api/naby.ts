@@ -63,6 +63,7 @@ import {
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
+import { resolveMaxSteps } from '../lib/autonomy';
 import {
   readTelegramConfig,
   writeTelegramConfig,
@@ -543,7 +544,14 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         memoryScope,
         autonomy: {
           escalation,
-          ...(typeof body.maxSteps === 'number' && body.maxSteps > 0 ? { maxSteps: body.maxSteps } : {}),
+          // P3-M3c: store the step budget ALREADY CLAMPED (same `resolveMaxSteps`
+          // the loop applies), so the value the user sees after saving is the
+          // value that will actually run — a stored 999 next to a UI that says
+          // "hard cap 20" would be a lie. 1 (or absent) means autonomy off, which
+          // is the field's absence rather than a stored 1.
+          ...(typeof body.maxSteps === 'number' && resolveMaxSteps(body.maxSteps) > 1
+            ? { maxSteps: resolveMaxSteps(body.maxSteps) }
+            : {}),
         },
       };
 

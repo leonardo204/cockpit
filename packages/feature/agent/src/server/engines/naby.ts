@@ -122,6 +122,20 @@ export type { Project, RuntimeMessage, SessionRef, Store };
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
 import { ensureCockpitImport } from './cockpitImport';
 import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
+import {
+  escalateApproval,
+  finishEscalation,
+  sendFinalReport,
+} from '../lib/telegramEscalation';
+import {
+  autonomyInstruction,
+  continuationPrompt,
+  decideAutonomyStep,
+  isAutonomous,
+  resolveMaxSteps,
+  stepMarker,
+  type AutonomyDecision,
+} from '../lib/autonomy';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -609,6 +623,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // The task text after the address is what the model answers; the address
         // itself is consumed by routing and never sent.
         const turnText = routedAgent ? addressed!.taskText : ctx.prompt ?? '';
+        // Phase 3 P3-M3b: WHERE THIS TURN'S CRITICAL DECISIONS GO. An agent's
+        // `autonomy.escalation` picks the channel: 'inline' (default) is the M2
+        // in-app prompt alone, 'telegram'/'both' ALSO send the question — and the
+        // end-of-turn report — out over Telegram. Only a routed agent can opt in,
+        // so an ordinary turn is byte-for-byte unchanged (no config read, no send).
+        const escalation = routedAgent?.autonomy.escalation ?? 'inline';
+        const escalateToTelegram = escalation === 'telegram' || escalation === 'both';
         // A routed agent limited to `toolRefs` may call ONLY those tools; the gate
         // denies anything else (an allowlist, engine-independent). No toolRefs =
         // no restriction (the built-in persona is unrestricted by default).
@@ -619,8 +640,21 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const shellNote = ctx.cwd
           ? `You are running inside the naby shell. Working directory: ${ctx.cwd}`
           : undefined;
+        // Phase 3 P3-M3c: HOW MANY STEPS THIS AGENT MAY TAKE ALONE. 1 (or no
+        // config) is a plain single-turn chat — nothing below runs and the system
+        // prompt is untouched. >1 injects the autonomy protocol and lets the loop
+        // around runTurn drive the agent until it is done, errors, is stopped, or
+        // spends the budget. Clamped in `resolveMaxSteps`, so the store cannot ask
+        // for an unbounded agent. See lib/autonomy.ts for the three safety rules.
+        const maxSteps = resolveMaxSteps(routedAgent?.autonomy.maxSteps);
+        const autonomous = isAutonomous(maxSteps);
+        if (autonomous) {
+          console.log(`[engine:naby] autonomy: up to ${maxSteps} steps (@${routedAgent?.name})`);
+        }
         const turnSystem =
-          [routedAgent?.systemPrompt, shellNote].filter(Boolean).join('\n\n') || undefined;
+          [routedAgent?.systemPrompt, shellNote, autonomous ? autonomyInstruction(maxSteps) : undefined]
+            .filter(Boolean)
+            .join('\n\n') || undefined;
 
         // ---- the gate ----------------------------------------------------
         //
@@ -695,6 +729,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               clearTimeout(timer);
               ctx.signal.removeEventListener('abort', onAbort);
               unregisterApproval(approvalId);
+              // P3-M3b: if the question was ALSO asked over Telegram, close it
+              // there. A no-op when Telegram is what answered (the bridge
+              // unwatches and confirms in-chat itself), so the user never gets a
+              // duplicate — and never gets left with live buttons for a decision
+              // that was already made in the app, aborted, or timed out.
+              if (escalateToTelegram) {
+                void finishEscalation({
+                  store,
+                  approvalId,
+                  decision: d.behavior === 'allow' ? 'allow' : 'deny',
+                  ...(d.behavior === 'deny' && d.reason ? { reason: d.reason } : {}),
+                });
+              }
               // Tell the UI the prompt is resolved (buttons off) before the turn
               // moves on. Reconciled against the tool_use/tool_result that follows.
               ctx.emit({
@@ -721,6 +768,22 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               input: call.input,
               session_id: sessionId,
             });
+            // P3-M3b: ask REMOTELY too. Deliberately not awaited — the in-app
+            // prompt is already up and the turn is already suspended on this
+            // promise, so a slow or failing Telegram send must not delay either.
+            // The bridge starts its polling loop and a button press / "yes" reply
+            // lands on `settle` through the same approvalRegistry entry.
+            if (escalateToTelegram) {
+              void escalateApproval({
+                store,
+                approvalId,
+                toolName: call.toolName,
+                input: call.input,
+                now: Date.now(),
+                ...(routedAgent ? { agentName: routedAgent.name } : {}),
+                ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+              });
+            }
           });
         };
         const gated = makeGate(realPolicy({ rules: policyRules, fallback: baseline, requestApproval }));
@@ -778,6 +841,28 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         let usage: Usage | undefined;
         let turns = 0;
 
+        // ---- autonomy bookkeeping (Phase 3, P3-M3c) ----------------------
+        //
+        // `step`/`stepText`/`stepUsedTool` are PER STEP (reset before each
+        // runTurn) because that is what the stop decision reads: whether THIS
+        // step did work and whether it declared itself done. The token/cost
+        // accumulators are per RUN, so the single `result` the client receives
+        // reports the whole goal rather than only its last step (for a
+        // single-step run they equal that step's own numbers, so nothing about
+        // an ordinary turn changes).
+        let step = 0;
+        let stepText = '';
+        let stepUsedTool = false;
+        let stepDecision: AutonomyDecision = { proceed: false, reason: 'not-autonomous' };
+        // Whether a terminal `result` RunEvent has reached the client. Distinct
+        // from `sawResult` (= the engine produced one): an intermediate step's
+        // result is deliberately SUPPRESSED, so the two disagree mid-loop, and
+        // it is this flag the end-of-run fallback must key on — otherwise a run
+        // stopped between steps would leave the client's turn spinning forever.
+        let emittedResult = false;
+        const accUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
+        let accCostUsd = 0;
+
         // ---- harness events: low-noise by construction --------------------
         //
         // These are OBSERVATIONAL (see the `harness` doc in the runtime): they
@@ -825,216 +910,294 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // from the store, appends the user turn, drives the engine, and
           // appends the assistant/tool messages (keeping tool calls paired with
           // their results). We only translate the events as they stream past.
-          await runTurn({
-            engine,
-            store,
-            sessionId,
-            // A routed agent may prefer its own model; else the engine's resolved
-            // model (or the provider default). Same field the model switcher uses.
-            model: (() => {
-              const m = routedAgent?.model ?? modelForEngine;
-              return { providerId, ...(m ? { model: m } : {}) };
-            })(),
-            userText: turnText,
-            // Multimodal input: hand this turn's images to the runtime, which
-            // attaches them (transiently) to the user message so each engine can
-            // build a native image block. ImageData -> RuntimeImage (drop the
-            // 'base64' discriminant the runtime does not need).
-            ...(ctx.images && ctx.images.length > 0
-              ? { images: ctx.images.map((im) => ({ media_type: im.media_type, data: im.data })) }
-              : {}),
-            toolSchemas,
-            gate,
-            executors,
-            signal: ctx.signal,
-            // Phase 2.5 (M4): enabled subagents the model may delegate to. The
-            // Claude Agent SDK engine maps these to native `agents` (spawned via
-            // the gated Task tool); the AI-SDK engine ignores them.
-            subagents: gatherSubagents(store, projectCwd),
-            // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
-            // whose trigger matches (or that is always-on) has its instructions
-            // appended to the system prompt; a tool-bearing skill participates
-            // only when all its tools are in `availableTools`, else it is excluded
-            // and counted. Scoped to user + org + this project's cwd (via
-            // opts.cwd, set above). Off entirely when no skill is enabled/matches
-            // (byte-for-byte no-op).
-            // Phase 3 P3-M2: turn-time MEMORY injection (was dormant — the
-            // runtime implemented it since Phase 1.5 but no caller wired it). The
-            // runtime retrieves confirmed, scope-appropriate memory within this
-            // budget and folds it into the system prompt above the engine seam.
-            // This is what makes an agent (the persona especially) act on what it
-            // has learned. A turn with no confirmed memory is a byte-for-byte
-            // no-op. Scoped to user + org + this project's cwd (opts.cwd).
-            memoryInjection: {
-              tokenBudget: MEMORY_TOKEN_BUDGET,
-              userId: DEFAULT_USER_ID,
-              orgId: DEFAULT_ORG_ID,
-            },
-            onMemoryInjection: (injected) => {
-              if (injected.items.length > 0 || injected.droppedForBudget > 0) {
-                console.log(
-                  `[engine:naby] memory: injected ${injected.items.length}` +
-                    `, dropped-for-budget ${injected.droppedForBudget}`,
-                );
-              }
-            },
-            skillInjection: {
-              tokenBudget: SKILL_TOKEN_BUDGET,
-              userId: DEFAULT_USER_ID,
-              orgId: DEFAULT_ORG_ID,
-              availableTools,
-            },
-            onSkillInjection: (injected) => {
-              if (injected.skills.length > 0 || injected.excludedForTools > 0) {
-                console.log(
-                  `[engine:naby] skills: injected ${injected.skills.length}` +
-                    `, excluded-for-tools ${injected.excludedForTools}` +
-                    `, dropped-for-budget ${injected.droppedForBudget}`,
-                );
-              }
-            },
-            // F1-07. runTurn records one usage row per answered turn. It cannot
-            // infer either of these — `Engine` is an interface and says nothing
-            // about which backend implements it or who pays for it — so the
-            // composition root, which chose the engine, supplies them.
-            engineId,
-            costBasis,
-            // THE DIRECTORY THIS TURN IS ABOUT — told to the model (`system`)
-            // and to the ENGINE (`cwd`) from the SAME source, in the same
-            // conditional, on purpose.
-            //
-            // These used to be one line, not two: the system prompt announced
-            // `ctx.cwd` while the engine was given nothing, so the Agent SDK
-            // fell back to the Electron process's cwd — naby's own source
-            // checkout — and loaded NABY's `.claude/` harness (CLAUDE.md,
-            // hooks) into a chat about someone else's project. The model was
-            // told one directory and was standing in another. Full write-up on
-            // `EngineRunInput.cwd` in the runtime.
-            //
-            // `RunCtx.cwd` is documented as "normalized, may be ''", and the
-            // empty string is NOT a directory: passing it through would hand
-            // the SDK a falsy-but-present value and re-open the same ambiguity.
-            // The truthiness guard means no-directory stays UNDEFINED end to
-            // end, which the contract defines as "say nothing about a
-            // directory" rather than "use the ambient one".
-            ...(turnSystem ? { system: turnSystem } : {}),
-            ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
-            onEvent: (ev: EngineEvent) => {
-            // Cancellation: stop translating the moment the run is stopped.
-            // The signal is also handed to the engine (and through it to the
-            // provider call), so this is a second, immediate barrier rather
-            // than the only one.
-            if (ctx.signal.aborted) return;
-
-            switch (ev.kind) {
-              case 'init':
-                break; // already emitted our own init above
-
-              case 'text': {
-                if (ev.role !== 'assistant' || !ev.text) break;
-                assistantText += ev.text;
-                turns += 1;
-                // Engine-agnostic render path — see the header note.
-                ctx.emit({
-                  type: 'stream_event',
-                  session_id: sessionId,
-                  event: {
-                    type: 'content_block_delta',
-                    index: 0,
-                    delta: { type: 'text_delta', text: ev.text },
-                  },
-                });
-                break;
-              }
-
-              case 'tool_request': {
-                // tool_use must reach the client BEFORE its result so the UI
-                // has a call to merge the result into.
-                ctx.emit({
-                  type: 'assistant',
-                  message: {
-                    role: 'assistant',
-                    model: modelLabel,
-                    content: [
-                      {
-                        type: 'tool_use',
-                        id: ev.toolCallId,
-                        name: ev.toolName,
-                        input: ev.input ?? {},
-                      },
-                    ],
-                  },
-                  session_id: sessionId,
-                });
-                break;
-              }
-
-              case 'gate_result': {
-                // A DENY terminates the call inside the runtime — no
-                // tool_result event follows — so surface the denial here or the
-                // UI would spin on a permanently loading tool call.
-                if (ev.decision === 'deny') {
-                  emitToolResult(
-                    ev.toolCallId,
-                    `Denied by policy gate: ${ev.reason ?? 'no reason given'}`,
-                    true,
+          //
+          // THE AUTONOMY LOOP (Phase 3, P3-M3c). One iteration = one step = one
+          // model turn. A non-autonomous turn runs the body EXACTLY once and the
+          // `while` is false on the first check (`stepDecision` starts at
+          // 'not-autonomous'), so this is a no-op wrapper for every ordinary
+          // message. When the agent is autonomous, the decision is taken in the
+          // `result` case below — the only place that knows whether the step did
+          // work and whether it declared itself done — and read here.
+          //
+          // The MCP toolset, the gate, the escalation channel and the store
+          // handle are all built ONCE, outside the loop: they belong to the goal,
+          // not to a step. Steps share the session history, so step N sees
+          // everything steps 1..N-1 did.
+          do {
+            step += 1;
+            stepText = '';
+            stepUsedTool = false;
+            await runTurn({
+              engine,
+              store,
+              sessionId,
+              // A routed agent may prefer its own model; else the engine's resolved
+              // model (or the provider default). Same field the model switcher uses.
+              model: (() => {
+                const m = routedAgent?.model ?? modelForEngine;
+                return { providerId, ...(m ? { model: m } : {}) };
+              })(),
+              // Step 1 is the user's own words; every later step is the harness
+              // asking the agent to continue. That prompt is stored as a real user
+              // message because it IS what drove the model — the transcript should
+              // never imply the user typed something they did not, nor hide what
+              // did (it is labelled `[naby autonomy]`).
+              userText: step === 1 ? turnText : continuationPrompt(step, maxSteps),
+              // Multimodal input: hand this turn's images to the runtime, which
+              // attaches them (transiently) to the user message so each engine can
+              // build a native image block. ImageData -> RuntimeImage (drop the
+              // 'base64' discriminant the runtime does not need).
+              ...(ctx.images && ctx.images.length > 0
+                ? { images: ctx.images.map((im) => ({ media_type: im.media_type, data: im.data })) }
+                : {}),
+              toolSchemas,
+              gate,
+              executors,
+              signal: ctx.signal,
+              // Phase 2.5 (M4): enabled subagents the model may delegate to. The
+              // Claude Agent SDK engine maps these to native `agents` (spawned via
+              // the gated Task tool); the AI-SDK engine ignores them.
+              subagents: gatherSubagents(store, projectCwd),
+              // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
+              // whose trigger matches (or that is always-on) has its instructions
+              // appended to the system prompt; a tool-bearing skill participates
+              // only when all its tools are in `availableTools`, else it is excluded
+              // and counted. Scoped to user + org + this project's cwd (via
+              // opts.cwd, set above). Off entirely when no skill is enabled/matches
+              // (byte-for-byte no-op).
+              // Phase 3 P3-M2: turn-time MEMORY injection (was dormant — the
+              // runtime implemented it since Phase 1.5 but no caller wired it). The
+              // runtime retrieves confirmed, scope-appropriate memory within this
+              // budget and folds it into the system prompt above the engine seam.
+              // This is what makes an agent (the persona especially) act on what it
+              // has learned. A turn with no confirmed memory is a byte-for-byte
+              // no-op. Scoped to user + org + this project's cwd (opts.cwd).
+              memoryInjection: {
+                tokenBudget: MEMORY_TOKEN_BUDGET,
+                userId: DEFAULT_USER_ID,
+                orgId: DEFAULT_ORG_ID,
+              },
+              onMemoryInjection: (injected) => {
+                if (injected.items.length > 0 || injected.droppedForBudget > 0) {
+                  console.log(
+                    `[engine:naby] memory: injected ${injected.items.length}` +
+                      `, dropped-for-budget ${injected.droppedForBudget}`,
                   );
                 }
-                break;
-              }
+              },
+              skillInjection: {
+                tokenBudget: SKILL_TOKEN_BUDGET,
+                userId: DEFAULT_USER_ID,
+                orgId: DEFAULT_ORG_ID,
+                availableTools,
+              },
+              onSkillInjection: (injected) => {
+                if (injected.skills.length > 0 || injected.excludedForTools > 0) {
+                  console.log(
+                    `[engine:naby] skills: injected ${injected.skills.length}` +
+                      `, excluded-for-tools ${injected.excludedForTools}` +
+                      `, dropped-for-budget ${injected.droppedForBudget}`,
+                  );
+                }
+              },
+              // F1-07. runTurn records one usage row per answered turn. It cannot
+              // infer either of these — `Engine` is an interface and says nothing
+              // about which backend implements it or who pays for it — so the
+              // composition root, which chose the engine, supplies them.
+              engineId,
+              costBasis,
+              // THE DIRECTORY THIS TURN IS ABOUT — told to the model (`system`)
+              // and to the ENGINE (`cwd`) from the SAME source, in the same
+              // conditional, on purpose.
+              //
+              // These used to be one line, not two: the system prompt announced
+              // `ctx.cwd` while the engine was given nothing, so the Agent SDK
+              // fell back to the Electron process's cwd — naby's own source
+              // checkout — and loaded NABY's `.claude/` harness (CLAUDE.md,
+              // hooks) into a chat about someone else's project. The model was
+              // told one directory and was standing in another. Full write-up on
+              // `EngineRunInput.cwd` in the runtime.
+              //
+              // `RunCtx.cwd` is documented as "normalized, may be ''", and the
+              // empty string is NOT a directory: passing it through would hand
+              // the SDK a falsy-but-present value and re-open the same ambiguity.
+              // The truthiness guard means no-directory stays UNDEFINED end to
+              // end, which the contract defines as "say nothing about a
+              // directory" rather than "use the ambient one".
+              ...(turnSystem ? { system: turnSystem } : {}),
+              ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+              onEvent: (ev: EngineEvent) => {
+              // Cancellation: stop translating the moment the run is stopped.
+              // The signal is also handed to the engine (and through it to the
+              // provider call), so this is a second, immediate barrier rather
+              // than the only one.
+              if (ctx.signal.aborted) return;
 
-              case 'tool_result': {
-                emitToolResult(ev.toolCallId, ev.output.content, ev.isError);
-                break;
-              }
+              switch (ev.kind) {
+                case 'init':
+                  break; // already emitted our own init above
 
-              case 'harness': {
-                const key = ev.detail ? `${ev.subtype} ${ev.detail}` : ev.subtype;
-                if (harnessSeen.has(key)) break;
-                if (harnessEmitted >= HARNESS_EVENT_CAP) break;
-                harnessSeen.add(key);
-                harnessEmitted += 1;
-                // `subtype:'harness'` keeps this off the client's existing
-                // system subtypes ('init' / 'task_notification' / 'api_retry'),
-                // each of which has its own handler and its own meaning. The
-                // client turns this into a role:'system' row with
-                // systemEvent.kind 'meta' — the muted one-line bar that already
-                // exists — rather than a conversation bubble.
-                ctx.emit({
-                  type: 'system',
-                  subtype: 'harness',
-                  session_id: sessionId,
-                  harness_subtype: ev.subtype,
-                  ...(ev.detail ? { harness_detail: ev.detail } : {}),
-                } satisfies RunEvent);
-                break;
-              }
+                case 'text': {
+                  if (ev.role !== 'assistant' || !ev.text) break;
+                  assistantText += ev.text;
+                  // Per-step copy: the stop decision looks for the done marker in
+                  // THIS step's words, not in something the agent said earlier.
+                  stepText += ev.text;
+                  turns += 1;
+                  // Engine-agnostic render path — see the header note.
+                  ctx.emit({
+                    type: 'stream_event',
+                    session_id: sessionId,
+                    event: {
+                      type: 'content_block_delta',
+                      index: 0,
+                      delta: { type: 'text_delta', text: ev.text },
+                    },
+                  });
+                  break;
+                }
 
-              case 'error': {
-                errorMessage = ev.message;
-                ctx.emit({ type: 'error', error: ev.message, session_id: sessionId });
-                break;
-              }
+                case 'tool_request': {
+                  // The step DID something — the signal the autonomy loop needs
+                  // to distinguish work in progress from an answer. Recorded on
+                  // the request (not the result) on purpose: a call the gate
+                  // denies is still the agent trying to act, so a denied step
+                  // gets to try something else rather than ending the run.
+                  stepUsedTool = true;
+                  // tool_use must reach the client BEFORE its result so the UI
+                  // has a call to merge the result into.
+                  ctx.emit({
+                    type: 'assistant',
+                    message: {
+                      role: 'assistant',
+                      model: modelLabel,
+                      content: [
+                        {
+                          type: 'tool_use',
+                          id: ev.toolCallId,
+                          name: ev.toolName,
+                          input: ev.input ?? {},
+                        },
+                      ],
+                    },
+                    session_id: sessionId,
+                  });
+                  break;
+                }
 
-              case 'result': {
-                sawResult = true;
-                usage = ev.usage;
-                ctx.emit({
-                  type: 'result',
-                  subtype: ev.ok ? 'success' : 'error_during_execution',
-                  session_id: sessionId,
-                  is_error: !ev.ok,
-                  result: ev.ok ? assistantText : (errorMessage ?? 'run failed'),
-                  usage: toSdkUsage(ev.usage),
-                  total_cost_usd: ev.costUsd ?? 0,
-                  duration_ms: Date.now() - startedAt,
-                  num_turns: turns,
-                });
-                break;
+                case 'gate_result': {
+                  // A DENY terminates the call inside the runtime — no
+                  // tool_result event follows — so surface the denial here or the
+                  // UI would spin on a permanently loading tool call.
+                  if (ev.decision === 'deny') {
+                    emitToolResult(
+                      ev.toolCallId,
+                      `Denied by policy gate: ${ev.reason ?? 'no reason given'}`,
+                      true,
+                    );
+                  }
+                  break;
+                }
+
+                case 'tool_result': {
+                  emitToolResult(ev.toolCallId, ev.output.content, ev.isError);
+                  break;
+                }
+
+                case 'harness': {
+                  const key = ev.detail ? `${ev.subtype} ${ev.detail}` : ev.subtype;
+                  if (harnessSeen.has(key)) break;
+                  if (harnessEmitted >= HARNESS_EVENT_CAP) break;
+                  harnessSeen.add(key);
+                  harnessEmitted += 1;
+                  // `subtype:'harness'` keeps this off the client's existing
+                  // system subtypes ('init' / 'task_notification' / 'api_retry'),
+                  // each of which has its own handler and its own meaning. The
+                  // client turns this into a role:'system' row with
+                  // systemEvent.kind 'meta' — the muted one-line bar that already
+                  // exists — rather than a conversation bubble.
+                  ctx.emit({
+                    type: 'system',
+                    subtype: 'harness',
+                    session_id: sessionId,
+                    harness_subtype: ev.subtype,
+                    ...(ev.detail ? { harness_detail: ev.detail } : {}),
+                  } satisfies RunEvent);
+                  break;
+                }
+
+                case 'error': {
+                  errorMessage = ev.message;
+                  ctx.emit({ type: 'error', error: ev.message, session_id: sessionId });
+                  break;
+                }
+
+                case 'result': {
+                  sawResult = true;
+                  usage = ev.usage;
+                  // Per-run totals (P3-M3c): the client gets ONE result for the
+                  // whole goal, so tokens and cost are summed across steps. A
+                  // single-step run sums exactly one step — the same numbers a
+                  // pre-M3c turn reported.
+                  accUsage.inputTokens += ev.usage?.inputTokens ?? 0;
+                  accUsage.outputTokens += ev.usage?.outputTokens ?? 0;
+                  accUsage.cachedInputTokens += ev.usage?.cachedInputTokens ?? 0;
+                  accCostUsd += ev.costUsd ?? 0;
+                  // THE STOP DECISION. Taken here because this is the moment both
+                  // inputs are known: whether the step used a tool and what it
+                  // said. `resolveMaxSteps` collapsed a non-autonomous agent to 1
+                  // step, for which the decision is always 'not-autonomous' —
+                  // i.e. an ordinary turn cannot accidentally continue.
+                  stepDecision = decideAutonomyStep({
+                    step,
+                    maxSteps,
+                    usedTools: stepUsedTool,
+                    text: stepText,
+                    ok: ev.ok,
+                    aborted: ctx.signal.aborted,
+                  });
+                  // A continuing step must NOT emit `result`: the client ends its
+                  // turn on that event, so an intermediate one would close the
+                  // bubble and leave the remaining steps streaming into a
+                  // finished turn. The step bar (emitted by the loop) is what the
+                  // user sees instead; the terminal result comes from the last
+                  // step — or from the fallback below if the run is stopped
+                  // between steps.
+                  if (stepDecision.proceed) break;
+                  emittedResult = true;
+                  ctx.emit({
+                    type: 'result',
+                    subtype: ev.ok ? 'success' : 'error_during_execution',
+                    session_id: sessionId,
+                    is_error: !ev.ok,
+                    result: ev.ok ? assistantText : (errorMessage ?? 'run failed'),
+                    usage: toSdkUsage(accUsage),
+                    total_cost_usd: accCostUsd,
+                    duration_ms: Date.now() - startedAt,
+                    num_turns: turns,
+                  });
+                  break;
+                }
               }
+              },
+            });
+            // Between steps: tell the user (a muted one-line bar) that the agent
+            // is continuing, or why it stopped. Emitted here rather than in the
+            // `result` case so it lands after that step's events, and so the
+            // reason a run ended is always in the transcript.
+            if (autonomous) {
+              console.log(`[engine:naby] autonomy: ${stepMarker(step, maxSteps, stepDecision)}`);
+              ctx.emit({
+                type: 'system',
+                subtype: 'harness',
+                session_id: sessionId,
+                harness_subtype: 'autonomy',
+                harness_detail: stepMarker(step, maxSteps, stepDecision),
+              } satisfies RunEvent);
             }
-            },
-          });
+            // An abort is re-checked here (not only inside the runtime) so a stop
+            // pressed mid-step never buys the agent another one.
+          } while (stepDecision.proceed && !ctx.signal.aborted);
         } catch (e) {
           errorMessage = e instanceof Error ? e.message : String(e);
           ctx.emit({ type: 'error', error: errorMessage, session_id: sessionId });
@@ -1049,7 +1212,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // The stream can end without a result — an abort mid-iteration, or a
         // throw out of the engine. The client's turn only ends on `result`, so
         // one is always emitted.
-        if (!sawResult) {
+        //
+        // P3-M3c: the condition is `emittedResult`, NOT `sawResult`. An autonomous
+        // run that was stopped (or threw) right after a step chose to continue HAS
+        // seen results — every one of them suppressed on purpose — so keying on
+        // `sawResult` would skip the fallback and leave the client's turn spinning.
+        if (!emittedResult) {
           const aborted = ctx.signal.aborted;
           const message =
             errorMessage ?? (aborted ? 'Run stopped by user.' : 'Run ended without a result.');
@@ -1061,11 +1229,40 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             subtype: 'error_during_execution',
             session_id: sessionId,
             is_error: true,
-            result: message,
-            usage: toSdkUsage(usage),
-            total_cost_usd: 0,
+            // A stopped autonomous run still did work: report what it managed to
+            // say, so the transcript is not just "stopped". Falls back to the
+            // status line when there is nothing (the pre-M3c case).
+            result: sawResult && assistantText ? `${assistantText}\n\n${message}` : message,
+            usage: toSdkUsage(sawResult ? accUsage : usage),
+            total_cost_usd: accCostUsd,
             duration_ms: Date.now() - startedAt,
             num_turns: turns,
+          });
+        }
+
+        // ---- the final report (Phase 3, P3-M3b) --------------------------
+        //
+        // The other half of escalation: the user who approved a step from their
+        // phone learns how the turn ENDED without opening the app. Awaited — the
+        // turn's events are all emitted by now, and awaiting is what guarantees
+        // the message is actually out before the run function returns (a
+        // fire-and-forget send can lose the race against process teardown).
+        // Never throws (sendTelegramMessage swallows), so it cannot fail a turn.
+        //
+        // P3-M3c: ONE report per goal, not per step — it is sent after the whole
+        // loop, and it says how many steps the agent spent and why it stopped, so
+        // "it hit its step cap" is distinguishable from "it finished".
+        if (escalateToTelegram) {
+          await sendFinalReport(store, {
+            ok: emittedResult && sawResult && !errorMessage,
+            text: assistantText,
+            ...(errorMessage ? { error: errorMessage } : {}),
+            ...(routedAgent ? { agentName: routedAgent.name } : {}),
+            durationMs: Date.now() - startedAt,
+            numTurns: turns,
+            ...(autonomous
+              ? { steps: step, stepsMax: maxSteps, stopReason: stepDecision.reason }
+              : {}),
           });
         }
       },

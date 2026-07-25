@@ -279,11 +279,21 @@ export function NabyAgentManager({ isOpen }: { isOpen: boolean; cwd?: string }) 
               <input
                 value={form.maxSteps}
                 onChange={(e) => set('maxSteps', e.target.value.replace(/[^0-9]/g, ''))}
-                placeholder={t('agentManager.noLimit', { defaultValue: 'no limit' })}
+                placeholder={t('agentManager.noLimit', { defaultValue: 'off (1 turn)' })}
                 className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground w-28"
               />
             </label>
           </div>
+
+          {/* P3-M3c: what the number actually does. An empty field is autonomy
+              OFF (one turn), not "unlimited" — and the store's value is clamped,
+              so the ceiling is stated rather than discovered. */}
+          <p className="text-[10px] text-muted-foreground">
+            {t('agentManager.stepsHint', {
+              defaultValue:
+                'Empty or 1 = a single turn. 2+ lets the agent keep working on its own (hard cap 20); it stops when it reports done, uses no tool, or spends the budget.',
+            })}
+          </p>
 
           {editingPersona ? (
             <p className="text-[10px] text-muted-foreground italic">
