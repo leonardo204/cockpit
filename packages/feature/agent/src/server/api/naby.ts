@@ -63,6 +63,8 @@ import {
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
+import { resolveCheckin } from '../lib/checkinRegistry';
+import { growthReport, type GrowthReport } from '../lib/growthRead';
 import { resolveMaxSteps } from '../lib/autonomy';
 import {
   readTelegramConfig,
@@ -388,7 +390,13 @@ export type NabyAction =
   | { action: 'telegram.test' }
   // Auto-detect the chat id from the naby bot's latest message (the user messages
   // their dedicated naby bot once, then this fills the chat id in).
-  | { action: 'telegram.detectChat' };
+  | { action: 'telegram.detectChat' }
+  // Phase 3 (P3-M5) — the butterfly trust meter. `growth.get` is the reading the
+  // Settings panel renders (stage, gauge, the axes, the regression reason and the
+  // per-task-type breakdown); `checkin.resolve` settles a paused check-in the way
+  // `approval.resolve` settles a paused tool approval.
+  | { action: 'growth.get'; agentId?: string }
+  | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string };
 
 export type NabyActionResult =
   | {
@@ -419,6 +427,8 @@ export type NabyActionResult =
       telegram?: { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
       /** `telegram.detectChat`: the chat id discovered from the bot's latest message. */
       chatId?: string;
+      /** `growth.get`: the full trust-meter reading for one agent. */
+      growth?: GrowthReport;
     }
   | { ok: false; error: string };
 
@@ -648,6 +658,40 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         }
       }
       return { ok: true, resolved };
+    }
+
+    // Phase 3 (P3-M5) — settle a paused check-in with the option the user picked.
+    // Shaped like `approval.resolve` and for the same reason: the turn is
+    // suspended in another request's promise, and this is what wakes it.
+    case 'checkin.resolve': {
+      if (typeof body.checkinId !== 'string' || !body.checkinId) {
+        return { ok: false, error: 'checkinId is required' };
+      }
+      // -1 means "the user answered in their own words" and REQUIRES those words:
+      // resolving with neither an index nor text would hand the agent an empty
+      // decision, which is worse than the prompt having timed out.
+      const chosen = typeof body.chosen === 'number' ? Math.trunc(body.chosen) : NaN;
+      if (Number.isNaN(chosen) || chosen < -1) {
+        return { ok: false, error: 'chosen must be an option index, or -1 with a correction' };
+      }
+      const correction = typeof body.correction === 'string' ? body.correction.trim() : '';
+      if (chosen === -1 && !correction) {
+        return { ok: false, error: 'a free-text answer needs `correction`' };
+      }
+      const resolved = resolveCheckin(body.checkinId, {
+        chosen,
+        ...(correction ? { correction } : {}),
+      });
+      return { ok: true, resolved };
+    }
+
+    // Phase 3 (P3-M5) — the trust-meter reading. Defaults to the built-in persona,
+    // which is the agent the Settings panel is about; an `agentId` reads a custom
+    // agent instead. Never throws on an empty ledger: an unmeasured agent reads as
+    // an egg, which is the honest answer rather than an error.
+    case 'growth.get': {
+      const agentId = typeof body.agentId === 'string' && body.agentId ? body.agentId : BUILTIN_PERSONA_ID;
+      return { ok: true, growth: growthReport(store, agentId) };
     }
 
     case 'model.set': {

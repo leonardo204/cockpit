@@ -43,7 +43,13 @@ export function useLiveStream(
   const apply = (ev: StreamEvent) => {
     // Phase 2 (M2): a viewed/resumed turn's tool-approval prompt. Re-dispatch as a
     // DOM event for <ToolApprovalPrompt>, mirroring useChatStream.
-    if (ev.type === 'approval_request' || ev.type === 'approval_resolved') {
+    // Phase 3 (P3-M5): the same for a paused CHECK-IN, read by <CheckinPrompt>.
+    if (
+      ev.type === 'approval_request' ||
+      ev.type === 'approval_resolved' ||
+      ev.type === 'checkin_request' ||
+      ev.type === 'checkin_resolved'
+    ) {
       window.dispatchEvent(new CustomEvent(`naby:${ev.type}`, { detail: ev }));
       return;
     }

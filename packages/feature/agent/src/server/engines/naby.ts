@@ -80,6 +80,7 @@ import {
   normalizeToolName,
   parseAgentAddress,
   phase1HarnessFloor,
+  BUILTIN_PERSONA_ID,
   realPolicy,
   makeModelResolver,
   Outbox,
@@ -128,6 +129,12 @@ import {
   sendFinalReport,
 } from '../lib/telegramEscalation';
 import { canLearn, learningInstruction } from '../lib/learning';
+import {
+  canCheckIn,
+  checkinInstruction,
+  makeCheckinSink,
+  recordGateOutcome,
+} from '../lib/checkinTurn';
 import {
   autonomyInstruction,
   continuationPrompt,
@@ -567,6 +574,33 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ? store.getAgentByName(addressed.name)
           : undefined;
 
+        // ---- WHOSE AGENT THIS TURN BELONGS TO (Phase 3, P3-M5) ------------
+        //
+        // Distinct from `routedAgent`, and the distinction matters:
+        //
+        //   routedAgent    the agent whose IDENTITY this turn adopts — its system
+        //                  prompt, model, tool restriction, autonomy. Only set by
+        //                  an explicit `@name`.
+        //   growthSubject  the agent this turn's OBSERVATIONS belong to — its
+        //                  memory and its growth ledger. On a plain turn that is
+        //                  the built-in persona, because naby IS the persona: the
+        //                  product is an agent that learns its user from the work
+        //                  they actually do.
+        //
+        // WHY THIS CHANGED. M4a deliberately attached learning only to a routed
+        // agent, to keep a normal turn's tool list untouched. Combined with M5's
+        // mention gate that produced a DEADLOCK: the persona cannot be `@`-addressed
+        // until it is a butterfly, it cannot become a butterfly without check-ins,
+        // and it could not check in unless it was addressed. Gating observation on
+        // being trusted meant it could never earn trust. So observation now follows
+        // the persona onto ordinary turns, while ADDRESSING it still has to be
+        // earned — which is what the gate was actually for.
+        //
+        // A turn routed to a CUSTOM agent belongs to that agent, not the persona:
+        // work handed to a specialist should not teach the persona it did the work.
+        const persona = routedAgent ? undefined : store.getAgent(BUILTIN_PERSONA_ID);
+        const growthSubject: Agent | undefined = routedAgent ?? persona;
+
         // ---- runtime construction ----------------------------------------
         const outbox = new Outbox();
         // Pass the store so the agent gets `naby_add_mcp` — it can register an MCP
@@ -580,22 +614,41 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // capture lands as a PROPOSAL, so it cannot shape an answer until the user
         // confirms it in the memory review UI.
         //
-        // ONLY FOR A ROUTED AGENT. A plain chat turn does not get the tool at all:
-        // learning is what an *agent* does on its user's behalf, and a turn with no
-        // agent has no memoryScope to write to. This also keeps a normal turn's
-        // tool list byte-for-byte what it was before M4.
+        // BOTH SINKS FOLLOW `growthSubject`, not `routedAgent` (P3-M5). A plain
+        // chat turn is the PERSONA's turn, so it learns and it checks in there
+        // too — see the growthSubject comment for why gating this on `@` had made
+        // the meter unable to move. The tool is still absent when there is no
+        // subject at all (no persona row yet), so nothing half-runs.
+        //
+        // P3-M5: the CHECK-IN sink adds `naby_checkin`, which suspends the turn on
+        // a question and writes the answer to the eval-event ledger — the labelled
+        // predictions the trust meter is computed from. Built per turn because it
+        // closes over this turn's emit and abort signal.
+        const checkinSink =
+          growthSubject && canCheckIn(growthSubject)
+            ? makeCheckinSink({
+                store,
+                agentId: growthSubject.id,
+                sessionId,
+                emit: (event) => ctx.emit(event as RunEvent),
+                signal: ctx.signal,
+                ttlMs: APPROVAL_TTL_MS,
+                now: () => Date.now(),
+              })
+            : undefined;
         const builtin = buildToolset(
           outbox,
           store,
-          routedAgent
+          growthSubject
             ? {
                 putMemory: (req) => store.putMemory(req),
                 sessionId,
                 ...(projectCwd ? { cwd: projectCwd } : {}),
                 userId: DEFAULT_USER_ID,
-                defaultScope: routedAgent.memoryScope,
+                defaultScope: growthSubject.memoryScope,
               }
             : undefined,
+          checkinSink,
         );
 
         // ---- MCP tools (F1-08) -------------------------------------------
@@ -687,18 +740,29 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // actually land this turn — a routed agent whose allowlist (if any)
         // includes the tool. Instructing an agent to call a tool its own gate
         // would deny is the "silent half-run" the skill injection also refuses.
-        const learns = canLearn(routedAgent);
+        //
+        // P3-M5: keyed on `growthSubject`, so the persona learns from ordinary
+        // turns too — the tool is built for the same subject, so the instruction
+        // and the tool's presence can never disagree.
+        const learns = canLearn(growthSubject);
         if (learns) {
           console.log(
-            `[engine:naby] learning: on (@${routedAgent?.name}, scope=${routedAgent?.memoryScope})`,
+            `[engine:naby] learning: on (@${growthSubject?.name}, scope=${growthSubject?.memoryScope})`,
           );
+        }
+        // Phase 3 P3-M5: TELL THE AGENT TO CHECK IN. Same condition as the sink
+        // above, so the words are only ever present alongside the tool.
+        const checksIn = checkinSink !== undefined;
+        if (checksIn) {
+          console.log(`[engine:naby] check-ins: on (@${growthSubject?.name})`);
         }
         const turnSystem =
           [
             routedAgent?.systemPrompt,
             shellNote,
             autonomous ? autonomyInstruction(maxSteps) : undefined,
-            learns && routedAgent ? learningInstruction(routedAgent) : undefined,
+            learns && growthSubject ? learningInstruction(growthSubject) : undefined,
+            checksIn ? checkinInstruction() : undefined,
           ]
             .filter(Boolean)
             .join('\n\n') || undefined;
@@ -838,6 +902,29 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // (and logged) by makeGate; this only reports it. Because it sits on
         // the return path, an observation is proof the gate ran — and the
         // runtime does not invoke an executor until this returns.
+        // Phase 3 P3-M5: THE OTHER TWO LEDGER KINDS, written from here rather than
+        // by the agent. A consequential call the agent made without asking is an
+        // `autonomous` row; one the gate refused is a `tripwire`. This is what makes
+        // "when to check in" a property of the ACTION rather than of the agent's
+        // judgement (spec §4.5): it can decline to ask, but it cannot decline to be
+        // counted. Read-only calls produce nothing (`isConsequentialTool`).
+        //
+        // ONE ROW PER CALL, deliberately not per plan: three writes after a single
+        // check-in are three autonomous rows. So coverage reads per action, which
+        // is only sound while coverage is REPORTED and not gated on — enforcing a
+        // coverage floor means first deciding how a check-in claims the calls that
+        // carry out its decision.
+        const observeForGrowth = (call: ToolCall, allowed: boolean, reason?: string): void => {
+          if (!growthSubject) return;
+          recordGateOutcome({
+            store,
+            agentId: growthSubject.id,
+            sessionId,
+            toolName: call.toolName,
+            allowed,
+            ...(reason ? { reason } : {}),
+          });
+        };
         const gate: Gate = async (call) => {
           // Phase 3 P3-M2: a routed agent restricted to `toolRefs` may use ONLY
           // those tools. This is the OUTERMOST check — it overrides even an
@@ -848,12 +935,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             console.log(
               `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (agent @${routedAgent?.name} toolRefs)`,
             );
-            return { behavior: 'deny', reason: `agent @${routedAgent?.name} is limited to its allowed tools` };
+            const reason = `agent @${routedAgent?.name} is limited to its allowed tools`;
+            observeForGrowth(call, false, reason);
+            return { behavior: 'deny', reason };
           }
           const decision = await gated.gate(call);
           const entry = gated.log[gated.log.length - 1];
           console.log(
             `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${decision.behavior}`,
+          );
+          observeForGrowth(
+            call,
+            decision.behavior === 'allow',
+            decision.behavior === 'deny' ? decision.reason : undefined,
           );
           if (entry) deps.onGateDecision?.(entry);
           return decision;

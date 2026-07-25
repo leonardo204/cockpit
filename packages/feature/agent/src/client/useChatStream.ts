@@ -207,7 +207,15 @@ export function useChatStream(
     // Phase 2 (M2): a paused turn's tool-approval prompt. Re-dispatch as a DOM
     // event so the self-contained <ToolApprovalPrompt> can render the prompt and
     // POST the decision, without threading approval state through this reducer.
-    if (eventType === 'approval_request' || eventType === 'approval_resolved') {
+    // Phase 3 (P3-M5): a paused CHECK-IN takes the same route to <CheckinPrompt>.
+    // Both are transient prompts rather than chat history, so neither belongs in
+    // the message reducer.
+    if (
+      eventType === 'approval_request' ||
+      eventType === 'approval_resolved' ||
+      eventType === 'checkin_request' ||
+      eventType === 'checkin_resolved'
+    ) {
       window.dispatchEvent(new CustomEvent(`naby:${eventType}`, { detail: event }));
       return;
     }

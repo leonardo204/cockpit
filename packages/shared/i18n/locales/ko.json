@@ -1533,6 +1533,15 @@
     "alwaysBlock": "항상 차단",
     "more": "+{{count}}개 대기 중"
   },
+  "checkin": {
+    "title": "나비가 어떻게 진행할지 묻습니다",
+    "other": "둘 다 아닙니다 — 직접 적겠습니다",
+    "otherPlaceholder": "원하는 방식을 적어 주세요",
+    "send": "보내기",
+    "revealHit": "나비도 같은 것을 추천했습니다: {{option}}",
+    "revealMiss": "나비는 이걸 추천했습니다: {{option}} — 다음에 반영합니다",
+    "more": "+{{count}}개 대기 중"
+  },
   "chatInput": {
     "agentsGroup": "에이전트",
     "commandsGroup": "커맨드",

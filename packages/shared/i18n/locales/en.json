@@ -1533,6 +1533,15 @@
     "alwaysBlock": "Always block",
     "more": "+{{count}} more waiting"
   },
+  "checkin": {
+    "title": "naby is asking how to proceed",
+    "other": "Neither — I will explain",
+    "otherPlaceholder": "Say how you want it done",
+    "send": "Send",
+    "revealHit": "naby had recommended the same thing: {{option}}",
+    "revealMiss": "naby had recommended: {{option}} — noted for next time",
+    "more": "+{{count}} more waiting"
+  },
   "chatInput": {
     "agentsGroup": "Agents",
     "commandsGroup": "Commands",

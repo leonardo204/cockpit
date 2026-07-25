@@ -24,14 +24,13 @@ import { handler } from "@cockpit/effect-runtime/server"
 import {
   DEFAULT_USER_ID,
   canBeAddressed,
-  computeGrowth,
-  GROWTH_WINDOW,
   type GrowthStage,
   type HarnessItem,
   type HarnessKind,
   type Store,
 } from "../../../../../../../dist/naby-runtime.mjs"
 import { getStore } from "../engines/naby"
+import { readGrowth } from "../lib/growthRead"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -175,11 +174,6 @@ export function mergeCommands(builtins: CommandInfo[], owned: HarnessItem[]): Co
   return order.map((verb) => byVerb.get(verb)!)
 }
 
-/** How much ledger history the meter reads per agent. Generous enough for the
- *  change detector (which needs rows on both sides of a split) while still bounding
- *  the query — the meter itself only scores the recent window. */
-const LEDGER_READ_LIMIT = GROWTH_WINDOW * 10
-
 /** naby agents as palette rows, each carrying its growth stage.
  *
  *  Best-effort like the harness read: a store hiccup must never empty the
@@ -194,15 +188,12 @@ export function loadAgentEntries(store: AgentPaletteStore): CommandInfo[] {
     return []
   }
   return agents.map((a) => {
-    let stage: GrowthStage = "egg"
-    let percent = 0
-    try {
-      const g = computeGrowth(store.listEvalEvents(a.id, { limit: LEDGER_READ_LIMIT }))
-      stage = g.stage
-      percent = g.percent
-    } catch {
-      /* no ledger yet (or an unreadable one) reads as an egg — never a crash */
-    }
+    // Shared with the Settings panel (growthRead), so the badge here and the
+    // gauge there can never disagree. Best-effort inside: no ledger reads as an
+    // egg rather than throwing.
+    const g = readGrowth(store, a.id)
+    const stage: GrowthStage = g.stage
+    const percent = g.percent
     return {
       name: `@${a.name}`,
       description: a.description ?? a.systemPrompt.split("\n")[0]?.slice(0, 120) ?? "",
