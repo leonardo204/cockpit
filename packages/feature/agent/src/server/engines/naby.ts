@@ -97,10 +97,12 @@ import {
   type GateLogEntry,
   type ToolCall,
   type McpLoadResult,
+  type HarnessItem,
   type ModelResolver,
   type PolicyRule,
   type Project,
   type ProviderProfile,
+  type SubagentSpec,
   type RuntimeMessage,
   type SessionRef,
   type Store,
@@ -177,6 +179,44 @@ function gatherPolicyRules(store: Store, cwd: string | undefined): PolicyRule[] 
     }
   }
   return out;
+}
+
+/** Gather enabled subagents (Phase 2.5 M4) across user + org + this project, as
+ *  engine-neutral SubagentSpecs. Project overrides a same-named user/org one
+ *  (last-write-wins on the ordered scan). Best-effort — never break a turn. */
+function gatherSubagents(store: Store, cwd: string | undefined): SubagentSpec[] {
+  const items: HarnessItem[] = [];
+  try {
+    items.push(...store.listHarness('user', DEFAULT_USER_ID, { kind: 'subagent', status: 'enabled' }));
+  } catch {
+    /* ignore */
+  }
+  try {
+    items.push(...store.listHarness('org', DEFAULT_ORG_ID, { kind: 'subagent', status: 'enabled' }));
+  } catch {
+    /* ignore */
+  }
+  if (cwd) {
+    try {
+      items.push(...store.listHarness('project', cwd, { kind: 'subagent', status: 'enabled' }));
+    } catch {
+      /* ignore */
+    }
+  }
+  const byName = new Map<string, SubagentSpec>();
+  for (const it of items) {
+    if (it.kind !== 'subagent' || !it.subagent) continue;
+    byName.set(it.name, {
+      name: it.name,
+      ...(it.description ? { description: it.description } : {}),
+      systemPrompt: it.subagent.systemPrompt,
+      ...(it.subagent.model ? { model: it.subagent.model } : {}),
+      ...(it.subagent.toolRefs && it.subagent.toolRefs.length > 0
+        ? { toolRefs: it.subagent.toolRefs }
+        : {}),
+    });
+  }
+  return [...byName.values()];
 }
 
 /** Exported so the `/api/naby` route reads the SAME database this engine writes
@@ -735,6 +775,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             gate,
             executors,
             signal: ctx.signal,
+            // Phase 2.5 (M4): enabled subagents the model may delegate to. The
+            // Claude Agent SDK engine maps these to native `agents` (spawned via
+            // the gated Task tool); the AI-SDK engine ignores them.
+            subagents: gatherSubagents(store, projectCwd),
             // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
             // whose trigger matches (or that is always-on) has its instructions
             // appended to the system prompt; a tool-bearing skill participates
