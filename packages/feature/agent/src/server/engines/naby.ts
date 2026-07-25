@@ -73,6 +73,8 @@ import {
   getChatgptTokenSource,
   isChatgptOauthEnabled,
   DEFAULT_USER_ID,
+  DANGEROUS_BUILTINS,
+  OBSERVATION_BUILTINS,
   loadMcpToolset,
   makeGate,
   phase1HarnessFloor,
@@ -147,6 +149,10 @@ const DEFAULT_ORG_ID = 'default';
 /** How long a tool-approval prompt waits for the user before auto-denying, so a
  *  turn can never hang forever on an unanswered prompt (Phase 2 M2). */
 const APPROVAL_TTL_MS = 10 * 60 * 1000;
+
+/** Per-turn hard cap on injected skill instructions (M3). Enough for a few
+ *  focused skills; over-budget candidates are dropped and counted, never silent. */
+const SKILL_TOKEN_BUDGET = 2000;
 
 /** Gather the policy rules that apply to a turn: user + org (always) and the
  *  project scope when a cwd is set. Order is irrelevant — realPolicy resolves
@@ -543,6 +549,16 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // passing the runtime tool names covers that path too: its calls are on
         // the allowlist and pass, while it has no built-ins to deny.
         const runtimeToolNames = toolSchemas.map((t) => t.name);
+        // Phase 2.5 (M3): the bare names of every tool THIS turn can run — runtime
+        // tools + MCP (both in toolSchemas) plus, on the Claude Agent SDK engine,
+        // its built-ins (Read/Bash/Write/…). A tool-bearing skill is only injected
+        // when all its toolRefs are here, so a skill never half-runs against a tool
+        // the turn cannot call. The AI-SDK engine has no built-ins, so its set is
+        // just the runtime/MCP tools.
+        const availableTools =
+          engineId === 'dev-claude'
+            ? [...runtimeToolNames, ...OBSERVATION_BUILTINS, ...DANGEROUS_BUILTINS]
+            : runtimeToolNames;
         // THE "ALLOW CHANGES" TOGGLE (setting `gate.allowChanges`, default ON).
         //
         // The floor above makes OBSERVATION safe, but it also blocks the agent
@@ -719,6 +735,28 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             gate,
             executors,
             signal: ctx.signal,
+            // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
+            // whose trigger matches (or that is always-on) has its instructions
+            // appended to the system prompt; a tool-bearing skill participates
+            // only when all its tools are in `availableTools`, else it is excluded
+            // and counted. Scoped to user + org + this project's cwd (via
+            // opts.cwd, set above). Off entirely when no skill is enabled/matches
+            // (byte-for-byte no-op).
+            skillInjection: {
+              tokenBudget: SKILL_TOKEN_BUDGET,
+              userId: DEFAULT_USER_ID,
+              orgId: DEFAULT_ORG_ID,
+              availableTools,
+            },
+            onSkillInjection: (injected) => {
+              if (injected.skills.length > 0 || injected.excludedForTools > 0) {
+                console.log(
+                  `[engine:naby] skills: injected ${injected.skills.length}` +
+                    `, excluded-for-tools ${injected.excludedForTools}` +
+                    `, dropped-for-budget ${injected.droppedForBudget}`,
+                );
+              }
+            },
             // F1-07. runTurn records one usage row per answered turn. It cannot
             // infer either of these — `Engine` is an interface and says nothing
             // about which backend implements it or who pays for it — so the

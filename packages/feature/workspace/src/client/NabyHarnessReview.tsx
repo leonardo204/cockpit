@@ -180,15 +180,14 @@ const TRUST_LABEL: Record<HarnessTrust, string> = {
   external: 'harnessReview.trustExternal',
 };
 
-/** A tool-bearing skill/subagent cannot execute until Phase 2.5 — surface that so
- *  enabling one is not mistaken for a fully working capability (strategy §6). */
+/** A tool-bearing SUBAGENT cannot be orchestrated until Phase 2.5 (M4) — surface
+ *  that so enabling one is not mistaken for a fully working capability
+ *  (strategy §6). Tool-bearing SKILLS are handled as of M3 (their instructions
+ *  inject when the turn actually has the tools they declare), so they no longer
+ *  carry this caveat. */
 function needsPhase25(item: HarnessItem): boolean {
-  const refs =
-    item.kind === 'skill'
-      ? item.skill?.toolRefs
-      : item.kind === 'subagent'
-        ? item.subagent?.toolRefs
-        : undefined;
+  if (item.kind !== 'subagent') return false;
+  const refs = item.subagent?.toolRefs;
   return Array.isArray(refs) && refs.length > 0;
 }
 
