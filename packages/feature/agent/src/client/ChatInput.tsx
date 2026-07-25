@@ -15,6 +15,7 @@ import {
   osFilePath,
   quotePath,
 } from './fileRefBus';
+import { paletteRows } from './palette';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
@@ -266,12 +267,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     const { marker, verb } = commandQuery;
     const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
     const all = [...localCommands.filter(match), ...commands.filter(match)];
-    // `/` is the harness (tools); `@` is the agent layer. An agent row must never
-    // appear under `/`, or picking it would produce a line the dispatcher reads as
-    // a harness verb.
-    const agents = marker === '@' ? all.filter((c) => c.agent) : [];
-    const rest = all.filter((c) => !c.agent);
-    return [...agents, ...rest];
+    // `/` is the harness, `@` is the agent layer — and NEITHER marker shows the
+    // other's rows. See lib `palette.ts` for why this lives in a tested function.
+    return paletteRows(all, marker === '@' ? '@' : '/');
   }, [commandQuery, localCommands, commands]);
 
   /** A row the user may actually pick. A non-butterfly agent is listed but not
