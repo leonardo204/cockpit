@@ -1599,7 +1599,10 @@
   "chatInput": {
     "agentsGroup": "에이전트",
     "commandsGroup": "커맨드",
-    "agentLocked": "아직 자라는 중입니다. 나비 단계가 되면 바로 부를 수 있습니다."
+    "agentLocked": "아직 자라는 중입니다. 나비 단계가 되면 바로 부를 수 있습니다.",
+    "filesGroup": "파일과 폴더",
+    "file": "파일",
+    "folder": "폴더"
   },
   "growth": {
     "stage": {

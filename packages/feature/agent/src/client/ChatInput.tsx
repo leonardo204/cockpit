@@ -15,7 +15,15 @@ import {
   osFilePath,
   quotePath,
 } from './fileRefBus';
-import { paletteRows } from './palette';
+import {
+  fileRows,
+  findMentionQuery,
+  mentionInsertion,
+  paletteRows,
+  splitMentionPath,
+  type DirEntry,
+  type FileRow,
+} from './palette';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
@@ -138,6 +146,10 @@ interface ChatInputProps {
   }) => void;
 }
 
+/** A row the palette can show: a harness command, a naby agent, or a file/folder
+ *  in the open project. `file` is present only on the last kind. */
+type PaletteEntry = CommandInfo & { file?: FileRow['file'] };
+
 /** The growth stages as the user sees them. Egg → larva → pupa → butterfly; only
  *  a butterfly can be addressed. */
 const GROWTH_GLYPH: Record<'egg' | 'larva' | 'pupa' | 'butterfly', string> = {
@@ -239,14 +251,52 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     return { text: input.slice(lineStart, lineEnd), start: lineStart, end: lineEnd };
   }, [input, caret]);
 
-  // The command being typed on the active line: a `/` or `@` marker followed by
-  // a partial verb with nothing after it yet (a trailing space starts the body
-  // and dismisses the menu). Marker-agnostic — `@qa` matches the same `/qa` entry.
+  // The command being typed on the active line: `/` followed by a partial verb
+  // with nothing after it yet (a trailing space starts the body and dismisses the
+  // menu). `/` ONLY — `@` belongs to the agent/file palette below, and letting one
+  // marker mean both is what produced the `@plan` bug.
   const commandQuery = useMemo(() => {
     // Verb char class kept in sync with the server (slashCommands' COMMAND_LINE_RE).
-    const m = activeLine.text.match(/^\s*([/@])([a-zA-Z0-9-]*)$/);
+    const m = activeLine.text.match(/^\s*(\/)([a-zA-Z0-9-]*)$/);
     return m ? { marker: m[1], verb: m[2].toLowerCase() } : null;
   }, [activeLine.text]);
+
+  // The `@…` mention being typed, anywhere in the input (see findMentionQuery for
+  // why it may sit mid-sentence and why `foo@bar.com` does not match).
+  const mentionQuery = useMemo(() => findMentionQuery(input, caret), [input, caret]);
+
+  // -- the directory listing behind a file mention ---------------------------
+  //
+  // One level at a time, keyed by the directory part of what has been typed, so
+  // walking into a folder is one fetch and typing more letters is none. `/api/
+  // list-dir` refuses anything that escapes the project root, which is why this
+  // does not have to re-derive that guard.
+  const mentionDir = mentionQuery ? splitMentionPath(mentionQuery.text).dir : null;
+  const [dirEntries, setDirEntries] = useState<{ dir: string; entries: DirEntry[] } | null>(null);
+  useEffect(() => {
+    if (!cwd || mentionDir === null) return;
+    // Already have this level: typing another letter must not refetch.
+    if (dirEntries?.dir === mentionDir) return;
+    let live = true;
+    const url = `/api/list-dir?cwd=${encodeURIComponent(cwd)}&rel=${encodeURIComponent(mentionDir)}`;
+    void fetch(url)
+      .then((r) => r.json())
+      .then((json: { ok?: boolean; entries?: DirEntry[] }) => {
+        if (!live) return;
+        // A directory that does not exist yet (mid-typing) yields nothing rather
+        // than clearing what is on screen — the menu should not flicker empty
+        // between keystrokes.
+        if (json?.ok && Array.isArray(json.entries)) {
+          setDirEntries({ dir: mentionDir, entries: json.entries });
+        }
+      })
+      .catch(() => {
+        /* offline or a bad path: the palette simply has no file rows */
+      });
+    return () => {
+      live = false;
+    };
+  }, [cwd, mentionDir, dirEntries?.dir]);
 
   // Command filtering: useMemo derived computation, eliminates setState churn per keystroke.
   // Client-side commands that perform a UI action instead of expanding to a prompt.
@@ -262,25 +312,39 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     }];
   }, [_engine]);
 
-  const filteredCommands = useMemo(() => {
+  const filteredCommands = useMemo<PaletteEntry[]>(() => {
+    // `@` — the agent layer plus files/folders in the open project.
+    if (mentionQuery) {
+      const { dir, leaf } = splitMentionPath(mentionQuery.text);
+      // An agent name is a single token, so a path (anything with a `/`) can only
+      // mean a file. Offering agents there would be noise.
+      const agents = dir
+        ? []
+        : paletteRows(
+            commands.filter((c) => c.name.slice(1).toLowerCase().startsWith(leaf.toLowerCase())),
+            '@',
+          );
+      const files = dirEntries?.dir === dir ? fileRows(dirEntries.entries, dir, leaf) : [];
+      return [...agents, ...files];
+    }
+    // `/` — the harness. Never an agent row: picking one would write `@name` into
+    // a line the dispatcher reads as a harness verb.
     if (!commandQuery) return [];
-    const { marker, verb } = commandQuery;
+    const { verb } = commandQuery;
     const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
-    const all = [...localCommands.filter(match), ...commands.filter(match)];
-    // `/` is the harness, `@` is the agent layer — and NEITHER marker shows the
-    // other's rows. See lib `palette.ts` for why this lives in a tested function.
-    return paletteRows(all, marker === '@' ? '@' : '/');
-  }, [commandQuery, localCommands, commands]);
+    return paletteRows([...localCommands.filter(match), ...commands.filter(match)], '/');
+  }, [commandQuery, mentionQuery, localCommands, commands, dirEntries]);
 
   /** A row the user may actually pick. A non-butterfly agent is listed but not
    *  selectable — the same gate the engine applies, so the palette never offers
    *  something routing would refuse. */
   const isSelectable = useCallback(
-    (cmd: CommandInfo) => !cmd.agent || cmd.agent.addressable,
+    (cmd: PaletteEntry) => !cmd.agent || cmd.agent.addressable,
     [],
   );
 
-  const showCommands = !commandsDismissed && !!commandQuery && filteredCommands.length > 0;
+  const showCommands =
+    !commandsDismissed && !!(commandQuery || mentionQuery) && filteredCommands.length > 0;
 
   // Reset selected index and dismiss state when input changes
   const prevInputRef = useRef(input);
@@ -319,17 +383,25 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     }
   }, [input, images, disabled, onSend]);
 
-  const handleSelectCommand = useCallback((command: CommandInfo) => {
+  const handleSelectCommand = useCallback((command: PaletteEntry) => {
     // An agent that has not reached the butterfly stage cannot be addressed yet.
     // Blocked HERE, the one place both the click and the Enter path go through, so
     // there is no second gate to keep in sync.
     if (command.agent && !command.agent.addressable) return;
-    // Preserve the marker the user typed (`/` main session, `@` subagent); only
-    // replace the command token on the active line, leaving other lines intact.
-    const marker = commandQuery?.marker ?? '/';
-    const insert = `${marker}${command.name.slice(1)} `;
-    const before = input.slice(0, activeLine.start);
-    const after = input.slice(activeLine.end);
+    // A FILE MENTION replaces only its own `@…` span. Replacing the line (what a
+    // command does) would delete the sentence around it, and mentions are normally
+    // written mid-sentence. A folder inserts a trailing `/` and no space so the
+    // menu stays open for the next segment.
+    const isMention = !!mentionQuery;
+    const insert = command.file
+      ? mentionInsertion(command as FileRow)
+      : isMention
+        ? `@${command.name.slice(1)} `
+        : `/${command.name.slice(1)} `;
+    const from = isMention ? mentionQuery!.start : activeLine.start;
+    const to = isMention ? mentionQuery!.end : activeLine.end;
+    const before = input.slice(0, from);
+    const after = input.slice(to);
     const next = before + insert + after;
     const pos = before.length + insert.length;
     setInput(next);
@@ -341,7 +413,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
         ta.setSelectionRange(pos, pos);
       }
     });
-  }, [input, activeLine, commandQuery]);
+  }, [input, activeLine, mentionQuery]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Check if IME composition is in progress (e.g., Chinese pinyin input)
@@ -560,14 +632,20 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
           className="absolute bottom-full left-0 right-0 mx-4 mb-2 max-h-64 overflow-y-auto bg-card border border-border rounded-lg shadow-lg"
         >
           {filteredCommands.map((cmd, index) => {
-            // Two groups now: agents (the `@` layer) then harness rows. A header is
-            // drawn at each boundary so the two never read as one list.
+            // THREE groups: agents (the `@` layer), files/folders, and harness
+            // commands. A header is drawn at each boundary so they never read as one
+            // list — under `@` the first two appear, under `/` only the third.
+            const groupOf = (r: PaletteEntry | undefined) =>
+              r === undefined ? '' : r.agent ? 'agents' : r.file ? 'files' : 'commands';
             const prev = index > 0 ? filteredCommands[index - 1] : undefined;
+            const group = groupOf(cmd);
             const groupHeader =
-              index === 0 || !!prev?.agent !== !!cmd.agent
-                ? cmd.agent
+              index === 0 || groupOf(prev) !== group
+                ? group === 'agents'
                   ? t('chatInput.agentsGroup', { defaultValue: 'Agents' })
-                  : t('chatInput.commandsGroup', { defaultValue: 'Commands' })
+                  : group === 'files'
+                    ? t('chatInput.filesGroup', { defaultValue: 'Files & folders' })
+                    : t('chatInput.commandsGroup', { defaultValue: 'Commands' })
                 : null;
             const locked = !!cmd.agent && !cmd.agent.addressable;
             return (
@@ -599,7 +677,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                 >
                   <div className="flex items-center gap-3">
                     <span className="font-mono text-sm font-medium text-foreground">
-                      {(commandQuery?.marker ?? '/') + cmd.name.slice(1)}
+                      {/* A folder shows its trailing slash, which is also what
+                          picking it inserts — so the row reads as what it does. */}
+                      {(mentionQuery ? '@' : '/') + cmd.name.slice(1) + (cmd.file?.isDir ? '/' : '')}
                     </span>
                     {getKindGlyph(cmd.kind) && (
                       <span className="text-xs" title={cmd.kind}>
@@ -607,9 +687,17 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                       </span>
                     )}
                     <span className="flex-1 text-sm text-muted-foreground truncate">
-                      {t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })}
+                      {/* A file row has no description and its name is a path, so it
+                          is not run through the command translation table. */}
+                      {cmd.file ? '' : t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })}
                     </span>
-                    {cmd.agent ? (
+                    {cmd.file ? (
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {cmd.file.isDir
+                          ? t('chatInput.folder', { defaultValue: 'folder' })
+                          : t('chatInput.file', { defaultValue: 'file' })}
+                      </span>
+                    ) : cmd.agent ? (
                       <span
                         className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground whitespace-nowrap"
                         title={t(`growth.stage.${cmd.agent.stage}`, { defaultValue: cmd.agent.stage })}

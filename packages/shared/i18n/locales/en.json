@@ -1599,7 +1599,10 @@
   "chatInput": {
     "agentsGroup": "Agents",
     "commandsGroup": "Commands",
-    "agentLocked": "Still growing — this agent can be addressed directly once it reaches the butterfly stage."
+    "agentLocked": "Still growing — this agent can be addressed directly once it reaches the butterfly stage.",
+    "filesGroup": "Files & folders",
+    "file": "file",
+    "folder": "folder"
   },
   "growth": {
     "stage": {
