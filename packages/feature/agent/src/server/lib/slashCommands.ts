@@ -111,7 +111,7 @@ const COMMAND_LINE_RE = /^\s*([/@])([a-zA-Z][a-zA-Z0-9-]*)(?:\s+|$)/;
 //
 /** The store slice command expansion reads — an injectable seam (default
  *  `getStore()`) so tests can drive owned-command override without a sqlite file. */
-export type CommandExpansionStore = Pick<Store, 'listHarness'>;
+export type CommandExpansionStore = Pick<Store, 'listHarness' | 'getAgentByName'>;
 
 /** The in-house org scopeKey — kept in sync with commands.ts / harness.ts so the
  *  palette listing and the dispatcher expand the SAME org rows (HP-08). */
@@ -217,9 +217,14 @@ export function resolveCommandPrompt(
   const marks: Array<{ i: number; marker: StepMarker; cmd: string; rest: string }> = [];
   lines.forEach((line, i) => {
     const m = line.match(COMMAND_LINE_RE);
-    if (m && isKnown(m[2])) {
-      marks.push({ i, marker: m[1] as StepMarker, cmd: m[2], rest: line.slice(m[0].length) });
-    }
+    if (!m || !isKnown(m[2])) return;
+    // Phase 3 P3-M2 collision rule: a registered naby agent name wins over a
+    // harness subagent of the same verb. Leave an `@<registeredAgent>` line
+    // UNEXPANDED so it flows through to the engine, which routes the turn to that
+    // agent (parseAgentAddress). `/verb` is unaffected — only the `@` marker
+    // addresses an agent.
+    if (m[1] === '@' && store.getAgentByName(m[2])) return;
+    marks.push({ i, marker: m[1] as StepMarker, cmd: m[2], rest: line.slice(m[0].length) });
   });
   if (marks.length === 0) return prompt;
 

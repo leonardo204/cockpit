@@ -77,6 +77,8 @@ import {
   OBSERVATION_BUILTINS,
   loadMcpToolset,
   makeGate,
+  normalizeToolName,
+  parseAgentAddress,
   phase1HarnessFloor,
   realPolicy,
   makeModelResolver,
@@ -97,6 +99,7 @@ import {
   type GateDecision,
   type GateLogEntry,
   type ToolCall,
+  type Agent,
   type McpLoadResult,
   type HarnessItem,
   type ModelResolver,
@@ -156,6 +159,12 @@ const APPROVAL_TTL_MS = 10 * 60 * 1000;
 /** Per-turn hard cap on injected skill instructions (M3). Enough for a few
  *  focused skills; over-budget candidates are dropped and counted, never silent. */
 const SKILL_TOKEN_BUDGET = 2000;
+
+/** Per-turn hard cap on injected memory tokens (Phase 3 P3-M2). The runtime
+ *  already implements retrieval+injection under this budget; the shell just wires
+ *  it here so learned memory reaches every turn (persona turns especially). A
+ *  turn with no confirmed memory is byte-for-byte unchanged (the no-op invariant). */
+const MEMORY_TOKEN_BUDGET = 2000;
 
 /** Gather the policy rules that apply to a turn: user + org (always) and the
  *  project scope when a cwd is set. Order is irrelevant — realPolicy resolves
@@ -571,6 +580,48 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ...(mcp?.executors ?? {}),
         };
 
+        // ---- @agent routing (Phase 3, P3-M2) -----------------------------
+        //
+        // When the prompt begins with `@<name>` and <name> resolves to a
+        // registered naby agent, route THIS turn to that agent: adopt its
+        // system prompt (its persona), strip the `@name` off the task text, and
+        // (if set) prefer its model and restrict it to its allowed tools. The
+        // command expander already declined to expand an `@<registeredAgent>`
+        // line (slashCommands collision rule), so the address survives to here.
+        // Memory injection (wired below) then folds the agent's learned memory
+        // into the same turn. Autonomy (maxSteps / telegram escalation) is P3-M3.
+        const addressed = parseAgentAddress(ctx.prompt ?? '');
+        const routedAgent: Agent | undefined = addressed
+          ? store.getAgentByName(addressed.name)
+          : undefined;
+        if (addressed && !routedAgent) {
+          // `@something` that is not a registered agent: leave the prompt intact
+          // (it may be prose, or a harness `@verb` the expander already handled).
+          console.log(`[engine:naby] @${addressed.name}: no such agent — not routed`);
+        }
+        if (routedAgent) {
+          console.log(
+            `[engine:naby] routed to @${routedAgent.name} (kind=${routedAgent.kind}` +
+              `${routedAgent.model ? `, model=${routedAgent.model}` : ''}` +
+              `${routedAgent.toolRefs ? `, tools=${routedAgent.toolRefs.length}` : ''})`,
+          );
+        }
+        // The task text after the address is what the model answers; the address
+        // itself is consumed by routing and never sent.
+        const turnText = routedAgent ? addressed!.taskText : ctx.prompt ?? '';
+        // A routed agent limited to `toolRefs` may call ONLY those tools; the gate
+        // denies anything else (an allowlist, engine-independent). No toolRefs =
+        // no restriction (the built-in persona is unrestricted by default).
+        const agentAllowedTools = routedAgent?.toolRefs;
+        // The turn's system prompt: the routed agent's persona (if any) followed
+        // by the working-directory note. Memory + skills are folded in ABOVE this
+        // by the runtime. Undefined when neither applies (byte-for-byte no-op).
+        const shellNote = ctx.cwd
+          ? `You are running inside the naby shell. Working directory: ${ctx.cwd}`
+          : undefined;
+        const turnSystem =
+          [routedAgent?.systemPrompt, shellNote].filter(Boolean).join('\n\n') || undefined;
+
         // ---- the gate ----------------------------------------------------
         //
         // Built HERE (after the toolset) because the Phase-1 floor needs to
@@ -678,6 +729,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // the return path, an observation is proof the gate ran — and the
         // runtime does not invoke an executor until this returns.
         const gate: Gate = async (call) => {
+          // Phase 3 P3-M2: a routed agent restricted to `toolRefs` may use ONLY
+          // those tools. This is the OUTERMOST check — it overrides even an
+          // allow-all baseline, because the restriction is the agent's identity,
+          // not a policy preference. Compared on the bare tool name so an
+          // `mcp__x__y` call matches a bare `mcp__x__y` / normalized ref.
+          if (agentAllowedTools && !agentAllowedTools.includes(normalizeToolName(call.toolName))) {
+            console.log(
+              `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (agent @${routedAgent?.name} toolRefs)`,
+            );
+            return { behavior: 'deny', reason: `agent @${routedAgent?.name} is limited to its allowed tools` };
+          }
           const decision = await gated.gate(call);
           const entry = gated.log[gated.log.length - 1];
           console.log(
@@ -767,8 +829,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             engine,
             store,
             sessionId,
-            model: { providerId, ...(modelForEngine ? { model: modelForEngine } : {}) },
-            userText: ctx.prompt ?? '',
+            // A routed agent may prefer its own model; else the engine's resolved
+            // model (or the provider default). Same field the model switcher uses.
+            model: (() => {
+              const m = routedAgent?.model ?? modelForEngine;
+              return { providerId, ...(m ? { model: m } : {}) };
+            })(),
+            userText: turnText,
             // Multimodal input: hand this turn's images to the runtime, which
             // attaches them (transiently) to the user message so each engine can
             // build a native image block. ImageData -> RuntimeImage (drop the
@@ -791,6 +858,26 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // and counted. Scoped to user + org + this project's cwd (via
             // opts.cwd, set above). Off entirely when no skill is enabled/matches
             // (byte-for-byte no-op).
+            // Phase 3 P3-M2: turn-time MEMORY injection (was dormant — the
+            // runtime implemented it since Phase 1.5 but no caller wired it). The
+            // runtime retrieves confirmed, scope-appropriate memory within this
+            // budget and folds it into the system prompt above the engine seam.
+            // This is what makes an agent (the persona especially) act on what it
+            // has learned. A turn with no confirmed memory is a byte-for-byte
+            // no-op. Scoped to user + org + this project's cwd (opts.cwd).
+            memoryInjection: {
+              tokenBudget: MEMORY_TOKEN_BUDGET,
+              userId: DEFAULT_USER_ID,
+              orgId: DEFAULT_ORG_ID,
+            },
+            onMemoryInjection: (injected) => {
+              if (injected.items.length > 0 || injected.droppedForBudget > 0) {
+                console.log(
+                  `[engine:naby] memory: injected ${injected.items.length}` +
+                    `, dropped-for-budget ${injected.droppedForBudget}`,
+                );
+              }
+            },
             skillInjection: {
               tokenBudget: SKILL_TOKEN_BUDGET,
               userId: DEFAULT_USER_ID,
@@ -830,12 +917,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // The truthiness guard means no-directory stays UNDEFINED end to
             // end, which the contract defines as "say nothing about a
             // directory" rather than "use the ambient one".
-            ...(ctx.cwd
-              ? {
-                  system: `You are running inside the naby shell. Working directory: ${ctx.cwd}`,
-                  cwd: ctx.cwd,
-                }
-              : {}),
+            ...(turnSystem ? { system: turnSystem } : {}),
+            ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
             onEvent: (ev: EngineEvent) => {
             // Cancellation: stop translating the moment the run is stopped.
             // The signal is also handed to the engine (and through it to the

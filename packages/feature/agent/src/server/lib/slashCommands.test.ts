@@ -5,10 +5,17 @@ import { resolveCommandPrompt, type CommandExpansionStore } from './slashCommand
 // A fake store returning owned commands per (scope,scopeKey), so expansion's
 // owned-override layer is exercised without a sqlite file. An empty store means
 // "no owned commands" — the pure builtin path.
-function fakeStore(byScope: Record<string, HarnessItem[]> = {}): CommandExpansionStore {
+function fakeStore(
+  byScope: Record<string, HarnessItem[]> = {},
+  agentNames: string[] = [],
+): CommandExpansionStore {
   return {
     listHarness(scope: string, scopeKey: string) {
       return byScope[`${scope}:${scopeKey}`] ?? [];
+    },
+    // P3-M2: the `@`-collision guard asks whether a verb is a registered agent.
+    getAgentByName(name: string) {
+      return agentNames.includes(name) ? ({ id: `a-${name}`, name } as never) : undefined;
     },
   } as CommandExpansionStore;
 }
@@ -137,5 +144,37 @@ describe('resolveCommandPrompt — owned commands (Phase 1.6 HP-02)', () => {
     });
     const out = resolveCommandPrompt('/dup x', 'en', undefined, store);
     expect(out).toBe('COMMAND BODY\n\nx');
+  });
+});
+
+describe('resolveCommandPrompt — @agent collision rule (Phase 3 P3-M2)', () => {
+  it('a registered agent SHADOWS a same-named @subagent — the line is left literal for engine routing', () => {
+    const store = fakeStore(
+      { [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('reviewer', 'You are a strict code reviewer.')] },
+      ['reviewer'], // 'reviewer' is ALSO a registered naby agent
+    );
+    const out = resolveCommandPrompt('@reviewer check', 'en', undefined, store);
+    // NOT expanded to a persona directive — passed through verbatim so the engine
+    // (parseAgentAddress) routes the turn to the registered @reviewer agent.
+    expect(out).toBe('@reviewer check');
+    expect(out).not.toContain('Adopt the following persona');
+  });
+
+  it('the collision rule is @-only: /verb still expands the harness subagent even when an agent shares the name', () => {
+    const store = fakeStore(
+      { [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('reviewer', 'You are a strict code reviewer.')] },
+      ['reviewer'],
+    );
+    const out = resolveCommandPrompt('/reviewer check', 'en', undefined, store);
+    expect(out).toContain('Adopt the following persona');
+    expect(out).toContain('You are a strict code reviewer.');
+  });
+
+  it('without a registered agent, @subagent expands as before (no regression)', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('reviewer', 'You are a strict code reviewer.')],
+    });
+    const out = resolveCommandPrompt('@reviewer check', 'en', undefined, store);
+    expect(out).toContain('You are a strict code reviewer.');
   });
 });
