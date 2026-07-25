@@ -9,18 +9,16 @@
 // press or a text reply), which the escalation bridge maps back onto the paused
 // approval (approvalRegistry), resolving the same turn the in-app prompt would.
 //
-// CONFIG: a bot token + a chat id. naby stores its OWN (store settings, keys
-// below) but PRE-FILLS them once from the dotclaude messenger the user already
-// has (~/.claude/messenger.json) so it works with zero setup on this machine and
-// stays portable off it. No secret is ever logged; the token is redacted when
-// the config is read back for the UI.
+// CONFIG: a bot token + a chat id. naby is a SEPARATE product from the dotclaude
+// messenger — it uses its OWN dedicated bot (create one with @BotFather), NOT the
+// dotclaude bot. naby stores its own config (store settings, keys below); the
+// chat id can be auto-detected (detectChatId) after the user messages the naby
+// bot, so setup stays one-step without coupling to any other tool. No secret is
+// ever logged; the token is redacted when the config is read back for the UI.
 //
 // The pure helpers (keyboard build, callback/text parse) are unit-tested; the IO
 // functions are thin wrappers over the Telegram Bot API and verified live.
 
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
 import type { Store } from '../../../../../../../dist/naby-runtime.mjs';
 
 // -- settings keys (in the naby store) --------------------------------------
@@ -62,44 +60,6 @@ export function redactToken(token: string): string {
   if (!token) return '';
   if (token.length <= 8) return '••••';
   return `${token.slice(0, 4)}…${token.slice(-4)}`;
-}
-
-// -- dotclaude messenger pre-fill -------------------------------------------
-
-/** The dotclaude messenger config the user may already have. We READ it only to
- *  pre-fill naby's own settings once (never write it). */
-export function readDotclaudeMessengerConfig(): { botToken: string; chatId: string } | undefined {
-  try {
-    const path = join(homedir(), '.claude', 'messenger.json');
-    const raw = JSON.parse(readFileSync(path, 'utf8')) as {
-      bot_token?: string;
-      chat_id?: string | number;
-    };
-    const botToken = (raw.bot_token ?? '').trim();
-    const chatId = String(raw.chat_id ?? '').trim();
-    if (!botToken || !chatId) return undefined;
-    return { botToken, chatId };
-  } catch {
-    return undefined; // absent / unreadable — nothing to pre-fill
-  }
-}
-
-/** IDEMPOTENT one-time pre-fill: if naby has no Telegram token yet and a
- *  dotclaude messenger config exists, seed naby's settings from it (disabled by
- *  default — the user opts in). Never overwrites an existing naby token. Returns
- *  whether it seeded. */
-export function seedTelegramFromDotclaude(store: Store): boolean {
-  const current = readTelegramConfig(store);
-  if (current.botToken) return false; // already configured — leave it
-  const imported = readDotclaudeMessengerConfig();
-  if (!imported) return false;
-  writeTelegramConfig(store, {
-    botToken: imported.botToken,
-    chatId: imported.chatId,
-    // Seeded but OFF: escalation is a deliberate opt-in, not an ambient default.
-    enabled: false,
-  });
-  return true;
 }
 
 // -- pure message helpers (unit-tested) -------------------------------------
@@ -232,6 +192,26 @@ export async function answerCallbackQuery(
   } catch {
     /* best-effort — the decision is already recorded */
   }
+}
+
+/** Discover the chat id to send to by reading the most recent update from the
+ *  bot — the naby-native, dotclaude-free way to finish setup: the user messages
+ *  their naby bot once, then this returns the chat id to save. Needs only the
+ *  token. Returns an error string when no message is waiting. */
+export async function detectChatId(
+  cfg: Pick<TelegramConfig, 'botToken'>,
+): Promise<{ ok: true; chatId: string } | { ok: false; error: string }> {
+  if (!cfg.botToken) return { ok: false, error: 'Set the bot token first.' };
+  const { updates } = await pollTelegramUpdates(cfg, 0, { timeoutSec: 0 });
+  for (let i = updates.length - 1; i >= 0; i -= 1) {
+    const u = updates[i]!;
+    const id = u.message?.chat?.id ?? u.callback_query?.message?.chat?.id;
+    if (id != null) return { ok: true, chatId: String(id) };
+  }
+  return {
+    ok: false,
+    error: 'No message found. Send any message to your naby bot in Telegram, then try again.',
+  };
 }
 
 export type TelegramUpdate = {

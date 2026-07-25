@@ -69,6 +69,7 @@ import {
   redactToken,
   isTelegramReady,
   sendTelegramMessage,
+  detectChatId,
   type TelegramConfig,
 } from '../lib/telegram';
 
@@ -383,7 +384,10 @@ export type NabyAction =
   // so the redacted UI never wipes it); `test` sends a live message.
   | { action: 'telegram.get' }
   | { action: 'telegram.set'; enabled?: boolean; botToken?: string; chatId?: string }
-  | { action: 'telegram.test' };
+  | { action: 'telegram.test' }
+  // Auto-detect the chat id from the naby bot's latest message (the user messages
+  // their dedicated naby bot once, then this fills the chat id in).
+  | { action: 'telegram.detectChat' };
 
 export type NabyActionResult =
   | {
@@ -412,6 +416,8 @@ export type NabyActionResult =
       agent?: Agent;
       /** `telegram.get`: current config with the token REDACTED (never the secret). */
       telegram?: { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
+      /** `telegram.detectChat`: the chat id discovered from the bot's latest message. */
+      chatId?: string;
     }
   | { ok: false; error: string };
 
@@ -597,6 +603,15 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       const sent = await sendTelegramMessage(cfg, '🤖 naby test — Telegram is connected.');
       return sent.ok ? { ok: true } : { ok: false, error: sent.error };
+    }
+
+    case 'telegram.detectChat': {
+      const cfg = readTelegramConfig(store);
+      const found = await detectChatId(cfg);
+      if (!found.ok) return { ok: false, error: found.error };
+      // Persist it so the next get/test uses it, and echo it to the UI.
+      writeTelegramConfig(store, { chatId: found.chatId });
+      return { ok: true, chatId: found.chatId };
     }
 
     case 'approval.resolve': {

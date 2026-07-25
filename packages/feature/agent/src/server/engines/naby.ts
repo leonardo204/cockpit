@@ -122,7 +122,6 @@ export type { Project, RuntimeMessage, SessionRef, Store };
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
 import { ensureCockpitImport } from './cockpitImport';
 import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
-import { seedTelegramFromDotclaude } from '../lib/telegram';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -247,11 +246,6 @@ export function getStore(): Store {
     // agent that learns the user and (P3-M2+) acts on their behalf. Idempotent:
     // seeds exactly one persona and never overwrites the user's later edits.
     seedBuiltinPersona(sharedStore);
-    // Phase 3 P3-M3: pre-fill naby's Telegram config from the dotclaude messenger
-    // the user may already have (~/.claude/messenger.json), so escalation works
-    // with zero setup here. Idempotent + seeded DISABLED (opt-in); never
-    // overwrites a token the user already set in naby.
-    seedTelegramFromDotclaude(sharedStore);
   }
   return sharedStore;
 }

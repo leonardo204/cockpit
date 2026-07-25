@@ -6,10 +6,9 @@
  *
  * naby's persona agent escalates a critical decision (and reports when done) over
  * Telegram so the user stays in the loop while away. This panel configures the
- * bot token + chat id it sends to. On first run naby pre-fills these from the
- * dotclaude messenger the user may already have (~/.claude/messenger.json), so
- * the fields often arrive populated and DISABLED — the user just flips it on and
- * hits Test.
+ * bot token + chat id it sends to. naby is a SEPARATE product from the dotclaude
+ * messenger — it uses its OWN dedicated bot (create one with @BotFather). The
+ * chat id can be auto-detected: message the naby bot once, then tap "Detect".
  *
  * The token is shown REDACTED (`1234…AAE1`); leaving it blank on save keeps the
  * stored secret, so the mask never wipes it.
@@ -22,7 +21,7 @@ import { toast } from '@cockpit/shared-ui';
 type TelegramView = { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
 
 async function tgAction(body: Record<string, unknown>): Promise<
-  { ok: true; telegram?: TelegramView } | { ok: false; error: string }
+  { ok: true; telegram?: TelegramView; chatId?: string } | { ok: false; error: string }
 > {
   try {
     const res = await fetch('/api/naby', {
@@ -31,10 +30,10 @@ async function tgAction(body: Record<string, unknown>): Promise<
       body: JSON.stringify(body),
     });
     const json = (await res.json().catch(() => null)) as
-      | { ok: boolean; telegram?: TelegramView; error?: string }
+      | { ok: boolean; telegram?: TelegramView; chatId?: string; error?: string }
       | null;
     if (!res.ok || !json?.ok) return { ok: false, error: json?.error ?? `request failed (${res.status})` };
-    return { ok: true, telegram: json.telegram };
+    return { ok: true, telegram: json.telegram, chatId: json.chatId };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -83,6 +82,21 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
     }
   }, [enabled, chatId, tokenInput, t]);
 
+  const detect = useCallback(async () => {
+    setBusy(true);
+    // Save the token first so detection can call the bot.
+    if (tokenInput.trim()) await tgAction({ action: 'telegram.set', botToken: tokenInput.trim() });
+    const res = await tgAction({ action: 'telegram.detectChat' });
+    setBusy(false);
+    if (res.ok && res.chatId) {
+      setChatId(res.chatId);
+      setTokenInput('');
+      toast(t('telegramSettings.detected', { defaultValue: 'Chat ID detected.' }), 'success');
+    } else {
+      toast(res.ok ? '' : res.error, 'error');
+    }
+  }, [tokenInput, t]);
+
   const test = useCallback(async () => {
     setBusy(true);
     // Save first so the test uses exactly what is on screen.
@@ -104,7 +118,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
       <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
         {t('telegramSettings.description', {
           defaultValue:
-            'How an agent reaches you when it hits a critical decision, and where it sends its final report. Uses a Telegram bot — reply or tap a button to approve remotely. Pre-filled from your existing setup when available.',
+            "How an agent reaches you when it hits a critical decision, and where it sends its final report. naby uses its OWN dedicated bot — create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",
         })}
       </p>
 
@@ -129,18 +143,30 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
         <span className="text-[10px] text-muted-foreground">
           {tokenMask
             ? t('telegramSettings.tokenKept', { defaultValue: 'Leave blank to keep the current token.' })
-            : t('telegramSettings.tokenHint', { defaultValue: 'One bot can serve both naby and other tools.' })}
+            : t('telegramSettings.tokenHint', { defaultValue: 'A dedicated naby bot, separate from any other tool.' })}
         </span>
       </label>
 
       <label className="flex flex-col gap-0.5">
         <span className="text-[10px] text-muted-foreground">{t('telegramSettings.chatId', { defaultValue: 'Chat ID' })}</span>
-        <input
-          value={chatId}
-          onChange={(e) => setChatId(e.target.value)}
-          placeholder="123456789"
-          className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground font-mono w-48"
-        />
+        <div className="flex gap-2 items-center">
+          <input
+            value={chatId}
+            onChange={(e) => setChatId(e.target.value)}
+            placeholder="123456789"
+            className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground font-mono w-48"
+          />
+          <button
+            onClick={() => void detect()}
+            disabled={busy}
+            className="text-xs px-2 py-1 rounded border border-border text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            {t('telegramSettings.detect', { defaultValue: 'Detect' })}
+          </button>
+        </div>
+        <span className="text-[10px] text-muted-foreground">
+          {t('telegramSettings.detectHint', { defaultValue: 'Message your naby bot once, then tap Detect.' })}
+        </span>
       </label>
 
       <div className="flex gap-2">
