@@ -86,8 +86,10 @@ export type GrowthDecision = {
   hit: boolean;
   taskType?: string;
   correction?: string;
-  /** Present when the row was thrown out, with the plain-words reason. */
-  excludedReason?: string;
+  /** Present when the row was thrown out. A CODE (`one-real-option` /
+   *  `repeat-question`), not prose — the panel renders it in the user's language.
+   *  Older rows may hold free text, so the client falls back to showing it. */
+  excludedCode?: string;
 };
 
 /** A per-task-type reading — trust is graduated, not global (spec §4.9). */
@@ -145,7 +147,7 @@ export function growthReport(store: GrowthLedgerStore, agentId: string): GrowthR
       hit: r.hit === true,
       ...(r.taskType ? { taskType: r.taskType } : {}),
       ...(r.correction ? { correction: r.correction } : {}),
-      ...(r.excludedFromScoring ? { excludedReason: r.reason ?? 'excluded from scoring' } : {}),
+      ...(r.excludedFromScoring ? { excludedCode: r.reason ?? 'excluded' } : {}),
     }));
 
   return {

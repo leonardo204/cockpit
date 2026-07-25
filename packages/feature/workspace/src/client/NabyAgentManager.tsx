@@ -16,6 +16,7 @@ import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import type { Agent } from '../../../../../../dist/naby-runtime.mjs';
+import { GrowthPanel } from './GrowthPanel';
 
 type Escalation = 'inline' | 'telegram' | 'both';
 type MemoryScope = 'session' | 'project' | 'user' | 'org';
@@ -87,8 +88,12 @@ const AgentRow = memo(function AgentRow({
 }) {
   const { t } = useTranslation();
   const isPersona = agent.kind === 'persona';
+  // Collapsed by default, and MOUNTED ONLY WHEN OPEN: each panel is one
+  // `growth.get` that reads the agent's ledger, so an unopened row costs nothing.
+  const [showGrowth, setShowGrowth] = useState(false);
   return (
-    <div className="flex items-start justify-between gap-2 rounded-lg border border-border p-2.5">
+    <div className="rounded-lg border border-border p-2.5">
+    <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-foreground truncate" title={agent.name}>
@@ -112,6 +117,13 @@ const AgentRow = memo(function AgentRow({
       </div>
       <div className="flex gap-1.5 shrink-0">
         <button
+          onClick={() => setShowGrowth((v) => !v)}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-brand/10 hover:border-brand/40 text-foreground"
+          aria-expanded={showGrowth}
+        >
+          {t('agentManager.growth', { defaultValue: 'Growth' })}
+        </button>
+        <button
           onClick={() => onEdit(agent)}
           disabled={busy}
           className="text-xs px-2 py-1 rounded border border-border hover:bg-brand/10 hover:border-brand/40 text-foreground disabled:opacity-50"
@@ -128,6 +140,8 @@ const AgentRow = memo(function AgentRow({
           </button>
         ) : null}
       </div>
+    </div>
+    {showGrowth ? <GrowthPanel agentId={agent.id} /> : null}
     </div>
   );
 });

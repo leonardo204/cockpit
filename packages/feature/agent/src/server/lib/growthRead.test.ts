@@ -137,7 +137,7 @@ describe('growthRead — the full report the Settings panel renders', () => {
         hit: false,
         correction: 'do it the other way',
         excludedFromScoring: true,
-        reason: 'the same question had just been asked',
+        reason: 'repeat-question',
       }),
       // Not a decision: an autonomous action has no question to show.
       row({ kind: 'autonomous', toolName: 'Write' }),
@@ -148,8 +148,8 @@ describe('growthRead — the full report the Settings panel renders', () => {
       chosen: -1,
       hit: false,
       correction: 'do it the other way',
-      excludedReason: 'the same question had just been asked',
+      excludedCode: 'repeat-question',
     });
-    expect(decisions[1]!.excludedReason).toBeUndefined();
+    expect(decisions[1]!.excludedCode).toBeUndefined();
   });
 });

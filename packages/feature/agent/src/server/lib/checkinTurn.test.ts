@@ -170,7 +170,7 @@ describe('checkinTurn — the ledger row', () => {
       correction: 'do neither',
       taskType: 'schema-change',
       excludedFromScoring: true,
-      reason: 'the same question had just been asked',
+      reason: 'repeat-question',
     });
     expect(store.appended).toHaveLength(1);
     expect(store.appended[0]).toEqual({
@@ -186,7 +186,7 @@ describe('checkinTurn — the ledger row', () => {
       correction: 'do neither',
       taskType: 'schema-change',
       excludedFromScoring: true,
-      reason: 'the same question had just been asked',
+      reason: 'repeat-question',
     });
   });
 

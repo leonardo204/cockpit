@@ -325,6 +325,7 @@
     "description": "Your naby agents. The built-in persona learns how you work and can act on your behalf; add custom agents for focused jobs. Address one in the composer with @name.",
     "kindPersona": "Persona",
     "kindCustom": "Custom",
+    "growth": "Growth",
     "edit": "Edit",
     "remove": "Remove",
     "addAgent": "+ Add agent",
@@ -1553,6 +1554,46 @@
       "larva": "Larva",
       "pupa": "Pupa",
       "butterfly": "Butterfly"
+    },
+    "loading": "Reading the record…",
+    "unavailable": "The growth record could not be read.",
+    "eggHint": "Not measured yet — {{needed}} more answered check-in(s) to go.",
+    "ofButterfly": "of the butterfly threshold",
+    "tripwireBlocked": "Accuracy has reached the line, but {{count}} action(s) were refused for safety recently. Until those fall out of the recent window it does not become a butterfly — a safety refusal is not averaged away.",
+    "byTaskType": "By kind of work",
+    "byTaskTypeHint": "A new kind of work starts in its own egg instead of dragging the overall number down.",
+    "recent": "What it asked, and what you chose",
+    "recentChose": "you chose: {{option}}",
+    "recentCorrected": "you answered in your own words: {{text}}",
+    "recentRecommended": "it had recommended: {{option}}",
+    "recentExcluded": "not counted — {{reason}}",
+    "howItMoves": "This does not rise with the number of conversations or stored memories. It moves only when naby asks how to proceed and its own recommendation turns out to match what you chose — and it can fall when your patterns change.",
+    "meaning": {
+      "egg": "Still watching. It has asked too few times for its record to mean anything yet.",
+      "larva": "Being measured now, but it is not guessing right often yet. Too early to hand work over.",
+      "pupa": "It guesses right fairly often. A little more and you can call on it.",
+      "butterfly": "You can now address it with @ and hand it work."
+    },
+    "reason": {
+      "notMeasured": "There is not enough to judge yet. Answer {{needed}} more check-in(s) and the stage starts being calculated.",
+      "newPattern": "A kind of work it had not seen before came up. {{misses}} of the last {{trials}} went differently from what it expected, mostly on \"{{taskType}}\" — it is still learning that one, so the stage came down.",
+      "accuracyDrop": "On familiar work, {{misses}} of the last {{trials}} went differently from what it expected. If how you decide has shifted, a few more answers bring it back in line.",
+      "accuracyGain": "Its recommendations landed more often lately — only {{misses}} of the last {{trials}} went differently.",
+      "evidenceGrew": "It is right about as often as before, but you have answered more, so the estimate is firmer. This rose because the evidence grew, not because it got better.",
+      "steady": "Recent decisions look much like the earlier ones."
+    },
+    "excluded": {
+      "one-real-option": "the options were not really different",
+      "repeat-question": "the same question had just been asked"
+    },
+    "axis": {
+      "hitRate": "Guessed right",
+      "hitRateValue": "{{hits}} of {{trials}}",
+      "coverage": "Handled without asking",
+      "excluded": "Not counted",
+      "excludedValue": "{{count}} (padded or repeated)",
+      "corrected": "Fixed afterwards",
+      "lifetime": "All time"
     }
   }
 }
