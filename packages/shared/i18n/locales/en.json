@@ -353,6 +353,21 @@
     "empty": "No agents yet.",
     "error": "Something went wrong."
   },
+  "telegramSettings": {
+    "title": "Telegram escalation",
+    "description": "How an agent reaches you when it hits a critical decision, and where it sends its final report. Uses a Telegram bot — reply or tap a button to approve remotely. Pre-filled from your existing setup when available.",
+    "enable": "Enable Telegram escalation",
+    "ready": "ready",
+    "botToken": "Bot token",
+    "tokenPlaceholder": "123456:AA… (from @BotFather)",
+    "tokenKept": "Leave blank to keep the current token.",
+    "tokenHint": "One bot can serve both naby and other tools.",
+    "chatId": "Chat ID",
+    "save": "Save",
+    "saved": "Telegram settings saved.",
+    "test": "Send test message",
+    "testSent": "Test message sent — check Telegram."
+  },
   "policyManager": {
     "title": "Permissions",
     "description": "Rules that decide whether the agent may run a tool. Allow or block a tool by name (use a trailing * to match a group like mcp__jira__*, or * for all). With no rules, the \"Allow changes\" toggle decides.",

@@ -63,6 +63,14 @@ import {
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
+import {
+  readTelegramConfig,
+  writeTelegramConfig,
+  redactToken,
+  isTelegramReady,
+  sendTelegramMessage,
+  type TelegramConfig,
+} from '../lib/telegram';
 
 // The store is opened on demand and the MCP test path spawns child processes,
 // so this must run on the node runtime and must never be statically rendered.
@@ -369,7 +377,13 @@ export type NabyAction =
       escalation?: string;
       maxSteps?: number;
     }
-  | { action: 'agent.remove'; id: string };
+  | { action: 'agent.remove'; id: string }
+  // Phase 3 (P3-M3) — the Telegram escalation channel config. `get` returns the
+  // config with the token REDACTED; `set` persists (a token '' is left unchanged
+  // so the redacted UI never wipes it); `test` sends a live message.
+  | { action: 'telegram.get' }
+  | { action: 'telegram.set'; enabled?: boolean; botToken?: string; chatId?: string }
+  | { action: 'telegram.test' };
 
 export type NabyActionResult =
   | {
@@ -396,6 +410,8 @@ export type NabyActionResult =
       agents?: Agent[];
       /** `agent.put`: the agent that was created/updated. */
       agent?: Agent;
+      /** `telegram.get`: current config with the token REDACTED (never the secret). */
+      telegram?: { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
     }
   | { ok: false; error: string };
 
@@ -539,6 +555,48 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // it never shows a "removed" persona.
       store.removeAgent(body.id);
       return { ok: true, agents: store.listAgents() };
+    }
+
+    case 'telegram.get': {
+      const cfg = readTelegramConfig(store);
+      return {
+        ok: true,
+        telegram: {
+          enabled: cfg.enabled,
+          botTokenRedacted: redactToken(cfg.botToken),
+          chatId: cfg.chatId,
+          ready: isTelegramReady(cfg),
+        },
+      };
+    }
+
+    case 'telegram.set': {
+      const patch: Partial<TelegramConfig> = {};
+      if (typeof body.enabled === 'boolean') patch.enabled = body.enabled;
+      // A blank token from the redacted UI means "unchanged" — never wipe a stored
+      // secret because the form showed a mask. A non-blank value replaces it.
+      if (typeof body.botToken === 'string' && body.botToken.trim()) patch.botToken = body.botToken.trim();
+      if (typeof body.chatId === 'string') patch.chatId = body.chatId.trim();
+      writeTelegramConfig(store, patch);
+      const cfg = readTelegramConfig(store);
+      return {
+        ok: true,
+        telegram: {
+          enabled: cfg.enabled,
+          botTokenRedacted: redactToken(cfg.botToken),
+          chatId: cfg.chatId,
+          ready: isTelegramReady(cfg),
+        },
+      };
+    }
+
+    case 'telegram.test': {
+      const cfg = readTelegramConfig(store);
+      if (!cfg.botToken || !cfg.chatId) {
+        return { ok: false, error: 'Set a bot token and chat id first.' };
+      }
+      const sent = await sendTelegramMessage(cfg, '🤖 naby test — Telegram is connected.');
+      return sent.ok ? { ok: true } : { ok: false, error: sent.error };
     }
 
     case 'approval.resolve': {

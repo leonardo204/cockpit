@@ -32,6 +32,9 @@ import { NabyPolicyManager } from './NabyPolicyManager';
 // Memory review moves UNDER this section (an agent's learned memory), and the
 // former standalone Commands section folds into Harness.
 import { NabyAgentManager } from './NabyAgentManager';
+// Phase 3 (P3-M3). The Telegram escalation channel config — how an agent reaches
+// the user for a critical decision and sends its final report.
+import { NabyTelegramSettings } from './NabyTelegramSettings';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -254,6 +257,13 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                     {t('agentManager.title', { defaultValue: 'Agents' })}
                   </label>
                   <NabyAgentManager isOpen={isOpen} cwd={cwd} />
+                </div>
+                {/* Telegram escalation — how an agent reaches you (P3-M3). */}
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    {t('telegramSettings.title', { defaultValue: 'Telegram escalation' })}
+                  </label>
+                  <NabyTelegramSettings isOpen={isOpen} />
                 </div>
                 {/* Memory lives with the agents (their learned memory), P3-M1 reorg. */}
                 <div>
