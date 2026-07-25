@@ -104,6 +104,15 @@ interface CommandInfo {
   // kind glyph to keep them distinguishable.
   kind?: 'command' | 'skill' | 'subagent';
   argumentHint?: string;
+  // naby AGENT rows (P3-M5). Offered for `@` ONLY and listed FIRST: `/` calls
+  // tools, `@` calls agents. `addressable` is the trust gate — an unverified
+  // agent is shown greyed rather than hidden, so the user can see it exists and
+  // that it is still growing.
+  agent?: {
+    stage: 'egg' | 'larva' | 'pupa' | 'butterfly';
+    percent: number;
+    addressable: boolean;
+  };
 }
 
 interface ChatInputProps {
@@ -127,6 +136,15 @@ interface ChatInputProps {
     cron?: string;
   }) => void;
 }
+
+/** The growth stages as the user sees them. Egg → larva → pupa → butterfly; only
+ *  a butterfly can be addressed. */
+const GROWTH_GLYPH: Record<'egg' | 'larva' | 'pupa' | 'butterfly', string> = {
+  egg: '🥚',
+  larva: '🐛',
+  pupa: '🛡',
+  butterfly: '🦋',
+};
 
 export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
   const { t } = useTranslation();
@@ -245,10 +263,24 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
 
   const filteredCommands = useMemo(() => {
     if (!commandQuery) return [];
-    const { verb } = commandQuery;
+    const { marker, verb } = commandQuery;
     const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
-    return [...localCommands.filter(match), ...commands.filter(match)];
+    const all = [...localCommands.filter(match), ...commands.filter(match)];
+    // `/` is the harness (tools); `@` is the agent layer. An agent row must never
+    // appear under `/`, or picking it would produce a line the dispatcher reads as
+    // a harness verb.
+    const agents = marker === '@' ? all.filter((c) => c.agent) : [];
+    const rest = all.filter((c) => !c.agent);
+    return [...agents, ...rest];
   }, [commandQuery, localCommands, commands]);
+
+  /** A row the user may actually pick. A non-butterfly agent is listed but not
+   *  selectable — the same gate the engine applies, so the palette never offers
+   *  something routing would refuse. */
+  const isSelectable = useCallback(
+    (cmd: CommandInfo) => !cmd.agent || cmd.agent.addressable,
+    [],
+  );
 
   const showCommands = !commandsDismissed && !!commandQuery && filteredCommands.length > 0;
 
@@ -290,6 +322,10 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   }, [input, images, disabled, onSend]);
 
   const handleSelectCommand = useCallback((command: CommandInfo) => {
+    // An agent that has not reached the butterfly stage cannot be addressed yet.
+    // Blocked HERE, the one place both the click and the Enter path go through, so
+    // there is no second gate to keep in sync.
+    if (command.agent && !command.agent.addressable) return;
     // Preserve the marker the user typed (`/` main session, `@` subagent); only
     // replace the command token on the active line, leaving other lines intact.
     const marker = commandQuery?.marker ?? '/';
@@ -526,20 +562,41 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
           className="absolute bottom-full left-0 right-0 mx-4 mb-2 max-h-64 overflow-y-auto bg-card border border-border rounded-lg shadow-lg"
         >
           {filteredCommands.map((cmd, index) => {
-            const isFirstCommand = index === 0;
+            // Two groups now: agents (the `@` layer) then harness rows. A header is
+            // drawn at each boundary so the two never read as one list.
+            const prev = index > 0 ? filteredCommands[index - 1] : undefined;
+            const groupHeader =
+              index === 0 || !!prev?.agent !== !!cmd.agent
+                ? cmd.agent
+                  ? t('chatInput.agentsGroup', { defaultValue: 'Agents' })
+                  : t('chatInput.commandsGroup', { defaultValue: 'Commands' })
+                : null;
+            const locked = !!cmd.agent && !cmd.agent.addressable;
             return (
               <div key={cmd.name}>
-                {isFirstCommand && (
+                {groupHeader && (
                   <div className="px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
-                    Commands
+                    {groupHeader}
                   </div>
                 )}
                 <div
                   onClick={() => handleSelectCommand(cmd)}
-                  className={`px-4 py-2 cursor-pointer ${
-                    index === selectedIndex
-                      ? 'bg-brand/10'
-                      : 'hover:bg-accent'
+                  title={
+                    locked
+                      ? t('chatInput.agentLocked', {
+                          defaultValue:
+                            'Still growing — naby can be addressed directly once it reaches the butterfly stage.',
+                        })
+                      : undefined
+                  }
+                  className={`px-4 py-2 ${
+                    // A locked agent is shown, not hidden: the user should see it
+                    // exists and that it is still growing.
+                    locked
+                      ? 'opacity-40 cursor-not-allowed'
+                      : index === selectedIndex
+                        ? 'bg-brand/10 cursor-pointer'
+                        : 'hover:bg-accent cursor-pointer'
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -554,11 +611,22 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                     <span className="flex-1 text-sm text-muted-foreground truncate">
                       {t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })}
                     </span>
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded ${getSourceColor(cmd.source)}`}
-                    >
-                      {getSourceLabel(cmd.source)}
-                    </span>
+                    {cmd.agent ? (
+                      <span
+                        className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground whitespace-nowrap"
+                        title={t(`growth.stage.${cmd.agent.stage}`, { defaultValue: cmd.agent.stage })}
+                      >
+                        {GROWTH_GLYPH[cmd.agent.stage]}{' '}
+                        {t(`growth.stage.${cmd.agent.stage}`, { defaultValue: cmd.agent.stage })}{' '}
+                        {cmd.agent.percent}%
+                      </span>
+                    ) : (
+                      <span
+                        className={`text-xs px-1.5 py-0.5 rounded ${getSourceColor(cmd.source)}`}
+                      >
+                        {getSourceLabel(cmd.source)}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

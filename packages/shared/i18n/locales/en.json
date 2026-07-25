@@ -1532,5 +1532,18 @@
     "alwaysAllow": "Always allow",
     "alwaysBlock": "Always block",
     "more": "+{{count}} more waiting"
+  },
+  "chatInput": {
+    "agentsGroup": "Agents",
+    "commandsGroup": "Commands",
+    "agentLocked": "Still growing — this agent can be addressed directly once it reaches the butterfly stage."
+  },
+  "growth": {
+    "stage": {
+      "egg": "Egg",
+      "larva": "Larva",
+      "pupa": "Pupa",
+      "butterfly": "Butterfly"
+    }
   }
 }

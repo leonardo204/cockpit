@@ -23,6 +23,10 @@ import { Effect } from "effect"
 import { handler } from "@cockpit/effect-runtime/server"
 import {
   DEFAULT_USER_ID,
+  canBeAddressed,
+  computeGrowth,
+  GROWTH_WINDOW,
+  type GrowthStage,
   type HarnessItem,
   type HarnessKind,
   type Store,
@@ -45,6 +49,19 @@ export interface CommandInfo {
   // deliberately NOT here: an MCP server is a tool provider, not a prompt.
   kind?: HarnessKind
   argumentHint?: string
+  // naby AGENT rows (Phase 3, P3-M5). A different layer from the harness — spec
+  // §2: `/` calls tools, `@` calls agents — so these are offered for the `@`
+  // marker ONLY, and FIRST, because addressing an agent is the headline action.
+  //
+  // `addressable` is the trust gate: an agent that has not been verified to the
+  // butterfly stage is listed but greyed out. The SAME predicate the engine uses
+  // (canBeAddressed), so the palette can never offer what routing would refuse.
+  agent?: {
+    stage: GrowthStage
+    /** progress toward butterfly, 0–100 */
+    percent: number
+    addressable: boolean
+  }
 }
 
 // Cross-kind precedence when the same verb exists as more than one kind: a
@@ -73,7 +90,8 @@ const BUILTIN_COMMANDS: CommandInfo[] = [
   { name: "/new-branch", description: "Create a clean new branch off the latest origin/main", source: "builtin" },
 ]
 
-type CommandStore = Pick<Store, "listHarness">
+type CommandStore = Pick<Store, "listHarness"> & Partial<AgentPaletteStore>
+type AgentPaletteStore = Pick<Store, "listAgents" | "listEvalEvents">
 
 /** Read enabled owned commands for the user scope (always), the org scope
  *  (always — a team-shared set inherited from the in-house org, HP-08), and,
@@ -157,8 +175,50 @@ export function mergeCommands(builtins: CommandInfo[], owned: HarnessItem[]): Co
   return order.map((verb) => byVerb.get(verb)!)
 }
 
+/** How much ledger history the meter reads per agent. Generous enough for the
+ *  change detector (which needs rows on both sides of a split) while still bounding
+ *  the query — the meter itself only scores the recent window. */
+const LEDGER_READ_LIMIT = GROWTH_WINDOW * 10
+
+/** naby agents as palette rows, each carrying its growth stage.
+ *
+ *  Best-effort like the harness read: a store hiccup must never empty the
+ *  dropdown, so a failure yields [] rather than throwing. The persona comes first
+ *  (it is the agent the product is about), then the rest by name.
+ */
+export function loadAgentEntries(store: AgentPaletteStore): CommandInfo[] {
+  let agents
+  try {
+    agents = store.listAgents()
+  } catch {
+    return []
+  }
+  return agents.map((a) => {
+    let stage: GrowthStage = "egg"
+    let percent = 0
+    try {
+      const g = computeGrowth(store.listEvalEvents(a.id, { limit: LEDGER_READ_LIMIT }))
+      stage = g.stage
+      percent = g.percent
+    } catch {
+      /* no ledger yet (or an unreadable one) reads as an egg — never a crash */
+    }
+    return {
+      name: `@${a.name}`,
+      description: a.description ?? a.systemPrompt.split("\n")[0]?.slice(0, 120) ?? "",
+      source: "user" as const,
+      agent: { stage, percent, addressable: canBeAddressed(stage) },
+    }
+  })
+}
+
 export function listCommands(cwd: string | null, store: CommandStore = getStore()): CommandInfo[] {
-  return mergeCommands(BUILTIN_COMMANDS, loadOwnedCommands(cwd, store))
+  // Agents FIRST: `@` is how the product's headline feature is invoked, and the
+  // client filters them out for `/`.
+  return [
+    ...loadAgentEntries(store as AgentPaletteStore),
+    ...mergeCommands(BUILTIN_COMMANDS, loadOwnedCommands(cwd, store)),
+  ]
 }
 
 export const GET = handler((request) =>

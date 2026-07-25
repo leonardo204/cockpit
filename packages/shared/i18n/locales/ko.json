@@ -1532,5 +1532,18 @@
     "alwaysAllow": "항상 허용",
     "alwaysBlock": "항상 차단",
     "more": "+{{count}}개 대기 중"
+  },
+  "chatInput": {
+    "agentsGroup": "에이전트",
+    "commandsGroup": "커맨드",
+    "agentLocked": "아직 자라는 중입니다. 나비 단계가 되면 바로 부를 수 있습니다."
+  },
+  "growth": {
+    "stage": {
+      "egg": "알",
+      "larva": "애벌레",
+      "pupa": "번데기",
+      "butterfly": "나비"
+    }
   }
 }
