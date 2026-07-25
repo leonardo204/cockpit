@@ -320,6 +320,24 @@
       "modified": "modified"
     }
   },
+  "policyManager": {
+    "title": "Permissions",
+    "description": "Rules that decide whether the agent may run a tool. Allow or block a tool by name (use a trailing * to match a group like mcp__jira__*, or * for all). With no rules, the \"Allow changes\" toggle decides.",
+    "scopeUser": "All projects",
+    "scopeProject": "This project",
+    "projectUnavailable": "Open a project to set project rules.",
+    "toolLabel": "Tool",
+    "toolPlaceholder": "e.g. Bash, Write, mcp__jira__*",
+    "effect_allow": "Allow",
+    "effect_deny": "Block",
+    "effect_ask": "Ask",
+    "add": "Add",
+    "remove": "Remove",
+    "added": "Rule saved.",
+    "empty": "No rules yet — the \"Allow changes\" toggle decides.",
+    "loading": "Loading…",
+    "error": "Something went wrong."
+  },
   "fileBrowser": {
     "panelTitle": "Files",
     "toggle": "Toggle file browser",

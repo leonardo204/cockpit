@@ -320,6 +320,24 @@
       "modified": "수정됨"
     }
   },
+  "policyManager": {
+    "title": "권한",
+    "description": "에이전트가 도구를 실행해도 되는지 정하는 규칙이에요. 도구 이름으로 허용/차단하세요 (mcp__jira__* 처럼 뒤에 *를 붙이면 그룹, *만 쓰면 전체). 규칙이 없으면 '변경 허용' 토글이 결정합니다.",
+    "scopeUser": "모든 프로젝트",
+    "scopeProject": "이 프로젝트",
+    "projectUnavailable": "프로젝트를 열면 프로젝트 규칙을 설정할 수 있어요.",
+    "toolLabel": "도구",
+    "toolPlaceholder": "예: Bash, Write, mcp__jira__*",
+    "effect_allow": "허용",
+    "effect_deny": "차단",
+    "effect_ask": "확인",
+    "add": "추가",
+    "remove": "삭제",
+    "added": "규칙을 저장했어요.",
+    "empty": "아직 규칙이 없어요 — '변경 허용' 토글이 결정합니다.",
+    "loading": "불러오는 중…",
+    "error": "문제가 발생했어요."
+  },
   "fileBrowser": {
     "panelTitle": "파일",
     "toggle": "파일 브라우저 토글",

@@ -48,8 +48,12 @@ import {
   getChatgptOauthBridge,
   getChatgptTokenSource,
   isChatgptOauthEnabled,
+  DEFAULT_USER_ID,
   type ClaudeLoginAccount,
   type McpEntry,
+  type HarnessScope,
+  type PolicyEffect,
+  type PolicyRule,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 
@@ -323,7 +327,12 @@ export type NabyAction =
   // server actually run. Status-only: it re-reads the STORED entry (secrets
   // intact) so approval never needs the redacted UI to resend them.
   | { action: 'mcp.approve'; name: string }
-  | { action: 'mcp.test'; name: string };
+  | { action: 'mcp.test'; name: string }
+  // Phase 2 (M1) tool-execution policy rules. `scopeKey` is optional for the
+  // user scope (server-defaulted); required (a cwd) for project.
+  | { action: 'policy.list'; scope?: string; scopeKey?: string }
+  | { action: 'policy.put'; scope?: string; scopeKey?: string; toolPattern: string; effect: string }
+  | { action: 'policy.remove'; id: string };
 
 export type NabyActionResult =
   | {
@@ -341,8 +350,29 @@ export type NabyActionResult =
        *  resolves, so the chip updates without waiting for the next GET poll
        *  (mirrors the old preload bridge, which resolved with the new status). */
       chatgpt?: ChatgptLoginState;
+      /** `policy.*`: the scope's rules after the operation. */
+      rules?: PolicyRule[];
     }
   | { ok: false; error: string };
+
+/** The in-house org scopeKey — kept in sync with the engine's gatherPolicyRules. */
+const DEFAULT_POLICY_ORG_ID = 'default';
+
+/** Resolve a policy action's scope + scopeKey. `user`/`org` are server-defaulted;
+ *  `project` requires a cwd. Mirrors how harness/commands key their scopes. */
+function resolvePolicyScope(
+  scope: string | undefined,
+  scopeKey: string | undefined,
+): { ok: true; scope: HarnessScope; scopeKey: string } | { ok: false; error: string } {
+  const s = scope ?? 'user';
+  if (s === 'user') return { ok: true, scope: 'user', scopeKey: DEFAULT_USER_ID };
+  if (s === 'org') return { ok: true, scope: 'org', scopeKey: DEFAULT_POLICY_ORG_ID };
+  if (s === 'project') {
+    if (!scopeKey) return { ok: false, error: 'project scope needs a scopeKey (cwd)' };
+    return { ok: true, scope: 'project', scopeKey };
+  }
+  return { ok: false, error: `unknown scope '${s}'` };
+}
 
 export async function runNabyAction(body: NabyAction): Promise<NabyActionResult> {
   const store = getStore();
@@ -372,6 +402,35 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       store.setSetting('gate.allowChanges', body.allowChanges ? 'true' : 'false');
       return { ok: true, allowChanges: body.allowChanges };
+    }
+
+    case 'policy.list': {
+      const r = resolvePolicyScope(body.scope, body.scopeKey);
+      if (!r.ok) return { ok: false, error: r.error };
+      return { ok: true, rules: store.listPolicyRules(r.scope, r.scopeKey) };
+    }
+
+    case 'policy.put': {
+      const r = resolvePolicyScope(body.scope, body.scopeKey);
+      if (!r.ok) return { ok: false, error: r.error };
+      const pattern = typeof body.toolPattern === 'string' ? body.toolPattern.trim() : '';
+      if (!pattern) return { ok: false, error: 'toolPattern is required' };
+      if (body.effect !== 'allow' && body.effect !== 'deny' && body.effect !== 'ask') {
+        return { ok: false, error: "effect must be 'allow', 'deny', or 'ask'" };
+      }
+      store.putPolicyRule({
+        scope: r.scope,
+        scopeKey: r.scopeKey,
+        toolPattern: pattern,
+        effect: body.effect as PolicyEffect,
+      });
+      return { ok: true, rules: store.listPolicyRules(r.scope, r.scopeKey) };
+    }
+
+    case 'policy.remove': {
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      store.removePolicyRule(body.id);
+      return { ok: true };
     }
 
     case 'model.set': {

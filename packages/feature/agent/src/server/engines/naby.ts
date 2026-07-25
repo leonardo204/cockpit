@@ -72,9 +72,11 @@ import {
   DEV_ENGINE_LABEL,
   getChatgptTokenSource,
   isChatgptOauthEnabled,
+  DEFAULT_USER_ID,
   loadMcpToolset,
   makeGate,
   phase1HarnessFloor,
+  realPolicy,
   makeModelResolver,
   Outbox,
   preflightEngine,
@@ -92,6 +94,7 @@ import {
   type GateLogEntry,
   type McpLoadResult,
   type ModelResolver,
+  type PolicyRule,
   type Project,
   type ProviderProfile,
   type RuntimeMessage,
@@ -133,6 +136,35 @@ function resolveDbPath(): string {
 /** One store per server process, opened lazily. SQLite handles the concurrency;
  *  reopening per run would just churn file handles. */
 let sharedStore: Store | undefined;
+
+/** The in-house org scopeKey — kept in sync with commands.ts / harness.ts (HP-08)
+ *  so policy rules key on the same org rows. */
+const DEFAULT_ORG_ID = 'default';
+
+/** Gather the policy rules that apply to a turn: user + org (always) and the
+ *  project scope when a cwd is set. Order is irrelevant — realPolicy resolves
+ *  scope precedence itself. Best-effort: a store hiccup must never break a turn. */
+function gatherPolicyRules(store: Store, cwd: string | undefined): PolicyRule[] {
+  const out: PolicyRule[] = [];
+  try {
+    out.push(...store.listPolicyRules('user', DEFAULT_USER_ID));
+  } catch {
+    /* ignore — no rules ⇒ baseline decides (non-breaking) */
+  }
+  try {
+    out.push(...store.listPolicyRules('org', DEFAULT_ORG_ID));
+  } catch {
+    /* ignore */
+  }
+  if (cwd) {
+    try {
+      out.push(...store.listPolicyRules('project', cwd));
+    } catch {
+      /* ignore */
+    }
+  }
+  return out;
+}
 
 /** Exported so the `/api/naby` route reads the SAME database this engine writes
  *  — per-session usage (F1-07) and the MCP registry (F1-08) are only coherent
@@ -520,11 +552,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // Read per turn so flipping the toggle takes effect on the next message.
         const allowChanges =
           (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
-        const gated = makeGate(
-          allowChanges
-            ? () => ({ behavior: 'allow' as const })
-            : phase1HarnessFloor(runtimeToolNames),
-        );
+        // Phase 2 (M1): the `allowChanges` toggle becomes the BASELINE, and the
+        // user's persistent per-scope policy rules override it per tool. With no
+        // rules this is byte-for-byte the pre-M1 behaviour; a rule can deny an
+        // otherwise-allowed tool or permit an otherwise-denied one. Rules are
+        // gathered project → user → org (precedence resolved in realPolicy) and
+        // re-read each turn so a change in Settings lands on the next message.
+        const baseline = allowChanges
+          ? () => ({ behavior: 'allow' as const })
+          : phase1HarnessFloor(runtimeToolNames);
+        const policyRules = gatherPolicyRules(getStore(), projectCwd);
+        const gated = makeGate(realPolicy({ rules: policyRules, fallback: baseline }));
         // Thin observer around the runtime's gate. The decision is still made
         // (and logged) by makeGate; this only reports it. Because it sits on
         // the return path, an observation is proof the gate ran — and the

@@ -25,6 +25,9 @@ import { NabyCommandManager } from './NabyCommandManager';
 // HP-04 + HP-06. The `~/.claude` importer + import review panel (all kinds).
 // Given the active cwd so its `project`-scope `.claude` is importable.
 import { NabyHarnessReview } from './NabyHarnessReview';
+// Phase 2 (M1). Tool-execution policy rules. Given the active cwd so its
+// project-scope rules are editable.
+import { NabyPolicyManager } from './NabyPolicyManager';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -44,6 +47,7 @@ type SettingsSectionId =
   | 'memory'
   | 'commands'
   | 'harness'
+  | 'permissions'
   | 'about';
 
 // Left-nav sections. Each `labelKey` reuses an existing i18n string, so no new
@@ -55,6 +59,7 @@ const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] 
   { id: 'memory', labelKey: 'memoryReview.title', icon: '🧠' },
   { id: 'commands', labelKey: 'commandManager.title', icon: '⌘' },
   { id: 'harness', labelKey: 'harnessReview.title', icon: '🧩' },
+  { id: 'permissions', labelKey: 'policyManager.title', icon: '🛡️' },
   { id: 'about', labelKey: 'settings.about', icon: 'ℹ️' },
 ];
 
@@ -259,6 +264,15 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                   {t('harnessReview.title')}
                 </label>
                 <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
+              </div>
+            ) : null}
+
+            {section === 'permissions' ? (
+              <div>
+                <label className="block text-sm font-medium text-foreground mb-2">
+                  {t('policyManager.title')}
+                </label>
+                <NabyPolicyManager isOpen={isOpen} cwd={cwd} />
               </div>
             ) : null}
 
