@@ -324,12 +324,36 @@ export interface NabyEngineDeps {
 // EngineEvent → Agent-SDK-shaped RunEvent
 // ---------------------------------------------------------------------------
 
-function toSdkUsage(u: Usage | undefined): Record<string, number> {
+/**
+ * Runtime `Usage` → the Agent-SDK-shaped usage the chat client reads.
+ *
+ * THE TWO SIDES DISAGREE ABOUT OVERLAP, and getting it wrong is silent:
+ *
+ *   runtime  `inputTokens` is the TOTAL — cache reads and writes are INSIDE it,
+ *            and `cachedInputTokens` is a subset of it (runtime/engine.ts:155).
+ *   Anthropic (and therefore TokenUsageBar, which sums all three) reports the
+ *            three counts DISJOINTLY.
+ *
+ * Passing `inputTokens` straight through as `input_tokens` therefore made the bar
+ * add the cache reads a second time: the context number was inflated by exactly
+ * `cachedInputTokens`, and `Cache: n%` was divided by that inflated total, so a
+ * turn running at ~89% cache displayed 47%. Cost was never affected — pricing.ts
+ * subtracts the cached portion itself.
+ *
+ * So subtract here and hand the client disjoint parts. `cache_creation` stays 0
+ * because the runtime contract has no cache-write field; those tokens are folded
+ * into the non-cached remainder, which keeps the SUM right — the number on screen.
+ */
+export function toSdkUsage(u: Usage | undefined): Record<string, number> {
+  const total = u?.inputTokens ?? 0;
+  // Clamp: the contract says cached <= input, but a provider that ever broke it
+  // must not produce a negative input count on screen.
+  const cacheRead = Math.min(u?.cachedInputTokens ?? 0, total);
   return {
-    input_tokens: u?.inputTokens ?? 0,
+    input_tokens: total - cacheRead,
     output_tokens: u?.outputTokens ?? 0,
     cache_creation_input_tokens: 0,
-    cache_read_input_tokens: u?.cachedInputTokens ?? 0,
+    cache_read_input_tokens: cacheRead,
   };
 }
 
