@@ -51,7 +51,6 @@ interface MessageBubbleProps {
   message: ChatMessage;
   cwd?: string;
   sessionId?: string | null;
-  onFork?: (messageId: string) => void;
   /** Plan mode: approve the plan card → turn off plan mode and resend to execute */
   onApprovePlan?: () => void;
   /** Disable the approve button while a run is streaming (no concurrent send) */
@@ -63,7 +62,7 @@ interface MessageBubbleProps {
 const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onFork, onApprovePlan, isLoading }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
@@ -75,7 +74,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   const hasImages = message.images && message.images.length > 0;
   const toolCallsCount = message.toolCalls?.length || 0;
   const shouldCollapseToolCalls = toolCallsCount > TOOL_CALLS_COLLAPSE_THRESHOLD;
-  const canFork = !!sessionId && !!cwd && !!onFork;
 
   // Last TodoWrite call
   const lastTodoWrite = useMemo(() => {
@@ -140,13 +138,18 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     }
   };
 
-  // Fork session (branch from this message)
-  const handleFork = () => {
-    if (canFork) {
-      onFork!(message.id);
-    }
-  };
-
+  // NO FORK BUTTON. Cockpit upstream puts a branch-from-here button next to Copy,
+  // and it CANNOT work in naby: /api/session/[id]/fork forks by copying the Claude
+  // Code CLI transcript at ~/.claude/projects/<cwd>/<sessionId>.jsonl, but a naby
+  // session id is our own SQLite key (`s-ms1e2gah-2-6xg7a0ha`) and never a filename
+  // there — so the very first existsSync fails, the route 404s, and Chat only
+  // console.error'd it. The user saw a button that did nothing at all.
+  //
+  // Forking is still POSSIBLE — the conversation lives in app.db, so a real
+  // implementation would copy messages up to this point into a new session (a
+  // `session.fork` action on /api/naby) and the bubble would have to carry the DB
+  // message id, not the client-side `assistant-<ts>` placeholder. Until that
+  // exists, no button: a control that silently does nothing is worse than none.
   // Format time as: 01-15 14:30
   const formatTime = (ts?: string) => {
     if (!ts) return '';
@@ -263,22 +266,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            )}
-            {canFork && (
-              <button
-                onClick={handleFork}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-                title={t('chat.forkSession')}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  {/* Git fork icon */}
-                  <circle cx="12" cy="18" r="3" />
-                  <circle cx="6" cy="6" r="3" />
-                  <circle cx="18" cy="6" r="3" />
-                  <path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9" />
-                  <path d="M12 12v3" />
                 </svg>
               </button>
             )}
@@ -489,21 +476,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            )}
-            {canFork && (
-              <button
-                onClick={handleFork}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-                title={t('chat.forkSession')}
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="18" r="3" />
-                  <circle cx="6" cy="6" r="3" />
-                  <circle cx="18" cy="6" r="3" />
-                  <path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9" />
-                  <path d="M12 12v3" />
                 </svg>
               </button>
             )}

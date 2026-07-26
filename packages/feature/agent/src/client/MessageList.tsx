@@ -36,7 +36,6 @@ interface MessageListProps {
   hasMoreHistory?: boolean;
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
-  onFork?: (messageId: string) => void;
   isActive?: boolean; // Whether the tab is active (handles scroll issues for hidden tabs)
   /** Plan mode: approve the presented plan → turn off plan mode and resend to execute */
   onApprovePlan?: () => void;
@@ -57,7 +56,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onApprovePlan, thinkingName, onStop },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, onStop },
   ref
 ) {
   const { t } = useTranslation();
@@ -424,7 +423,6 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   message={message}
                   cwd={cwd}
                   sessionId={sessionId}
-                  onFork={onFork}
                   onApprovePlan={onApprovePlan}
                   isLoading={isLoading}
                 />

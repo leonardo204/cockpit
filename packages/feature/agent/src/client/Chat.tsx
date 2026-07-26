@@ -5,10 +5,7 @@ import { ClipboardList } from 'lucide-react';
 import { toast } from '@cockpit/shared-ui';
 import { useLiveStream } from './useLiveStream';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
-import {
-  querySessionByPath,
-  forkSession,
-} from './effect/agentClient';
+import { querySessionByPath } from './effect/agentClient';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
 import { ChatHeader } from './ChatHeader';
@@ -69,7 +66,9 @@ interface ChatProps {
     activeTo?: string;
     cron?: string;
   }) => void;
-  onOpenSession?: (sessionId: string, title?: string) => void; // Open a new session (used for Fork)
+  /** Host hook to open a session in a new tab. Currently unused — its only caller
+   *  was the removed fork button; a DB-backed fork would use it again. */
+  onOpenSession?: (sessionId: string, title?: string) => void;
   onOpenSessionBrowser?: () => void; // Host-handled: open the cross-engine session browser
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
 }
@@ -472,50 +471,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isHovered, isLoading, liveRunning, handleStop]);
 
-  // Fork session from a specified message point.
-  //
-  // IMPORTANT: route the fork through `loadedSessionId` (the sessionId of
-  // the JSONL file the user is currently looking at), NOT through
-  // `sessionId` (which the SDK overwrites on every `system.init` event).
-  // The bubble id passed in is a uuid taken from the loaded file; using a
-  // drifted sessionId would point the server at a different file where
-  // that uuid may not exist, causing fork.ts to silently degrade to a
-  // full-file copy. Fall back to `sessionId` only when no file has been
-  // loaded yet (fresh tab with no history).
-  const handleForkImpl = useCallback(async (messageId: string) => {
-    const forkSid = loadedSessionId ?? sessionId;
-    if (!initialCwd || !forkSid) return;
-
-    const exit = await BrowserRuntime.runPromiseExit(
-      forkSession<{ newSessionId?: string }>(forkSid, {
-        cwd: initialCwd,
-        fromMessageUuid: messageId,
-      })
-    );
-    if (exit._tag === 'Success' && exit.value.newSessionId) {
-      const newSessionId = exit.value.newSessionId;
-      if (onOpenSession) {
-        onOpenSession(newSessionId, 'Fork');
-      } else {
-        publishTopic(Topics.OpenProject, {
-          cwd: initialCwd,
-          sessionId: newSessionId,
-        });
-      }
-    } else if (exit._tag === 'Failure') {
-      console.error('Fork failed:', exit.cause);
-    }
-  }, [initialCwd, loadedSessionId, sessionId, onOpenSession]);
-
-  // Stabilize the fork callback passed down to every (memoized) MessageBubble.
-  // handleForkImpl's identity changes whenever loadedSessionId / sessionId churn
-  // (each of the many re-renders a session switch fans out), which would break
-  // MessageBubble's React.memo and re-parse react-markdown for the whole list on
-  // every switch. A ref indirection keeps the passed-down identity constant while
-  // still calling the latest implementation.
-  const handleForkRef = useRef(handleForkImpl);
-  handleForkRef.current = handleForkImpl;
-  const handleFork = useRef((messageId: string) => handleForkRef.current(messageId)).current;
+  // NO FORK HANDLER — see the note in MessageBubble.tsx. Upstream forked a session
+  // by copying the Claude Code CLI transcript file, which naby has no equivalent of:
+  // our session id is a SQLite key, not a filename under ~/.claude/projects, so every
+  // fork 404'd and only reached console.error. The button is gone; the /api/session/
+  // [id]/fork route is left in place (unreferenced) for whoever rebuilds this on top
+  // of app.db.
 
   // Stabilize ChatInput callback props, combined with React.memo to avoid unnecessary re-renders
   const handleShowUserMessages = useCallback(() => {
@@ -637,7 +598,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             hasMoreHistory={hasMoreHistory}
             isLoadingMore={isLoadingMore}
             onLoadMore={loadMoreHistory}
-            onFork={handleFork}
             isActive={isActive}
             onApprovePlan={handleApprovePlan}
             thinkingName={thinkingName}
