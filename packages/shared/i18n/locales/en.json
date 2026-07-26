@@ -592,7 +592,9 @@
     "planApproveHint": "No approval dialog here — click to exit plan mode and execute",
     "approvePlanPrompt": "Approved — proceed with the plan above.",
     "stop": "Stop",
-    "stopHint": "Stop this turn (or press Esc)"
+    "stopHint": "Stop this turn (or press Esc)",
+    "thinkingBlock": "Reasoning",
+    "thinkingChars": "({{count}} chars)"
   },
   "claudeAccount": {
     "signedIn": "Claude: signed in",

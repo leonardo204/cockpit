@@ -131,6 +131,10 @@ export function useChatStream(
 
   // Streaming text buffer - used to throttle setState
   const streamBufferRef = useRef<{ messageId: string; text: string } | null>(null);
+  // Reasoning has its own buffer and its own timer: it arrives interleaved with the
+  // answer, and sharing a buffer would splice the two together.
+  const thinkingBufferRef = useRef<{ messageId: string; text: string } | null>(null);
+  const thinkingFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // #bg multi-turn (background persistence): a single resident run can now span the launch turn
@@ -161,8 +165,32 @@ export function useChatStream(
     streamFlushTimerRef.current = null;
   }, [setMessages, engine]);
 
+  const flushThinkingBuffer = useCallback(() => {
+    const buffer = thinkingBufferRef.current;
+    if (buffer && buffer.text) {
+      const { messageId, text } = buffer;
+      setMessages((prev) => {
+        // Append to the target bubble if it exists; a thinking delta can arrive
+        // before the assistant bubble has been created, in which case it is dropped
+        // rather than conjuring a bubble with no answer in it.
+        const idx = prev.findIndex((m) => m.id === messageId);
+        if (idx === -1) return prev;
+        const next = [...prev];
+        next[idx] = { ...next[idx]!, thinking: (next[idx]!.thinking ?? '') + text };
+        return next;
+      });
+      thinkingBufferRef.current = { messageId, text: '' };
+    }
+    thinkingFlushTimerRef.current = null;
+  }, [setMessages]);
+
   // End the originator's view of the current run (turn finished / stopped / failed).
   const endRun = useCallback(() => {
+    if (thinkingFlushTimerRef.current) {
+      clearTimeout(thinkingFlushTimerRef.current);
+      thinkingFlushTimerRef.current = null;
+      flushThinkingBuffer();
+    }
     if (streamFlushTimerRef.current) {
       clearTimeout(streamFlushTimerRef.current);
       streamFlushTimerRef.current = null;
@@ -186,7 +214,7 @@ export function useChatStream(
     // reconciled). This closes the ephemeral-id lifecycle within the run and keeps in-session
     // state identical to a page reload.
     onRunCompleteRef.current?.();
-  }, [flushStreamBuffer, setMessages]);
+  }, [flushStreamBuffer, flushThinkingBuffer, setMessages]);
 
   // Stop generation: the run is detached server-side, so closing a socket won't stop it —
   // hit the explicit stop endpoint. Send both keys (sessionId once known, else runId).
@@ -340,6 +368,25 @@ export function useChatStream(
             : msg
         )
       );
+      return;
+    }
+
+    // The model's reasoning. Appended to the CURRENT assistant bubble's own
+    // `thinking` field, so it renders in a collapsed block beside the answer and
+    // never inside it — reasoning presented as the reply would be worse than not
+    // showing it at all. Throttled the same way text is: thinking arrives token by
+    // token and a setState per token would thrash the list.
+    if (eventType === 'thinking') {
+      const text = typeof event.text === 'string' ? event.text : '';
+      if (!text) return;
+      if (!thinkingBufferRef.current || thinkingBufferRef.current.messageId !== messageId) {
+        thinkingBufferRef.current = { messageId, text };
+      } else {
+        thinkingBufferRef.current.text += text;
+      }
+      if (!thinkingFlushTimerRef.current) {
+        thinkingFlushTimerRef.current = setTimeout(flushThinkingBuffer, 120);
+      }
       return;
     }
 

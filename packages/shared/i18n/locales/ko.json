@@ -592,7 +592,9 @@
     "planApproveHint": "여기서는 승인 대화상자가 없습니다 — 클릭하면 플랜 모드를 종료하고 실행합니다",
     "approvePlanPrompt": "승인됨 — 위 계획대로 진행하세요.",
     "stop": "중단",
-    "stopHint": "이 턴을 중단합니다 (Esc를 눌러도 됩니다)"
+    "stopHint": "이 턴을 중단합니다 (Esc를 눌러도 됩니다)",
+    "thinkingBlock": "사고과정",
+    "thinkingChars": "({{count}}자)"
   },
   "claudeAccount": {
     "signedIn": "Claude: 로그인됨",

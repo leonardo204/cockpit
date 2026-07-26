@@ -29,6 +29,10 @@ export interface ChatMessage {
   images?: MessageImage[];  // Images in the message
   toolCalls?: ToolCallInfo[];
   isStreaming?: boolean;
+  /** The model's REASONING for this message, shown in a collapsed block.
+   *  Deliberately separate from `content`: it is the working-out, not the reply,
+   *  and it is never part of what gets stored as the answer. */
+  thinking?: string;
   timestamp?: string;  // Message creation time (ISO format)
   // Set on role:'system' rows — a harness event rendered as a muted one-line bar
   // (not a conversation bubble). `task-notification` shows the <summary> line;

@@ -233,6 +233,24 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             {timeStr}
           </span>
         )}
+        {/* THE MODEL'S REASONING, collapsed.
+            Above the answer because that is the order it happened in, and closed by
+            default because it is working-out: available when you want to know why,
+            never in the way when you do not. It is not part of `content`, so
+            copying the message copies the reply alone. */}
+        {!isUser && message.thinking && (
+          <details className="mb-1 w-full max-w-[90%]" data-testid="thinking-block">
+            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+              {t('chat.thinkingBlock', { defaultValue: 'Reasoning' })}
+              <span className="ml-1 opacity-60">
+                {t('chat.thinkingChars', { defaultValue: '({{count}} chars)', count: message.thinking.length })}
+              </span>
+            </summary>
+            <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+              {message.thinking}
+            </div>
+          </details>
+        )}
         <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
         {/* Action buttons for user messages — on the left */}
         {isUser && (

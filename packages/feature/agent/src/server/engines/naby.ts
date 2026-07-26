@@ -1246,6 +1246,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 case 'init':
                   break; // already emitted our own init above
 
+                case 'thinking': {
+                  if (!ev.text) break;
+                  // Its OWN event type, never a text delta: the client shows it in
+                  // a collapsed block and it is not part of `assistantText`, so the
+                  // stored transcript stays the reply rather than the working-out.
+                  ctx.emit({
+                    type: 'thinking',
+                    session_id: sessionId,
+                    text: ev.text,
+                    ...(ev.partial ? { partial: true } : {}),
+                  });
+                  break;
+                }
                 case 'text': {
                   if (ev.role !== 'assistant' || !ev.text) break;
                   // A PARTIAL is a token-level delta: render it and nothing else.
