@@ -269,6 +269,24 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
   }, [messages, shouldAutoScroll]);
 
+  // Once the answer has words in it, the "thinking" bubble is a lie sitting under
+  // the thing it claims has not happened yet. It goes; the elapsed clock and Stop
+  // go with it, which is right — the visible answer is now the progress indicator,
+  // and Stop is still on Esc.
+  const answerStarted = useMemo(() => {
+    // The LAST assistant message, not the last message: a system event bar can sit
+    // after it and would otherwise hide the fact that an answer is already there.
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i]!;
+      if (m.role !== 'assistant') continue;
+      // TEXT only. Tool calls alone are not an answer — the model can sit inside a
+      // tool for a long time, and there the elapsed clock is the only evidence it
+      // is still alive, which is the whole reason it was added.
+      return m.content.trim().length > 0;
+    }
+    return false;
+  }, [messages]);
+
   // -- HOW LONG IT HAS BEEN THINKING ---------------------------------------
   //
   // Without this, a turn that is legitimately working through a large project is
@@ -412,7 +430,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 />
               </div>
             ))}
-            {isLoading && (
+            {isLoading && !answerStarted && (
               <div className="flex justify-start mb-4">
                 <div className="bg-accent rounded-2xl rounded-bl-md px-4 py-3 max-w-[90%]">
                   <div className="flex items-center gap-2 text-muted-foreground">
