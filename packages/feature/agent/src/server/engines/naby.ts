@@ -132,6 +132,7 @@ import {
 } from '../lib/telegramEscalation';
 import { canLearn, learningInstruction } from '../lib/learning';
 import { runNestedTurn } from '../lib/delegation';
+import { planTextRender } from './textRender';
 import {
   canCheckIn,
   checkinInstruction,
@@ -1056,6 +1057,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // an ordinary turn changes).
         let step = 0;
         let stepText = '';
+        // Whether token deltas already put THIS assistant message on screen. Reset
+        // when its complete event lands, so the next message decides for itself —
+        // an engine may stream one message and not the next.
+        let sawPartialText = false;
         let stepUsedTool = false;
         let stepDecision: AutonomyDecision = { proceed: false, reason: 'not-autonomous' };
         // Whether a terminal `result` RunEvent has reached the client. Distinct
@@ -1243,21 +1248,31 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
                 case 'text': {
                   if (ev.role !== 'assistant' || !ev.text) break;
-                  assistantText += ev.text;
-                  // Per-step copy: the stop decision looks for the done marker in
-                  // THIS step's words, not in something the agent said earlier.
-                  stepText += ev.text;
-                  turns += 1;
-                  // Engine-agnostic render path — see the header note.
-                  ctx.emit({
-                    type: 'stream_event',
-                    session_id: sessionId,
-                    event: {
-                      type: 'content_block_delta',
-                      index: 0,
-                      delta: { type: 'text_delta', text: ev.text },
-                    },
-                  });
+                  // A PARTIAL is a token-level delta: render it and nothing else.
+                  // The complete message arrives as its own non-partial event, so
+                  // accumulating both would double the answer and inflate `turns`.
+                  // One tested rule for both engines — see lib textRender.ts.
+                  const plan = planTextRender(ev.partial === true, sawPartialText);
+                  sawPartialText = plan.sawPartialNext;
+                  if (plan.accumulate) {
+                    assistantText += ev.text;
+                    // Per-step copy: the stop decision looks for the done marker in
+                    // THIS step's words, not in something the agent said earlier.
+                    stepText += ev.text;
+                    turns += 1;
+                  }
+                  if (plan.render) {
+                    // Engine-agnostic render path — see the header note.
+                    ctx.emit({
+                      type: 'stream_event',
+                      session_id: sessionId,
+                      event: {
+                        type: 'content_block_delta',
+                        index: 0,
+                        delta: { type: 'text_delta', text: ev.text },
+                      },
+                    });
+                  }
                   break;
                 }
 
