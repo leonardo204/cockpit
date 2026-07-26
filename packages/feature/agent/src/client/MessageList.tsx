@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { useChatContextOptional } from './ChatContext';
+import { formatElapsed } from './elapsed';
 import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './types';
 import { MessageBubble } from './MessageBubble';
 import { GENERIC_ENGINE_NAME } from './engineName';
@@ -44,6 +45,10 @@ interface MessageListProps {
    *  so it never threatens the memoized rows below. Falls back to a generic
    *  label when absent. */
   thinkingName?: string | null;
+  /** Stops the running turn. The machinery already existed (ESC over the chat
+   *  area, `/api/chat/stop`) but had no visible control, so a long turn looked
+   *  indistinguishable from a hung one. */
+  onStop?: () => void;
 }
 
 // Methods exposed to parent component
@@ -52,7 +57,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onApprovePlan, thinkingName },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, onFork, isActive = true, onApprovePlan, thinkingName, onStop },
   ref
 ) {
   const { t } = useTranslation();
@@ -264,6 +269,26 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
   }, [messages, shouldAutoScroll]);
 
+  // -- HOW LONG IT HAS BEEN THINKING ---------------------------------------
+  //
+  // Without this, a turn that is legitimately working through a large project is
+  // indistinguishable from one that has hung, and the only thing a user can do is
+  // guess. The clock starts when the spinner appears and is dropped when it goes,
+  // so it never survives into the next turn.
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (!isLoading) {
+      setElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    setElapsedSec(0);
+    // One second is the right resolution: finer would flicker, coarser would look
+    // frozen for the first stretch — which is the very thing being fixed.
+    const id = setInterval(() => setElapsedSec(Math.floor((Date.now() - startedAt) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [isLoading]);
+
   // Also check scroll on isLoading change (showing/hiding the "thinking" indicator)
   useEffect(() => {
     if (shouldAutoScroll && isLoading) {
@@ -393,6 +418,21 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <span className="inline-block w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
                     <span className="text-sm">{t('chat.thinking', { name: thinkingName || GENERIC_ENGINE_NAME })}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground/70" data-testid="thinking-elapsed">
+                      {formatElapsed(elapsedSec)}
+                    </span>
+                    {onStop && (
+                      // Shown from the first second, not after a threshold: a
+                      // control that appears only once the user is already worried
+                      // teaches them the app freezes.
+                      <button
+                        onClick={onStop}
+                        className="ml-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-red-500/50 hover:text-red-600 dark:hover:text-red-400"
+                        title={t('chat.stopHint', { defaultValue: 'Stop this turn (or press Esc)' })}
+                      >
+                        {t('chat.stop', { defaultValue: 'Stop' })}
+                      </button>
+                    )}
                   </div>
                   {apiRetryInfo && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-amber-400 border-t border-border/50 pt-2">

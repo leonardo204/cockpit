@@ -641,6 +641,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             isActive={isActive}
             onApprovePlan={handleApprovePlan}
             thinkingName={thinkingName}
+            onStop={handleStop}
           />
         )}
         </div>
