@@ -590,7 +590,9 @@
     "planTitle": "Plan (awaiting your review)",
     "approvePlan": "Approve & run",
     "planApproveHint": "No approval dialog here — click to exit plan mode and execute",
-    "approvePlanPrompt": "Approved — proceed with the plan above."
+    "approvePlanPrompt": "Approved — proceed with the plan above.",
+    "stop": "Stop",
+    "stopHint": "Stop this turn (or press Esc)"
   },
   "claudeAccount": {
     "signedIn": "Claude: signed in",
@@ -627,7 +629,10 @@
   },
   "modelSwitcher": {
     "label": "Model",
-    "title": "Which model"
+    "title": "Which model",
+    "refresh": "Refresh",
+    "refreshing": "Checking…",
+    "refreshHint": "Ask your Claude sign-in which models it can use"
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",

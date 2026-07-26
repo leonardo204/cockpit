@@ -590,7 +590,9 @@
     "planTitle": "계획 (검토 대기 중)",
     "approvePlan": "승인 후 실행",
     "planApproveHint": "여기서는 승인 대화상자가 없습니다 — 클릭하면 플랜 모드를 종료하고 실행합니다",
-    "approvePlanPrompt": "승인됨 — 위 계획대로 진행하세요."
+    "approvePlanPrompt": "승인됨 — 위 계획대로 진행하세요.",
+    "stop": "중단",
+    "stopHint": "이 턴을 중단합니다 (Esc를 눌러도 됩니다)"
   },
   "claudeAccount": {
     "signedIn": "Claude: 로그인됨",
@@ -627,7 +629,10 @@
   },
   "modelSwitcher": {
     "label": "모델",
-    "title": "사용할 모델"
+    "title": "사용할 모델",
+    "refresh": "새로 받기",
+    "refreshing": "확인 중…",
+    "refreshHint": "내 Claude 로그인이 쓸 수 있는 모델을 물어봅니다"
   },
   "console": {
     "enterCommandOrUrl": "명령 또는 URL을 입력하여 시작하세요",

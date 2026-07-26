@@ -51,6 +51,8 @@ import {
   DEFAULT_USER_ID,
   BUILTIN_PERSONA_ID,
   parseAgentSidecar,
+  probeClaudeModels,
+  type ClaudeModelInfo,
   BOOTSTRAP_DONE_KEY,
   BOOTSTRAP_QUESTIONS,
   answersToMemory,
@@ -421,6 +423,13 @@ export type NabyAction =
   // offer it and what to ask; `bootstrap.save` writes the answers as CONFIRMED
   // user-tier memory (the user typed them, which is what that tier means).
   // `dismiss` closes it for good without storing anything.
+  // WHICH MODELS THE LOCAL SIGN-IN ACTUALLY HAS. The chat bar's list used to be a
+  // constant, so it went stale the day a new model shipped and naby had to be
+  // rebuilt to name one. `models.list` returns the cached answer (and probes when
+  // the cache is empty or old); `refresh: true` always probes. The probe asks the
+  // Agent SDK, which reports what THIS sign-in is entitled to — strictly better
+  // than any list we could maintain, because it reflects the user's own plan.
+  | { action: 'models.list'; refresh?: boolean }
   | { action: 'bootstrap.get' }
   | { action: 'bootstrap.save'; answers?: Record<string, string>; dismiss?: boolean }
   | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string };
@@ -458,6 +467,15 @@ export type NabyActionResult =
       growth?: GrowthReport;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
+      /** `models.list`: the live model catalog for the Claude sign-in. */
+      models?: {
+        claude: ClaudeModelInfo[];
+        /** epoch ms the list was fetched, or 0 when it has never succeeded. */
+        fetchedAt: number;
+        /** True when this list came from the cache rather than a fresh probe. False
+         *  with an empty list means the probe failed and nothing was cached. */
+        cached: boolean;
+      };
       /** `bootstrap.get`/`save`: whether to offer the interview and what happened. */
       bootstrap?: {
         offer: boolean;
@@ -476,6 +494,33 @@ export type NabyActionResult =
       };
     }
   | { ok: false; error: string };
+
+/** Setting key holding the last successful model probe. */
+const CLAUDE_MODELS_CACHE_KEY = 'models.claude.cache';
+
+/** How long a probed list is trusted before another probe is worth it. A day: new
+ *  models do not ship hourly, and the user has an explicit refresh either way. */
+const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Read the cache defensively — it is JSON in a settings row, so a hand-edited or
+ *  half-written value must read as "no cache" rather than throwing in a chat
+ *  header. */
+function readModelCache(raw: string | undefined): { fetchedAt: number; claude: ClaudeModelInfo[] } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { fetchedAt?: unknown; claude?: unknown };
+    const fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0;
+    const claude = Array.isArray(parsed.claude)
+      ? parsed.claude.filter(
+          (m): m is ClaudeModelInfo =>
+            !!m && typeof m === 'object' && typeof (m as ClaudeModelInfo).value === 'string',
+        )
+      : [];
+    return { fetchedAt, claude };
+  } catch {
+    return null;
+  }
+}
 
 /** The in-house org scopeKey — kept in sync with the engine's gatherPolicyRules. */
 const DEFAULT_POLICY_ORG_ID = 'default';
@@ -795,6 +840,39 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           ledgerWritten: outcome.ledgerWritten,
         },
       };
+    }
+
+    // The live model catalog. Cached in settings because the probe spawns the
+    // Claude CLI: cheap (~1.6s measured) but not something to pay on every render
+    // of a chat header.
+    case 'models.list': {
+      const cachedRaw = store.getSetting(CLAUDE_MODELS_CACHE_KEY);
+      const cached = readModelCache(cachedRaw);
+      const fresh =
+        cached !== null && Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS && cached.claude.length > 0;
+      if (fresh && body.refresh !== true) {
+        return { ok: true, models: { claude: cached!.claude, fetchedAt: cached!.fetchedAt, cached: true } };
+      }
+      const probed = await probeClaudeModels();
+      if (!probed) {
+        // Not signed in, SDK absent, or the CLI did not answer in time. Hand back
+        // whatever was cached rather than nothing: a stale list beats an empty
+        // picker, and the client's own fallback covers a cold cache. `cached` is
+        // only true when there is genuinely something cached — reporting a cache
+        // hit for an empty list would be a small lie the client cannot check.
+        const have = cached?.claude ?? [];
+        return {
+          ok: true,
+          models: { claude: have, fetchedAt: cached?.fetchedAt ?? 0, cached: have.length > 0 },
+        };
+      }
+      const fetchedAt = Date.now();
+      try {
+        store.setSetting(CLAUDE_MODELS_CACHE_KEY, JSON.stringify({ fetchedAt, claude: probed }));
+      } catch {
+        /* an unwritable cache costs a probe next time, nothing more */
+      }
+      return { ok: true, models: { claude: probed, fetchedAt, cached: false } };
     }
 
     // Phase 1.5 (P15-07) — cold start. Read-only.

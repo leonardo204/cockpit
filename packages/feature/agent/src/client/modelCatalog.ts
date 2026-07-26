@@ -32,14 +32,53 @@ export interface ModelOption {
 export const CLAUDE_MODEL_SCOPE = 'dev-claude';
 export { CHATGPT_OAUTH_PROVIDER_ID };
 
-/** Claude Agent SDK (local subscription sign-in). '' = SDK default (inherit). */
+/**
+ * Claude Agent SDK (local subscription sign-in) — the FALLBACK only.
+ *
+ * The live list comes from the SDK (`models.list` → `probeClaudeModels`), which
+ * reports what this sign-in is actually entitled to. That is strictly better than
+ * anything maintained here, and it is why a new model no longer needs a rebuild.
+ * This constant is what the picker shows before the first probe answers, or when
+ * the user is not signed in.
+ *
+ * Left with ALIASES rather than pinned ids on purpose: an alias resolves to
+ * whatever the plan grants, so it cannot advertise a model the user does not have.
+ */
 export const CLAUDE_MODELS: ModelOption[] = [
   { value: '', label: 'Default', hint: 'let Claude pick' },
-  { value: 'opus', label: 'Opus 4.8', hint: 'most capable' },
-  { value: 'sonnet', label: 'Sonnet 5', hint: 'balanced' },
-  { value: 'haiku', label: 'Haiku 4.5', hint: 'fast & light' },
-  { value: 'fable', label: 'Fable 5', hint: 'creative' },
+  { value: 'opus', label: 'Opus', hint: 'most capable' },
+  { value: 'sonnet', label: 'Sonnet', hint: 'balanced' },
+  { value: 'haiku', label: 'Haiku', hint: 'fast & light' },
+  { value: 'fable', label: 'Fable', hint: 'creative' },
 ];
+
+/** One row of the live catalog, as `models.list` returns it. */
+export type LiveModel = {
+  value: string;
+  displayName: string;
+  description?: string;
+  resolvedModel?: string;
+};
+
+/**
+ * Turn the SDK's answer into picker options.
+ *
+ * The SDK's own list already contains a `default` row, so no `''` entry is added:
+ * two rows both meaning "let Claude pick" is the kind of duplication that makes a
+ * picker look broken. When the list is empty (never probed, or not signed in) the
+ * curated fallback is returned unchanged.
+ */
+export function claudeOptionsFrom(live: readonly LiveModel[] | null | undefined): ModelOption[] {
+  if (!live || live.length === 0) return CLAUDE_MODELS;
+  return live.map((m) => ({
+    value: m.value,
+    label: m.displayName || m.value,
+    // The SDK descriptions read like "Opus 4.8 with 1M context · Best for …" —
+    // already the one-line hint this needs, so it is passed through rather than
+    // re-worded into something less accurate.
+    ...(m.description ? { hint: m.description } : {}),
+  }));
+}
 
 /** ChatGPT subscription (codex backend). Order = strongest → lightest. */
 export const CHATGPT_MODELS: ModelOption[] = [

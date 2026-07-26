@@ -21,18 +21,27 @@
  * and the payload keeps carrying it. Same iframe-safe fetch discipline as every
  * other bottom-bar control (`window.naby` does not exist in the project iframe).
  *
- * The candidate lists live in modelCatalog.ts (researched per engine, not a
- * runtime export — there is no per-provider model list in the runtime).
+ * WHERE THE CANDIDATES COME FROM. For Claude, the LIVE list is fetched from
+ * `models.list`, which asks the Agent SDK what this sign-in is entitled to — so a
+ * newly released model appears without rebuilding naby, and a model the plan does
+ * not include is never offered. modelCatalog's constant is the fallback for before
+ * the first answer arrives (or when nobody is signed in). ChatGPT has no
+ * equivalent live source, so it stays curated.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
+  CHATGPT_OAUTH_PROVIDER_ID,
+  CLAUDE_MODEL_SCOPE,
+  claudeOptionsFrom,
   defaultModelForScope,
   modelLabel,
   modelScopeFor,
   modelsForScope,
+  type LiveModel,
+  type ModelOption,
 } from './modelCatalog';
 
 type ModelSwitcherProps = {
@@ -55,6 +64,10 @@ type NabyModelState = {
 export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: ModelSwitcherProps) {
   const { t } = useTranslation();
   const scope = modelScopeFor(activeEngine?.engineId ?? null, activeEngine?.selectedProvider ?? null);
+  // The live Claude catalog. Null until the first answer; the curated fallback
+  // covers that window so the picker is never empty.
+  const [liveClaude, setLiveClaude] = useState<LiveModel[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [value, setValue] = useState<string>('');
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -104,6 +117,42 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
       alive = false;
     };
   }, [scope]);
+
+  // -- THE LIVE CLAUDE CATALOG ----------------------------------------------
+  //
+  // Fetched when the menu is OPENED rather than on mount: the probe spawns the
+  // Claude CLI on a cache miss, and paying that for every chat header that renders
+  // would be rude. `models.list` serves the cached answer for a day, so opening the
+  // menu twice costs one probe.
+  const loadModels = useCallback(
+    async (refresh: boolean) => {
+      if (scope !== CLAUDE_MODEL_SCOPE) return;
+      if (refresh) setRefreshing(true);
+      try {
+        const res = await fetch('/api/naby', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'models.list', ...(refresh ? { refresh: true } : {}) }),
+        });
+        const json = (await res.json().catch(() => null)) as
+          | { ok?: boolean; models?: { claude?: LiveModel[] } }
+          | null;
+        const list = json?.ok ? json.models?.claude : undefined;
+        // An empty answer leaves the curated fallback in place rather than
+        // emptying the picker — not signed in should not mean "no models".
+        if (aliveRef.current && Array.isArray(list) && list.length > 0) setLiveClaude(list);
+      } catch {
+        /* the fallback list stays; the send path surfaces any real failure */
+      } finally {
+        if (aliveRef.current) setRefreshing(false);
+      }
+    },
+    [scope],
+  );
+
+  useEffect(() => {
+    if (open) void loadModels(false);
+  }, [open, loadModels]);
 
   // Close on an outside click or Escape — a popover in the three-panel layout
   // must not linger once the user has moved on.
@@ -158,8 +207,11 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
   // No per-turn model choice for this engine (metered API-key provider, or no
   // engine resolved yet) → nothing to show.
   if (!scope) return null;
-  const options = modelsForScope(scope);
+  const options: ModelOption[] =
+    scope === CLAUDE_MODEL_SCOPE ? claudeOptionsFrom(liveClaude) : modelsForScope(scope);
   if (options.length === 0) return null;
+  // Label from whatever list is in play, so a live-only id does not render raw.
+  const currentLabel = options.find((o) => o.value === value)?.label ?? modelLabel(scope, value);
 
   return (
     <span ref={rootRef} className="relative inline-flex items-center text-xs">
@@ -174,7 +226,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
         title={t('modelSwitcher.title', { defaultValue: 'Which model' })}
       >
         {t('modelSwitcher.label', { defaultValue: 'Model' })}
-        <span className="text-foreground/70">{modelLabel(scope, value)}</span>
+        <span className="text-foreground/70">{currentLabel}</span>
         <ChevronDown className="w-3 h-3 flex-shrink-0 opacity-60" />
       </button>
 
@@ -184,9 +236,28 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
           data-testid="model-switcher-menu"
           className="absolute top-full left-0 mt-1 z-50 w-64 rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-2 flex flex-col gap-1"
         >
-          <span className="px-1 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-            {t('modelSwitcher.title', { defaultValue: 'Which model' })}
-          </span>
+          <div className="flex items-center justify-between gap-2 px-1 py-0.5">
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              {t('modelSwitcher.title', { defaultValue: 'Which model' })}
+            </span>
+            {scope === CLAUDE_MODEL_SCOPE && (
+              // The list is cached for a day, so this is how a model released
+              // today shows up today — without rebuilding the app.
+              <button
+                type="button"
+                onClick={() => void loadModels(true)}
+                disabled={refreshing}
+                className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
+                title={t('modelSwitcher.refreshHint', {
+                  defaultValue: 'Ask your Claude sign-in which models it can use',
+                })}
+              >
+                {refreshing
+                  ? t('modelSwitcher.refreshing', { defaultValue: 'Checking…' })
+                  : t('modelSwitcher.refresh', { defaultValue: 'Refresh' })}
+              </button>
+            )}
+          </div>
           {options.map((o) => {
             const active = o.value === value;
             return (
