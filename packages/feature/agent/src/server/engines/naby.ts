@@ -255,6 +255,13 @@ function gatherSubagents(store: Store, cwd: string | undefined): SubagentSpec[] 
   return [...byName.values()];
 }
 
+/** The resolved database file. Exported so a change WATCHER can watch the same
+ *  file this engine writes — a view that derives from the store must refresh on
+ *  the store, not on some other file that happens to be written nearby. */
+export function storeDbPath(): string {
+  return resolveDbPath();
+}
+
 /** Exported so the `/api/naby` route reads the SAME database this engine writes
  *  — per-session usage (F1-07) and the MCP registry (F1-08) are only coherent
  *  if the reader and the writer agree on the file. */

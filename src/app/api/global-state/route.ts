@@ -5,12 +5,11 @@
  * rename) and DELETE (clear recents) are wrapped so that AFTER the store write
  * they push a fresh recent-sessions snapshot to every /ws/global-state client.
  *
- * WHY THE WRAP: the sidebar badge/dropdown refreshes on an fs.watch of
- * state.json (see globalStateHandler.ts). Since Phase C-2 these writes land in
- * the Naby store, not state.json, so no watch event fires — which is exactly why
- * the unread badge never cleared after viewing a session. Broadcasting the
- * snapshot here re-pushes the store-derived status so the badge decrements
- * immediately, without reintroducing a state.json status write.
+ * WHY THE WRAP, now that the sidebar watches the store these writes land in
+ * (globalStateHandler.ts): latency, not correctness. The watcher debounces, so
+ * the badge would decrement a fraction of a second after the click; pushing
+ * here makes it decrement with it. If this wrapper were deleted the badge would
+ * still clear — which is the point of watching the file you read.
  */
 import {
   GET,

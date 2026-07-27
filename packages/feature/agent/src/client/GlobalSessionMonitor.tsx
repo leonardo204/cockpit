@@ -70,7 +70,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
     };
   }, [isOpen]);
 
-  // Switch to the specified session (iframe SWITCH_SESSION handler writes state.json status=normal)
+  // Switch to the specified session (the iframe's SWITCH_SESSION handler marks it read in the store)
   const handleSessionClick = useCallback((session: GlobalSession) => {
     onSwitchProject(session.cwd, session.sessionId);
     setIsOpen(false);
@@ -91,8 +91,9 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
     return t('common.daysAgo', { count: Math.floor(hours / 24) });
   }, [t, now]);
 
-  // Get project name
-  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd;
+  // Get project name. A projectless session arrives with cwd '' — it is still a
+  // real session, opened by sessionId, so it gets a label rather than a blank.
+  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd || t('sessions.noProject');
 
   return (
     <div className="relative" ref={dropdownRef}>
