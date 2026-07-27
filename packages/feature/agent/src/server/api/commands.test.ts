@@ -47,34 +47,20 @@ function ownedSubagent(over: Partial<HarnessItem> & { name: string }): HarnessIt
   } as HarnessItem;
 }
 
-const BUILTINS: CommandInfo[] = [
-  { name: '/qa', description: 'builtin qa', source: 'builtin' },
-  { name: '/fx', description: 'builtin fx', source: 'builtin' },
-];
-
 describe('mergeCommands', () => {
-  it('appends a new owned verb after the builtins, badged by scope', () => {
-    const out = mergeCommands(BUILTINS, [ownedCommand({ name: 'ship' })]);
-    expect(out.map((c) => c.name)).toEqual(['/qa', '/fx', '/ship']);
-    expect(out.find((c) => c.name === '/ship')?.source).toBe('user');
+  it('lists a registered command, badged by scope', () => {
+    const out = mergeCommands([ownedCommand({ name: 'ship' })]);
+    expect(out.map((c) => c.name)).toEqual(['/ship']);
+    expect(out[0].source).toBe('user');
   });
 
-  it('an owned command OVERRIDES a builtin of the same verb', () => {
-    const out = mergeCommands(BUILTINS, [
-      ownedCommand({ name: 'qa', description: 'my own qa' }),
-    ]);
-    // still one /qa entry, now owned
-    expect(out.filter((c) => c.name === '/qa')).toHaveLength(1);
-    const qa = out.find((c) => c.name === '/qa')!;
-    expect(qa.source).toBe('user');
-    expect(qa.description).toBe('my own qa');
-    // order preserved: /qa stays first
-    expect(out[0].name).toBe('/qa');
+  it('offers nothing when the harness is empty — there are no builtins to fall back on', () => {
+    expect(mergeCommands([])).toEqual([]);
   });
 
   it('a project-scope owned command overrides a user-scope one of the same verb', () => {
     // input order is user-first, project-second (as loadOwnedCommands returns)
-    const out = mergeCommands(BUILTINS, [
+    const out = mergeCommands([
       ownedCommand({ name: 'dup', scope: 'user', description: 'user dup' }),
       ownedCommand({ name: 'dup', scope: 'project', scopeKey: '/w', description: 'project dup' }),
     ]);
@@ -84,7 +70,7 @@ describe('mergeCommands', () => {
   });
 
   it('badges an org-scope owned command as "org" (HP-08 inheritance)', () => {
-    const out = mergeCommands(BUILTINS, [
+    const out = mergeCommands([
       ownedCommand({ name: 'onboard', scope: 'org', scopeKey: 'default', description: 'team onboard' }),
     ]);
     const org = out.find((c) => c.name === '/onboard')!;
@@ -94,7 +80,7 @@ describe('mergeCommands', () => {
 
   it('a project-scope command overrides an org-scope one of the same verb', () => {
     // input order user → org → project (as loadOwnedCommands returns)
-    const out = mergeCommands(BUILTINS, [
+    const out = mergeCommands([
       ownedCommand({ name: 'dup', scope: 'org', scopeKey: 'default', description: 'org dup' }),
       ownedCommand({ name: 'dup', scope: 'project', scopeKey: '/w', description: 'project dup' }),
     ]);
@@ -104,7 +90,7 @@ describe('mergeCommands', () => {
   });
 
   it('carries argumentHint through and falls back to it for description', () => {
-    const out = mergeCommands([], [
+    const out = mergeCommands([
       ownedCommand({ name: 'x', description: undefined, command: { template: 't', argumentHint: '<arg>' } }),
     ]);
     expect(out[0].argumentHint).toBe('<arg>');
@@ -112,7 +98,7 @@ describe('mergeCommands', () => {
   });
 
   it('lists owned skills and subagents alongside commands, each kind-tagged', () => {
-    const out = mergeCommands(BUILTINS, [
+    const out = mergeCommands([
       ownedCommand({ name: 'ship' }),
       ownedSkill({ name: 'summarize', description: 'summarize a doc' }),
       ownedSubagent({ name: 'reviewer', description: 'code reviewer persona' }),
@@ -122,13 +108,13 @@ describe('mergeCommands', () => {
     expect(byName('/summarize').kind).toBe('skill');
     expect(byName('/summarize').description).toBe('summarize a doc');
     expect(byName('/reviewer').kind).toBe('subagent');
-    // display grouping: command before skill before subagent (builtins first)
-    expect(out.map((c) => c.name)).toEqual(['/qa', '/fx', '/ship', '/summarize', '/reviewer']);
+    // display grouping: command before skill before subagent
+    expect(out.map((c) => c.name)).toEqual(['/ship', '/summarize', '/reviewer']);
   });
 
   it('a command wins a verb clash over a skill/subagent of the same name', () => {
     // Same verb "dup" as all three kinds — the command must win regardless of order.
-    const out = mergeCommands([], [
+    const out = mergeCommands([
       ownedSubagent({ name: 'dup', description: 'sub dup' }),
       ownedSkill({ name: 'dup', description: 'skill dup' }),
       ownedCommand({ name: 'dup', description: 'command dup' }),
@@ -140,7 +126,7 @@ describe('mergeCommands', () => {
 
   it('skips an owned row whose kind-payload is missing (no silent empty verb)', () => {
     const broken = { ...ownedSkill({ name: 'nope' }), skill: undefined } as HarnessItem;
-    const out = mergeCommands([], [broken]);
+    const out = mergeCommands([broken]);
     expect(out.some((c) => c.name === '/nope')).toBe(false);
   });
 });
@@ -154,13 +140,13 @@ describe('listCommands (store-backed)', () => {
     };
   }
 
-  it('merges user-scope owned commands with builtins even without a cwd', () => {
+  it('lists user-scope harness rows even without a cwd, and nothing else', () => {
     const store = fakeStore({
       [`user:${DEFAULT_USER_ID}`]: [ownedCommand({ name: 'ship' })],
     });
     const out = listCommands(null, store);
-    expect(out.some((c) => c.name === '/ship')).toBe(true);
-    expect(out.some((c) => c.name === '/qa')).toBe(true); // builtin retained
+    // The palette is exactly the harness now: what the store returns and no more.
+    expect(out.map((c) => c.name)).toEqual(['/ship']);
   });
 
   it('includes org-scope owned commands even without a cwd (HP-08 inheritance)', () => {

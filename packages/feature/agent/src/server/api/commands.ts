@@ -1,23 +1,22 @@
 /**
- * /api/commands — list the slash commands the autocomplete dropdown offers.
+ * /api/commands — what the autocomplete palette offers.
  *
- * Two sources are MERGED here (Phase 1.6 HP-02):
- *   1. the in-process builtin set (`/qa`, `/fx`, …) — unchanged, still carrying
- *      their bilingual en/ko expansion in slashCommands' COMMAND_CONTENT;
- *   2. Naby-OWNED commands (kind='command', status='enabled') read from the store
- *      for the `user` scope (always) and the `project` scope (when a `cwd` query
- *      param is supplied). These are the rows the /api/harness CRUD surface
- *      creates.
+ * ONE SOURCE: the harness the user registered under Settings > Harness, read
+ * from `app.db` (`status='enabled'`) for the `user` and `org` scopes always and
+ * the `project` scope when a `cwd` is supplied. Commands, skills and subagents
+ * all appear under `/`; naby AGENTS are a different layer and appear under `@`.
  *
- * OVERRIDE. An owned command whose verb equals a builtin's REPLACES the builtin
- * in the dropdown (the user's own definition wins) — matching the dispatcher's
- * precedence in slashCommands.resolveCommandPrompt. A project-scope owned command
- * further overrides a user-scope one of the same verb.
+ * The cockpit builtins (`/qa`, `/ap`, `/fx`, `/ex`, `/go`, `/new-branch`) used to
+ * be merged in here from a hardcoded list. They are gone: a menu that mixes
+ * things the user registered with things the app shipped makes "where is this
+ * from, and how do I change it" unanswerable from the UI, and the builtins had
+ * no entry anywhere in Settings.
  *
- * Each entry MUST have a matching expansion: builtins in COMMAND_CONTENT, owned
- * commands via their stored `command.template` (also read by resolveCommandPrompt).
- * Listing a name here without an expansion makes the dropdown advertise a feature
- * that silently no-ops on dispatch.
+ * Each entry MUST have a matching expansion — the stored `command.template` /
+ * `skill.instructions` / `subagent.systemPrompt` that resolveCommandPrompt
+ * reads. Listing a name the resolver cannot expand makes the palette advertise a
+ * feature that silently no-ops on dispatch, which is why both sides read the
+ * same rows.
  */
 import { Effect } from "effect"
 import { handler } from "@cockpit/effect-runtime/server"
@@ -35,13 +34,13 @@ import { readGrowth } from "../lib/growthRead"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-// `source` widens beyond 'builtin' to badge Naby-owned rows in the dropdown.
-// 'org' is a team-shared (in-house) command inherited from the org scope (HP-08).
+// Which scope a row came from — the badge the dropdown shows. 'org' is a
+// team-shared (in-house) row inherited from the org scope (HP-08).
 export interface CommandInfo {
   name: string
   description: string
-  source: "builtin" | "user" | "org" | "project"
-  // Which owned-harness kind this row is (undefined for a builtin). The "/" menu
+  source: "user" | "org" | "project"
+  // Which owned-harness kind this row is (undefined for an agent row). The "/" menu
   // now unifies command/skill/subagent into ONE palette (Claude-Code-style UX):
   // a skill invocation injects its instructions, a subagent injection adopts its
   // persona — both handled in slashCommands.resolveCommandPrompt. MCP is
@@ -80,15 +79,6 @@ function scopeRank(source: CommandInfo["source"]): number {
 // the same rows.
 const DEFAULT_ORG_ID = "default"
 
-const BUILTIN_COMMANDS: CommandInfo[] = [
-  { name: "/qa", description: "Enter requirements clarification mode", source: "builtin" },
-  { name: "/ap", description: "Enter apply mode: implement <SPEC> while keeping running apply-notes", source: "builtin" },
-  { name: "/fx", description: "Enter bug evidence-chain analysis mode", source: "builtin" },
-  { name: "/ex", description: "Enter structured analysis & discussion mode", source: "builtin" },
-  { name: "/go", description: "Enter landing mode: MVP staged implementation with self-verify", source: "builtin" },
-  { name: "/new-branch", description: "Create a clean new branch off the latest origin/main", source: "builtin" },
-]
-
 type CommandStore = Pick<Store, "listHarness"> & Partial<AgentPaletteStore>
 type AgentPaletteStore = Pick<Store, "listAgents" | "listEvalEvents">
 
@@ -96,7 +86,7 @@ type AgentPaletteStore = Pick<Store, "listAgents" | "listEvalEvents">
  *  (always — a team-shared set inherited from the in-house org, HP-08), and,
  *  when a cwd is given, the project scope. Order is user → org → project so the
  *  more specific scope wins on a verb clash (a plain map upsert in mergeCommands).
- *  Best-effort: a store hiccup must never break the builtin dropdown, so each
+ *  Best-effort: a store hiccup empties the palette rather than throwing, so each
  *  read is guarded and returns [] on failure. */
 function loadOwnedCommands(cwd: string | null, store: CommandStore): HarnessItem[] {
   const out: HarnessItem[] = []
@@ -106,7 +96,7 @@ function loadOwnedCommands(cwd: string | null, store: CommandStore): HarnessItem
   try {
     out.push(...store.listHarness("user", DEFAULT_USER_ID, { status: "enabled" }))
   } catch {
-    /* ignore — fall back to builtins only */
+    /* ignore — an unreadable scope contributes nothing */
   }
   try {
     out.push(...store.listHarness("org", DEFAULT_ORG_ID, { status: "enabled" }))
@@ -123,17 +113,15 @@ function loadOwnedCommands(cwd: string | null, store: CommandStore): HarnessItem
   return out
 }
 
-/** Merge builtins with owned commands. Owned verbs OVERRIDE builtins of the same
- *  name; a later (project) owned row overrides an earlier (user) one — the input
- *  order of `owned` is user-first, project-second, so a plain map upsert yields
- *  the right precedence. Builtin order is preserved; new owned verbs append. */
-export function mergeCommands(builtins: CommandInfo[], owned: HarnessItem[]): CommandInfo[] {
+/** Collapse the owned rows to one entry per verb. A later (project) row overrides
+ *  an earlier (user) one — the input order is user → org → project, and the rank
+ *  guard below makes the outcome independent of that order anyway. */
+export function mergeCommands(owned: HarnessItem[]): CommandInfo[] {
   const byVerb = new Map<string, CommandInfo>()
   const rankOf = new Map<string, number>()
   const order: string[] = []
   // Rank-guarded upsert: a new row replaces an existing one only when its rank is
-  // >= the incumbent's, so precedence (kind × scope) is order-independent and a
-  // builtin (rank 0) is always overridden by any owned row of the same verb.
+  // >= the incumbent's, so precedence (kind × scope) is order-independent.
   const upsert = (info: CommandInfo, rank: number) => {
     const verb = info.name.replace(/^\//, "")
     const prev = rankOf.get(verb)
@@ -143,7 +131,6 @@ export function mergeCommands(builtins: CommandInfo[], owned: HarnessItem[]): Co
       rankOf.set(verb, rank)
     }
   }
-  for (const b of builtins) upsert(b, 0)
   // Sort by kind for display grouping only (command → skill → subagent); the rank
   // guard, not this order, decides who wins a verb clash.
   const sorted = [...owned].sort((a, b) => (KIND_ORDER[a.kind] ?? 9) - (KIND_ORDER[b.kind] ?? 9))
@@ -208,7 +195,7 @@ export function listCommands(cwd: string | null, store: CommandStore = getStore(
   // client filters them out for `/`.
   return [
     ...loadAgentEntries(store as AgentPaletteStore),
-    ...mergeCommands(BUILTIN_COMMANDS, loadOwnedCommands(cwd, store)),
+    ...mergeCommands(loadOwnedCommands(cwd, store)),
   ]
 }
 

@@ -1,20 +1,17 @@
-// One file per command — body lives in `<cmd>Prompt.ts`, this file stays a
-// thin index. Adding a new builtin: create `<cmd>Prompt.ts` exporting
-// `<CMD>_PROMPT_KO` and `<CMD>_PROMPT_EN`, then wire it here AND register a
-// matching entry in `packages/feature/agent/src/server/api/commands.ts` so the
-// autocomplete dropdown also lists it.
+// slashCommands — expansion for `/verb` and `@verb` lines.
 //
-// `labelKo` / `labelEn` are OPTIONAL per command. Set them only when the
-// command wants to override the default neutral "질문: " / "Question: "
-// prefix attached to the user's trailing text — see `/new-branch`.
+// EVERY VERB COMES FROM THE HARNESS. The commands, skills and subagents the user
+// registered under Settings > Harness live in `app.db` and are the only thing a
+// `/` line can name. The cockpit builtins that used to live here (`/qa`, `/ap`,
+// `/fx`, `/ex`, `/go`, `/new-branch`) are gone, along with the machinery that
+// backed them: their bilingual prompt bodies, the SKILL.md files they wrote into
+// `~/.cockpit/skills/`, and the `~/.cockpit/skills.json` registry read — which
+// nothing had written since the tool that produced it was removed in the F1-03
+// trim, so it could only ever have resolved a file the app no longer creates.
 //
-// F1-03 chat-first trim removed /cg (needed /api/projectGraph/*), /html (needed
-// the /api/preview + /ws/bash window.cockpit SDK), /cr (needed feature-review),
-// /skillify (needed feature-skills) and /cc (documented `cock` subcommands that
-// drove the terminal / browser / codegraph APIs). All of those backends are gone.
-import { mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { join } from 'path';
-import { COCKPIT_DIR, SKILLS_FILE } from '@cockpit/shared-utils';
+// The point is that ONE list answers "what can I type": the palette
+// (`api/commands.ts`) and this resolver read the same harness rows, so a verb the
+// menu offers always expands and a verb it does not offer never silently does.
 import {
   DEFAULT_USER_ID,
   type HarnessItem,
@@ -22,62 +19,6 @@ import {
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
-import { AP_PROMPT_EN, AP_PROMPT_KO } from './apPrompt';
-import { EX_PROMPT_EN, EX_PROMPT_KO } from './exPrompt';
-import { FX_PROMPT_EN, FX_PROMPT_KO } from './fxPrompt';
-import { GO_PROMPT_EN, GO_PROMPT_KO } from './goPrompt';
-import {
-  NEW_BRANCH_LABEL_EN,
-  NEW_BRANCH_LABEL_KO,
-  NEW_BRANCH_PROMPT_EN,
-  NEW_BRANCH_PROMPT_KO,
-} from './newBranchPrompt';
-import { QA_PROMPT_EN, QA_PROMPT_KO } from './qaPrompt';
-
-interface CommandEntry {
-  /** Prompt content for each language — a COMPLETE SKILL.md (YAML frontmatter +
-   *  body), same shape as a user-defined skill. Written to disk verbatim. */
-  ko: string;
-  en: string;
-  /** Optional override for the "질문: " / "Question: " prefix prepended to the
-   *  user's trailing text. When omitted, dispatch falls back to the default. */
-  labelKo?: string;
-  labelEn?: string;
-}
-
-export const COMMAND_CONTENT: Record<string, CommandEntry> = {
-  qa: { ko: QA_PROMPT_KO, en: QA_PROMPT_EN },
-  ap: { ko: AP_PROMPT_KO, en: AP_PROMPT_EN },
-  fx: { ko: FX_PROMPT_KO, en: FX_PROMPT_EN },
-  ex: { ko: EX_PROMPT_KO, en: EX_PROMPT_EN },
-  go: { ko: GO_PROMPT_KO, en: GO_PROMPT_EN },
-  'new-branch': {
-    ko: NEW_BRANCH_PROMPT_KO,
-    en: NEW_BRANCH_PROMPT_EN,
-    labelKo: NEW_BRANCH_LABEL_KO,
-    labelEn: NEW_BRANCH_LABEL_EN,
-  },
-};
-
-/** Directory holding the on-disk copies of builtin slash commands, written as
- *  SKILL.md files so the model reads them through the SAME flow as user-defined
- *  skills (`이 skill 파일을 읽어주세요:\n<path>`) instead of inlining the full template. */
-const BUILTIN_SKILLS_DIR = join(COCKPIT_DIR, 'skills');
-
-/**
- * Derive the base URL the AI should use in its curl recipes.
- *
- * Always `http://localhost:<COCKPIT_PORT>`. The only consumer of {{BASE_URL}}
- * is /cg's curl recipes, which the agent runs via bash on the *same machine*
- * as the server — so loopback is always reachable, never needs auth, and never
- * leaks a token into the user-visible / on-disk SKILL.md. We deliberately do
- * NOT honor X-Forwarded-Host: a public/proxy URL would force the curls through
- * the auth gate (401) and is irrelevant to a co-located executor.
- */
-function deriveBaseUrl(): string {
-  const port = process.env.COCKPIT_PORT || process.env.PORT || '3457';
-  return `http://localhost:${port}`;
-}
 
 // A single parsed command step: its marker, verb, and the body text that
 // belongs to it (everything up to the next command line).
@@ -99,15 +40,15 @@ const COMMAND_LINE_RE = /^\s*([/@])([a-zA-Z][a-zA-Z0-9-]*)(?:\s+|$)/;
 //     `@verb` begins a step; its body runs until the next command line
 //     (multi-line + blank lines included).
 //   - `/verb` runs in the main session; `@verb` is delegated to a subagent.
-//   - builtin commands (COMMAND_CONTENT) AND user-registered skills, mixed.
+//   - the verb is a harness row (command / skill / subagent) and nothing else.
 //
-// Each command resolves to a "read this SKILL.md" pointer (builtins are written
-// to ~/.cockpit/skills/<verb>/SKILL.md; user skills use their registered path) —
-// the SAME flow user-defined skills use, keeping the first message compact.
+// Each verb resolves to its stored body, inlined. There is no SKILL.md written
+// to disk and read back any more: that indirection existed for the builtins,
+// whose bodies lived in code and had to be materialised as files first.
 //
-// A single `/verb` command (no preamble, no `@`) keeps the original compact
-// "pointer + label + body" output. Two+ commands, or any `@`, or leading
-// preamble text, switch to a numbered step list framed for sequential dispatch.
+// A single `/verb` (no preamble, no `@`) keeps the compact "body + trailing
+// text" output. Two+ verbs, or any `@`, or leading preamble text, switch to a
+// numbered step list framed for sequential dispatch.
 //
 /** The store slice command expansion reads — an injectable seam (default
  *  `getStore()`) so tests can drive owned-command override without a sqlite file. */
@@ -204,13 +145,10 @@ export function resolveCommandPrompt(
 ): string {
   const lang: 'ko' | 'en' = language.startsWith('ko') ? 'ko' : 'en';
 
-  // Skill registry read once per dispatch (not per keystroke) so command-line
-  // recognition can tell a real `/skill-name` from ordinary text-with-slash.
-  const userSkills = listUserSkills();
-  // Owned commands read once per dispatch — the override layer above builtins.
+  // The harness, read once per dispatch (not per keystroke), so command-line
+  // recognition can tell a registered verb from ordinary text-with-a-slash.
   const owned = ownedCommandMap(loadOwnedCommands(cwd, store));
-  const isKnown = (cmd: string) =>
-    owned.has(cmd) || !!COMMAND_CONTENT[cmd] || userSkills.some((s) => s.name === cmd);
+  const isKnown = (cmd: string) => owned.has(cmd);
 
   // ── Parse: find known command lines, split bodies between them ──
   const lines = prompt.split('\n');
@@ -235,20 +173,19 @@ export function resolveCommandPrompt(
     return { marker: mk.marker, cmd: mk.cmd, body };
   });
 
-  const baseUrl = deriveBaseUrl();
-  const resolved = steps.map((s) => resolveStep(s, lang, baseUrl, userSkills, owned));
+  const resolved = steps.map((s) => resolveStep(s, lang, owned));
 
-  // ── Single `/command`, no preamble → original compact output ──
+  // ── Single `/command`, no preamble → compact output ──
   if (resolved.length === 1 && resolved[0].marker === '/' && !preamble) {
     const r = resolved[0];
-    return r.body ? `${r.pointer}\n\n${r.label}${r.body}` : r.pointer;
+    return r.body ? `${r.pointer}\n\n${r.body}` : r.pointer;
   }
 
   // ── Otherwise: numbered, locus-annotated step list ──
   const intro = lang === 'ko' ? '다음 단계를 순서대로 완료하세요:' : 'Complete the following steps in order:';
   const blocks = resolved.map((r, idx) => {
     const where = stepHeader(idx + 1, r.marker, lang);
-    const bodyPart = r.body ? `\n${r.label}${r.body}` : '';
+    const bodyPart = r.body ? `\n${r.body}` : '';
     return `${where}\n${r.pointer}${bodyPart}`;
   });
   const parts: string[] = [];
@@ -260,30 +197,20 @@ export function resolveCommandPrompt(
 interface ResolvedStep {
   marker: StepMarker;
   body: string;
-  label: string;
-  /** The pointer text injected for this step (read-the-SKILL.md, or, if the
-   *  builtin write failed, the inlined content as a fallback). */
+  /** The prompt text this step injects. */
   pointer: string;
 }
 
-// Resolve one parsed step to its pointer text + label. (Callers only pass known
-// verbs.) A user skill takes PRECEDENCE over a builtin of the same name —
-// restoring the pre-server-resolution behavior where the client expanded the
-// user's own skill first. So a user skill named `cr`/`new-branch` shadows the
-// builtin; the user's edits to their own skill keep taking effect.
+// Resolve one parsed step. Callers only pass verbs `isKnown` accepted, and the
+// only thing it accepts is a harness row, so the lookup cannot miss.
 function resolveStep(
   step: ParsedStep,
   lang: 'ko' | 'en',
-  baseUrl: string,
-  userSkills: Array<{ name: string; path: string }>,
   owned: Map<string, OwnedEntry>,
 ): ResolvedStep {
-  // Owned harness items (Phase 1.6) take PRECEDENCE over both user skills and
-  // builtins of the same verb. The stored body is the full, provider-independent
-  // prompt text, so it is inlined directly (no SKILL.md file dependency) —
-  // expansion happens here, above the engine seam, so it is identical on all five
-  // providers and the dev engine. No mindset-primer label, matching the
-  // user-skill path; the trailing user text follows the body.
+  // The stored body IS the prompt text, so it is inlined directly — no SKILL.md
+  // file to write and read back. Expansion happens here, above the engine seam,
+  // so a verb behaves identically on every provider.
   //   - command : the template IS the prompt body → inline as-is.
   //   - skill   : the SKILL instructions are directives → inline as-is (an
   //               explicit "/" invocation activates the skill now, on top of the
@@ -291,24 +218,9 @@ function resolveStep(
   //   - subagent: real subagent orchestration is Phase 2.5; until then a "/"
   //               invocation makes the MAIN session adopt the persona by framing
   //               its systemPrompt as a persona directive for this conversation.
-  const ownedEntry = owned.get(step.cmd);
-  if (ownedEntry !== undefined) {
-    const pointer =
-      ownedEntry.kind === 'subagent' ? framePersona(ownedEntry.body, lang) : ownedEntry.body;
-    return { marker: step.marker, body: step.body, label: '', pointer };
-  }
-  const skill = userSkills.find((s) => s.name === step.cmd);
-  if (skill) {
-    // User-skill invocations carry no mindset-primer label — matches the old
-    // client expansion, which appended the trailing text with no prefix.
-    return { marker: step.marker, body: step.body, label: '', pointer: readSkillPointer(skill.path, lang) };
-  }
-  const entry = COMMAND_CONTENT[step.cmd]!;
-  const content = entry[lang].replaceAll('{{BASE_URL}}', baseUrl);
-  const skillPath = writeBuiltinSkill(step.cmd, content);
-  // On write failure, inline the content so the command never silently no-ops.
-  const pointer = skillPath ? readSkillPointer(skillPath, lang) : content;
-  return { marker: step.marker, body: step.body, label: labelFor(entry, lang), pointer };
+  const entry = owned.get(step.cmd)!;
+  const pointer = entry.kind === 'subagent' ? framePersona(entry.body, lang) : entry.body;
+  return { marker: step.marker, body: step.body, pointer };
 }
 
 /** Frame a subagent's system prompt as a persona directive for the MAIN session.
@@ -321,13 +233,6 @@ function framePersona(systemPrompt: string, lang: 'ko' | 'en'): string {
     : `Adopt the following persona for this conversation:\n\n${systemPrompt}`;
 }
 
-/** "Please read this skill file: <path>" pointer in the active language. */
-function readSkillPointer(skillPath: string, lang: 'ko' | 'en'): string {
-  return lang === 'ko'
-    ? `이 skill 파일을 읽어주세요:\n${skillPath}`
-    : `Please read this skill file:\n${skillPath}`;
-}
-
 /** Step header with execution-locus annotation (main session vs subagent). */
 function stepHeader(n: number, marker: StepMarker, lang: 'ko' | 'en'): string {
   if (lang === 'ko') {
@@ -338,77 +243,4 @@ function stepHeader(n: number, marker: StepMarker, lang: 'ko' | 'en'): string {
   return marker === '@'
     ? `Step ${n} (run in a subagent): `
     : `Step ${n} (run in the main session): `;
-}
-
-interface SkillRecord {
-  id: string;
-  path: string;
-  addedAt: string;
-}
-
-// Read the user-skill registry (~/.cockpit/skills.json) and resolve each
-// record's `name` from its SKILL.md frontmatter. Synchronous — runs once per
-// dispatch, reads a handful of small local files; keeps resolveCommandPrompt
-// sync for the five engine handlers that call it inside Effect.gen.
-function listUserSkills(): Array<{ name: string; path: string }> {
-  try {
-    const data = JSON.parse(readFileSync(SKILLS_FILE, 'utf-8')) as {
-      skills?: SkillRecord[];
-    };
-    const out: Array<{ name: string; path: string }> = [];
-    for (const s of data.skills ?? []) {
-      const name = readSkillName(s.path);
-      if (name) out.push({ name, path: s.path });
-    }
-    return out;
-  } catch {
-    return [];
-  }
-}
-
-// Extract the `name:` field from a SKILL.md YAML frontmatter block. Minimal
-// sync parse (no async parseSkillMd dependency) — just enough to match a
-// `/name` command to its file.
-function readSkillName(path: string): string | null {
-  try {
-    const txt = readFileSync(path, 'utf-8');
-    const fm = txt.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-    const block = fm ? fm[1] : txt;
-    const m = block.match(/^name:\s*["']?([^"'\n]+?)["']?\s*$/m);
-    return m ? m[1].trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-// Write a builtin command's resolved SKILL.md to ~/.cockpit/skills/<cmd>/SKILL.md
-// and return the absolute path. `content` IS a complete SKILL.md (YAML
-// frontmatter + body) — identical in shape to a user-defined skill — so it's
-// written verbatim, no frontmatter synthesis. Overwritten on every dispatch so
-// the file always reflects the current code + the loopback base URL.
-// Returns null on any failure so the caller can fall back to inlining.
-//
-// Synchronous fs on purpose: keeps resolveCommandPrompt's sync signature — all
-// five engine chat handlers (chat.ts + chat/{codex,deepseek,kimi,ollama}.ts)
-// invoke it inline inside an Effect.gen — and the payload is a single small
-// local file, same pattern as notifyReviewChange.
-function writeBuiltinSkill(cmd: string, content: string): string | null {
-  try {
-    const dir = join(BUILTIN_SKILLS_DIR, cmd);
-    mkdirSync(dir, { recursive: true });
-    const filePath = join(dir, 'SKILL.md');
-    writeFileSync(filePath, content.endsWith('\n') ? content : `${content}\n`, 'utf-8');
-    return filePath;
-  } catch {
-    return null;
-  }
-}
-
-/** Pick the "label:" prefix for a command's trailing user text. Uses the
- *  entry's per-command override when set, otherwise falls back to a neutral
- *  question label. */
-function labelFor(entry: CommandEntry, lang: 'ko' | 'en'): string {
-  const custom = lang === 'ko' ? entry.labelKo : entry.labelEn;
-  if (custom) return custom;
-  return lang === 'ko' ? '질문: ' : 'Question: ';
 }

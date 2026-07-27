@@ -103,11 +103,12 @@ export function splitMentionPath(text: string): { dir: string; leaf: string } {
 export type DirEntry = { name: string; isDir: boolean };
 
 /** A palette row for a file or folder. `name` carries the `@` so it renders and
- *  keys like every other row. */
+ *  keys like every other row. `source` is 'file' because a path has no harness
+ *  scope — it is not something the user registered anywhere. */
 export type FileRow = {
   name: string;
   description: string;
-  source: 'builtin';
+  source: 'file';
   file: { rel: string; isDir: boolean };
 };
 
@@ -135,7 +136,7 @@ export function fileRows(
     rows.push({
       name: `@${rel}`,
       description: '',
-      source: 'builtin',
+      source: 'file',
       file: { rel, isDir: e.isDir },
     });
     if (rows.length >= limit) break;

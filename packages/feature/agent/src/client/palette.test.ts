@@ -23,12 +23,14 @@ const agent = (name: string, addressable = true): PaletteRow => ({
 });
 const command = (name: string): PaletteRow => ({ name });
 
+// Harness verbs, which is all a `/` row can be now that the cockpit builtins
+// are gone. The names are arbitrary — what is under test is the partition.
 const ROWS: PaletteRow[] = [
-  command('/plan'),
+  command('/ship'),
   agent('@persona', false),
-  command('/qa'),
+  command('/summarize'),
   agent('@reviewer'),
-  command('/fx'),
+  command('/deploy'),
 ];
 
 describe('palette rows — the two markers never share a list', () => {
@@ -36,15 +38,15 @@ describe('palette rows — the two markers never share a list', () => {
     const { agents, commands } = partitionPaletteRows(ROWS, '@');
     expect(agents.map((r) => r.name)).toEqual(['@persona', '@reviewer']);
     expect(commands).toEqual([]);
-    // The bug this exists for: `/plan` rendered as `@plan`, which the dispatcher
-    // cannot read as anything.
+    // The bug this exists for: a `/verb` rendered as `@verb`, which the
+    // dispatcher cannot read as anything.
     expect(paletteRows(ROWS, '@').map((r) => r.name)).toEqual(['@persona', '@reviewer']);
   });
 
   it('/ shows commands only, and never an agent', () => {
     const { agents, commands } = partitionPaletteRows(ROWS, '/');
     expect(agents).toEqual([]);
-    expect(commands.map((r) => r.name)).toEqual(['/plan', '/qa', '/fx']);
+    expect(commands.map((r) => r.name)).toEqual(['/ship', '/summarize', '/deploy']);
     // Picking an agent under `/` would write `@name` into a line read as a
     // harness verb.
     expect(paletteRows(ROWS, '/').some((r) => r.agent)).toBe(false);

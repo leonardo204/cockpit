@@ -98,18 +98,24 @@ describe('resolveCommandPrompt — owned commands (Phase 1.6 HP-02)', () => {
     expect(out).toBe('PROJECT BODY\n\nx');
   });
 
-  it('BUILTIN REGRESSION GUARD: a builtin still expands (en) when no owned command shadows it', () => {
-    const out = resolveCommandPrompt('/qa hello', 'en', undefined, fakeStore());
-    // builtin path writes ~/.cockpit/skills/qa/SKILL.md and injects a pointer to it
-    expect(out).toContain('qa');
-    expect(out).toContain('SKILL.md');
-    expect(out).not.toBe('/qa hello');
+  it('leaves a retired cockpit builtin as ordinary text', () => {
+    // `/qa` and its five siblings were removed along with the palette entries
+    // that advertised them. The resolver must not keep a private list of verbs
+    // the menu no longer offers — that is the divergence this whole change was
+    // about, just pointing the other way.
+    for (const verb of ['/qa', '/ap', '/fx', '/ex', '/go', '/new-branch']) {
+      const line = `${verb} hello`;
+      expect(resolveCommandPrompt(line, 'en', undefined, fakeStore())).toBe(line);
+      expect(resolveCommandPrompt(line, 'ko', undefined, fakeStore())).toBe(line);
+    }
   });
 
-  it('BUILTIN REGRESSION GUARD: the ko builtin path is language-specific', () => {
-    const out = resolveCommandPrompt('/qa 안녕', 'ko', undefined, fakeStore());
-    // ko pointer copy differs from en ("이 skill 파일을 읽어주세요")
-    expect(out).toContain('이 skill 파일을 읽어주세요');
+  it('expands a registered command that reuses a retired builtin name', () => {
+    // Nothing is reserved any more: the user may register `qa` and get theirs.
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [owned('qa', 'MY OWN QA')],
+    });
+    expect(resolveCommandPrompt('/qa hello', 'en', undefined, store)).toBe('MY OWN QA\n\nhello');
   });
 
   it('expands an owned SKILL invoked via "/" by inlining its instructions', () => {

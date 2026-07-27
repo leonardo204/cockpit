@@ -104,11 +104,12 @@ async function prepareImage(
 interface CommandInfo {
   name: string;
   description: string;
-  // 'builtin' = in-process bilingual command; 'user'/'org'/'project' = Naby-owned
-  // harness row from the /api/harness CRUD surface, badged distinctly (Phase 1.6).
-  // The old `.claude/commands/*.md` sources were retired.
-  source: 'builtin' | 'user' | 'org' | 'project';
-  // Which owned-harness kind this row is (undefined for a builtin). The "/" menu
+  // Which scope the harness row came from, badged distinctly (Phase 1.6).
+  // 'file' is the palette's own row type for an `@path` mention, which has no
+  // scope at all. The cockpit builtins and the `.claude/commands/*.md` sources
+  // were both retired.
+  source: 'user' | 'org' | 'project' | 'file';
+  // Which owned-harness kind this row is (undefined for an agent or file row). The "/" menu
   // unifies command/skill/subagent into one palette, so the row shows a small
   // kind glyph to keep them distinguishable.
   kind?: 'command' | 'skill' | 'subagent';
@@ -299,19 +300,12 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   }, [cwd, mentionDir, dirEntries?.dir]);
 
   // Command filtering: useMemo derived computation, eliminates setState churn per keystroke.
-  // Client-side commands that perform a UI action instead of expanding to a prompt.
-  // `/plan` toggles plan mode (consumed in Chat.wrappedHandleSend) — only on claude engines.
-  const localCommands = useMemo<CommandInfo[]>(() => {
-    const isClaude = !_engine || _engine === 'claude';
-    if (!isClaude) return [];
-    return [{
-      name: '/plan',
-      description: 'Enable plan mode (read-only). /plan <task> to plan a task; /plan off to disable.',
-      source: 'builtin',
-      argumentHint: '[task|off]',
-    }];
-  }, [_engine]);
-
+  //
+  // There are no client-side commands. `/plan` used to be one — a row defined
+  // inline here that toggled plan mode instead of expanding to a prompt — and it
+  // was the last thing in the palette the user could not find, edit or remove in
+  // Settings. Plan mode is a checkbox above the input; it did not also need a
+  // verb that only existed in this file.
   const filteredCommands = useMemo<PaletteEntry[]>(() => {
     // `@` — the agent layer plus files/folders in the open project.
     if (mentionQuery) {
@@ -332,8 +326,8 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     if (!commandQuery) return [];
     const { verb } = commandQuery;
     const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
-    return paletteRows([...localCommands.filter(match), ...commands.filter(match)], '/');
-  }, [commandQuery, mentionQuery, localCommands, commands, dirEntries]);
+    return paletteRows(commands.filter(match), '/');
+  }, [commandQuery, mentionQuery, commands, dirEntries]);
 
   /** A row the user may actually pick. A non-butterfly agent is listed but not
    *  selectable — the same gate the engine applies, so the palette never offers
@@ -574,27 +568,16 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     setImages((prev) => prev.filter((img) => img.id !== id));
   }, []);
 
-  const getSourceLabel = (source: CommandInfo['source']) => {
-    switch (source) {
-      case 'builtin':
-        return t('common.builtin');
-      case 'user':
-      case 'org':
-      case 'project':
-        return t('commandManager.badgeOwned');
-    }
-  };
+  // Every row in the "/" list now comes from the harness, so there is one badge
+  // rather than a builtin/owned distinction that no longer exists. File rows are
+  // never badged — they render their path instead.
+  const getSourceLabel = (source: CommandInfo['source']) =>
+    source === 'file' ? '' : t('commandManager.badgeOwned');
 
-  const getSourceColor = (source: CommandInfo['source']) => {
-    switch (source) {
-      case 'builtin':
-        return 'bg-brand/15 text-brand dark:bg-brand/25 dark:text-teal-11';
-      case 'user':
-      case 'org':
-      case 'project':
-        return 'bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400';
-    }
-  };
+  const getSourceColor = (source: CommandInfo['source']) =>
+    source === 'file'
+      ? ''
+      : 'bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400';
 
   // A small glyph so a unified "/" list still tells command / skill / subagent
   // apart at a glance. Commands (the default) get none to stay uncluttered.
@@ -687,9 +670,12 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                       </span>
                     )}
                     <span className="flex-1 text-sm text-muted-foreground truncate">
-                      {/* A file row has no description and its name is a path, so it
-                          is not run through the command translation table. */}
-                      {cmd.file ? '' : t(`commands.${cmd.name.slice(1)}`, { defaultValue: cmd.description })}
+                      {/* The description is the one the user wrote when registering
+                          the row, so there is nothing to translate — the old
+                          `commands.<verb>` lookup existed for the shipped builtins
+                          and would now try to localise a user's own verb name. A
+                          file row has no description at all. */}
+                      {cmd.file ? '' : cmd.description}
                     </span>
                     {cmd.file ? (
                       <span className="text-xs text-muted-foreground whitespace-nowrap">

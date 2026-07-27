@@ -53,7 +53,6 @@
     "connecting": "연결 중",
     "connected": "연결됨",
     "connectionFailed": "연결 실패",
-    "builtin": "기본 제공",
     "global": "전역",
     "project": "프로젝트",
     "current": "현재"
@@ -1257,14 +1256,6 @@
     "horizontalRuleDesc": "수평 구분선",
     "link": "링크",
     "linkDesc": "하이퍼링크 삽입"
-  },
-  "commands": {
-    "qa": "요구사항 명확화 모드로 전환",
-    "fx": "버그 증거 체인 분석 모드로 전환",
-    "ex": "구조적 분석 및 논의 모드로 전환",
-    "go": "랜딩 모드로 전환: MVP 단계별 구현",
-    "cg": "CodeGraph 탐색 모드로 전환",
-    "plan": "플랜 모드 활성화 · /plan <작업>으로 계획 · /plan off로 비활성화"
   },
   "review": {
     "reviewManagement": "리뷰 관리",
