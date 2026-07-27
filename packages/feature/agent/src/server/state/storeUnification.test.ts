@@ -81,13 +81,19 @@ describe('one store — an engine that is not Naby still lands in the views', ()
     store.close();
   });
 
-  it('puts a Naby session and a codex session in one list, ordered by recency', () => {
+  it('puts a Naby session and a codex session in one list, ordered by recency', async () => {
     const store = new SqliteStore({ path: join(dir, 'two.db') });
 
     // A Naby session, written the way the runtime writes it.
     const naby = store.createSession('anthropic', undefined, '/work/demo');
     store.appendMessage(naby.sessionId, { role: 'user', content: 'naby question' });
     store.appendMessage(naby.sessionId, { role: 'assistant', content: 'naby answer' });
+
+    // MRU is `last_used_at DESC` at millisecond resolution, and both writes land
+    // inside one millisecond on any machine this runs on — which makes the tie,
+    // not the ordering rule, decide the result. Wait out the tick so "newest
+    // first" is a claim about recency rather than about insertion order.
+    await new Promise((r) => setTimeout(r, 5));
 
     // Then a codex run, recorded by the orchestrator.
     const rec = createTranscriptRecorder({
