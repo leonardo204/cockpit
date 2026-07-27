@@ -13,13 +13,20 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ProjectSessionsModal } from '@cockpit/feature-agent';
 import { ChatProvider } from '@cockpit/feature-agent';
-import { PanelPortalProvider } from '@cockpit/shared-ui';
+import { PanelPortalProvider, ResizeHandle } from '@cockpit/shared-ui';
 import { useTabState } from './useTabState';
 import { TabManagerTopBar } from './TabManagerTopBar';
 import { TabBar } from './TabBar';
-import { FileBrowserPanel } from './FileBrowserPanel';
+import {
+  FileBrowserPanel,
+  FILES_DEFAULT_WIDTH,
+  FILES_MAX_WIDTH,
+  FILES_MIN_WIDTH,
+} from './FileBrowserPanel';
+import { fetchProjects, saveFilesWidth as saveFilesWidthEffect } from './effect/projectClient';
 import { ChatPanel } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
 import { useScheduledTasks } from '@cockpit/feature-agent';
@@ -34,6 +41,7 @@ interface TabManagerProps {
 }
 
 export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
+  const { t } = useTranslation();
   // Tab state management. `activeView` is pinned to 'agent' — the only panel
   // left — so unread bookkeeping keeps treating the chat as foreground.
   const {
@@ -80,6 +88,41 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
   // Right-side file browser (VSCode-style). Project-scoped, so it needs a cwd.
   const [isFilesOpen, setIsFilesOpen] = useState(false);
+  // Its width, dragged by the divider beside it. An app-wide preference (the
+  // same `ui.*` store the sidebar width uses), NOT per project: a person who
+  // likes a wide file tree likes it in every project, and having it change on
+  // each switch would read as the panel forgetting.
+  const [filesWidth, setFilesWidth] = useState(FILES_DEFAULT_WIDTH);
+  const [isResizingFiles, setIsResizingFiles] = useState(false);
+
+  // Read the stored width once. This runs in the project IFRAME, which shares
+  // the server (and therefore the settings store) with the outer window but not
+  // its React state — hence its own fetch rather than a prop.
+  useEffect(() => {
+    let cancelled = false;
+    void BrowserRuntime.runPromise(fetchProjects.pipe(Effect.either)).then((exit) => {
+      if (cancelled || exit._tag === 'Left') return;
+      const stored = exit.right.filesWidth;
+      if (typeof stored === 'number') setFilesWidth(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleFilesResize = useCallback((next: number) => {
+    setIsResizingFiles(true);
+    setFilesWidth(next);
+  }, []);
+
+  // Persisted once the gesture ends, not on every pointer move.
+  const handleFilesResizeEnd = useCallback((next: number) => {
+    setIsResizingFiles(false);
+    setFilesWidth(next);
+    void BrowserRuntime.runPromise(saveFilesWidthEffect(next).pipe(Effect.either)).then((exit) => {
+      if (exit._tag === 'Left') console.error('Failed to save file browser width:', exit.left);
+    });
+  }, []);
   // Forced chat refresh signal: bumped when a SWITCH_SESSION jump targets a session whose
   // tab already exists. Activating an already-active tab produces no isActive rising edge
   // in Chat, so without this a jump from the scheduled-tasks / recent / pinned panels would
@@ -251,7 +294,25 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
           is stable across chat-tab switches; only mounted while toggled open and
           a project cwd exists. */}
       {initialCwd && isFilesOpen && (
-        <FileBrowserPanel cwd={initialCwd} onClose={() => setIsFilesOpen(false)} />
+        <>
+          {/* Its divider. `side="right"` because the panel it sizes is on the
+              right of the handle: dragging LEFT makes it wider. */}
+          <ResizeHandle
+            width={filesWidth}
+            min={FILES_MIN_WIDTH}
+            max={FILES_MAX_WIDTH}
+            side="right"
+            onResize={handleFilesResize}
+            onResizeEnd={handleFilesResizeEnd}
+            label={t('workspace.resizeFiles')}
+          />
+          <FileBrowserPanel
+            cwd={initialCwd}
+            onClose={() => setIsFilesOpen(false)}
+            width={filesWidth}
+            resizing={isResizingFiles}
+          />
+        </>
       )}
 
       {/* Project Sessions Modal */}

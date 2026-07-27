@@ -34,4 +34,13 @@ export interface ProjectsData {
   readonly projects: ReadonlyArray<ProjectInfo>
   readonly activeIndex: number
   readonly collapsed: boolean
+  /**
+   * Expanded sidebar width in px. OPTIONAL both ways: absent from a GET on an
+   * install that has never resized (the client keeps its default), and absent
+   * from a POST that is saving something else, which the route reads as "leave
+   * it alone" rather than "reset it".
+   */
+  readonly sidebarWidth?: number
+  /** File-browser panel width in px. Same optional-both-ways rule as above. */
+  readonly filesWidth?: number
 }

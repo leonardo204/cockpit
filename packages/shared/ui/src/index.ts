@@ -51,6 +51,9 @@ export { FileIcon, FolderIcon } from './FileIcon';
 // Markdown table-of-contents sidebar
 export { TocSidebar, extractToc, type TocItem } from './TocSidebar';
 
+// Draggable divider between two panels
+export { ResizeHandle } from './ResizeHandle';
+
 // Generic React hooks
 export { useWebSocket } from './useWebSocket';
 export { useViMode } from './useViMode';

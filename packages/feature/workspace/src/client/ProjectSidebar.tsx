@@ -18,10 +18,26 @@ export interface ProjectInfo {
   lastOpenedAt?: number;
 }
 
+/** Width bounds for the resizable sidebar, in px. The minimum is the point below
+ *  which project names stop being readable — narrower than this the user wants
+ *  the collapsed rail, which is a separate mode. */
+export const SIDEBAR_MIN_WIDTH = 160;
+export const SIDEBAR_MAX_WIDTH = 480;
+/** The width before it was resizable (Tailwind `w-56`), so an install that has
+ *  never dragged the divider looks exactly as it did. */
+export const SIDEBAR_DEFAULT_WIDTH = 224;
+/** The collapsed rail (Tailwind `w-12`). Not resizable — it is an icon strip. */
+export const SIDEBAR_COLLAPSED_WIDTH = 48;
+
 interface ProjectSidebarProps {
   projects: ProjectInfo[];
   activeIndex: number;
   collapsed: boolean;
+  /** Expanded width in px. Ignored while collapsed. */
+  width: number;
+  /** True mid-drag: suppresses the width transition so the panel tracks the
+   *  pointer instead of easing toward it a beat late. */
+  resizing?: boolean;
   currentCwd?: string;
   onSelectProject: (index: number) => void;
   onRemoveProject: (index: number) => void;
@@ -45,6 +61,8 @@ export function ProjectSidebar({
   projects,
   activeIndex,
   collapsed,
+  width,
+  resizing = false,
   currentCwd,
   onSelectProject,
   onRemoveProject,
@@ -133,9 +151,10 @@ export function ProjectSidebar({
 
   return (
     <div
-      className={`h-full bg-card border-r border-border flex flex-col transition-all duration-200 ${
-        collapsed ? 'w-12' : 'w-56'
+      className={`h-full bg-card flex flex-col shrink-0 overflow-hidden ${
+        resizing ? '' : 'transition-[width] duration-200'
       }`}
+      style={{ width: collapsed ? SIDEBAR_COLLAPSED_WIDTH : width }}
     >
       {/* Open project button + collapse button */}
       <div className="group p-2 border-b border-border relative">

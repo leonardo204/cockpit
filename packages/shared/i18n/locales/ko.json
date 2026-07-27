@@ -152,6 +152,8 @@
     "openProject": "프로젝트 열기",
     "expandSidebar": "사이드바 펼치기",
     "collapseSidebar": "사이드바 접기",
+    "resizeSidebar": "사이드바 너비 조절",
+    "resizeFiles": "파일 브라우저 너비 조절",
     "notes": "노트",
     "skills": "스킬",
     "settings": "설정",

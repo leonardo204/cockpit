@@ -267,7 +267,28 @@ const TreeChildren = memo(function TreeChildren({
   );
 });
 
-export function FileBrowserPanel({ cwd, onClose }: { cwd: string; onClose: () => void }) {
+/** Width bounds for the resizable file browser, in px. The minimum is where a
+ *  nested path stops being readable at all. */
+export const FILES_MIN_WIDTH = 200;
+export const FILES_MAX_WIDTH = 640;
+/** The width before it was resizable (Tailwind `w-72`), so an install that has
+ *  never dragged the divider looks exactly as it did. */
+export const FILES_DEFAULT_WIDTH = 288;
+
+export function FileBrowserPanel({
+  cwd,
+  onClose,
+  width = FILES_DEFAULT_WIDTH,
+  resizing = false,
+}: {
+  cwd: string;
+  onClose: () => void;
+  /** Panel width in px. */
+  width?: number;
+  /** True mid-drag: suppresses the width transition so the panel tracks the
+   *  pointer instead of easing toward it a beat late. */
+  resizing?: boolean;
+}) {
   const { t } = useTranslation();
   // Per-directory refresh nonces (bumped after a copy lands files in a folder).
   const [nonces, setNonces] = useState<Record<string, number>>({});
@@ -306,7 +327,12 @@ export function FileBrowserPanel({ cwd, onClose }: { cwd: string; onClose: () =>
   );
 
   return (
-    <aside className="w-72 shrink-0 border-l border-border flex flex-col bg-card h-full">
+    <aside
+      className={`shrink-0 flex flex-col bg-card h-full overflow-hidden ${
+        resizing ? '' : 'transition-[width] duration-200'
+      }`}
+      style={{ width }}
+    >
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <span className="text-xs font-medium text-foreground truncate" title={cwd}>
           {t('fileBrowser.panelTitle', { defaultValue: 'Files' })}

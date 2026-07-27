@@ -33,6 +33,22 @@ export const dynamic = "force-dynamic"
 
 const ACTIVE_INDEX_KEY = "ui.activeIndex"
 const COLLAPSED_KEY = "ui.collapsed"
+const SIDEBAR_WIDTH_KEY = "ui.sidebarWidth"
+const FILES_WIDTH_KEY = "ui.filesWidth"
+
+/** Kept in step with the panels' own MIN/MAX constants. Clamped here too,
+ *  because a stored width is read straight into a layout and a bad one from any
+ *  source would leave the user unable to see the handle that fixes it. */
+const SIDEBAR_MIN_WIDTH = 160
+const SIDEBAR_MAX_WIDTH = 480
+const FILES_MIN_WIDTH = 200
+const FILES_MAX_WIDTH = 640
+
+/** Read a stored px width back, or undefined when unset or unreadable. */
+const readWidth = (raw: string | undefined, min: number, max: number): number | undefined => {
+  const n = Number.parseInt(raw ?? "", 10)
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : undefined
+}
 
 // ─────────────────────────────────────────────────────────
 // GET — read the project list (from the store)
@@ -49,7 +65,23 @@ export const GET = handler(() =>
       const rawIndex = Number.parseInt(store.getSetting(ACTIVE_INDEX_KEY) ?? "0", 10)
       const activeIndex = Number.isFinite(rawIndex) && rawIndex >= 0 ? rawIndex : 0
       const collapsed = store.getSetting(COLLAPSED_KEY) === "true"
-      return { projects, activeIndex, collapsed }
+      const sidebarWidth = readWidth(
+        store.getSetting(SIDEBAR_WIDTH_KEY),
+        SIDEBAR_MIN_WIDTH,
+        SIDEBAR_MAX_WIDTH
+      )
+      const filesWidth = readWidth(
+        store.getSetting(FILES_WIDTH_KEY),
+        FILES_MIN_WIDTH,
+        FILES_MAX_WIDTH
+      )
+      return {
+        projects,
+        activeIndex,
+        collapsed,
+        ...(sidebarWidth === undefined ? {} : { sidebarWidth }),
+        ...(filesWidth === undefined ? {} : { filesWidth }),
+      }
     },
     catch: (cause) => new FSError({ path: "app.db:projects", op: "read", cause }),
   }).pipe(Effect.map((data) => ok(data)))
@@ -61,40 +93,70 @@ export const GET = handler(() =>
 
 export const POST = handler((req) =>
   Effect.gen(function* () {
-    const body = (yield* parseJsonRaw(req)) as ProjectsData
+    const body = (yield* parseJsonRaw(req)) as Partial<ProjectsData>
     yield* Effect.try({
       try: () => {
         const store = getStore()
-        const incoming = body?.projects ?? []
-        const incomingCwds = new Set(
-          incoming.map((p) => p.cwd).filter((c): c is string => !!c)
-        )
 
-        // Drop projects the client no longer lists. removeProject CASCADEs the
-        // project's sessions (and their messages/memory/usage) — this unifies
-        // the old delete-purge: removing a project from recents discards its
-        // session history, same product decision as before, now atomic in-store.
-        for (const existing of store.listProjects()) {
-          if (!incomingCwds.has(existing.cwd)) store.removeProject(existing.cwd)
-        }
+        // EVERY FIELD IS OPTIONAL, AND ABSENT MEANS "LEAVE IT ALONE".
+        //
+        // This is a PATCH, not a replace, because a caller that only wants to
+        // record a UI preference must not have to send the project list to do
+        // it — and the cost of getting that wrong is not a stale flag. An absent
+        // `projects` used to read as an empty list, and the reconcile below
+        // would then remove every project, CASCADING away each one's sessions
+        // and their messages. A save of the sidebar width would have wiped the
+        // workspace.
+        if (Array.isArray(body?.projects)) {
+          const incoming = body.projects
+          const incomingCwds = new Set(
+            incoming.map((p) => p.cwd).filter((c): c is string => !!c)
+          )
 
-        // Upsert each incoming project. Title defaults to the cwd basename (the
-        // wire format carries no title — display name is derived from cwd). The
-        // client still owns lastOpenedAt, so persist it when present rather than
-        // bumping to now — that keeps MRU ordering client-driven as before.
-        for (const p of incoming) {
-          if (!p.cwd) continue
-          store.upsertProject(p.cwd, {
-            title: basename(p.cwd) || p.cwd,
-            ...(typeof p.lastOpenedAt === "number"
-              ? { lastOpenedAt: p.lastOpenedAt }
-              : {}),
-          })
+          // Drop projects the client no longer lists. removeProject CASCADEs the
+          // project's sessions (and their messages/memory/usage) — this unifies
+          // the old delete-purge: removing a project from recents discards its
+          // session history, same product decision as before, now atomic in-store.
+          for (const existing of store.listProjects()) {
+            if (!incomingCwds.has(existing.cwd)) store.removeProject(existing.cwd)
+          }
+
+          // Upsert each incoming project. Title defaults to the cwd basename (the
+          // wire format carries no title — display name is derived from cwd). The
+          // client still owns lastOpenedAt, so persist it when present rather than
+          // bumping to now — that keeps MRU ordering client-driven as before.
+          for (const p of incoming) {
+            if (!p.cwd) continue
+            store.upsertProject(p.cwd, {
+              title: basename(p.cwd) || p.cwd,
+              ...(typeof p.lastOpenedAt === "number"
+                ? { lastOpenedAt: p.lastOpenedAt }
+                : {}),
+            })
+          }
         }
 
         // App-wide UI prefs → settings (not projects.json).
-        store.setSetting(ACTIVE_INDEX_KEY, String(body?.activeIndex ?? 0))
-        store.setSetting(COLLAPSED_KEY, String(Boolean(body?.collapsed)))
+        if (typeof body?.activeIndex === "number") {
+          store.setSetting(ACTIVE_INDEX_KEY, String(body.activeIndex))
+        }
+        if (typeof body?.collapsed === "boolean") {
+          store.setSetting(COLLAPSED_KEY, String(body.collapsed))
+        }
+        if (typeof body?.sidebarWidth === "number" && Number.isFinite(body.sidebarWidth)) {
+          const clamped = Math.min(
+            SIDEBAR_MAX_WIDTH,
+            Math.max(SIDEBAR_MIN_WIDTH, Math.round(body.sidebarWidth))
+          )
+          store.setSetting(SIDEBAR_WIDTH_KEY, String(clamped))
+        }
+        if (typeof body?.filesWidth === "number" && Number.isFinite(body.filesWidth)) {
+          const clamped = Math.min(
+            FILES_MAX_WIDTH,
+            Math.max(FILES_MIN_WIDTH, Math.round(body.filesWidth))
+          )
+          store.setSetting(FILES_WIDTH_KEY, String(clamped))
+        }
       },
       catch: (cause) => new FSError({ path: "app.db:projects", op: "write", cause }),
     })

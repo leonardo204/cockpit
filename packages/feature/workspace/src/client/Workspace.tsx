@@ -2,7 +2,14 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ProjectSidebar, ProjectInfo } from './ProjectSidebar';
+import {
+  ProjectSidebar,
+  ProjectInfo,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+} from './ProjectSidebar';
+import { ResizeHandle } from '@cockpit/shared-ui';
 import { EmptyState } from './EmptyState';
 import { SessionBrowser } from './SessionBrowser';
 import { SettingsModal } from './SettingsModal';
@@ -14,12 +21,18 @@ import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
 import { APP_TITLE, appTitleForCwd } from '@cockpit/shared-utils';
 import { useEffectQuery } from '@cockpit/effect-react';
-import { fetchProjects, saveProjects as saveProjectsEffect } from './effect/projectClient';
+import {
+  fetchProjects,
+  saveProjects as saveProjectsEffect,
+  saveSidebarWidth as saveSidebarWidthEffect,
+} from './effect/projectClient';
 
 interface ProjectsData {
   projects: ProjectInfo[];
   activeIndex: number;
   collapsed: boolean;
+  /** Expanded sidebar width in px. Absent on an install that never resized it. */
+  sidebarWidth?: number;
 }
 
 /**
@@ -59,6 +72,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isSessionBrowserOpen, setIsSessionBrowserOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTokenStatsOpen, setIsTokenStatsOpen] = useState(false);
@@ -113,6 +128,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       setProjects([...(data.projects || [])]);
       setActiveIndex(data.activeIndex || 0);
       setCollapsed(data.collapsed || false);
+      if (typeof data.sidebarWidth === 'number') setSidebarWidth(data.sidebarWidth);
       setIsLoaded(true);
     } else if (projectsQuery.status === 'error') {
       console.error('Failed to load projects:', projectsQuery.error);
@@ -141,6 +157,41 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       }
     },
     []
+  );
+
+  // Sidebar width is saved on its OWN, not through saveProjects. Threading a
+  // fourth argument through saveProjects' fourteen call sites would make every
+  // unrelated save carry a width, and the server would then have to guess
+  // whether an absent one means "unchanged" or "reset". A width-only POST omits
+  // the other fields and the route leaves them alone.
+  const saveSidebarWidth = useCallback(
+    async (nextWidth: number) => {
+      const { Effect } = await import('effect');
+      const { BrowserRuntime } = await import('@cockpit/effect-runtime');
+      const exit = await BrowserRuntime.runPromise(
+        saveSidebarWidthEffect(nextWidth).pipe(Effect.either)
+      );
+      if (exit._tag === 'Left') {
+        console.error('Failed to save sidebar width:', exit.left);
+      }
+    },
+    []
+  );
+
+  // Live width during the drag; persisted once at the end. Persisting on every
+  // move would be one write per pointer event.
+  const handleSidebarResize = useCallback((next: number) => {
+    setIsResizingSidebar(true);
+    setSidebarWidth(next);
+  }, []);
+
+  const handleSidebarResizeEnd = useCallback(
+    (next: number) => {
+      setIsResizingSidebar(false);
+      setSidebarWidth(next);
+      void saveSidebarWidth(next);
+    },
+    [saveSidebarWidth]
   );
 
   // When activeIndex changes, add the corresponding project to the loaded set
@@ -623,6 +674,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         projects={projects}
         activeIndex={activeIndex}
         collapsed={collapsed}
+        width={sidebarWidth}
+        resizing={isResizingSidebar}
         currentCwd={projects[activeIndex]?.cwd}
         onSelectProject={handleSelectProject}
         onRemoveProject={handleRemoveProject}
@@ -643,6 +696,21 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onSwitchProject={handleSwitchProject}
         onAddProject={openProjectByCwd}
       />
+
+      {/* The divider between the sidebar and the content, draggable. Rendered as
+          a sibling rather than inside the sidebar so it is never clipped by the
+          sidebar's own overflow, and so it keeps its full hit area at any width.
+          Hidden while collapsed: the rail is an icon strip with one width. */}
+      {!collapsed && (
+        <ResizeHandle
+          width={sidebarWidth}
+          min={SIDEBAR_MIN_WIDTH}
+          max={SIDEBAR_MAX_WIDTH}
+          onResize={handleSidebarResize}
+          onResizeEnd={handleSidebarResizeEnd}
+          label={t('workspace.resizeSidebar')}
+        />
+      )}
 
       {/* Right content area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">

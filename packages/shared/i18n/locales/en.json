@@ -152,6 +152,8 @@
     "openProject": "Open Project",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
+    "resizeSidebar": "Resize sidebar",
+    "resizeFiles": "Resize file browser",
     "notes": "Notes",
     "skills": "Skills",
     "settings": "Settings",
