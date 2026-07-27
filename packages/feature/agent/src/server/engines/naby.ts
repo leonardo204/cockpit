@@ -64,6 +64,7 @@ import { dirname, join } from 'node:path';
 import {
   AiSdkEngine,
   buildToolset,
+  buildWorkspaceTools,
   isMcpEntryActive,
   ClaudeAgentSdkEngine,
   CHATGPT_OAUTH_DEFAULT_MODEL,
@@ -734,6 +735,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 ),
             };
 
+        // THE TWO PERMISSION SWITCHES, read before the toolset because they
+        // decide which tools it contains.
+        //
+        // `gate.allowChanges` (default ON) is the app-wide toggle; read per turn
+        // so flipping it lands on the next message. `permissionMode: 'plan'` is
+        // the per-tab plan-mode checkbox — read-only, plan first, edit nothing.
+        // Plan mode used to be sent only to the Claude engine and was a NO-OP
+        // here, so the checkbox promised something this engine never did. It is
+        // honoured now, and it wins over the toggle: a user who asked for a plan
+        // has said what they want more recently than the global default.
+        const allowChanges =
+          (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
+        const planMode = ctx.params.permissionMode === 'plan';
+
         const builtin = buildToolset(
           outbox,
           store,
@@ -779,12 +794,40 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           );
         }
 
+        // THE WORKSPACE TOOLS — read/search/edit/run over the open project.
+        //
+        // Added HERE rather than inside buildToolset because they need two things
+        // only this composition root knows: the project directory, and whether
+        // this turn is allowed to change anything.
+        //
+        // NOT ON dev-claude. The Claude Agent SDK brings its own
+        // Read/Glob/Grep/Write/Edit/Bash, and offering a second, near-identical
+        // set alongside them makes the model pick between two tools that do the
+        // same job — for no gain, since that engine was never the one that
+        // couldn't read a file. This exists for every OTHER provider, where our
+        // tools are the only ones there are.
+        //
+        // PLAN MODE and ALLOW CHANGES both land on `allowMutations`. When it is
+        // false the mutating tools are not merely gated, they are absent from the
+        // schema list: a tool the model can see but never use produces a turn
+        // that keeps trying and keeps being refused, which reads as the assistant
+        // being broken rather than as the mode working.
+        const workspace =
+          projectCwd && engineId !== 'dev-claude'
+            ? buildWorkspaceTools({
+                cwd: projectCwd,
+                allowMutations: !planMode && allowChanges,
+              })
+            : undefined;
+
         const toolSchemas: ToolSchema[] = [
           ...builtin.toolSchemas,
+          ...(workspace?.toolSchemas ?? []),
           ...(mcp?.toolSchemas ?? []),
         ];
         const executors: Record<string, Executor> = {
           ...builtin.executors,
+          ...(workspace?.executors ?? {}),
           ...(mcp?.executors ?? {}),
         };
 
@@ -912,18 +955,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         //     it just permits. This is the interim before Phase 2's approval UI.
         //   * OFF: the phase1HarnessFloor — read-only observation, mutation denied
         //     from the main loop AND inside any subagent.
-        // Read per turn so flipping the toggle takes effect on the next message.
-        const allowChanges =
-          (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
+        // (Read further up, before the toolset is assembled: the workspace tools
+        // need to know whether this turn may change anything BEFORE deciding
+        // which of them to offer.)
         // Phase 2 (M1): the `allowChanges` toggle becomes the BASELINE, and the
         // user's persistent per-scope policy rules override it per tool. With no
         // rules this is byte-for-byte the pre-M1 behaviour; a rule can deny an
         // otherwise-allowed tool or permit an otherwise-denied one. Rules are
         // gathered project → user → org (precedence resolved in realPolicy) and
         // re-read each turn so a change in Settings lands on the next message.
-        const baseline = allowChanges
-          ? () => ({ behavior: 'allow' as const })
-          : phase1HarnessFloor(runtimeToolNames);
+        // Plan mode forces the floor regardless of the toggle. The mutating tools
+        // are already absent from this turn's schemas, so this is the second
+        // barrier rather than the only one — it catches a call the model invents
+        // from memory of an earlier turn, and it covers the SDK built-ins on any
+        // engine that has them.
+        const baseline =
+          allowChanges && !planMode
+            ? () => ({ behavior: 'allow' as const })
+            : phase1HarnessFloor(runtimeToolNames);
         const policyRules = gatherPolicyRules(getStore(), projectCwd);
         // Phase 2 (M2): an 'ask' rule SUSPENDS the turn here on a promise, emits an
         // `approval_request` RunEvent for the UI, and resumes when the user resolves
@@ -1068,7 +1117,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             name: c.entry.name,
             status: 'connected',
           })),
-          permissionMode: 'default',
+          // Reported, not hardcoded: the client shows what mode the turn is
+          // actually running in, and it was claiming 'default' even when the
+          // user had plan mode checked.
+          permissionMode: planMode ? 'plan' : 'default',
           slash_commands: [],
           apiKeySource: 'env',
           uuid: randomUUID(),

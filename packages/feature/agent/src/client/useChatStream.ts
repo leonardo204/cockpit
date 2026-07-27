@@ -586,8 +586,6 @@ export function useChatStream(
       sawResultRef.current = false;
       turnActiveRef.current = false;
 
-      const isClaudeEngine = !engine || engine === 'claude';
-
       const runId = genRunId();
 
       try {
@@ -612,9 +610,12 @@ export function useChatStream(
               const m = getModelRef.current?.();
               return m ? { model: m } : {};
             })(),
-            // Plan mode: only meaningful on a claude engine. When unchecked, omit → server
-            // defaults to bypassPermissions.
-            ...(usePlanMode && isClaudeEngine && { permissionMode: 'plan' }),
+            // Plan mode. Sent for EVERY engine now: it used to be gated on the
+            // claude engine, which meant the checkbox was visible on the Naby
+            // engine — the only one this app actually runs — and did nothing.
+            // The Naby engine now honours it by withholding the writing tools
+            // and forcing the read-only gate floor.
+            ...(usePlanMode && { permissionMode: 'plan' }),
           }),
         });
 
