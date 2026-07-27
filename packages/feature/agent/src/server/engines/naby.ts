@@ -368,6 +368,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
   return {
     name: 'naby',
 
+    // `runTurn` appends every user/assistant/tool row to the store as the turn
+    // runs (src/runtime/session.ts). The orchestrator must not record it again.
+    persistsOwnTranscript: true,
+
     async preflight(params: DispatchParams) {
       // A test-injected resolver supplies its own model, so no key is needed.
       if (deps.resolveModel) return { ok: true as const };

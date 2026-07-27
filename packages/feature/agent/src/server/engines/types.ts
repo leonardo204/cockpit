@@ -62,6 +62,11 @@ export interface EngineRunner {
 /** Static per-engine wiring consumed by the orchestrator + registry. */
 export interface EngineSpec {
   name: string;
+  /** True when the engine already records its conversation into the Naby store
+   *  itself (the Naby runtime does, as it runs). The orchestrator records every
+   *  OTHER engine from its event stream, so that every session lands in the one
+   *  store the views read — this flag is what keeps it from writing twice. */
+  persistsOwnTranscript?: boolean;
   /** Sync pre-check BEFORE startRun (e.g. deepseek apiKey). ok:false short-circuits with no
    *  registry side-effects. May mutate params (e.g. resolve model). */
   preflight?(params: DispatchParams): Promise<{ ok: true } | { ok: false; status: number; error: string }>;

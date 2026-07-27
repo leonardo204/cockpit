@@ -2,6 +2,8 @@ import { updateGlobalState, getSessionTitle } from '../state/globalState';
 import { startRun, appendRun, rekeyRun, markRunIdle, isRunActive, setRunAbort } from '../sessionRunHub';
 import { snapshotOnRunStart, snapshotOnRunEvent } from '../snapshot/hook';
 import { resolveCommandPrompt } from '../lib/slashCommands';
+import { createTranscriptRecorder } from '../state/transcriptRecorder';
+import { getStore } from './naby';
 import { randomUUID } from 'crypto';
 import type { DispatchParams, DispatchOutcome, RunCtx, RunEvent, EngineSpec } from './types';
 
@@ -85,6 +87,20 @@ export async function dispatchChat(
   // first tool commit of this run diffs against the true pre-run state.
   snapshotOnRunStart(cwd || '', currentKey, spec.name);
 
+  // Every session the app can show lives in the Naby store. Engines that do not
+  // write there themselves get recorded from the event stream below, so that a
+  // codex or ollama run is as visible — in the recent lists, the browsers, the
+  // transcript view — as a Naby one. Flushed exactly once, on whichever
+  // teardown path this run takes.
+  const recorder = spec.persistsOwnTranscript
+    ? undefined
+    : createTranscriptRecorder({
+        store: getStore,
+        providerId: spec.name,
+        ...(cwd ? { cwd } : {}),
+        ...(promptText ? { prompt: promptText } : {}),
+      });
+
   const ctx: RunCtx = {
     prompt: promptText,
     images,
@@ -98,6 +114,9 @@ export async function dispatchChat(
       // Tool-call snapshots: observe every engine's tool_use/tool_result here —
       // the single choke point all providers flow through. Fire-and-forget.
       snapshotOnRunEvent(cwd || '', currentKey, spec.name, event);
+      // Same choke point, same reason: it is the one place every engine's
+      // conversation is visible in a single shape.
+      recorder?.observe(event);
     },
     rekey(realSessionId: string) {
       if (!realSessionId) return;
@@ -124,6 +143,9 @@ export async function dispatchChat(
         // explicit stop: requestStop already emitted the terminal result + marked idle.
         isClosed = true;
         markRunIdle(currentKey, 'idle');
+        // A stopped turn still happened: the user asked something and got part
+        // of an answer. Record it rather than losing it for having ended early.
+        recorder?.flush(actualSessionId);
         return;
       }
       console.error(`[engine:${spec.name}] run error:`, error);
@@ -133,6 +155,7 @@ export async function dispatchChat(
       ctx.emit({ type: 'error', error: error instanceof Error ? error.message : String(error) });
       markRunIdle(currentKey, 'error');
       isClosed = true;
+      recorder?.flush(actualSessionId);
       // Best-effort teardown of global state even on failure.
       if (cwd && actualSessionId) {
         const title = await getSessionTitle(cwd, actualSessionId).catch(() => undefined);
@@ -140,7 +163,11 @@ export async function dispatchChat(
       }
       return;
     }
-    // Success teardown (shared across all engines).
+    // Success teardown (shared across all engines). The transcript is written
+    // BEFORE the status flips to 'unread': the status write is what wakes the
+    // recent views, and they must not read a session whose rows are still
+    // in flight.
+    recorder?.flush(actualSessionId);
     if (cwd && actualSessionId) {
       const title = await (spec.runner.resolveTitle
         ? spec.runner.resolveTitle(cwd, actualSessionId).catch(() => undefined)
