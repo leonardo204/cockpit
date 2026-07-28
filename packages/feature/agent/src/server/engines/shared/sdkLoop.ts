@@ -1,4 +1,17 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+// LOADED ON USE, NOT ON IMPORT — this is what keeps the packaged app working.
+//
+// The Claude Agent SDK is deliberately excluded from the shipped build
+// (electron-builder.yml, design §3.3). A STATIC import here put it in the module
+// graph of `/api/chat`, which imports the orchestrator, which reaches these
+// engines — so the packaged route failed to load before it ran a line:
+//
+//   Cannot find package '@anthropic-ai/claude-agent-sdk' imported from
+//     .../.next-prod/server/app/api/chat/route.js   (ERR_MODULE_NOT_FOUND)
+//
+// and every chat request 500'd. The engines that need the SDK are unreachable
+// from the chat UI anyway (Naby is single-engine; these run only via scheduled
+// tasks), so deferring the require to the moment one of them actually runs makes
+// the shipped app correct and costs a dev-mode run nothing but one cached import.
 import type { RunCtx, ImageData } from '../types';
 
 type SdkOptions = Record<string, unknown>;
@@ -96,6 +109,7 @@ export async function runSdkLoop(ctx: RunCtx, buildOptions: BuildSdkOptions): Pr
       ? { ...buildOptions(attemptAbort, resume), resume }
       : buildOptions(attemptAbort, ctx.sessionId);
 
+    const { query } = await import('@anthropic-ai/claude-agent-sdk');
     const response = query({ prompt: input, options });
 
     let receivedResult = false;

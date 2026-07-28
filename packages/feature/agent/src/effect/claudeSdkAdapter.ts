@@ -14,7 +14,11 @@
  * "SDK connectivity + Stream wrapping".
  */
 import { Effect, Stream } from "effect"
-import { query, type Options } from "@anthropic-ai/claude-agent-sdk"
+// TYPE-ONLY, so nothing of the SDK survives into the emitted module graph. The
+// runtime `query` is imported where it is used, for the reason spelled out in
+// server/engines/shared/sdkLoop.ts: the SDK is excluded from the packaged app,
+// and a static import made `/api/chat` fail to load in the shipped build.
+import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import { AgentError, type AgentProvider } from "@cockpit/effect-core"
 import type {
   AgentRequest,
@@ -124,6 +128,7 @@ export const claudeStream = (
 
     void (async () => {
       try {
+        const { query } = await import("@anthropic-ai/claude-agent-sdk")
         const response = query({ prompt, options })
         for await (const message of response) {
           if (cancelled) break
