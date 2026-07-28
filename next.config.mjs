@@ -12,15 +12,13 @@ const dev = process.env.COCKPIT_ENV === 'dev';
 // the server bundle imports `../dist/naby-runtime.mjs`, so the root has to be
 // the parent, not this directory.
 //
-// On a Windows CI runner the guess went somewhere else entirely, and the build
-// died globbing the runner's own profile:
-//
-//   glob error [EACCES: permission denied, scandir
-//     'C:\Users\runneradmin\Local Settings\Microsoft\WindowsApps\...']
-//   Failed to compile.
-//
 // Pinning it makes the root the same fact on every platform instead of a
-// heuristic that can wander into directories the build has no business reading.
+// heuristic, and silences the warning the build printed on every run.
+//
+// It is NOT what fixed the Windows build. That failure — a scan of the runner's
+// user profile hitting EACCES on Microsoft\WindowsApps reparse points — survived
+// this change; it was fixed by giving the Windows job an empty HOME (see
+// .github/workflows/release.yml). Recorded so nobody reads this as the cure.
 const WORKSPACE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Empty stub used to short-circuit Node-only modules from browser bundles.

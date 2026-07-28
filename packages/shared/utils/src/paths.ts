@@ -8,25 +8,22 @@ import { execSync } from 'child_process';
 // Directory Constants
 // ============================================
 
-// READ FROM THE ENVIRONMENT, NOT `homedir()` — this is a build-time concern,
-// not a style choice.
+// Read from the environment rather than calling `homedir()` at module scope, so
+// the value is not a constant a build-time analyser can fold. Several helpers
+// below build paths from it and readdirSync them (`~/.codex/sessions`,
+// `~/.kimi/sessions`), and a folded constant is what lets a bundler's static
+// analysis follow those calls into the building user's home directory.
 //
-// Next's build-time file tracer statically evaluates `os.homedir()` and then
-// follows every fs call derived from it. Several helpers below do exactly that
-// (`join(HOME_DIR, '.codex'|'.kimi', 'sessions')` + readdirSync), so the tracer
-// walks the building user's home directory. On macOS and Linux that is merely
-// wasteful; on a Windows runner it is fatal — `C:\Users\<user>` contains
-// protected junctions (`Local Settings` -> `AppData\Local`) that raise EACCES,
-// and the whole compile fails:
+// HONEST SCOPE: this was written while chasing a Windows CI build that died
+// scanning the runner's profile, and it did NOT fix it — the emitted .nft.json
+// traces contain no home paths, and an fs shim armed inside the failing process
+// never fired, so Next's file tracer was not the thing walking the profile. The
+// actual fix was to give that build an empty HOME (see the Windows job in
+// .github/workflows/release.yml). This is kept as cheap insurance, not as a cure.
 //
-//   glob error [EACCES: permission denied, scandir
-//     'C:\Users\runneradmin\Local Settings\Microsoft\WindowsApps\...']
-//   Failed to compile.
-//
-// An env read is opaque to the analyser, so it stops at the call instead of
-// descending into the profile. Runtime behaviour is identical: HOME is set on
-// macOS/Linux, USERPROFILE on Windows, and homedir() is still the fallback.
-// The same idiom is already used for the same reason in effect-core/config.ts.
+// Runtime behaviour is unchanged: HOME is set on macOS/Linux, USERPROFILE on
+// Windows, homedir() remains the fallback. The same idiom is already used in
+// effect-core/config.ts.
 export const HOME_DIR = process.env.HOME || process.env.USERPROFILE || homedir();
 // Data root. Defaults to ~/.cockpit (dev/prod share it — reusing prod data is
 // intentional). Set COCKPIT_HOME to isolate (e.g. ~/.cockpit-dev, a CI tmp dir).
