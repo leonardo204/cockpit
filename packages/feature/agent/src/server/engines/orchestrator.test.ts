@@ -4,9 +4,17 @@ import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from '../se
 import type { EngineSpec, RunCtx, RunEvent } from './types';
 
 // ── Contract suite for the shared run-lifecycle skeleton (orchestrator) ──
-// Uses fake engine runners (no real SDK/spawn). cwd is omitted so globalState never touches
-// disk (orchestrator gates 'loading'/'unread' on cwd). Each test uses a unique runId so the
+// Uses fake engine runners (no real SDK/spawn). Each test uses a unique runId so the
 // in-memory sessionRunHub registry never collides across tests.
+//
+// THIS SUITE DOES TOUCH THE STORE. It used to be able to claim otherwise —
+// "cwd is omitted so globalState never touches disk" — because globalState wrote
+// ~/.cockpit/state.json and gated on cwd. Unifying the recent views onto one
+// store ended that: status writes and the transcript recorder go to the Naby
+// store now, so these runs persist sessions. They land in a temp database only
+// because vitest.setup.ts redirects NABY_DB_PATH; without it they went into the
+// developer's real ~/.naby/app.db, 3 rows per run, until they crowded the user's
+// own conversations out of the recents dropdown. See storeIsolation.test.ts.
 
 let n = 0;
 const freshRunId = () => `test-run-${Date.now()}-${n++}`;
