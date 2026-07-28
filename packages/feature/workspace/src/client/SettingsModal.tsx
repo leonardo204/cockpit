@@ -16,6 +16,7 @@ import {
 // Electron main process), so the section renders itself as unavailable when
 // `window.naby` is absent — i.e. in the plain browser dev server.
 import { NabyProviderSettings } from './NabyProviderSetup';
+import { UpdatePanel } from './UpdatePanel';
 // P15-06. The scoped-memory review + delete panel. Given the active session/cwd
 // so its `session`/`project` scopes are addressable; `user` scope needs neither.
 import { NabyMemoryReview } from './NabyMemoryReview';
@@ -313,6 +314,17 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                       and "Alpha" is the most important word there. */}
                   <p>{APP_TITLE}{appVersion ? ` · shell v${appVersion}` : ''}</p>
                   <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
+                </div>
+
+                {/* Updates live here rather than in a section of their own: the
+                    About box is already where someone goes to find out which
+                    build they are on, and "which build am I on" and "is there a
+                    newer one" are the same question asked twice. */}
+                <div className="mt-6 pt-4 border-t border-border">
+                  <label className="block text-sm font-medium text-foreground mb-2">
+                    {t('updates.title')}
+                  </label>
+                  <UpdatePanel />
                 </div>
               </div>
             ) : null}

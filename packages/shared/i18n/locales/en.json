@@ -1655,5 +1655,19 @@
       "corrected": "Fixed afterwards",
       "lifetime": "All time"
     }
+  },
+  "updates": {
+    "title": "Updates",
+    "check": "Check for updates",
+    "checking": "Checking…",
+    "upToDate": "You are up to date (v{{version}})",
+    "available": "Version {{version}} found. Downloading.",
+    "downloading": "Downloading {{version}}",
+    "ready": "{{version}} is ready. Restart to apply.",
+    "restartNow": "Restart now",
+    "openReleases": "Open releases page",
+    "unsupported": "This build cannot update itself. Download from the releases page.",
+    "failed": "Could not check for updates.",
+    "desktopOnly": "Available in the desktop app only."
   }
 }

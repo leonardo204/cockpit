@@ -1655,5 +1655,19 @@
       "corrected": "나중에 고친 일",
       "lifetime": "전체 기간"
     }
+  },
+  "updates": {
+    "title": "업데이트",
+    "check": "업데이트 확인",
+    "checking": "확인 중…",
+    "upToDate": "최신 버전입니다 (v{{version}})",
+    "available": "새 버전 {{version}} 을(를) 찾았습니다. 내려받는 중입니다.",
+    "downloading": "{{version}} 내려받는 중",
+    "ready": "{{version}} 준비 완료. 다시 시작하면 적용됩니다.",
+    "restartNow": "지금 다시 시작",
+    "openReleases": "릴리스 페이지 열기",
+    "unsupported": "이 빌드는 스스로 업데이트할 수 없습니다. 릴리스 페이지에서 내려받으세요.",
+    "failed": "업데이트 확인에 실패했습니다.",
+    "desktopOnly": "데스크톱 앱에서만 사용할 수 있습니다."
   }
 }
