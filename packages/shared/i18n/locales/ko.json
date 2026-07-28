@@ -190,6 +190,8 @@
     "sessionList": "세션 목록",
     "searchSessions": "세션 검색...",
     "searchRecentSessions": "최근 세션 검색",
+    "hiddenByClear": "'최근 목록 비우기'로 숨겨진 세션 {{n}}개 — 대화는 지워지지 않았습니다",
+    "restoreCleared": "다시 보이기",
     "clearRecents": "최근 목록 비우기 (대화는 유지되며 '모든 세션 보기'에서 계속 확인 가능)",
     "clearRecentsConfirm": "목록을 비울까요?",
     "loadSessionsFailed": "세션을 불러오지 못함",

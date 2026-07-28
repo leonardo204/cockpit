@@ -3,7 +3,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { loadRecentSessions, clearRecentSessions, type RecentSessionInfo } from './effect/agentClient';
+import {
+  loadRecentSessions,
+  clearRecentSessions,
+  restoreRecentSessions,
+  type RecentSessionInfo,
+} from './effect/agentClient';
 
 interface RecentSessionsModalProps {
   isOpen: boolean;
@@ -27,11 +32,16 @@ interface RecentSessionsModalProps {
 export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: RecentSessionsModalProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<RecentSessionInfo[]>([]);
+  // How many sessions "clear recents" is holding back. Shown, with an undo,
+  // because a session that plainly exists and does not appear reads as data
+  // loss — which is exactly how it was reported.
+  const [hiddenCount, setHiddenCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState('');
-  // Two-click confirm for the destructive "clear recents" action (no undo, but
-  // reversible-ish: sessions aren't deleted, only hidden until they run again).
+  // Two-click confirm for "clear recents". Sessions are never deleted, only
+  // hidden behind a watermark — and the hidden count below now offers an undo,
+  // so this is fully reversible rather than reversible-in-principle.
   const [confirmClear, setConfirmClear] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,7 +50,8 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
     setError(null);
     const exit = await BrowserRuntime.runPromiseExit(loadRecentSessions());
     if (exit._tag === 'Success') {
-      setSessions([...exit.value]);
+      setSessions([...exit.value.sessions]);
+      setHiddenCount(exit.value.hiddenCount);
     } else {
       setError(t('sessions.loadSessionsFailed'));
     }
@@ -52,11 +63,23 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
   const handleClear = useCallback(async () => {
     const exit = await BrowserRuntime.runPromiseExit(clearRecentSessions());
     if (exit._tag === 'Success') {
-      setSessions([...exit.value]);
+      setSessions([...exit.value.sessions]);
+      setHiddenCount(exit.value.hiddenCount);
     } else {
       setError(t('sessions.loadSessionsFailed'));
     }
     setConfirmClear(false);
+  }, [t]);
+
+  // Undo the clear — the watermark goes away and every hidden session returns.
+  const handleRestore = useCallback(async () => {
+    const exit = await BrowserRuntime.runPromiseExit(restoreRecentSessions());
+    if (exit._tag === 'Success') {
+      setSessions([...exit.value.sessions]);
+      setHiddenCount(exit.value.hiddenCount);
+    } else {
+      setError(t('sessions.loadSessionsFailed'));
+    }
   }, [t]);
 
   // Drop the pending confirm whenever the modal closes.
@@ -222,6 +245,28 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
           {error && (
             <div className="flex items-center justify-center h-full">
               <div className="text-xs text-red-11">{error}</div>
+            </div>
+          )}
+
+          {/* WHAT "CLEAR RECENTS" IS HIDING. Without this the sessions are just
+              gone — present under Browse all sessions, absent here, with nothing
+              to explain the gap and no way back short of opening one and running
+              a turn in it. Shown above the list (and above the empty state,
+              which is where clearing usually leaves you) so the state is
+              legible at the moment it is confusing. */}
+          {!isLoading && !error && hiddenCount > 0 && !searchKeyword && (
+            <div className="mb-3 flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-border bg-accent/30">
+              {/* `n`, not `count` — i18next reads `count` as a plural selector
+                  and would look for hiddenByClear_one / hiddenByClear_other. */}
+              <span className="text-xs text-muted-foreground">
+                {t('sessions.hiddenByClear', { n: hiddenCount })}
+              </span>
+              <button
+                onClick={handleRestore}
+                className="px-2 py-1 text-xs rounded border border-border text-foreground hover:bg-accent transition-colors flex-shrink-0"
+              >
+                {t('sessions.restoreCleared')}
+              </button>
             </div>
           )}
 

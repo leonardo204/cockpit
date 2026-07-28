@@ -24,6 +24,7 @@ import { FSError, ValidationError } from "@cockpit/effect-core"
 import { getStore } from "../engines/naby"
 import {
   buildRecentSessions,
+  countHiddenByWatermark,
   customTitleKey,
   statusKey,
 } from "../state/recentSessions"
@@ -43,11 +44,21 @@ const PANEL_LIMIT = 100
 const panelSessions = () =>
   buildRecentSessions({ limit: PANEL_LIMIT, includeSearchText: true })
 
+/**
+ * The panel payload. `hiddenCount` is what the "clear recents" watermark is
+ * holding back — sent so the view can SAY that sessions are hidden rather than
+ * letting them look deleted. See countHiddenByWatermark.
+ */
+const panelPayload = () => ({
+  sessions: panelSessions(),
+  hiddenCount: countHiddenByWatermark(),
+})
+
 export const GET = handler(() =>
   Effect.try({
-    try: () => panelSessions(),
+    try: () => panelPayload(),
     catch: (cause) => new FSError({ path: "app.db:global-state", op: "read", cause }),
-  }).pipe(Effect.map((sessions) => ok({ sessions })))
+  }).pipe(Effect.map((payload) => ok(payload)))
 )
 
 export const POST = handler((req) =>
@@ -76,11 +87,11 @@ export const POST = handler((req) =>
         if (title !== undefined) {
           store.setSetting(customTitleKey(sessionId), title)
         }
-        return panelSessions()
+        return panelPayload()
       },
       catch: (cause) => new FSError({ path: "app.db:global-state", op: "write", cause }),
     })
-    return ok({ sessions })
+    return ok(sessions)
   })
 )
 
@@ -94,13 +105,22 @@ export const POST = handler((req) =>
  * all sessions, and any session that runs again bumps its `lastUsedAt` past the
  * watermark and returns to the list. Returns the (now-empty) filtered list.
  */
-export const DELETE = handler(() =>
+export const DELETE = handler((req) =>
   Effect.try({
     try: () => {
       const store = getStore()
-      store.setSetting(CLEARED_BEFORE_KEY, String(Date.now()))
-      return buildRecentSessions()
+      // `?undo=1` REMOVES the watermark instead of setting one, bringing every
+      // hidden session back. Clearing used to be one-way — the only route back
+      // was to open a session and run a turn, which is not something a user can
+      // be expected to discover — so the panel now offers an undo beside the
+      // hidden count and calls this.
+      if (new URL(req.url).searchParams.get("undo") === "1") {
+        store.setSetting(CLEARED_BEFORE_KEY, "")
+      } else {
+        store.setSetting(CLEARED_BEFORE_KEY, String(Date.now()))
+      }
+      return panelPayload()
     },
     catch: (cause) => new FSError({ path: "app.db:global-state", op: "write", cause }),
-  }).pipe(Effect.map((sessions) => ok({ sessions })))
+  }).pipe(Effect.map((payload) => ok(payload)))
 )

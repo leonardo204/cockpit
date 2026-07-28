@@ -80,6 +80,29 @@ export interface RecentSessionsStore {
  * `includeSearchText` is opt-in for the same reason — the untruncated corpus is
  * only worth building for the panel that actually searches it.
  */
+/**
+ * How many sessions the "clear recents" watermark is currently hiding.
+ *
+ * WHY THIS IS NEEDED. Clearing recents hides every session older than the
+ * moment it was clicked, permanently, until one of them runs again. Nothing
+ * said so afterwards: the sessions were simply gone from the list, still listed
+ * under Browse all sessions, with no count, no hint and no way back. That is
+ * indistinguishable from losing them, and it was reported as a bug — the
+ * complaint was not about a particular session but about a session plainly
+ * existing and not appearing.
+ *
+ * A hidden thing should say it is hidden. The views render this as a row with
+ * an undo, so the state is visible and reversible instead of silent.
+ */
+export function countHiddenByWatermark(store: RecentSessionsStore = getStore()): number {
+  const clearedBefore = parseClearedBefore(store.getSetting(CLEARED_BEFORE_KEY));
+  if (clearedBefore <= 0) return 0;
+  return store
+    .listSessions()
+    .filter((ref) => !isRecentVisible({ lastActive: ref.lastUsedAt, cwd: ref.cwd }, clearedBefore))
+    .length;
+}
+
 export function buildRecentSessions(
   opts?: { limit?: number; includeSearchText?: boolean },
   store: RecentSessionsStore = getStore(),

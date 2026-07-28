@@ -141,12 +141,21 @@ export interface RecentSessionInfo {
   engine?: string
 }
 
-export const loadRecentSessions = (): Effect.Effect<
-  ReadonlyArray<RecentSessionInfo>,
-  AppError
-> =>
-  httpJson<{ sessions: RecentSessionInfo[] }>("/api/global-state").pipe(
-    Effect.map((r) => r.sessions ?? [])
+/**
+ * The recents payload. `hiddenCount` is how many sessions the "clear recents"
+ * watermark is holding back, so the panel can say they are hidden rather than
+ * letting them look deleted.
+ */
+export interface RecentSessionsPayload {
+  sessions: ReadonlyArray<RecentSessionInfo>
+  hiddenCount: number
+}
+
+export const loadRecentSessions = (): Effect.Effect<RecentSessionsPayload, AppError> =>
+  httpJson<{ sessions?: RecentSessionInfo[]; hiddenCount?: number }>(
+    "/api/global-state"
+  ).pipe(
+    Effect.map((r) => ({ sessions: r.sessions ?? [], hiddenCount: r.hiddenCount ?? 0 }))
   )
 
 /**
@@ -155,13 +164,26 @@ export const loadRecentSessions = (): Effect.Effect<
  * are NOT deleted (still reachable via Browse all sessions). Returns the
  * now-filtered list so the caller can update in place.
  */
-export const clearRecentSessions = (): Effect.Effect<
-  ReadonlyArray<RecentSessionInfo>,
-  AppError
-> =>
-  httpJson<{ sessions: RecentSessionInfo[] }>("/api/global-state", {
+export const clearRecentSessions = (): Effect.Effect<RecentSessionsPayload, AppError> =>
+  httpJson<{ sessions?: RecentSessionInfo[]; hiddenCount?: number }>("/api/global-state", {
     method: "DELETE",
-  }).pipe(Effect.map((r) => r.sessions ?? []))
+  }).pipe(
+    Effect.map((r) => ({ sessions: r.sessions ?? [], hiddenCount: r.hiddenCount ?? 0 }))
+  )
+
+/**
+ * Undo a clear (DELETE /api/global-state?undo=1) — removes the watermark, so
+ * every hidden session returns to the list. Clearing used to be one-way: the
+ * only route back was to open a session and run a turn in it, which is not
+ * something a user can be expected to find.
+ */
+export const restoreRecentSessions = (): Effect.Effect<RecentSessionsPayload, AppError> =>
+  httpJson<{ sessions?: RecentSessionInfo[]; hiddenCount?: number }>(
+    "/api/global-state?undo=1",
+    { method: "DELETE" }
+  ).pipe(
+    Effect.map((r) => ({ sessions: r.sessions ?? [], hiddenCount: r.hiddenCount ?? 0 }))
+  )
 
 // ─────────────────────────────────────────────────────────
 // /api/claude-stats?engine= (token usage)

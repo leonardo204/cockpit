@@ -190,6 +190,8 @@
     "sessionList": "Session List",
     "searchSessions": "Search sessions...",
     "searchRecentSessions": "Search recent sessions",
+    "hiddenByClear": "{{n}} session(s) hidden by Clear recents — no conversation was deleted",
+    "restoreCleared": "Show them again",
     "clearRecents": "Clear the recent list (conversations are kept, still under Browse all sessions)",
     "clearRecentsConfirm": "Clear the list?",
     "loadSessionsFailed": "Failed to load sessions",

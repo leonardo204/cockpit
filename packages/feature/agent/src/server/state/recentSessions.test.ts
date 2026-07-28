@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildRecentSessions, statusKey, customTitleKey } from './recentSessions';
+import {
+  buildRecentSessions,
+  countHiddenByWatermark,
+  statusKey,
+  customTitleKey,
+} from './recentSessions';
 import type { RecentSessionsStore } from './recentSessions';
 import { CLEARED_BEFORE_KEY } from './recentFilter';
 import type { RuntimeMessage, SessionRef } from '../../../../../../../dist/naby-runtime.mjs';
@@ -91,6 +96,24 @@ describe('buildRecentSessions — the one source both recent views read', () => 
     expect(
       buildRecentSessions({ limit: 100, includeSearchText: true }, store).map((s) => s.sessionId),
     ).toEqual(['new']);
+  });
+
+  // The hidden ones have to be COUNTABLE, or the panel cannot say they exist.
+  // Clearing recents used to make sessions look deleted: gone from this list,
+  // still under Browse all sessions, with nothing to explain the gap.
+  it('counts what the watermark is hiding, and reports zero when unset', () => {
+    const sessions = [
+      session({ sessionId: 'old1', lastUsedAt: 100 }),
+      session({ sessionId: 'old2', lastUsedAt: 150 }),
+      session({ sessionId: 'new', lastUsedAt: 300 }),
+    ];
+
+    expect(countHiddenByWatermark(fakeStore(sessions, {}, { [CLEARED_BEFORE_KEY]: '200' }))).toBe(2);
+
+    // No watermark: nothing is hidden, so the row must not appear at all.
+    expect(countHiddenByWatermark(fakeStore(sessions, {}, {}))).toBe(0);
+    // An emptied watermark is how "undo" clears it — same as never set.
+    expect(countHiddenByWatermark(fakeStore(sessions, {}, { [CLEARED_BEFORE_KEY]: '' }))).toBe(0);
   });
 
   it('applies the limit before reading messages, so the dropdown does not pay for the tail', () => {
