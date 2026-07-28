@@ -1,4 +1,27 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 const dev = process.env.COCKPIT_ENV === 'dev';
+
+// WHERE THE WORKSPACE ROOT IS — pinned, not inferred.
+//
+// This app is a submodule inside the naby repo, so there are TWO lockfiles
+// (naby/package-lock.json and shell/package-lock.json). Next.js resolves the
+// tracing root by looking for lockfiles and warns that its guess "may not be
+// correct". On macOS and Linux it guesses the naby repo root, which is right —
+// the server bundle imports `../dist/naby-runtime.mjs`, so the root has to be
+// the parent, not this directory.
+//
+// On a Windows CI runner the guess went somewhere else entirely, and the build
+// died globbing the runner's own profile:
+//
+//   glob error [EACCES: permission denied, scandir
+//     'C:\Users\runneradmin\Local Settings\Microsoft\WindowsApps\...']
+//   Failed to compile.
+//
+// Pinning it makes the root the same fact on every platform instead of a
+// heuristic that can wander into directories the build has no business reading.
+const WORKSPACE_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // Empty stub used to short-circuit Node-only modules from browser bundles.
 // `web-tree-sitter` references `fs/promises` inside a `process.versions.node`
@@ -9,6 +32,10 @@ const EMPTY_STUB = './src/lib/empty-stub.js';
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // See WORKSPACE_ROOT above. `outputFileTracingRoot` is what the build's own
+  // warning names; `turbopack.root` is the same fact for the dev server, and it
+  // is set in the turbopack block below.
+  outputFileTracingRoot: WORKSPACE_ROOT,
   // dev 和 prod 使用不同输出目录，避免 Turbopack 热更新影响 prod
   distDir: dev ? '.next' : '.next-prod',
   // Allow loading dev resources (HMR, /_next/*) through tunnels — needed to test
@@ -37,6 +64,9 @@ const nextConfig = {
     '@cockpit/feature-workspace',
   ],
   turbopack: {
+    // The same pinned root as outputFileTracingRoot — the dev server infers it
+    // separately and warns about the same two lockfiles.
+    root: WORKSPACE_ROOT,
     // Stub Node built-ins for the BROWSER bundle only. `web-tree-sitter` ships
     // a Node-detection branch full of `await import("fs/promises" | "module" | ...)`
     // calls that the static analyzer tries to resolve, even though they are
