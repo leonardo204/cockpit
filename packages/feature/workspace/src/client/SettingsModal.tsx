@@ -17,6 +17,7 @@ import {
 // `window.naby` is absent — i.e. in the plain browser dev server.
 import { NabyProviderSettings } from './NabyProviderSetup';
 import { UpdatePanel } from './UpdatePanel';
+import { DevModePanel } from './DevModePanel';
 // P15-06. The scoped-memory review + delete panel. Given the active session/cwd
 // so its `session`/`project` scopes are addressable; `user` scope needs neither.
 import { NabyMemoryReview } from './NabyMemoryReview';
@@ -78,6 +79,10 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [appVersion, setAppVersion] = useState<string>('');
+  // The packaged app's own version (package.json / the release tag), read from
+  // the update bridge — the only place the main process publishes it. Absent in
+  // the browser dev server, where the shell version is all there is.
+  const [nabyVersion, setNabyVersion] = useState<string>('');
 
   // Language: 'en', 'ko', or 'auto' (use browser detection)
   const [language, setLanguageState] = useState<string>('auto');
@@ -127,6 +132,16 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
       if (exit._tag === 'Success' && exit.value.version) {
         setAppVersion(exit.value.version);
       }
+    });
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const w = window as unknown as {
+      naby?: { updates?: { get(): Promise<{ ok: boolean; value?: { currentVersion?: string } }> } };
+    };
+    void w.naby?.updates?.get().then((r) => {
+      if (r?.ok && r.value?.currentVersion) setNabyVersion(r.value.currentVersion);
     });
   }, [isOpen]);
 
@@ -312,7 +327,20 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                   {/* APP_TITLE, not APP_NAME: the About box is exactly where a
                       tester looks to confirm which build they are reporting on,
                       and "Alpha" is the most important word there. */}
-                  <p>{APP_TITLE}{appVersion ? ` · shell v${appVersion}` : ''}</p>
+                  {/* THE APP VERSION FIRST. This line used to show only the
+                      cockpit shell's package version (1.0.245), which is not the
+                      number on the release, the tag, or the update dialog — a
+                      tester reading "v1.0.245" next to an update that just
+                      installed 1.3.0 has no way to tell which is real. The shell
+                      version stays, demoted, because it is still useful when the
+                      submodule and the app move independently. */}
+                  <p>
+                    {APP_TITLE}
+                    {nabyVersion ? ` · v${nabyVersion}` : ''}
+                  </p>
+                  {appVersion ? (
+                    <p className="text-muted-foreground/60">shell v{appVersion}</p>
+                  ) : null}
                   <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
                 </div>
 
@@ -326,6 +354,8 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                   </label>
                   <UpdatePanel />
                 </div>
+
+                <DevModePanel />
               </div>
             ) : null}
           </div>

@@ -1669,5 +1669,15 @@
     "unsupported": "This build cannot update itself. Download from the releases page.",
     "failed": "Could not check for updates.",
     "desktopOnly": "Available in the desktop app only."
+  },
+  "devMode": {
+    "title": "Developer mode",
+    "description": "Enter the key to use the Claude and ChatGPT subscription sign-ins in this release build. Intended for testing a shipped artifact.",
+    "placeholder": "Developer mode key",
+    "unlock": "Unlock",
+    "lock": "Lock again",
+    "unlockedRestart": "Unlocked. Restart the app to apply.",
+    "active": "Unlocked — active in this launch.",
+    "wrongKey": "That key does not match."
   }
 }
