@@ -31,11 +31,23 @@ interface DevModeStatus {
   activeNow: boolean;
 }
 
+type UnlockOutcome = 'unlocked' | 'mismatch' | 'unavailable' | 'not-persisted';
+
 interface DevModeBridge {
   status(): Promise<Result<DevModeStatus>>;
-  unlock(key: string): Promise<Result<boolean>>;
+  unlock(key: string): Promise<Result<UnlockOutcome>>;
   lock(): Promise<Result<void>>;
 }
+
+/** Which message to show. `'transport'` is the bridge itself failing. */
+type Failure = Exclude<UnlockOutcome, 'unlocked'> | 'transport';
+
+const FAILURE_KEY: Record<Failure, string> = {
+  mismatch: 'devMode.wrongKey',
+  'not-persisted': 'devMode.notPersisted',
+  unavailable: 'devMode.unavailable',
+  transport: 'devMode.failed',
+};
 
 function bridge(): DevModeBridge | null {
   if (typeof window === 'undefined') return null;
@@ -48,7 +60,11 @@ export function DevModePanel() {
   const [status, setStatus] = useState<DevModeStatus | null>(null);
   const [key, setKey] = useState('');
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  // Off by default — this is a secret. But a masked field that rejects a key the
+  // user knows is right is undiagnosable: an active Korean IME, a smart-quoted
+  // paste and a trailing newline all look identical as dots. Let them look.
+  const [reveal, setReveal] = useState(false);
 
   const refresh = useCallback(async () => {
     const api = bridge();
@@ -65,12 +81,18 @@ export function DevModePanel() {
     const api = bridge();
     if (!api || !key.trim()) return;
     setBusy(true);
-    setFailed(false);
+    setFailure(null);
     try {
+      // Sent verbatim. The main process tries the exact string first and the
+      // trimmed one as a fallback, so a key with real edge whitespace still
+      // works while a stray pasted newline stops being a silent rejection.
       const r = await api.unlock(key);
-      const okNow = r.ok && r.value === true;
-      setFailed(!okNow);
-      if (okNow) setKey(''); // never leave the key sitting in the DOM
+      if (!r.ok) setFailure('transport');
+      else if (r.value !== 'unlocked') setFailure(r.value);
+      else {
+        setKey(''); // never leave the key sitting in the DOM
+        setReveal(false);
+      }
       await refresh();
     } finally {
       setBusy(false);
@@ -79,7 +101,7 @@ export function DevModePanel() {
 
   const relock = useCallback(async () => {
     await bridge()?.lock();
-    setFailed(false);
+    setFailure(null);
     await refresh();
   }, [refresh]);
 
@@ -110,15 +132,25 @@ export function DevModePanel() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <input
-              type="password"
+              type={reveal ? 'text' : 'password'}
               value={key}
               onChange={(e) => setKey(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void submit();
               }}
               placeholder={t('devMode.placeholder')}
-              className="flex-1 px-2 py-1.5 text-xs rounded-md bg-background border border-border text-foreground focus:outline-none focus:ring-1 focus:ring-brand"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              className="flex-1 px-2 py-1.5 text-xs font-mono rounded-md bg-background border border-border text-foreground focus:outline-none focus:ring-1 focus:ring-brand"
             />
+            <button
+              onClick={() => setReveal((v) => !v)}
+              className="px-3 py-1.5 text-xs rounded-md bg-accent text-foreground hover:bg-accent/80 transition-colors"
+            >
+              {t(reveal ? 'devMode.hide' : 'devMode.reveal')}
+            </button>
             <button
               onClick={submit}
               disabled={busy || !key.trim()}
@@ -127,7 +159,17 @@ export function DevModePanel() {
               {t('devMode.unlock')}
             </button>
           </div>
-          {failed && <p className="text-xs text-red-500">{t('devMode.wrongKey')}</p>}
+          {/* Character count, always. It is the one clue that survives masking:
+              a key of the wrong length is a paste or an IME problem, not a
+              memory problem, and the user can see that at a glance. */}
+          {key.length > 0 && (
+            <p className="text-xs text-muted-foreground/60">
+              {/* `n`, not `count` — i18next treats `count` as a plural selector
+                  and would look for charCount_one / charCount_other. */}
+              {t('devMode.charCount', { n: key.length })}
+            </p>
+          )}
+          {failure && <p className="text-xs text-red-500">{t(FAILURE_KEY[failure])}</p>}
         </div>
       )}
     </div>
