@@ -83,7 +83,15 @@ export const POST = handler((req) =>
         const store = getStore()
         // Persist the status (and title override, when supplied) as Naby
         // settings so the panel's own reload sees them — no state.json write.
-        store.setSetting(statusKey(sessionId), status || "normal")
+        //
+        // STATUS IS ONLY WRITTEN WHEN SENT. It used to be forced to
+        // `status || "normal"` on every POST, so a title-only write (a rename)
+        // silently cleared an unread badge. Same shape as the projects route
+        // that wiped its rows on a width-only POST: a partial update must touch
+        // only what it carries.
+        if (status !== undefined) {
+          store.setSetting(statusKey(sessionId), status || "normal")
+        }
         if (title !== undefined) {
           store.setSetting(customTitleKey(sessionId), title)
         }

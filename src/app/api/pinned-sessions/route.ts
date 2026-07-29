@@ -11,6 +11,12 @@
  * The WIRE CONTRACT is unchanged — GET returns `{ sessions: PinnedSession[] }`
  * and POST accepts `{ sessions: PinnedSession[] }` (the full desired set), with
  * `PinnedSession { sessionId, cwd, customTitle? }`.
+ *
+ * ORDER IS PART OF THAT CONTRACT (schema v7). GET lists in pin order — earliest
+ * pin first, which is how the tab bar stacks pinned tabs left-to-right — and
+ * POST persists whatever order it is handed. Before v7 the store sorted pinned
+ * sessions by last-used, so pinned tabs rearranged themselves as soon as the
+ * user typed in one.
  */
 import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
@@ -20,7 +26,18 @@ import { getStore } from "@cockpit/feature-agent/server/engines/naby"
 export interface PinnedSession {
   sessionId: string
   cwd: string
+  /**
+   * The USER'S OWN name for the session, and only that.
+   *
+   * It used to fall back to the derived title, which made the two
+   * indistinguishable on the wire — so a client could not tell "the user named
+   * this" from "this is what the conversation is about". The chat tab needs
+   * exactly that distinction: a real rename must override and freeze the tab
+   * label, while a derived title must not.
+   */
   customTitle?: string
+  /** The derived title, for rendering when there is no rename. */
+  title?: string
 }
 
 const customTitleKey = (sessionId: string) => `session.customTitle.${sessionId}`
@@ -32,7 +49,8 @@ function readPinned(): PinnedSession[] {
     return {
       sessionId: ref.sessionId,
       cwd: ref.cwd ?? "",
-      customTitle: custom && custom.trim() ? custom : ref.title,
+      ...(custom && custom.trim() ? { customTitle: custom } : {}),
+      ...(ref.title ? { title: ref.title } : {}),
     }
   })
 }
@@ -66,14 +84,24 @@ export const POST = handler((req) =>
           }
         }
 
-        // Pin each listed session and persist its custom title (when given).
-        for (const s of desired) {
-          if (!s.sessionId) continue
-          store.setSessionPinned(s.sessionId, true)
+        // THE ARRAY ORDER IS THE TRUTH. The client always sends its full,
+        // ordered pinned set, and that order is what the tab bar and the sidebar
+        // list render — including after a manual drag. So each session is
+        // stamped by its INDEX rather than by the clock: a plain pin appends
+        // (the client appends), and a reorder is persisted by the same write
+        // with no second endpoint.
+        //
+        // The stamps are spaced from a single base so they stay monotonic and
+        // comparable; their absolute value carries no meaning beyond ordering.
+        const base = Date.now()
+        desired.forEach((s, index) => {
+          if (!s.sessionId) return
+          store.setSessionPinned(s.sessionId, false)
+          store.setSessionPinned(s.sessionId, true, base + index)
           if (s.customTitle !== undefined) {
             store.setSetting(customTitleKey(s.sessionId), s.customTitle)
           }
-        }
+        })
       },
       catch: (cause) =>
         new FSError({ path: "app.db:pinned-sessions", op: "write", cause }),

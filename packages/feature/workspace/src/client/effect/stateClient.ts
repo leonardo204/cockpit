@@ -110,6 +110,33 @@ export const updateSessionStatus = (
       new AppError({ message: "updateSessionStatus failed", cause }),
   })
 
+/**
+ * Rename a session — the user's own title, which then STICKS.
+ *
+ * Titles are normally derived from the conversation and re-derived as it grows.
+ * Writing `session.customTitle.<id>` overrides that for good; sending an EMPTY
+ * string clears the override and hands the session back to the automatic title,
+ * which is the only way back.
+ *
+ * `status` is deliberately not sent: this must not disturb the unread badge.
+ */
+export const renameSession = (
+  sessionId: string,
+  title: string,
+  cwd = ""
+): Effect.Effect<void, AppError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const res = await fetch("/api/global-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd, sessionId, title }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    },
+    catch: (cause) => new AppError({ message: "renameSession failed", cause }),
+  })
+
 // ─────────────────────────────────────────────────────────
 // scheduled-tasks (PATCH mark read by session)
 // ─────────────────────────────────────────────────────────
