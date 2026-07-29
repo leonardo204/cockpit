@@ -16,6 +16,13 @@
   - Positioning calculations must account for the boundaries of the current panel
   - z-index levels must be managed consistently
   - Prevent components from overflowing into adjacent panels
+  - **Never put `overflow-hidden` on a container that hosts an escaping
+    popover.** The sidebar's Recent sessions / Pinned sessions / Scheduled tasks
+    each open an `absolute left-full` panel *outside* the sidebar; one
+    `overflow-hidden` on the sidebar root erased all three, and the buttons
+    simply did nothing. Clip on the parts that scroll instead. Neither tests nor
+    typecheck can see this — jsdom has no layout — so the guard is a source
+    assertion (`sidebarPopoverClipping.test.ts`)
 
 ## React Performance Conventions
 
