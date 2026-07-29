@@ -12,7 +12,7 @@
  * and the HTML-apps launcher all went with the panels they drove.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ProjectSessionsModal } from '@cockpit/feature-agent';
 import { ChatProvider } from '@cockpit/feature-agent';
@@ -20,6 +20,8 @@ import { PanelPortalProvider, ResizeHandle } from '@cockpit/shared-ui';
 import { useTabState } from './useTabState';
 import { TabManagerTopBar } from './TabManagerTopBar';
 import { TabBar } from './TabBar';
+import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
+import { orderTabs, planDrop, pinRankOf } from './tabOrder';
 import {
   FileBrowserPanel,
   FILES_DEFAULT_WIDTH,
@@ -32,8 +34,9 @@ import { usePinnedSessions } from '@cockpit/feature-agent';
 import { useScheduledTasks } from '@cockpit/feature-agent';
 import { Effect } from 'effect';
 import { IframeBus, Topics } from '@cockpit/effect-services';
+import { publishTopic } from '@cockpit/effect-react';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
-import { updateSessionStatus, markScheduledTasksReadBySession } from './effect/stateClient';
+import { updateSessionStatus, renameSession, markScheduledTasksReadBySession } from './effect/stateClient';
 
 interface TabManagerProps {
   initialCwd?: string;
@@ -59,12 +62,13 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     updateTabPlanMode,
     handleTabDragStart,
     handleTabDragOver,
-    handleTabDrop,
+    reorderTabs,
     handleTabDragEnd,
   } = useTabState({ initialCwd, initialSessionId, activeView: 'agent' });
 
-  // Pin state management
-  const { isPinned, pinSession, unpinSession } = usePinnedSessions();
+  // Pin state management. `pinnedSessions` is ORDERED — the server lists by pin
+  // time (schema v7), earliest first — and that order is what the tab bar uses.
+  const { pinnedSessions, isPinned, pinSession, unpinSession, reorder } = usePinnedSessions();
 
   // Scheduled tasks
   const { createTask: createScheduledTask } = useScheduledTasks();
@@ -76,6 +80,8 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
 
   const handleTogglePin = useCallback((tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
+    // A tab with no session has nothing to pin yet: pinning is per SESSION, and
+    // a blank tab is not one until its first turn creates it.
     if (!tab?.sessionId) return;
     if (isPinned(tab.sessionId)) {
       unpinSession(tab.sessionId);
@@ -83,6 +89,119 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       pinSession(tab.sessionId, tab.cwd || initialCwd || '', tab.title);
     }
   }, [tabs, isPinned, pinSession, unpinSession, initialCwd]);
+
+  // ── Tab ORDER: unpinned first, pinned parked at the right ────────────────
+  //
+  // Pinned tabs are stacked in PIN order (earliest leftmost), which is the order
+  // the server hands back. Everything else keeps the order the user dragged it
+  // into. Deriving this instead of storing it means a pin/unpin never has to
+  // rewrite the tab array — the tab simply changes groups.
+  // The rules themselves live in ./tabOrder, so they can be asserted without
+  // rendering the app — see tabOrder.test.ts.
+  const pinnedIds = useMemo(() => pinnedSessions.map((p) => p.sessionId), [pinnedSessions]);
+  const displayTabs = useMemo(() => orderTabs(tabs, pinnedIds), [tabs, pinnedIds]);
+
+  // ── Drag: order only. Pinning is the menu's job ──────────────────────────
+  //
+  // The rules are in ./tabOrder (tabOrder.test.ts). A drop across the boundary
+  // was briefly made to pin/unpin, and it had to be undone: with one pinned
+  // tab, every possible drop target was unpinned, so moving the tab always cost
+  // the pin. A move must not undo a deliberate choice. Cross-group drops are
+  // declined VISIBLY — the bar shows the "no" cursor — rather than silently.
+  /** Whether a drop at this index would do anything — the tab bar uses it to
+   *  show a "no" cursor instead of silently swallowing the drag. */
+  const canDropAt = useCallback((targetIndex: number) => {
+    return planDrop(displayTabs, pinnedIds, dragTabIndex, targetIndex).kind !== 'none';
+  }, [displayTabs, pinnedIds, dragTabIndex]);
+
+  const handleGroupedDrop = useCallback((targetIndex: number) => {
+    const plan = planDrop(displayTabs, pinnedIds, dragTabIndex, targetIndex);
+    handleTabDragEnd();
+    if (plan.kind === 'reorder-tabs') {
+      reorderTabs(plan.fromId, plan.toId);
+    } else if (plan.kind === 'reorder-pins') {
+      // Reordering the pinned group means reordering the PINNED SET itself: the
+      // route takes the whole ordered set and stamps pin order from the array
+      // index, so this one write is what persists the order across restarts.
+      // Every id is already in the set, so nothing can be unpinned by a move.
+      const byId = new Map(pinnedSessions.map((p) => [p.sessionId, p]));
+      reorder(plan.pinnedIds.map((id) => byId.get(id)!).filter(Boolean));
+    }
+  }, [displayTabs, pinnedIds, dragTabIndex, handleTabDragEnd, reorderTabs, pinnedSessions, reorder]);
+
+  // ── Pinned tabs come back when the project opens ─────────────────────────
+  //
+  // This is the ONE exception to the rule in useTabState that opening a project
+  // starts a fresh session and never rebuilds the old tab layout. That rule
+  // exists because silently reconnecting the last session was a real complaint;
+  // a pin is the opposite of silent — the user asked for that session to stay.
+  //
+  // Runs once per project open, after the pinned set has loaded. `restoredRef`
+  // guards the second pass that arrives when the pinned list refreshes, which
+  // would otherwise reopen a tab the user had just closed.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || !initialCwd || pinnedSessions.length === 0) return;
+    restoredRef.current = true;
+    const open = new Set(tabs.map((t) => t.sessionId).filter(Boolean));
+    for (const p of pinnedSessions) {
+      if (p.cwd !== initialCwd || open.has(p.sessionId)) continue;
+      handleOpenSession(p.sessionId, p.customTitle);
+    }
+    // `tabs` is read as a snapshot on purpose: re-running on every tab change
+    // would fight the user's own closes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCwd, pinnedSessions, handleOpenSession]);
+
+  // ── A rename made ANYWHERE reaches the tab ───────────────────────────────
+  //
+  // The name is stored once (`session.customTitle.<id>`), but the tab carries
+  // its own copy of the label, so a rename done in the sidebar's pinned list
+  // used to show up there and nowhere else. Whenever the pinned set arrives —
+  // on load and after any pin/rename — its overrides are pushed onto the
+  // matching tabs and locked, so the derived title stops fighting them.
+  useEffect(() => {
+    for (const p of pinnedSessions) {
+      if (!p.customTitle) continue;
+      const tab = tabs.find((t) => t.sessionId === p.sessionId);
+      if (!tab || tab.title === p.customTitle) continue;
+      updateTabState(tab.id, { title: p.customTitle, lockTitle: true });
+    }
+  }, [pinnedSessions, tabs, updateTabState]);
+
+  // ── Right-click menu + rename ────────────────────────────────────────────
+  const [menu, setMenu] = useState<TabContextMenuState | null>(null);
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null);
+
+  const openTabMenu = useCallback((tabId: string, x: number, y: number) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    setMenu({ tabId, x, y, isPinned: pinRankOf(pinnedIds, tab?.sessionId) >= 0 });
+  }, [tabs, pinnedIds]);
+
+  /**
+   * Commit a rename. An EMPTY name is not a name — it clears the override and
+   * hands the tab back to the automatic title, which is the only way back once
+   * a title has been fixed.
+   */
+  const commitRename = useCallback((tabId: string, raw: string) => {
+    setRenamingTabId(null);
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab?.sessionId) return;
+    const title = raw.trim();
+    // An empty name hands the tab BACK to the automatic title — the only way to
+    // undo a rename — so the lock is released with it.
+    updateTabState(tabId, title ? { title, lockTitle: true } : { titleLocked: false });
+    BrowserRuntime.runFork(
+      renameSession(tab.sessionId, title, tab.cwd || initialCwd || '').pipe(
+        Effect.orElse(() => Effect.void),
+      ),
+    );
+    // The name is one setting, but the pinned list holds its own copy and only
+    // refetches when told. Without this a rename showed up in Recent sessions
+    // (which rebuilds per request) and nowhere else, which looks like it only
+    // half-saved.
+    publishTopic(Topics.PinnedSessionsChanged, {});
+  }, [tabs, updateTabState, initialCwd]);
 
   // UI state
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
@@ -245,22 +364,34 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
           <PanelPortalProvider>
             <div className="w-full h-full flex flex-col">
               <TabBar
-                tabs={tabs}
+                tabs={displayTabs}
                 activeTabId={activeTabId}
                 unreadTabs={unreadTabs}
                 dragTabIndex={dragTabIndex}
                 dragOverTabIndex={dragOverTabIndex}
                 isPinned={isTabPinned}
-                onTogglePin={handleTogglePin}
+                onTabContextMenu={openTabMenu}
+                renamingTabId={renamingTabId}
+                onRenameCommit={commitRename}
+                onRenameCancel={() => setRenamingTabId(null)}
                 onSwitchTab={switchTab}
                 onCloseTab={closeTab}
                 onNewTab={handleNewTab}
                 onOpenProjectSessions={initialCwd ? () => setIsProjectSessionsOpen(true) : undefined}
                 onDragStart={handleTabDragStart}
                 onDragOver={handleTabDragOver}
-                onDrop={handleTabDrop}
+                canDropAt={canDropAt}
+                onDrop={handleGroupedDrop}
                 onDragEnd={handleTabDragEnd}
               />
+              {menu && (
+                <TabContextMenu
+                  state={menu}
+                  onClose={() => setMenu(null)}
+                  onTogglePin={handleTogglePin}
+                  onRename={setRenamingTabId}
+                />
+              )}
               <div className="flex-1 overflow-hidden relative">
                 {tabs.map((tab) => (
                   <div

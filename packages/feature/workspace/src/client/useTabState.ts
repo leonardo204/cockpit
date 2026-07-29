@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { usePageVisible, useWebSocket } from '@cockpit/shared-ui';
+import { applyTitleUpdate } from './titleLock';
 import type { ChatEngine } from '@cockpit/feature-agent';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
@@ -26,6 +27,14 @@ export interface TabInfo {
   isLoading?: boolean;
   engine?: ChatEngine;
   planMode?: boolean;
+  /**
+   * The user renamed this tab, so the derived title must stop overwriting it.
+   *
+   * Titles are normally re-derived from the conversation as it grows, which is
+   * right until someone picks a name — after that, watching your own label get
+   * replaced by the next question you asked is just the app arguing with you.
+   */
+  titleLocked?: boolean;
 }
 
 // ============================================
@@ -399,7 +408,15 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   }, [initialCwd, addTab]);
 
   // Update tab state (loading, sessionId)
-  const updateTabState = useCallback((tabId: string, updates: { isLoading?: boolean; sessionId?: string; title?: string }) => {
+  const updateTabState = useCallback((tabId: string, updates: {
+    isLoading?: boolean;
+    sessionId?: string;
+    title?: string;
+    /** Set with a rename: pins the title so the derived one stops overwriting it. */
+    lockTitle?: boolean;
+    /** Clear the lock, handing the tab back to the automatic title. */
+    titleLocked?: false;
+  }) => {
     setTabs((prev) => {
       const oldTab = prev.find(t => t.id === tabId);
       if (oldTab?.isLoading && updates.isLoading === false) {
@@ -418,9 +435,15 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
           if (sid) updateSessionStatus(sid, 'normal');
         }
       }
-      return prev.map((tab) =>
-        tab.id === tabId ? { ...tab, ...updates } : tab
-      );
+      // The title rule lives in ./titleLock so it can be asserted on its own —
+      // it is the entire "a rename sticks" requirement, and getting it wrong
+      // looks like the rename never saved.
+      // The PREVIOUS tab goes in, not a pre-merged one. Passing
+      // `{...tab, ...updates}` here silently disabled the lock: the function
+      // restores `tab.title` when locked, and on a merged object that is
+      // already the incoming title, so a renamed tab was overwritten by the
+      // next derived title as if the rename had never happened.
+      return prev.map((tab) => (tab.id === tabId ? applyTitleUpdate(tab, updates) : tab));
     });
   }, [activeTabId, updateSessionStatus]);
 
@@ -496,6 +519,27 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     setDragOverTabIndex(null);
   }, [dragTabIndex]);
 
+  /**
+   * Move one tab in front of another, BY ID.
+   *
+   * The index-based `handleTabDrop` above cannot serve the tab bar any more:
+   * the bar renders pinned tabs in their own group at the right, so a displayed
+   * index no longer matches this array's index. Ids are unambiguous in both
+   * orders, which is why the caller translates to them.
+   */
+  const reorderTabs = useCallback((fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setTabs((prev) => {
+      const from = prev.findIndex((t) => t.id === fromId);
+      const to = prev.findIndex((t) => t.id === toId);
+      if (from < 0 || to < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
+
   const handleTabDragEnd = useCallback(() => {
     setDragTabIndex(null);
     setDragOverTabIndex(null);
@@ -526,6 +570,7 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     handleTabDragStart,
     handleTabDragOver,
     handleTabDrop,
+    reorderTabs,
     handleTabDragEnd,
   };
 }

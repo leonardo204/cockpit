@@ -69,7 +69,13 @@ interface TabBarProps {
   dragTabIndex: number | null;
   dragOverTabIndex: number | null;
   isPinned?: (tabId: string) => boolean;
-  onTogglePin?: (tabId: string) => void;
+  /** Right-click on a tab. Pin/unpin and rename live in that menu now — the
+   *  hover icon they replaced was read as a bell and never found. */
+  onTabContextMenu?: (tabId: string, x: number, y: number) => void;
+  /** The tab currently being renamed, if any; its label becomes an input. */
+  renamingTabId?: string | null;
+  onRenameCommit?: (tabId: string, title: string) => void;
+  onRenameCancel?: () => void;
   onSwitchTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onNewTab: () => void;
@@ -78,6 +84,9 @@ interface TabBarProps {
   onOpenProjectSessions?: () => void;
   onDragStart: (index: number) => void;
   onDragOver: (e: React.DragEvent, index: number) => void;
+  /** Whether dropping here would do anything. A refused drop shows the "no"
+   *  cursor and no insert line, rather than looking like a broken drag. */
+  canDropAt?: (index: number) => boolean;
   onDrop: (index: number) => void;
   onDragEnd: () => void;
 }
@@ -89,13 +98,17 @@ export function TabBar({
   dragTabIndex,
   dragOverTabIndex,
   isPinned,
-  onTogglePin,
+  onTabContextMenu,
+  renamingTabId,
+  onRenameCommit,
+  onRenameCancel,
   onSwitchTab,
   onCloseTab,
   onNewTab,
   onOpenProjectSessions,
   onDragStart,
   onDragOver,
+  canDropAt,
   onDrop,
   onDragEnd,
 }: TabBarProps) {
@@ -107,10 +120,42 @@ export function TabBar({
           <Tooltip key={tab.id} content={tab.title} delay={200} className="flex-1 min-w-16 max-w-[260px]">
             <div
               draggable
-              onDragStart={() => onDragStart(index)}
-              onDragOver={(e) => onDragOver(e, index)}
-              onDrop={() => onDrop(index)}
+              onDragStart={(e) => {
+                // THE DRAG MUST CARRY DATA. Chromium refuses to fire `drop` for
+                // a drag whose dataTransfer is empty: dragstart and dragover
+                // both fire (the tab dims, the insert line shows) and then the
+                // tab simply springs back, which reads as "reordering is
+                // broken" rather than as a missing API call. The payload itself
+                // is unused — the index props carry the real information — but
+                // it has to exist.
+                e.dataTransfer.setData('text/plain', tab.id);
+                e.dataTransfer.effectAllowed = 'move';
+                onDragStart(index);
+              }}
+              onDragOver={(e) => {
+                // A cross-group drop is refused by design (pinning is an
+                // explicit choice, never a side effect of a drag). Say so with
+                // the cursor: an accepted-looking drag that then springs back
+                // is indistinguishable from a bug.
+                if (canDropAt && !canDropAt(index)) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'none';
+                  return;
+                }
+                e.dataTransfer.dropEffect = 'move';
+                onDragOver(e, index);
+              }}
+              onDrop={(e) => {
+                // Without this the browser handles the drop itself (navigating
+                // to the dropped text), and the handler below never runs.
+                e.preventDefault();
+                onDrop(index);
+              }}
               onDragEnd={onDragEnd}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                onTabContextMenu?.(tab.id, e.clientX, e.clientY);
+              }}
               className={`group flex items-center gap-1 px-3 py-1.5 text-sm cursor-pointer rounded-t-lg border-t-[1.5px] transition-colors ${
                 tab.id === activeTabId
                   ? 'border-brand bg-slate-4 text-foreground font-medium'
@@ -136,38 +181,42 @@ export function TabBar({
                 {!tab.isLoading && unreadTabs.has(tab.id) && tab.id !== activeTabId && (
                   <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
                 )}
-                {/* Pin badge - top-right (shown when not overlapping loading/unread) */}
-                {onTogglePin && isPinned?.(tab.id) && !tab.isLoading && !(unreadTabs.has(tab.id) && tab.id !== activeTabId) && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTogglePin(tab.id);
-                    }}
-                    className="absolute -top-1 -right-1 w-3.5 h-3.5 flex items-center justify-center rounded-full bg-card text-amber-500 hover:text-destructive transition-colors"
-                    title={t('tabBar.unpin')}
-                  >
-                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M16 4h-2V2h-4v2H8c-.55 0-1 .45-1 1v4l-2 3v2h5.97v7l1 1 1-1v-7H19v-2l-2-3V5c0-.55-.45-1-1-1z" />
-                    </svg>
-                  </button>
-                )}
-                {/* Show pin icon on hover when not pinned - top-right */}
-                {onTogglePin && !isPinned?.(tab.id) && !tab.isLoading && !(unreadTabs.has(tab.id) && tab.id !== activeTabId) && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTogglePin(tab.id);
-                    }}
-                    className="absolute -top-1 -right-1 w-3.5 h-3.5 flex items-center justify-center rounded-full bg-card text-muted-foreground opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:!text-brand transition-all"
-                    title={t('tabBar.pin')}
+                {/* Pinned indicator. NOT a button: pinning moved into the
+                    right-click menu, because as a hover-only icon in the corner
+                    of a tab it was mistaken for a bell and never used. This only
+                    reports state. */}
+                {isPinned?.(tab.id) && !tab.isLoading && !(unreadTabs.has(tab.id) && tab.id !== activeTabId) && (
+                  <span
+                    className="absolute -top-1 -right-1 w-3.5 h-3.5 flex items-center justify-center rounded-full bg-card text-brand"
+                    title={t('tabBar.pinned')}
+                    aria-label={t('tabBar.pinned')}
                   >
                     <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                      <path d="M16 4h-2V2h-4v2H8c-.55 0-1 .45-1 1v4l-2 3v2h5.97v7l1 1 1-1v-7H19v-2l-2-3V5c0-.55-.45-1-1-1z" />
+                      <path d="M15 4.5l-4 4L7 10l-2 2 7 7 2-2 1.5-4 4-4z" />
+                      <path d="M9 15l-4.5 4.5" />
                     </svg>
-                  </button>
+                  </span>
                 )}
               </div>
-              <span className="flex-1 min-w-0 truncate">{tab.title}</span>
+              {renamingTabId === tab.id ? (
+                <input
+                  autoFocus
+                  data-testid="tab-rename-input"
+                  defaultValue={tab.title}
+                  onClick={(e) => e.stopPropagation()}
+                  // Commit on blur as well as Enter: clicking away is what most
+                  // people do, and losing the typed name there would be rude.
+                  onBlur={(e) => onRenameCommit?.(tab.id, e.target.value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter') onRenameCommit?.(tab.id, e.currentTarget.value);
+                    if (e.key === 'Escape') onRenameCancel?.();
+                  }}
+                  className="flex-1 min-w-0 px-1 py-0 text-sm bg-background border border-brand rounded outline-none"
+                />
+              ) : (
+                <span className="flex-1 min-w-0 truncate">{tab.title}</span>
+              )}
               {/* No per-tab engine badge: Naby runs a single engine, so every
                   tab is the same runtime and a tag would be noise. */}
               {/* Close is offered on EVERY tab, including the last one.

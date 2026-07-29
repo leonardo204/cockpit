@@ -1464,7 +1464,9 @@
   },
   "tabBar": {
     "unpin": "고정 해제",
-    "pin": "즐겨찾기에 고정",
+    "pin": "탭 고정",
+    "pinned": "고정된 탭",
+    "rename": "이름 변경",
     "closeTab": "탭 닫기",
     "newTab": "새 탭"
   },

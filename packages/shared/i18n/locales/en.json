@@ -1464,7 +1464,9 @@
   },
   "tabBar": {
     "unpin": "Unpin",
-    "pin": "Pin to favorites",
+    "pin": "Pin tab",
+    "pinned": "Pinned tab",
+    "rename": "Rename",
     "closeTab": "Close tab",
     "newTab": "New tab"
   },
