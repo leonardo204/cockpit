@@ -150,8 +150,19 @@ export function ProjectSidebar({
   }, []);
 
   return (
+    // NO `overflow-hidden` HERE. It was added with the drag-to-resize handle to
+    // keep content from spilling mid-drag, and it silently broke all three of
+    // the bottom panels: Recent sessions, Pinned sessions and Scheduled tasks
+    // each open an `absolute left-full` popover — deliberately OUTSIDE this
+    // element, to the right of the sidebar — and a clipping ancestor erased
+    // them. Clicking did nothing at all, which reads as a dead button rather
+    // than as a layout bug.
+    //
+    // Clipping belongs on the parts that scroll, not on the panel that hosts
+    // escaping popovers: the project list below sets its own overflow-y-auto,
+    // and the rows truncate their own text.
     <div
-      className={`h-full bg-card flex flex-col shrink-0 overflow-hidden ${
+      className={`h-full bg-card flex flex-col shrink-0 ${
         resizing ? '' : 'transition-[width] duration-200'
       }`}
       style={{ width: collapsed ? SIDEBAR_COLLAPSED_WIDTH : width }}

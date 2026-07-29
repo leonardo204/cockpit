@@ -18,8 +18,15 @@ interface RecentSessionsModalProps {
 
 /**
  * RecentSessionsModal — a searchable, cross-project view of every persisted
- * recent session (week-bounded, 15–100). Opened from the GlobalSessionMonitor
- * search button; complements the sidebar dropdown which only shows the top 15.
+ * recent session (up to 100). Opened from the GlobalSessionMonitor search
+ * button; complements the sidebar dropdown which only shows the top 15.
+ *
+ * "RECENT" IS NOT A TIME WINDOW. It once was — this comment used to say
+ * "week-bounded", inherited from the state.json list that expired rows by age —
+ * and the store-backed builder has no such rule. A session is recent when it is
+ * in the most-recently-used top N and is not hidden by the "clear recents"
+ * watermark. Nothing ages out, so a months-old session still appears if nothing
+ * newer has displaced it.
  *
  * Visually aligned with ProjectSessionsModal (same modal shell + grid card
  * layout + absolute timestamps + first/last message preview). The only
