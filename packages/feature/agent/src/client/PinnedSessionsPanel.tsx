@@ -72,7 +72,7 @@ export function PinnedSessionsPanel({
   const startEdit = useCallback((session: PinnedSession, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingId(session.sessionId);
-    setEditValue(session.customTitle || '');
+    setEditValue(session.customTitle || session.title || '');
   }, []);
 
   const saveEdit = useCallback(() => {
@@ -149,9 +149,23 @@ export function PinnedSessionsPanel({
                 <div
                   key={session.sessionId}
                   draggable
-                  onDragStart={() => handleDragStart(index)}
-                  onDragOver={(e) => handleDragOver(e, index)}
-                  onDrop={() => handleDrop(index)}
+                  // Chromium will not fire `drop` for a drag whose
+                  // dataTransfer is empty — the row dims, the insert line
+                  // shows, and then it springs back. The payload is unused; it
+                  // only has to exist.
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('text/plain', session.sessionId);
+                    e.dataTransfer.effectAllowed = 'move';
+                    handleDragStart(index);
+                  }}
+                  onDragOver={(e) => {
+                    e.dataTransfer.dropEffect = 'move';
+                    handleDragOver(e, index);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleDrop(index);
+                  }}
                   onDragEnd={handleDragEnd}
                   onClick={() => handleSessionClick(session)}
                   className={`group w-full px-3 py-2 text-left hover:bg-accent transition-colors flex items-start gap-2 cursor-pointer ${
@@ -191,7 +205,7 @@ export function PinnedSessionsPanel({
                       />
                     ) : (
                       <div className="text-xs text-foreground/80 truncate">
-                        {session.customTitle || session.sessionId.slice(0, 8)}
+                        {session.customTitle || session.title || session.sessionId.slice(0, 8)}
                       </div>
                     )}
                   </div>

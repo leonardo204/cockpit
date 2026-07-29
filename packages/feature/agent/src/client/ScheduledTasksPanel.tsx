@@ -192,9 +192,22 @@ export function ScheduledTasksPanel({
                   <div
                     key={task.id}
                     draggable
-                    onDragStart={() => handleDragStart(index)}
-                    onDragOver={(e) => handleDragOver(e, index)}
-                    onDrop={() => handleDrop(index)}
+                    // See PinnedSessionsPanel: an empty dataTransfer means
+                    // Chromium never fires `drop`, so the reorder silently
+                    // never happens.
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', task.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                      handleDragStart(index);
+                    }}
+                    onDragOver={(e) => {
+                      e.dataTransfer.dropEffect = 'move';
+                      handleDragOver(e, index);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleDrop(index);
+                    }}
                     onDragEnd={handleDragEnd}
                     className={`group px-3 py-2 hover:bg-accent transition-colors border-b border-border/50 cursor-pointer ${
                       task.unread ? 'bg-brand/5' : ''
