@@ -50,6 +50,12 @@ type GrowthWire = {
   correctedAfter: number;
   tripwires: number;
   excluded: number;
+  /** P3-M8d — the implicit axis. RAW counts plus the weight they entered the
+   *  bound at; all three absent when nothing has been reviewed yet, which is
+   *  also when the sentence must not be rendered (it would read as "0 of 0"). */
+  implicitTrials?: number;
+  implicitHits?: number;
+  implicitWeight?: number;
   blockedByTripwire?: boolean;
   brier?: number;
   brierSamples: number;
@@ -327,6 +333,27 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
         </dd>
       </dl>
 
+      {/* P3-M8d — THE IMPLICIT AXIS, as a sentence rather than a row in the
+          table above. It belongs here, next to the gauge, because unlike the
+          learning block at the bottom it DOES move the number — so the honest
+          thing is to say what it is (actions nobody objected to), what it is
+          worth (a fraction of an answered check-in, sent by the server so this
+          sentence cannot go stale if the constant is retuned) and why it is
+          worth less (silence is not agreement). Raw counts, never the weighted
+          product: "3.5 of 15" is a number no user can check against anything
+          they remember doing. */}
+      {g.implicitTrials !== undefined && g.implicitTrials > 0 ? (
+        <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="growth-implicit">
+          {t('growth.implicitAxis', {
+            defaultValue:
+              'It also acted on its own {{reviewed}} time(s) that were looked back over afterwards, and you left {{stood}} of them alone. Those count toward the gauge too, but each is worth {{weight}} of a check-in you actually answered — not objecting is weaker evidence than choosing.',
+            reviewed: g.implicitTrials,
+            stood: g.implicitHits ?? 0,
+            weight: g.implicitWeight ?? 0,
+          })}
+        </p>
+      ) : null}
+
       {/* the second tier. Shown as SENTENCES, not scores: "Brier 0.09" means
           nothing to a person deciding whether to delegate, while "it is right
           about as often as it says it is" does. */}
@@ -442,11 +469,15 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
         </details>
       ) : null}
 
-      {/* THE TRUST STATEMENT. Without this the number reads as arbitrary. */}
+      {/* THE TRUST STATEMENT. Without this the number reads as arbitrary.
+          P3-M8d amended it rather than leaving it: "only when naby asks" stopped
+          being true the day reviewed actions started entering the bound, and a
+          disclaimer that is slightly false is worse than none — it is the
+          sentence a user checks the rest of the panel against. */}
       <p className="border-t border-border pt-2 text-[10px] leading-relaxed text-muted-foreground/80">
         {t('growth.howItMoves', {
           defaultValue:
-            'This does not rise with the number of conversations or stored memories. It moves only when naby asks how to proceed and its own recommendation turns out to match what you chose — and it can fall when your patterns change.',
+            'This does not rise with the number of conversations or stored memories. It moves when naby asks how to proceed and its own recommendation turns out to match what you chose — and, counting for much less, when something it did without asking was looked back over later and you had left it alone. It can fall when your patterns change.',
         })}
       </p>
 

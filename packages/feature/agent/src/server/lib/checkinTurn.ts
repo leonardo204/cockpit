@@ -213,6 +213,13 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
  * record, so coverage tells the other half of the story. And a refusal lands as a
  * `tripwire`, which the meter treats as a hard block rather than one bad average.
  *
+ * P3-M8d: MCP tools are no longer invisible here. The caller passes what was
+ * DECLARED about the tool — the server's `readOnlyHint` annotation and whether
+ * the user's own policy has an ask/deny rule on it — and
+ * `classifyToolConsequence` decides. Nothing about permission changes: by the
+ * time this runs the gate has already decided, and `allowed` is being reported,
+ * not chosen.
+ *
  * @returns the kind written, or undefined when the call was not consequential
  */
 export function recordGateOutcome(deps: {
@@ -222,11 +229,24 @@ export function recordGateOutcome(deps: {
   toolName: string;
   allowed: boolean;
   reason?: string;
+  /** The MCP annotation, when this tool came from a server that declared one. */
+  readOnlyHint?: boolean;
+  /** The user has an ask/deny rule matching this tool (P3-M8d §7.4). */
+  policyForcesConsequential?: boolean;
 }): 'autonomous' | 'tripwire' | undefined {
   const bare = normalizeToolName(deps.toolName);
   // A denied READ is not a tripwire: the meter's hard block is for
   // safety-relevant refusals, and refusing a Grep is a policy preference.
-  if (!isConsequentialTool(bare)) return undefined;
+  if (
+    !isConsequentialTool(bare, {
+      ...(deps.readOnlyHint !== undefined ? { readOnlyHint: deps.readOnlyHint } : {}),
+      ...(deps.policyForcesConsequential !== undefined
+        ? { policyForcesConsequential: deps.policyForcesConsequential }
+        : {}),
+    })
+  ) {
+    return undefined;
+  }
   try {
     if (deps.allowed) {
       deps.store.appendEvalEvent({

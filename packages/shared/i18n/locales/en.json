@@ -1634,7 +1634,7 @@
     "recentCorrected": "you answered in your own words: {{text}}",
     "recentRecommended": "it had recommended: {{option}}",
     "recentExcluded": "not counted — {{reason}}",
-    "howItMoves": "This does not rise with the number of conversations or stored memories. It moves only when naby asks how to proceed and its own recommendation turns out to match what you chose — and it can fall when your patterns change.",
+    "howItMoves": "This does not rise with the number of conversations or stored memories. It moves when naby asks how to proceed and its own recommendation turns out to match what you chose — and, counting for much less, when something it did without asking was looked back over later and you had left it alone. It can fall when your patterns change.",
     "meaning": {
       "egg": "Still watching. It has asked too few times for its record to mean anything yet.",
       "larva": "Being measured now, but it is not guessing right often yet. Too early to hand work over.",
@@ -1662,6 +1662,7 @@
       "corrected": "Fixed afterwards",
       "lifetime": "All time"
     },
+    "implicitAxis": "It also acted on its own {{reviewed}} time(s) that were looked back over afterwards, and you left {{stood}} of them alone. Those count toward the gauge too, but each is worth {{weight}} of a check-in you actually answered — not objecting is weaker evidence than choosing.",
     "learning": {
       "title": "What it has learned so far",
       "confirmed": "Facts in use",

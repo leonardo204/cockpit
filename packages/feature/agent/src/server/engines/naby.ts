@@ -83,6 +83,7 @@ import {
   phase1HarnessFloor,
   BUILTIN_PERSONA_ID,
   realPolicy,
+  resolvePolicyEffect,
   makeModelResolver,
   Outbox,
   preflightEngine,
@@ -1069,15 +1070,35 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // `autonomous` row; one the gate refused is a `tripwire`. This is what makes
         // "when to check in" a property of the ACTION rather than of the agent's
         // judgement (spec §4.5): it can decline to ask, but it cannot decline to be
-        // counted. Read-only calls produce nothing (`isConsequentialTool`).
+        // counted. Read-only calls produce nothing (`classifyToolConsequence`).
         //
         // ONE ROW PER CALL, deliberately not per plan: three writes after a single
         // check-in are three autonomous rows. So coverage reads per action, which
         // is only sound while coverage is REPORTED and not gated on — enforcing a
         // coverage floor means first deciding how a check-in claims the calls that
         // carry out its decision.
+        //
+        // P3-M8d: MCP TOOLS ARE CLASSIFIED FROM DECLARATIONS, NOT FROM THEIR
+        // NAMES (spec §7.4). Two signals travel with the call, and neither is a
+        // guess:
+        //
+        //   * what the SERVER declared — `readOnlyHint: true` in the tool's MCP
+        //     annotations, collected at connect time (`loadMcpToolset`) and keyed
+        //     by the same namespaced name the gate sees. Anything else, including
+        //     no annotation at all, is treated as consequential (fail-closed).
+        //   * what the USER declared — an `ask`/`deny` policy rule matching this
+        //     tool. Resolved with the SAME `resolvePolicyEffect` the gate itself
+        //     runs on, so "the user wanted to watch this" can never be true for
+        //     the gate and false for the ledger.
+        //
+        // This feeds the OBSERVATION ONLY. The decision has already been made and
+        // is being reported; nothing here can allow or deny anything.
+        const mcpAnnotations = mcp?.toolAnnotations ?? {};
         const observeForGrowth = (call: ToolCall, allowed: boolean, reason?: string): void => {
           if (!growthSubject) return;
+          const bare = normalizeToolName(call.toolName);
+          const readOnlyHint = mcpAnnotations[bare]?.readOnlyHint;
+          const effect = resolvePolicyEffect(policyRules, bare);
           recordGateOutcome({
             store,
             agentId: growthSubject.id,
@@ -1085,6 +1106,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             toolName: call.toolName,
             allowed,
             ...(reason ? { reason } : {}),
+            ...(readOnlyHint !== undefined ? { readOnlyHint } : {}),
+            policyForcesConsequential: effect === 'ask' || effect === 'deny',
           });
         };
         const gate: Gate = async (call) => {

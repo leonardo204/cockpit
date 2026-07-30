@@ -238,20 +238,79 @@ describe('checkinTurn — what the GATE records (not the agent)', () => {
     expect(store.appended).toHaveLength(0);
   });
 
-  it('our own outbound tool is scored, and an MCP tool is KNOWINGLY not', () => {
+  it('our own outbound tool is scored, and so is an MCP tool that declared nothing (P3-M8d)', () => {
     const store = fakeStore();
     expect(recordGateOutcome({ store, ...base, toolName: 'send_message', allowed: true })).toBe(
       'autonomous',
     );
-    // A DOCUMENTED GAP, asserted so it stays visible rather than being discovered
-    // later as a silent hole: the classifier knows the harness built-ins and our
-    // own tools. A third-party MCP tool that mails someone is consequential in
-    // reality but unclassified here, so it produces no row. Guessing from tool
-    // names would be worse than being explicit about the limit.
+    // THE GAP THIS MILESTONE CLOSED. Through M8c a third-party tool that mails
+    // someone produced no row at all, because danger was not inferable from a
+    // name — and the honest consequence was that coverage read higher than the
+    // truth for anyone using MCP. It is not inferred now either: an undeclared
+    // tool counts because it is UNDECLARED (fail-closed, spec §7.4), not because
+    // of anything its name suggests.
     expect(
-      recordGateOutcome({ store, ...base, toolName: 'mcp__mail__send_email', allowed: true }),
+      recordGateOutcome({ store, ...base, toolName: 'mail__send_email', allowed: true }),
+    ).toBe('autonomous');
+    expect(store.appended[1]).toMatchObject({
+      kind: 'autonomous',
+      toolName: 'mail__send_email',
+      // Unknown means unknown: nothing promises a third-party action can be undone.
+      reversible: false,
+    });
+  });
+
+  it('an MCP tool that DECLARED itself read-only produces no row', () => {
+    const store = fakeStore();
+    expect(
+      recordGateOutcome({
+        store,
+        ...base,
+        toolName: 'jira__search_issues',
+        allowed: true,
+        readOnlyHint: true,
+      }),
     ).toBeUndefined();
-    expect(store.appended).toHaveLength(1);
+    // And a refused read-only tool is not a safety tripwire either — the same
+    // rule that keeps a denied Grep from hard-blocking growth.
+    expect(
+      recordGateOutcome({
+        store,
+        ...base,
+        toolName: 'jira__search_issues',
+        allowed: false,
+        reason: 'denied by policy',
+        readOnlyHint: true,
+      }),
+    ).toBeUndefined();
+    expect(store.appended).toHaveLength(0);
+  });
+
+  it("the user's own ask/deny rule outranks the server's read-only claim", () => {
+    const store = fakeStore();
+    // They put a rule on it, which is them saying they want to see this one. A
+    // `readOnlyHint` cannot talk its way out of that.
+    expect(
+      recordGateOutcome({
+        store,
+        ...base,
+        toolName: 'jira__search_issues',
+        allowed: true,
+        readOnlyHint: true,
+        policyForcesConsequential: true,
+      }),
+    ).toBe('autonomous');
+    expect(
+      recordGateOutcome({
+        store,
+        ...base,
+        toolName: 'jira__search_issues',
+        allowed: false,
+        reason: 'blocked by your policy rule',
+        policyForcesConsequential: true,
+      }),
+    ).toBe('tripwire');
+    expect(store.appended).toHaveLength(2);
   });
 
   it('a ledger failure never breaks the turn', () => {

@@ -28,7 +28,11 @@ import type { EvalEvent, EvalEventKind } from '../../../../../../../dist/naby-ru
 
 /** How much ledger history a reading pulls per agent. Generous enough for the
  *  change detector (which needs rows on both sides of a candidate split) while
- *  still bounding the query — the meter itself scores only the recent window. */
+ *  still bounding the query — the meter itself scores only the recent window.
+ *
+ *  It also has to be comfortably wider than the IMPLICIT window (P3-M8d): 200
+ *  rows of every kind against an implicit pool of 40 autonomous ones, so the
+ *  weak-label half is never truncated by this limit before the meter windows it. */
 export const LEDGER_READ_LIMIT = GROWTH_WINDOW * 10;
 
 /** How many past questions the duplicate check compares against. Small on

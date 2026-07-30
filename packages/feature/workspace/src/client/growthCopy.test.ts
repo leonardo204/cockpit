@@ -130,6 +130,13 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         ['growth.learning.taskTypesValue', ['{{count}}']],
         ['growth.learning.byScopeValue', ['{{user}}', '{{project}}']],
         ['growth.learning.lastReflection', ['{{when}}']],
+        // P3-M8d: the implicit axis. All three placeholders are load-bearing —
+        // the two counts are what the user can check against their own history,
+        // and {{weight}} is the SERVER's constant. A translation that spelled the
+        // weight out in prose instead would go quietly wrong the day it changes,
+        // which is the same failure the corroboration threshold avoids by being
+        // interpolated rather than typed into the sentence.
+        ['growth.implicitAxis', ['{{reviewed}}', '{{stood}}', '{{weight}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');
@@ -173,6 +180,25 @@ describe('growth, check-in and export copy is complete in every locale', () => {
     for (const key of ['title', 'confirmed', 'proposed', 'corroborated', 'taskTypes']) {
       const value = String(lookup(ko, `growth.learning.${key}`) ?? '');
       expect(value, `growth.learning.${key} must be Korean`).toMatch(/[가-힣]/);
+    }
+  });
+
+  it('P3-M8d: the implicit axis admits it is weaker evidence, and the trust statement stops saying "only"', () => {
+    // TWO SENTENCES THAT HAVE TO AGREE WITH EACH OTHER (trust-meter §9.2 rule 2).
+    // The implicit axis moves the gauge, so the panel cannot describe it the way
+    // it describes the learning block ("this does not enter the judgement") — it
+    // has to say the opposite AND say it counts for less. And `howItMoves`, the
+    // line a user checks the whole panel against, said growth moves ONLY on
+    // answered check-ins; leaving that in place would make the disclaimer itself
+    // the false statement on the screen.
+    for (const locale of LOCALES) {
+      const d = dict(locale);
+      const implicit = String(lookup(d, 'growth.implicitAxis') ?? '');
+      expect(implicit.length).toBeGreaterThan(40);
+      // It must NAME the weakness rather than merely reporting two counts.
+      expect(implicit).toMatch(locale === 'ko' ? /약한|적은/ : /weaker|less/i);
+      const howItMoves = String(lookup(d, 'growth.howItMoves') ?? '');
+      expect(howItMoves).not.toMatch(/moves only when|만 셉니다|만 센다/);
     }
   });
 

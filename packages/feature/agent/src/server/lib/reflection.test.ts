@@ -119,6 +119,8 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
   });
 
   const marked: string[] = [];
+  /** Every `markEvalEventReviewed` call, in order (P3-M8d). */
+  const reviewed: Array<{ id: string; reviewedAt: number }> = [];
   const cursorWrites: Array<{ sessionId: string; lastSeq: number; reflectedAt: number }> = [];
   // P3-M8b state: what was written, what was confirmed, and the settings the
   // consolidation step reads.
@@ -195,6 +197,15 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
       row.correctedAfter = true;
       return true;
     },
+    // P3-M8d. Mirrors the real store on both rules that matter: autonomous rows
+    // only, and the FIRST review time stands.
+    markEvalEventReviewed: (id, reviewedAt) => {
+      const row = [...events.values()].flat().find((e) => e.id === id);
+      if (!row || row.kind !== 'autonomous') return false;
+      reviewed.push({ id, reviewedAt });
+      if (typeof row.reviewedAt !== 'number') row.reviewedAt = reviewedAt;
+      return true;
+    },
     getReflectionCursor: (sessionId) => cursors.get(sessionId),
     setReflectionCursor: (sessionId, lastSeq, reflectedAt) => {
       cursors.set(sessionId, { lastSeq, reflectedAt });
@@ -202,7 +213,7 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
     },
   };
 
-  return { store, marked, cursorWrites, cursors, events, writes, confirmed, memory };
+  return { store, marked, reviewed, cursorWrites, cursors, events, writes, confirmed, memory };
 }
 
 /** The counts a sweep that touched no memory returns — spelled out once so the
@@ -234,6 +245,7 @@ describe('runReflectionSweep — which sessions get read', () => {
     expect(out).toEqual<ReflectionSweepResult>({
       sweptSessions: 0,
       markedEvents: 0,
+      reviewedEvents: 0,
       droppedVerdicts: 0,
       ...NO_MEMORY,
     });
@@ -289,6 +301,9 @@ describe('runReflectionSweep — what it writes', () => {
     expect(out).toEqual<ReflectionSweepResult>({
       sweptSessions: 1,
       markedEvents: 1,
+      // The same action is BOTH reviewed and corrected: reviewedAt records that
+      // it was looked at, not that it was fine (P3-M8d).
+      reviewedEvents: 1,
       droppedVerdicts: 0,
       ...NO_MEMORY,
     });
@@ -422,9 +437,90 @@ describe('runReflectionSweep — failure containment', () => {
     await expect(runReflectionSweep(broken, neverCalled)).resolves.toEqual({
       sweptSessions: 0,
       markedEvents: 0,
+      reviewedEvents: 0,
       droppedVerdicts: 0,
       ...NO_MEMORY,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3-M8d — what "reviewed" means, and which rows earn it (spec §7.2)
+// ---------------------------------------------------------------------------
+
+describe('runReflectionSweep — the reviewedAt stamp (P3-M8d)', () => {
+  it('stamps every action it put to the judge, including the one it marks corrected', async () => {
+    const { store, reviewed, marked, events } = fakeStore([{ sessionId: 's1' }]);
+    const { judge } = honestJudge();
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    // ONE action, BOTH facts about it: it was looked at, and it was corrected.
+    // Stamping only the uncorrected ones would make the field mean "this was
+    // fine", and the meter reads the PAIR — reviewed and uncorrected is the weak
+    // accept, reviewed and corrected is the weak miss.
+    expect(reviewed).toEqual([{ id: 'ev-s1', reviewedAt: NOW }]);
+    expect(marked).toEqual(['ev-s1']);
+    expect(out.reviewedEvents).toBe(1);
+    const row = events.get('s1')?.[0];
+    expect(row?.reviewedAt).toBe(NOW);
+    expect(row?.correctedAfter).toBe(true);
+  });
+
+  it('stamps an action the user simply moved past — that is the whole point of it', async () => {
+    const { store, reviewed, marked, events } = fakeStore([
+      { sessionId: 's1', messages: transcript(false) },
+    ]);
+    const { judge } = honestJudge();
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(marked).toEqual([]);
+    expect(out.reviewedEvents).toBe(1);
+    expect(events.get('s1')?.[0]?.reviewedAt).toBe(NOW);
+    expect(events.get('s1')?.[0]?.correctedAfter).toBeUndefined();
+    expect(reviewed).toHaveLength(1);
+  });
+
+  it('stamps nothing when no case reached the judge', async () => {
+    // A session with an action but no user message after it builds no case, so
+    // nobody had a chance to object and the row must stay unreviewed.
+    const { store, reviewed, events } = fakeStore([
+      { sessionId: 's1', messages: briefTranscript() },
+    ]);
+    const out = await runReflectionSweep(store, neverCalled, { now: NOW });
+    expect(out.sweptSessions).toBe(1);
+    expect(out.reviewedEvents).toBe(0);
+    expect(reviewed).toEqual([]);
+    expect(events.get('s1')?.[0]?.reviewedAt).toBeUndefined();
+  });
+
+  it('stamps nothing when the judge failed — the cursor and the ledger move together', async () => {
+    const { store, reviewed, cursorWrites } = fakeStore([{ sessionId: 's1' }]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = await runReflectionSweep(
+      store,
+      async () => {
+        throw new Error('provider unavailable');
+      },
+      { now: NOW },
+    );
+    warn.mockRestore();
+    expect(reviewed).toEqual([]);
+    expect(out.reviewedEvents).toBe(0);
+    expect(cursorWrites).toEqual([]);
+  });
+
+  it('a re-review keeps the FIRST timestamp, so an old action cannot drift into the recent window', async () => {
+    const { store, events } = fakeStore([{ sessionId: 's1', messages: transcript(false) }]);
+    const { judge } = honestJudge();
+    await runReflectionSweep(store, judge, { now: NOW });
+    expect(events.get('s1')?.[0]?.reviewedAt).toBe(NOW);
+
+    // The user says something new, so the same action is judged again later.
+    // (`getMessages` hands back the live array, as the fake store's map holds it.)
+    store.getMessages('s1').push({ role: 'user', content: 'and one more thing' });
+    const second = await runReflectionSweep(store, judge, { now: NOW + 500_000 });
+    expect(second.reviewedEvents).toBe(1); // reported as marked...
+    expect(events.get('s1')?.[0]?.reviewedAt).toBe(NOW); // ...and unchanged
   });
 });
 

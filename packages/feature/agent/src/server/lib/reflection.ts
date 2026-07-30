@@ -1,7 +1,14 @@
 // packages/feature/agent/src/server/lib/reflection.ts
 //
-// THE SESSION-REFLECTION SWEEP (Phase 3, P3-M8a + P3-M8b + P3-M8c) —
-// specs/phase-3-continuous-learning.md §4, §5 and §6.4.
+// THE SESSION-REFLECTION SWEEP (Phase 3, P3-M8a + P3-M8b + P3-M8c + P3-M8d) —
+// specs/phase-3-continuous-learning.md §4, §5, §6.4 and §7.2.
+//
+// M8d ADDS ONE WRITE: every action the sweep actually put before the judge is
+// stamped `reviewedAt`, corrected or not. It is a small change with a specific
+// purpose — until now the ledger could not tell "nobody has looked at this" from
+// "someone looked and the user let it stand", so the second, which is real
+// (weak) evidence, was indistinguishable from silence. The meter blends it in at
+// a quarter weight (trust-meter §4.11); this file is the only thing that writes it.
 //
 // The runtime owns the rules (when a session is due, which actions become cases,
 // which verdicts and which memory proposals are admissible —
@@ -89,6 +96,9 @@ export interface ReflectionStore {
     opts?: { kind?: EvalEventKind; taskType?: string; sessionId?: string; limit?: number },
   ): EvalEvent[];
   markEvalEventCorrected(id: string): boolean;
+  /** P3-M8d: stamp WHEN an action was put before the judge. Autonomous rows
+   *  only, first timestamp wins — the store enforces both. */
+  markEvalEventReviewed(id: string, reviewedAt: number): boolean;
   getReflectionCursor(sessionId: string): ReflectionCursor | undefined;
   setReflectionCursor(sessionId: string, lastSeq: number, reflectedAt: number): void;
   // -- P3-M8b: memory proposals and consolidation --------------------------
@@ -135,6 +145,10 @@ export type ReflectionSweepResult = {
   sweptSessions: number;
   /** Ledger rows marked `correctedAfter`. */
   markedEvents: number;
+  /** Ledger rows stamped `reviewedAt` — every action that was actually put
+   *  before the judge (P3-M8d). Always ≥ `markedEvents`: a corrected action was
+   *  reviewed too. */
+  reviewedEvents: number;
   /** Verdicts thrown out by the validator (bad case id, ungrounded quote). */
   droppedVerdicts: number;
   /** Memory rows written as `proposed` (P3-M8b). */
@@ -191,6 +205,7 @@ export async function runReflectionSweep(
   const result: ReflectionSweepResult = {
     sweptSessions: 0,
     markedEvents: 0,
+    reviewedEvents: 0,
     droppedVerdicts: 0,
     proposedMemories: 0,
     droppedCandidates: 0,
@@ -268,6 +283,27 @@ export async function runReflectionSweep(
       const { kept, dropped } = validateReflectionVerdicts(answer.corrections, cases);
       result.droppedVerdicts += dropped;
 
+      // REVIEWED comes first, and it covers EVERY case that was put to the judge
+      // — including the ones about to be marked corrected (P3-M8d, spec §7.2).
+      //
+      // WHY THE WHOLE LIST AND NOT JUST THE UNCORRECTED ONES. `reviewedAt` does
+      // not mean "this was fine", it means "this was looked at". Stamping only
+      // the survivors would make the field mean two things at once, and the
+      // implicit half of the meter reads exactly this pair: reviewed AND not
+      // corrected is the weak accept, reviewed AND corrected is the weak miss.
+      // Stamping it before the corrections also keeps the ordering honest if a
+      // store write throws halfway: a row can be reviewed-but-not-yet-corrected
+      // (which the next sweep fixes), never corrected-but-never-reviewed.
+      //
+      // AND ONLY THE CASES. An action dropped before the call — no later user
+      // message, no anchor, over the cap — was never put in front of anything,
+      // so it stays unreviewed and simply does not count either way. A judge
+      // that THREW never reaches this line at all (the catch below), which is
+      // the same rule the cursor already follows.
+      for (const one of cases) {
+        if (store.markEvalEventReviewed(one.caseId, now)) result.reviewedEvents += 1;
+      }
+
       for (const verdict of kept) {
         if (!verdict.corrected) continue;
         // `markEvalEventCorrected` refuses anything that is not an `autonomous`
@@ -297,7 +333,8 @@ export async function runReflectionSweep(
 
   if (result.sweptSessions > 0 || result.markedEvents > 0 || result.proposedMemories > 0) {
     console.log(
-      `[reflection] swept ${result.sweptSessions} session(s), marked ${result.markedEvents} corrected, ` +
+      `[reflection] swept ${result.sweptSessions} session(s), reviewed ${result.reviewedEvents} action(s), ` +
+        `marked ${result.markedEvents} corrected, ` +
         `dropped ${result.droppedVerdicts} verdict(s), proposed ${result.proposedMemories} memory row(s), ` +
         `dropped ${result.droppedCandidates} candidate(s), auto-confirmed ${result.autoConfirmed}`,
     );

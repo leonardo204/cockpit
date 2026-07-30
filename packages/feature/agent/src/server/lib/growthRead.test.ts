@@ -153,3 +153,44 @@ describe('growthRead — the full report the Settings panel renders', () => {
     expect(decisions[1]!.excludedCode).toBeUndefined();
   });
 });
+
+describe('growthRead — the implicit axis reaches the wire (P3-M8d)', () => {
+  it('passes reviewedAt through, so the report carries the raw counts and the weight', () => {
+    const rows = [
+      // Five answered check-ins: enough to be measured at all.
+      ...Array.from({ length: 5 }, () => row({ hit: true })),
+      // Four reviewed actions, one of which the user fixed afterwards.
+      ...Array.from({ length: 3 }, () =>
+        row({ kind: 'autonomous', toolName: 'Write', reviewedAt: 2_000 }),
+      ),
+      row({ kind: 'autonomous', toolName: 'Write', reviewedAt: 2_000, correctedAfter: true }),
+    ];
+    const report = growthReport(fakeStore(rows), 'a1');
+
+    // RAW, not pre-multiplied: the panel says "3 of 4 stood, each worth 0.25",
+    // which a user can check against their own history. A weighted 0.75 could
+    // not be checked against anything.
+    expect(report.implicitTrials).toBe(4);
+    expect(report.implicitHits).toBe(3);
+    expect(report.implicitWeight).toBe(0.25);
+    // The check-in record is untouched by the weak labels.
+    expect(report.hits).toBe(5);
+    expect(report.trials).toBe(5);
+  });
+
+  it('omits the implicit fields entirely when nothing has been reviewed', () => {
+    // The regression invariant as the WIRE sees it: an existing user, whose
+    // ledger has autonomous rows that no reflection pass has ever read, gets a
+    // report shaped exactly as before — so the panel renders no implicit
+    // sentence rather than "0 of 0".
+    const rows = [
+      ...Array.from({ length: 5 }, () => row({ hit: true })),
+      ...Array.from({ length: 4 }, () => row({ kind: 'autonomous', toolName: 'Write' })),
+    ];
+    const report = growthReport(fakeStore(rows), 'a1');
+    expect(report.implicitTrials).toBeUndefined();
+    expect(report.implicitHits).toBeUndefined();
+    expect(report.implicitWeight).toBeUndefined();
+    expect(report.lowerBound).toBe(readGrowth(fakeStore(rows), 'a1').lowerBound);
+  });
+});
