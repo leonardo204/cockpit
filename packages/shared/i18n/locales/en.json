@@ -1053,7 +1053,10 @@
     "empty": "No memory in this scope yet.",
     "emptyHint": "Naby learns as you work; confirmed memories will appear here.",
     "sessionUnavailable": "Open a session to review its memory.",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "corroborated": "seen in {{count}} sessions",
+    "autoConfirmLabel": "Auto-confirm repeated memories",
+    "autoConfirmHint": "Confirm a proposal on its own once {{count}} different sessions have said the same thing. Memories learned from external content are never auto-confirmed."
   },
   "bootstrap": {
     "title": "Tell naby four things and it starts out knowing you",

@@ -67,6 +67,10 @@ const SOURCES = [
   'feature/workspace/src/client/AgentImportButton.tsx',
   // P15-07: the cold-start interview is the very first Korean a new user reads.
   'feature/workspace/src/client/BootstrapCard.tsx',
+  // P3-M8b: the memory review queue. Its new copy explains a switch that lets
+  // naby confirm memories WITHOUT being asked — an English fallback on that
+  // sentence would leave a Korean user unable to read what they are turning on.
+  'feature/workspace/src/client/NabyMemoryReview.tsx',
 ];
 
 describe('growth, check-in and export copy is complete in every locale', () => {
@@ -112,6 +116,11 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         ['agentImport.done', ['{{name}}', '{{count}}']],
         ['bootstrap.saved', ['{{count}}']],
         ['bootstrap.savedWithSkips', ['{{count}}', '{{skipped}}']],
+        // P3-M8b: both counts are the whole content of their sentence. "Seen in
+        // sessions" and "once different sessions have said the same thing" are
+        // grammatical and say nothing.
+        ['memoryReview.corroborated', ['{{count}}']],
+        ['memoryReview.autoConfirmHint', ['{{count}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');

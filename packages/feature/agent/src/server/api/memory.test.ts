@@ -5,12 +5,14 @@ import { listScopedMemory, runMemoryAction } from './memory';
 // A fake store recording every scoped-memory call, so the list/action logic is
 // exercised without opening a real sqlite file. Only the three methods the route
 // touches are implemented.
-function fakeStore(items: MemoryItem[] = []) {
+function fakeStore(items: MemoryItem[] = [], corroboration: Record<string, number> = {}) {
   const calls = {
     getScopedMemory: [] as { scope: string; scopeKey: string; opts?: { status?: string } }[],
     confirmMemory: [] as string[],
     deleteMemory: [] as unknown[],
+    getMemoryCorroboration: [] as string[][],
   };
+  const settings = new Map<string, string>();
   const store = {
     getScopedMemory(scope: string, scopeKey: string, opts?: { status?: string }) {
       calls.getScopedMemory.push({ scope, scopeKey, ...(opts ? { opts } : {}) });
@@ -22,8 +24,21 @@ function fakeStore(items: MemoryItem[] = []) {
     deleteMemory(sel: unknown) {
       calls.deleteMemory.push(sel);
     },
+    // P3-M8b: distinct-session counts, and the auto-confirm opt-in.
+    getMemoryCorroboration(ids: readonly string[]) {
+      calls.getMemoryCorroboration.push([...ids]);
+      const out: Record<string, number> = {};
+      for (const id of ids) if (corroboration[id]) out[id] = corroboration[id]!;
+      return out;
+    },
+    getSetting(key: string) {
+      return settings.get(key);
+    },
+    setSetting(key: string, value: string) {
+      settings.set(key, value);
+    },
   };
-  return { store, calls };
+  return { store, calls, settings };
 }
 
 function makeItem(over: Partial<MemoryItem> = {}): MemoryItem {
@@ -156,5 +171,75 @@ describe('runMemoryAction', () => {
     // @ts-expect-error — exercising the default branch.
     const res = runMemoryAction({ action: 'frobnicate' }, store);
     expect(res.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3-M8b — corroboration on the list, and the auto-confirm opt-in
+// ---------------------------------------------------------------------------
+
+describe('listScopedMemory — corroboration (P3-M8b §5.4)', () => {
+  it('asks for the ids it just listed and returns their counts', () => {
+    const { store, calls } = fakeStore(
+      [makeItem({ id: 'a' }), makeItem({ id: 'b' })],
+      { a: 3 },
+    );
+    const res = listScopedMemory({ scope: 'user', scopeKey: null, status: null }, store);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(calls.getMemoryCorroboration).toEqual([['a', 'b']]);
+    // 'b' has never been observed, so it is ABSENT rather than 0 — the client
+    // reads `?? 0` and cannot mistake one for the other.
+    expect(res.data.corroboration).toEqual({ a: 3 });
+  });
+
+  it('reports the auto-confirm state and the threshold with the list', () => {
+    const { store } = fakeStore([makeItem()]);
+    const before = listScopedMemory({ scope: 'user', scopeKey: null, status: null }, store);
+    expect(before.ok).toBe(true);
+    if (before.ok) {
+      // Absent setting = OFF. Nothing is promoted without an explicit opt-in.
+      expect(before.data.autoConfirm).toBe(false);
+      expect(before.data.corroborationThreshold).toBeGreaterThan(1);
+    }
+
+    runMemoryAction({ action: 'autoConfirm.set', enabled: true }, store);
+    const after = listScopedMemory({ scope: 'user', scopeKey: null, status: null }, store);
+    if (after.ok) expect(after.data.autoConfirm).toBe(true);
+  });
+});
+
+describe('runMemoryAction — the auto-confirm opt-in', () => {
+  it('reads false before anything has been written', () => {
+    const { store } = fakeStore();
+    expect(runMemoryAction({ action: 'autoConfirm.get' }, store)).toEqual({
+      ok: true,
+      autoConfirm: false,
+    });
+  });
+
+  it('round-trips on and back off', () => {
+    const { store } = fakeStore();
+    expect(runMemoryAction({ action: 'autoConfirm.set', enabled: true }, store)).toEqual({
+      ok: true,
+      autoConfirm: true,
+    });
+    expect(runMemoryAction({ action: 'autoConfirm.get' }, store)).toEqual({
+      ok: true,
+      autoConfirm: true,
+    });
+    runMemoryAction({ action: 'autoConfirm.set', enabled: false }, store);
+    expect(runMemoryAction({ action: 'autoConfirm.get' }, store)).toEqual({
+      ok: true,
+      autoConfirm: false,
+    });
+  });
+
+  it('refuses a non-boolean enabled rather than reading it as on', () => {
+    const { store, settings } = fakeStore();
+    // @ts-expect-error — the whole point is what arrives off the wire.
+    const res = runMemoryAction({ action: 'autoConfirm.set', enabled: 'true' }, store);
+    expect(res.ok).toBe(false);
+    expect(settings.size).toBe(0);
   });
 });

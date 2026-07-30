@@ -72,6 +72,11 @@ import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
+import {
+  modelReflectionJudge,
+  runReflectionSweep,
+  type ReflectionSweepResult,
+} from '../lib/reflection';
 import { exportAgent } from '../lib/agentExport';
 import { applyAgentImport } from '../lib/agentImport';
 import type {
@@ -410,6 +415,11 @@ export type NabyAction =
   // per-task-type breakdown); `checkin.resolve` settles a paused check-in the way
   // `approval.resolve` settles a paused tool approval.
   | { action: 'growth.get'; agentId?: string }
+  // Phase 3 (P3-M8a/M8b) — run the session-reflection sweep on demand. Normally a
+  // turn kicks it fire-and-forget; this is the manual/test entry point (spec
+  // §4.3). `excludeSessionId` skips a session that is still live. The result
+  // carries both halves: ledger marks and memory proposals/promotions.
+  | { action: 'reflection.run'; excludeSessionId?: string }
   // Phase 3 (P3-M6) — package a grown agent for another environment. READ-ONLY:
   // it returns the two files' contents and a report of what was dropped, and
   // writes nothing. The user sees the report and decides whether to save.
@@ -465,6 +475,11 @@ export type NabyActionResult =
       chatId?: string;
       /** `growth.get`: the full trust-meter reading for one agent. */
       growth?: GrowthReport;
+      /** `reflection.run`: what the sweep did — sessions read, ledger rows marked
+       *  `correctedAfter`, verdicts the validator threw out, and (P3-M8b) memory
+       *  rows proposed, candidates refused, and proposals the consolidation step
+       *  auto-confirmed. */
+      reflection?: ReflectionSweepResult;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
       /** `models.list`: the live model catalog for the Claude sign-in. */
@@ -782,6 +797,22 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'growth.get': {
       const agentId = typeof body.agentId === 'string' && body.agentId ? body.agentId : BUILTIN_PERSONA_ID;
       return { ok: true, growth: growthReport(store, agentId) };
+    }
+
+    // Phase 3 (P3-M8a) — run a reflection sweep NOW, rather than waiting for the
+    // next turn to kick one (spec §4.3). Exists for tests and for a user who wants
+    // the ledger brought up to date on demand; it takes the same path the engine's
+    // fire-and-forget trigger takes, so there is one sweep implementation.
+    //
+    // Awaited here, unlike the engine's trigger: an on-demand caller asked for the
+    // counts, so returning before the work is done would report zeros.
+    case 'reflection.run': {
+      const sweep = await runReflectionSweep(store, modelReflectionJudge(), {
+        ...(typeof body.excludeSessionId === 'string' && body.excludeSessionId
+          ? { excludeSessionId: body.excludeSessionId }
+          : {}),
+      });
+      return { ok: true, reflection: sweep };
     }
 
     // Phase 3 (P3-M6) — build the export pair. Nothing is written and nothing

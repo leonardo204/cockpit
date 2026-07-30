@@ -132,6 +132,7 @@ import {
   sendFinalReport,
 } from '../lib/telegramEscalation';
 import { canLearn, learningInstruction } from '../lib/learning';
+import { kickReflectionSweep } from '../lib/reflection';
 import { runNestedTurn } from '../lib/delegation';
 import { planTextRender } from './textRender';
 import {
@@ -431,6 +432,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           sessionId = store.createSession('', undefined, projectCwd).sessionId;
         }
         if (projectCwd) store.touchProject(projectCwd);
+
+        // ---- session reflection, fire-and-forget (Phase 3, P3-M8a) ---------
+        //
+        // The next conversation is what makes the previous ones learnable (spec
+        // §4.3): sessions the user walked away from are read back here, and the
+        // autonomous actions they later corrected are written to the ledger.
+        //
+        // NOTHING BELOW WAITS FOR IT. No await, no shared state with the turn, and
+        // THIS session is excluded — the user is still reacting to it, so judging
+        // it now would score an unfinished exchange. A failure is logged inside
+        // `kickReflectionSweep` and cannot surface in the turn.
+        kickReflectionSweep(store, { excludeSessionId: sessionId });
+
         const requestedModel =
           typeof ctx.params.model === 'string' ? ctx.params.model : undefined;
 

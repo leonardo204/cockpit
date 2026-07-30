@@ -55,12 +55,24 @@ import { BootstrapCard } from './BootstrapCard';
 // Wire helpers — the same shape/style as NabyProviderSetup's nabyGet/nabyPost.
 // ---------------------------------------------------------------------------
 
-type MemoryListResponse = { scope: MemoryScope; scopeKey: string; items: MemoryItem[] };
+type MemoryListResponse = {
+  scope: MemoryScope;
+  scopeKey: string;
+  items: MemoryItem[];
+  /** P3-M8b: distinct sessions agreeing with each row's current value, by id. */
+  corroboration?: Record<string, number>;
+  /** P3-M8b: whether corroborated proposals are confirmed without a click. */
+  autoConfirm?: boolean;
+  /** P3-M8b: how many sessions that takes. Sent by the server so this file
+   *  never has to hold a copy of a runtime constant (see memory.ts). */
+  corroborationThreshold?: number;
+};
 
 type MemoryActionBody =
   | { action: 'confirm'; id: string }
   | { action: 'delete'; id: string }
-  | { action: 'deleteBySource'; source?: TrustTier; sessionId?: string };
+  | { action: 'deleteBySource'; source?: TrustTier; sessionId?: string }
+  | { action: 'autoConfirm.set'; enabled: boolean };
 
 async function memoryGet(
   scope: MemoryScope,
@@ -115,11 +127,17 @@ const TRUST_LABELS: Record<TrustTier, string> = {
   external: 'memoryReview.trustExternal',
 };
 
+/** From how many sessions a row is worth BADGING. One is every row that exists;
+ *  two is the first moment a fact has outlived the conversation it came from,
+ *  which is the thing a reviewer actually wants pointed out. */
+const CORROBORATION_BADGE_MIN = 2;
+
 const MemoryRow = memo(function MemoryRow({
   item,
   scope,
   cwd,
   busy,
+  corroboration,
   onConfirm,
   onDelete,
 }: {
@@ -127,6 +145,8 @@ const MemoryRow = memo(function MemoryRow({
   scope: NabyScopeId;
   cwd?: string;
   busy: boolean;
+  /** How many distinct sessions agree with this row's current value (P3-M8b). */
+  corroboration: number;
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -146,6 +166,14 @@ const MemoryRow = memo(function MemoryRow({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {/* P3-M8b: cross-session corroboration. Shown only once a SECOND
+              session has said the same thing — on every row it would be noise,
+              and the point of the badge is that this one is different. */}
+          {corroboration >= CORROBORATION_BADGE_MIN ? (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-sky-500/15 text-sky-600 dark:text-sky-400">
+              {t('memoryReview.corroborated', { count: corroboration })}
+            </span>
+          ) : null}
           {/* Which scope this row lives in — global vs this project etc. */}
           <ScopeBadge scope={scope} cwd={cwd} />
           <span
@@ -223,6 +251,11 @@ export function NabyMemoryReview({
   const [scope, setScope] = useState<MemoryScope>('user');
   const [status, setStatus] = useState<MemoryStatus | 'all'>('all');
   const [items, setItems] = useState<MemoryItem[]>([]);
+  const [corroboration, setCorroboration] = useState<Record<string, number>>({});
+  const [autoConfirm, setAutoConfirm] = useState(false);
+  // Server-supplied; the fallback only ever shows for the instant before the
+  // first response lands.
+  const [threshold, setThreshold] = useState(3);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -260,8 +293,14 @@ export function NabyMemoryReview({
     );
     if (res.ok) {
       setItems(res.data.items);
+      setCorroboration(res.data.corroboration ?? {});
+      setAutoConfirm(res.data.autoConfirm === true);
+      if (typeof res.data.corroborationThreshold === 'number') {
+        setThreshold(res.data.corroborationThreshold);
+      }
     } else {
       setItems([]);
+      setCorroboration({});
       setError(res.error);
     }
     setLoading(false);
@@ -316,6 +355,43 @@ export function NabyMemoryReview({
     },
     [reload, t],
   );
+
+  const handleAutoConfirm = useCallback(
+    async (enabled: boolean) => {
+      // Optimistic, then reconciled by the reload: the checkbox has to answer the
+      // click immediately, and the reload is what makes a failed write visible
+      // (it puts the box back where the server says it is).
+      setAutoConfirm(enabled);
+      setBusyId('__setting__');
+      try {
+        const res = await memoryPost({ action: 'autoConfirm.set', enabled });
+        if (!res.ok) toast(t('memoryReview.actionError', { error: res.error ?? '' }), 'error');
+        await reload();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [reload, t],
+  );
+
+  /**
+   * P3-M8b §5.4 — proposals first, best-corroborated first inside that.
+   *
+   * The queue's whole job is to put the reviewer in front of the decisions that
+   * are both PENDING and best evidenced. A `proposed` row is the only one that
+   * needs an answer, and among those the one three separate conversations kept
+   * arriving at is the one most likely to be true — so it should not be sitting
+   * below a one-off from last Tuesday just because it was created earlier.
+   */
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'proposed' ? -1 : 1;
+      const ca = corroboration[a.id] ?? 0;
+      const cb = corroboration[b.id] ?? 0;
+      if (ca !== cb) return cb - ca;
+      return b.updatedAt - a.updatedAt;
+    });
+  }, [items, corroboration]);
 
   const busy = busyId !== null;
 
@@ -381,19 +457,39 @@ export function NabyMemoryReview({
         </div>
       ) : (
         <div className="space-y-2">
-          {items.map((item) => (
+          {sortedItems.map((item) => (
             <MemoryRow
               key={item.id}
               item={item}
               scope={scope as NabyScopeId}
               cwd={cwd}
               busy={busy}
+              corroboration={corroboration[item.id] ?? 0}
               onConfirm={handleConfirm}
               onDelete={handleDelete}
             />
           ))}
         </div>
       )}
+
+      {/* P3-M8b §5.4 — the opt-in. Off by default and stated plainly, including
+          the one thing it does NOT do: external-origin memory is never confirmed
+          without a person, setting or no setting (memory-contracts §4). */}
+      <div className="pt-1 border-t border-border/60 space-y-1">
+        <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoConfirm}
+            disabled={busy}
+            onChange={(e) => void handleAutoConfirm(e.target.checked)}
+            className="mt-0.5 accent-brand disabled:opacity-50"
+          />
+          <span>{t('memoryReview.autoConfirmLabel')}</span>
+        </label>
+        <p className="text-[10px] text-muted-foreground leading-relaxed pl-6">
+          {t('memoryReview.autoConfirmHint', { count: threshold })}
+        </p>
+      </div>
 
       {/* Bulk cleanup — provenance-addressed delete (the poisoning rollback). */}
       {available ? (

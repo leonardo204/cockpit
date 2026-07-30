@@ -29,6 +29,7 @@
 import { Effect } from 'effect';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
+  CORROBORATION_THRESHOLD,
   DEFAULT_USER_ID,
   type MemoryItem,
   type MemoryScope,
@@ -37,11 +38,25 @@ import {
   type TrustTier,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
+// The auto-confirm opt-in belongs to the consolidation step (which is the only
+// thing that acts on it), so the key and its spelling live there and this route
+// reads/writes it through the same two functions rather than re-deriving them.
+import { readAutoConfirmSetting, writeAutoConfirmSetting } from '../lib/reflection';
 
 // The slice of the store this route touches. Named so the handlers depend on an
 // injectable seam (default `getStore()`), which keeps the list/action logic unit-
 // testable against a fake store without opening a real sqlite file.
-type MemoryStore = Pick<Store, 'getScopedMemory' | 'confirmMemory' | 'deleteMemory'>;
+type MemoryStore = Pick<
+  Store,
+  | 'getScopedMemory'
+  | 'confirmMemory'
+  | 'deleteMemory'
+  // P3-M8b: how many distinct sessions agree with each listed row, and the
+  // opt-in that lets consolidation confirm the best-corroborated ones.
+  | 'getMemoryCorroboration'
+  | 'getSetting'
+  | 'setSetting'
+>;
 
 // The store is opened on demand, so this must run on the node runtime and must
 // never be statically rendered.
@@ -94,6 +109,27 @@ export interface MemoryListResult {
   /** The rows WHOLE — value included; this is the user's own content (see file
    *  header). Ordered createdAt asc by the store. */
   items: MemoryItem[];
+  /**
+   * P3-M8b: how many DISTINCT sessions agree with each row's current value,
+   * keyed by item id. Ids with no observations are absent (read `?? 0`).
+   *
+   * WHY IT RIDES ALONG WITH THE LIST. A reviewer facing thirty proposals needs
+   * to know which ones the conversation kept coming back to — that is the whole
+   * ordering signal (§5.4), and fetching it separately would mean rendering the
+   * queue once in the wrong order and then re-sorting it.
+   */
+  corroboration: Record<string, number>;
+  /** Whether corroborated proposals are auto-confirmed (§5.4). Sent with the
+   *  list so the toggle renders in its true state on first paint. */
+  autoConfirm: boolean;
+  /**
+   * How many distinct sessions auto-confirmation requires
+   * (`CORROBORATION_THRESHOLD`). Sent rather than duplicated client-side because
+   * the review panel imports the runtime for TYPES ONLY — pulling a value across
+   * that line would drag node code into the browser bundle — and a hand-copied 3
+   * in a Korean sentence is a number that goes wrong silently the day §7 tunes it.
+   */
+  corroborationThreshold: number;
 }
 
 export function listScopedMemory(
@@ -120,7 +156,20 @@ export function listScopedMemory(
     scopeKey,
     params.status ? { status: params.status } : undefined,
   );
-  return { ok: true, data: { scope: params.scope, scopeKey, items } };
+  // ONE extra store call for the ids just listed — the store answers them in a
+  // single grouped query, so this stays two statements however long the list is.
+  const corroboration = store.getMemoryCorroboration(items.map((item) => item.id));
+  return {
+    ok: true,
+    data: {
+      scope: params.scope,
+      scopeKey,
+      items,
+      corroboration,
+      autoConfirm: readAutoConfirmSetting(store),
+      corroborationThreshold: CORROBORATION_THRESHOLD,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,9 +183,17 @@ export type MemoryAction =
   // ("all external-origin memory"), `sessionId` ("everything this session
   // taught", across every trust tier), or both ("this session's external
   // memory"). At least one selector is required.
-  | { action: 'deleteBySource'; source?: TrustTier; sessionId?: string };
+  | { action: 'deleteBySource'; source?: TrustTier; sessionId?: string }
+  // P3-M8b §5.4 — the opt-in that lets the consolidation step confirm a
+  // `proposed` row that CORROBORATION_THRESHOLD distinct sessions agree with.
+  // Off by default, and `external`-origin memory is untouched by it either way
+  // (memory-contracts §4 invariant 1 is not a setting).
+  | { action: 'autoConfirm.get' }
+  | { action: 'autoConfirm.set'; enabled: boolean };
 
-export type MemoryActionResult = { ok: true } | { ok: false; error: string };
+export type MemoryActionResult =
+  | { ok: true; autoConfirm?: boolean }
+  | { ok: false; error: string };
 
 export function runMemoryAction(
   body: MemoryAction,
@@ -187,6 +244,20 @@ export function runMemoryAction(
       }
 
       return { ok: false, error: 'deleteBySource requires source and/or sessionId' };
+    }
+
+    case 'autoConfirm.get':
+      return { ok: true, autoConfirm: readAutoConfirmSetting(store) };
+
+    case 'autoConfirm.set': {
+      // Strictly boolean: a missing or string-ish `enabled` would otherwise turn
+      // auto-confirmation ON by accident, which is the one direction this switch
+      // must never be flipped by a malformed request.
+      if (typeof body.enabled !== 'boolean') {
+        return { ok: false, error: 'enabled must be a boolean' };
+      }
+      writeAutoConfirmSetting(store, body.enabled);
+      return { ok: true, autoConfirm: body.enabled };
     }
 
     default:
