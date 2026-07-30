@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   kickReflectionSweep,
   MEMORY_AUTO_CONFIRM_KEY,
+  ReflectionJudgeUnavailableError,
   runReflectionSweep,
   type ReflectionStore,
   type ReflectionSweepResult,
@@ -420,6 +421,102 @@ describe('runReflectionSweep — failure containment', () => {
         // The first session judged is the failing one.
         throw new Error('boom');
       }
+      return cases.map((c) => ({ caseId: c.caseId, corrected: false }));
+    };
+    const out = await runReflectionSweep(store, flaky, { now: NOW });
+    warn.mockRestore();
+    expect(out.sweptSessions).toBe(1);
+    expect(cursorWrites.map((c) => c.sessionId)).toEqual(['good']);
+  });
+
+  // -------------------------------------------------------------------------
+  // NO JUDGE AT ALL — the case that used to be reported as an empty answer.
+  //
+  // On a subscription-only machine `resolveProviderCredential` always failed and
+  // the judge returned `[]`, which is the SAME value it returns after reading a
+  // clean session. The sweep therefore stamped every case `reviewedAt` and moved
+  // the cursor — and since reviewed-and-uncorrected is the weak ACCEPT the trust
+  // meter blends into its bound, the meter was being fed evidence that no model
+  // had ever produced. These tests pin the shape of the fix: unavailability is a
+  // THROW, and a throw leaves the ledger and the cursor exactly as they were.
+  // -------------------------------------------------------------------------
+  it('an unavailable judge stamps no reviewedAt and moves no cursor', async () => {
+    const { store, reviewed, cursorWrites, events } = fakeStore([{ sessionId: 's1' }]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await runReflectionSweep(
+      store,
+      async () => {
+        throw new ReflectionJudgeUnavailableError('no reflection judge is available');
+      },
+      { now: NOW },
+    );
+    log.mockRestore();
+
+    expect(out.sweptSessions).toBe(0);
+    expect(out.reviewedEvents).toBe(0);
+    expect(out.markedEvents).toBe(0);
+    expect(reviewed).toEqual([]);
+    expect(cursorWrites).toEqual([]);
+    // The distinction the bug erased: the row is still UNREVIEWED, so the meter
+    // counts it as evidence nobody has looked at rather than as a weak accept.
+    expect(events.get('s1')?.[0]?.reviewedAt).toBeUndefined();
+  });
+
+  it('the same evidence is judged on the next sweep, once a judge exists', async () => {
+    const { store, cursorWrites, events } = fakeStore([{ sessionId: 's1' }]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await runReflectionSweep(
+      store,
+      async () => {
+        throw new ReflectionJudgeUnavailableError('no reflection judge is available');
+      },
+      { now: NOW },
+    );
+    log.mockRestore();
+    expect(cursorWrites).toEqual([]);
+
+    // A key is configured (or the user signs in): the backlog is intact.
+    const { judge, calls } = honestJudge();
+    const retry = await runReflectionSweep(store, judge, { now: NOW });
+    expect(calls).toHaveLength(1);
+    expect(retry.markedEvents).toBe(1);
+    expect(retry.reviewedEvents).toBe(1);
+    expect(events.get('s1')?.[0]?.reviewedAt).toBe(NOW);
+  });
+
+  it('an unavailable judge ends the whole sweep instead of failing once per session', async () => {
+    // Every session would fail identically, so trying them all buys nothing and
+    // costs a warning each. The sweep stops — and leaves ALL of them untouched.
+    const { store, cursorWrites, reviewed } = fakeStore([
+      { sessionId: 's1' },
+      { sessionId: 's2' },
+      { sessionId: 's3' },
+    ]);
+    let calls = 0;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await runReflectionSweep(
+      store,
+      async () => {
+        calls += 1;
+        throw new ReflectionJudgeUnavailableError('no reflection judge is available');
+      },
+      { now: NOW },
+    );
+    log.mockRestore();
+
+    expect(calls).toBe(1);
+    expect(out.sweptSessions).toBe(0);
+    expect(cursorWrites).toEqual([]);
+    expect(reviewed).toEqual([]);
+  });
+
+  it('an ORDINARY judge failure still only skips its own session', async () => {
+    // The contrast that makes the rule above legible: a provider error is about
+    // one call, so the next session is still tried.
+    const { store, cursorWrites } = fakeStore([{ sessionId: 'bad' }, { sessionId: 'good' }]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const flaky: ReflectionJudge = async (cases) => {
+      if (cases[0]?.caseId === 'ev-bad') throw new Error('provider returned 500');
       return cases.map((c) => ({ caseId: c.caseId, corrected: false }));
     };
     const out = await runReflectionSweep(store, flaky, { now: NOW });

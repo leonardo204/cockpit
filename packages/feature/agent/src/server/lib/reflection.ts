@@ -45,7 +45,15 @@
 //     since the cursor to be worth one (§6.4) — the cursor advances either way.
 //   * a session whose JUDGE FAILED does not. A failed call is not an answer, and
 //     advancing past unread messages would silently discard the evidence in them.
+//   * NO JUDGE AT ALL is a third case, and getting it wrong was a real bug. On a
+//     machine with no provider key and no local Claude sign-in there is nothing
+//     to ask, and "nothing to ask" used to be reported as an empty answer — which
+//     is indistinguishable from "asked, found nothing", so the sweep stamped every
+//     case `reviewedAt` and advanced. Since `reviewedAt`-without-correction is the
+//     weak ACCEPT the meter blends in, that invented evidence out of an absence.
+//     It now THROWS (`ReflectionJudgeUnavailableError`) and ends the sweep.
 //   * one session's failure never ends the sweep — each is wrapped on its own.
+//     The unavailable-judge throw is the single exception, for the reason above.
 
 import {
   AiSdkEngine,
@@ -53,9 +61,11 @@ import {
   buildReflectionCases,
   buildReflectionPrompt,
   BUILTIN_PERSONA_ID,
+  ClaudeAgentSdkEngine,
   collectReflectionUserMessages,
   CORROBORATION_THRESHOLD,
   DEFAULT_USER_ID,
+  isClaudeAgentSdkAvailable,
   isSessionDueForReflection,
   makeModelResolver,
   normalizeReflectionAnswer,
@@ -69,9 +79,11 @@ import {
   validateMemoryCandidates,
   validateReflectionVerdicts,
   type Agent,
+  type Engine,
   type EvalEvent,
   type EvalEventKind,
   type MemoryItem,
+  type ModelSelection,
   type MemoryWriteRequest,
   type ReflectionCase,
   type ReflectionCursor,
@@ -317,6 +329,20 @@ export async function runReflectionSweep(
       store.setReflectionCursor(session.sessionId, latestSeq, now);
       result.sweptSessions += 1;
     } catch (e) {
+      // NO JUDGE AT ALL ends the sweep, and only this one does. Every other
+      // failure is about ONE session and the next may still be readable, but a
+      // machine with no judge will fail identically on all of them — so trying is
+      // just N pointless attempts and N warnings for a single fact. Stopping here
+      // leaves every session untouched: nothing stamped, no cursor moved, so the
+      // whole backlog is still there for the first sweep that has a judge.
+      //
+      // Deliberately BEFORE the per-session warning, and deliberately a `break`
+      // rather than a rethrow: consolidation below still runs, because promoting
+      // an already-corroborated memory needs no model.
+      if (e instanceof ReflectionJudgeUnavailableError) {
+        console.log(`[reflection] sweep stopped: ${e.message}`);
+        break;
+      }
       // One unreadable session (or one failed judge call) must not end the sweep:
       // the others still have evidence worth reading.
       console.warn(
@@ -473,21 +499,112 @@ function consolidateMemory(store: ReflectionStore, result: ReflectionSweepResult
 export const REFLECTION_JUDGE_TIMEOUT_MS = 60_000;
 
 /**
+ * THERE IS NO JUDGE ON THIS MACHINE. Thrown, never returned — and the difference
+ * is the whole bug this class exists to fix.
+ *
+ * The judge used to answer "no provider configured" by returning `[]`, which is
+ * the SAME value it returns for "I read the session and found nothing wrong".
+ * The sweep cannot tell those apart, so it did what it does after a real answer:
+ * stamped every case `reviewedAt` and advanced the cursor. On a subscription-only
+ * machine — where credential resolution ALWAYS fails — that manufactured
+ * evidence. `reviewedAt` with no correction is the weak ACCEPT the trust meter
+ * blends into its bound (M8d, trust-meter §4.11), so every autonomous action the
+ * agent had ever taken was quietly counted as having been looked at and let
+ * stand, by nobody. The bound rose on an empty room.
+ *
+ * A throw is the correct shape because the sweep already handles it correctly:
+ * the per-session catch skips the session WITHOUT stamping and WITHOUT moving the
+ * cursor, so the evidence waits for a sweep that can actually read it.
+ */
+export class ReflectionJudgeUnavailableError extends Error {
+  readonly name = 'ReflectionJudgeUnavailableError';
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/** What one judge call needs: an engine to drive and the model selection to drive
+ *  it with. Which of the two backends produced it is not otherwise interesting —
+ *  the prompt, the empty toolset, the deny-all gate and the parse are identical. */
+type JudgeBackend = {
+  engine: Engine;
+  model: ModelSelection;
+  /** Names which backend answered, for the log line — "reflection did nothing"
+   *  is a very different report depending on which one was in use. */
+  label: string;
+};
+
+/**
+ * Pick a backend for the judge, in the order that costs the user least.
+ *
+ * 1. AN API KEY, through the same `resolveProviderCredential` the engine uses.
+ *    Preferred because it is a cheap, small, side call on a provider the user has
+ *    already chosen, and because it is metered per token rather than counted
+ *    against a subscription's rate limits.
+ * 2. THE CLAUDE AGENT SDK, when a local sign-in is present. This is the path that
+ *    used to be missing, and its absence was the reason reflection did nothing on
+ *    subscription-only machines. Availability is asked of
+ *    `isClaudeAgentSdkAvailable` — the ONE predicate for that question; a second
+ *    copy of it here is exactly how a UI ends up believing the wrong one.
+ *
+ * Returns undefined when neither exists. The caller turns that into a throw, not
+ * into an empty answer — see `ReflectionJudgeUnavailableError`.
+ */
+async function resolveJudgeBackend(): Promise<JudgeBackend | undefined> {
+  const resolution = await resolveProviderCredential({});
+  if (resolution.ok) {
+    const { profile, apiKey } = resolution.value;
+    const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
+    return {
+      engine: new AiSdkEngine({
+        resolveModel: (selection) => base(selection.providerId, selection.model),
+      }),
+      model: { providerId: profile.id, model: profile.model },
+      label: `ai-sdk (${profile.id})`,
+    };
+  }
+
+  if (isClaudeAgentSdkAvailable()) {
+    // ISOLATED, and that flag is doing real work. The judge names no cwd, so
+    // without it the SDK would default to `process.cwd()` and load THAT
+    // directory's CLAUDE.md, settings and hooks — naby's own harness, in a
+    // development checkout — into a background call the user never made and
+    // cannot see. `isolated` sets `settingSources: []` so nothing is adopted.
+    //
+    // The model is left unset on purpose: the SDK picks the sign-in's default,
+    // which is the same thing a dev-engine turn does (engines/naby.ts). Inventing
+    // a model id here would be a guess that outlives the sign-in that made it
+    // true.
+    return {
+      engine: new ClaudeAgentSdkEngine({ isolated: true }),
+      model: { providerId: 'dev-claude' },
+      label: 'claude-agent-sdk (subscription)',
+    };
+  }
+
+  return undefined;
+}
+
+/**
  * The model-backed judge: ONE call per session, no tools, strict JSON out.
  *
- * IT REUSES THE TURN PATH RATHER THAN OPENING A SECOND ONE. Credential resolution
- * is `resolveProviderCredential` — the same single resolver the engine uses
- * (engines/naby.ts `resolveProvider` is a two-line unwrap of it) — and the call
- * runs through `AiSdkEngine` with an empty toolset. No provider is named here, no
- * key is read here, and adding a provider adds nothing to this file.
+ * IT REUSES THE TURN PATH RATHER THAN OPENING A SECOND ONE. Both backends are the
+ * ones the engine itself uses — `resolveProviderCredential` + `AiSdkEngine` for a
+ * key, `ClaudeAgentSdkEngine` for a local Claude sign-in — so no provider is named
+ * here, no key is read here, and adding a provider adds nothing to this file.
  *
  * IT NEVER TOUCHES THE TURN'S STORE STATE. `runTurn` is deliberately NOT used:
  * that would append the judge's prompt and answer to a user's transcript and file
  * a usage row against their conversation. The engine is driven directly, so
  * reflection leaves no trace in the session it is reading.
  *
- * ANY FAILURE RETURNS []. No credential, a provider error, unparseable output —
- * all of them mean "no evidence was produced", which leaves the ledger untouched.
+ * WHAT [] MEANS, AND WHAT IT NO LONGER MEANS. `[]` is an ANSWER: the judge looked
+ * and found nothing to correct. It is returned for an empty ask and for output
+ * that parsed to no verdicts. "There is no judge here" is NOT that, and returning
+ * `[]` for it is the bug documented on `ReflectionJudgeUnavailableError` — so
+ * that case THROWS and the sweep leaves the session exactly as it found it. A
+ * provider ERROR (a 401, a timeout) likewise propagates: an attempt that failed
+ * has not read anything either.
  */
 export function modelReflectionJudge(): ReflectionJudge {
   return async (cases: readonly ReflectionCase[], context?: ReflectionSessionContext) => {
@@ -498,19 +615,13 @@ export function modelReflectionJudge(): ReflectionJudge {
     if (cases.length === 0 && (context?.userMessages.length ?? 0) === 0) {
       return [] as ReflectionVerdict[];
     }
-    const resolution = await resolveProviderCredential({});
-    if (!resolution.ok) {
-      // Expected on a machine running only the local Claude sign-in: there is no
-      // api-key provider to make a cheap side call on. Logged once per attempt,
-      // never thrown — reflection is an optimization, not a turn.
-      console.log(`[reflection] judge skipped: ${resolution.error.message}`);
-      return [] as ReflectionVerdict[];
+
+    const backend = await resolveJudgeBackend();
+    if (!backend) {
+      throw new ReflectionJudgeUnavailableError(
+        'no reflection judge is available: no provider API key is configured and the Claude Agent SDK is not installed',
+      );
     }
-    const { profile, apiKey } = resolution.value;
-    const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
-    const engine = new AiSdkEngine({
-      resolveModel: (selection) => base(selection.providerId, selection.model),
-    });
 
     // The session context is what turns one call into two tasks (§5.2): with it
     // the prompt also asks for memory proposals, without it this is exactly the
@@ -520,14 +631,15 @@ export function modelReflectionJudge(): ReflectionJudge {
     const timer = setTimeout(() => controller.abort(), REFLECTION_JUDGE_TIMEOUT_MS);
     let answer = '';
     try {
-      for await (const event of engine.run({
-        model: { providerId: profile.id, model: profile.model },
+      for await (const event of backend.engine.run({
+        model: backend.model,
         messages: [{ role: 'user', content: prompt.user }],
         system: prompt.system,
         toolSchemas: [],
         // The judge is given no tools; a gate that denies everything is the
         // belt-and-braces half of that, so a model that hallucinates a call can
-        // do nothing with it.
+        // do nothing with it. It matters MORE on the Agent SDK backend, whose
+        // built-ins are live unless something stops them.
         gate: async () => ({ behavior: 'deny' as const, reason: 'the reflection judge runs without tools' }),
         executors: {},
         signal: controller.signal,
