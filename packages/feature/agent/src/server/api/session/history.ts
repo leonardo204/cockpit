@@ -23,65 +23,13 @@ import {
   ValidationError,
 } from '@cockpit/effect-core';
 import { getStore } from '../../engines/naby';
-import type { RuntimeMessage } from '../../engines/naby';
+// The row→bubble mapping (including the tool-call coalescing a reloaded
+// transcript needs) lives in its own module: a Next route may only export the
+// handler surface, so a testable helper cannot sit here.
+import { toChatMessages } from './toChatMessages';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp?: string;
-  toolCalls?: Array<{
-    id: string;
-    name: string;
-    input: Record<string, unknown>;
-    result?: string;
-    isLoading: boolean;
-    skillContent?: string;
-  }>;
-}
-
-/**
- * Map the store's RuntimeMessage stream into the client's ChatMessage list.
- * `tool` rows are not rendered as their own bubbles — their output is folded
- * into the matching assistant message's tool call (by toolCallId), mirroring the
- * old tool_use/tool_result pairing.
- */
-function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
-  // First pass: collect every tool output keyed by the call it answers.
-  const toolResults = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role === 'tool') {
-      toolResults.set(m.toolCallId, m.output?.content ?? '');
-    }
-  }
-
-  // Second pass: build user/assistant bubbles in order.
-  const out: ChatMessage[] = [];
-  messages.forEach((m, i) => {
-    if (m.role === 'user') {
-      out.push({ id: `user-${i}`, role: 'user', content: m.content });
-    } else if (m.role === 'assistant') {
-      const toolCalls = (m.toolCalls ?? []).map((tc) => ({
-        id: tc.toolCallId,
-        name: tc.toolName,
-        input: (tc.input as Record<string, unknown>) ?? {},
-        result: toolResults.get(tc.toolCallId),
-        isLoading: false,
-      }));
-      out.push({
-        id: `assistant-${i}`,
-        role: 'assistant',
-        content: m.content,
-        ...(toolCalls.length ? { toolCalls } : {}),
-      });
-    }
-    // role === 'tool' is consumed above (folded into its assistant call).
-  });
-  return out;
-}
 
 export const GET = dynamicHandler<
   { sessionId: string },

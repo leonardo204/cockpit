@@ -2,42 +2,34 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { toast } from '@cockpit/shared-ui';
 import { SubagentTranscriptModal } from './SubagentTranscriptModal';
 import { WorkflowRunModal } from './WorkflowRunModal';
 import type { ToolCallInfo } from './types';
 import { ToolCallPreviewModal } from './ToolCallPreviewModal';
+import {
+  parseWorkflowRunId,
+  relativizePath,
+  toolCallPreview,
+  toolIconFor,
+} from './toolCallDisplay';
 
 // Migrated from src/components/project/ToolCallModal.tsx.
 
 // ============================================
-// Tool icon mapping
+// ToolCallModal — one tool call, as a slim machinery row
 // ============================================
-
-const TOOL_ICONS: Record<string, string> = {
-  Read: '📄',
-  Write: '✏️',
-  Edit: '📝',
-  Bash: '💻',
-  Glob: '🔍',
-  Grep: '🔎',
-  WebFetch: '🌐',
-  WebSearch: '🔍',
-  Workflow: '🧩',
-  Skill: '🛠️',
-};
-
-// Extract the workflow run id (wf_xxx) from a Workflow tool call result. The
-// launch text carries `Transcript dir: .../subagents/workflows/wf_<id>` even
-// for background runs, so the id is available as soon as the call returns.
-function parseWorkflowRunId(result?: string): string | null {
-  if (!result) return null;
-  return result.match(/subagents\/workflows\/(wf_[A-Za-z0-9_-]+)/)?.[1] ?? null;
-}
-
-// ============================================
-// ToolCallModal - tool call display component
-// ============================================
+//
+// This used to be a card: `border border-border rounded-lg bg-secondary`, i.e.
+// the same vocabulary the chat bubbles use, stacked INSIDE a bubble. Two nested
+// surfaces per call meant a turn that read four files looked like five separate
+// utterances, and the actual answer was the hardest thing on screen to find.
+//
+// A call is now a row: icon, name, a one-line preview, and the controls, in the
+// muted house style (text-xs / text-muted-foreground / hover tint, no border, no
+// filled block). It reads as a log line, which is what it is. The detail body is
+// still one click away and still starts closed.
 
 interface ToolCallProps {
   toolCall: ToolCallInfo;
@@ -53,7 +45,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
   const [showSubagent, setShowSubagent] = useState(false);
   const [showWorkflow, setShowWorkflow] = useState(false);
 
-  const toolIcon = TOOL_ICONS[toolCall.name] || '🔧';
+  const toolIcon = toolIconFor(toolCall.name);
   const isAgentTool = toolCall.name === 'Agent' || toolCall.name === 'Task';
   const isSubagentCall = isAgentTool && !!cwd && !!sessionId;
   const isWorkflow = toolCall.name === 'Workflow';
@@ -61,72 +53,23 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
   // Workflow drill-in needs the run id plus the session coordinates to locate
   // the journal under `<sessionId>/workflows/`.
   const isWorkflowCall = isWorkflow && !!workflowRunId && !!cwd && !!sessionId;
-  const isSkill = toolCall.name === 'Skill';
-  // The header text slot carries a description (Agent) / name (Workflow/Skill),
-  // not a path — skip relative-path conversion and the copy-path icon for these.
-  const hideCopyIcon = isAgentTool || isWorkflow || isSkill;
 
-  // Extract file path or key info from input
-  const getDisplayInfo = () => {
-    const input = toolCall.input;
-    if (toolCall.name === 'Bash' && input.command && typeof input.command === 'string') {
-      return input.command;
-    }
-    if (isAgentTool && input.description && typeof input.description === 'string') {
-      return input.description;
-    }
-    if (isWorkflow) {
-      const name = typeof input.name === 'string' ? input.name : '';
-      const detail =
-        typeof input.args === 'string'
-          ? input.args
-          : typeof input.resumeFromRunId === 'string'
-            ? input.resumeFromRunId
-            : '';
-      const label = [name, detail].filter(Boolean).join(' · ');
-      if (label) return label;
-    }
-    if (isSkill && typeof input.skill === 'string') {
-      const detail = typeof input.args === 'string' ? input.args : '';
-      return [input.skill, detail].filter(Boolean).join(' · ');
-    }
-    if (toolCall.name === 'Glob' && input.pattern && typeof input.pattern === 'string') {
-      return input.pattern;
-    }
-    if (toolCall.name === 'Grep' && input.pattern && typeof input.pattern === 'string') {
-      return input.pattern;
-    }
-    if (toolCall.name === 'ToolSearch' && input.query && typeof input.query === 'string') {
-      return input.query;
-    }
-    if (toolCall.name === 'TaskCreate' && input.subject && typeof input.subject === 'string') {
-      return input.subject;
-    }
-    if (input.file_path && typeof input.file_path === 'string') {
-      return input.file_path;
-    }
-    if (input.path && typeof input.path === 'string') {
-      return input.path;
-    }
-    return null;
+  // The identifying detail beside the name. `path` previews are shortened for
+  // display but copied in full; `label` previews (an agent's task, a workflow
+  // name, a generic fallback) are not addresses, so no copy affordance.
+  const preview = toolCallPreview(toolCall.name, toolCall.input);
+  const displayText = preview
+    ? preview.kind === 'path'
+      ? relativizePath(preview.text, cwd)
+      : preview.text
+    : null;
+  const canCopy = !!preview && preview.kind !== 'label';
+
+  const copyPreview = () => {
+    if (!preview) return;
+    navigator.clipboard.writeText(preview.text);
+    toast(t('common.copiedPath'));
   };
-
-  // Get path relative to cwd
-  const getRelativePath = (fullPath: string) => {
-    if (cwd && fullPath.startsWith(cwd)) {
-      const relativePath = fullPath.slice(cwd.length);
-      return relativePath.startsWith('/') ? relativePath.slice(1) : relativePath;
-    }
-    const parts = fullPath.split('/');
-    if (parts.length > 2) {
-      return '.../' + parts.slice(-2).join('/');
-    }
-    return fullPath;
-  };
-
-  const displayInfo = getDisplayInfo();
-  const skipRelativePath = toolCall.name === 'Glob' || toolCall.name === 'Grep' || toolCall.name === 'Bash' || isAgentTool || isWorkflow || isSkill;
-  const displayPath = displayInfo ? (skipRelativePath ? displayInfo : getRelativePath(displayInfo)) : null;
 
   const openPreview = (type: 'input' | 'result') => {
     const suffix = type === 'input' ? t('toolCall.inputParams') : t('toolCall.resultLabel');
@@ -134,53 +77,48 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
       ? JSON.stringify(toolCall.input, null, 2)
       : (typeof toolCall.result === 'string' ? toolCall.result : JSON.stringify(toolCall.result, null, 2));
     setPreviewContent({
-      title: `${toolCall.name}${displayPath ? ` ${displayPath}` : ''} - ${suffix}`,
+      title: `${toolCall.name}${displayText ? ` ${displayText}` : ''} - ${suffix}`,
       content,
     });
   };
 
   return (
-    <div className="my-1 border border-border rounded-lg overflow-hidden bg-secondary">
+    <div className="group/tool" data-testid="tool-call-row">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-3 py-1.5 flex items-center gap-2 text-left hover:bg-accent transition-colors"
+        aria-expanded={expanded}
+        className="w-full flex items-center gap-1.5 rounded px-2 py-1 text-left text-xs leading-5 text-muted-foreground hover:bg-muted/30 transition-colors"
+        title={t('toolCall.toggleDetails', { defaultValue: 'Show details' })}
       >
-        <span className="text-sm">{toolIcon}</span>
-        <span className="font-medium text-sm text-foreground flex-shrink-0">
-          {toolCall.name}
-        </span>
-        {displayPath && (
+        <span className="text-[11px] leading-none flex-shrink-0">{toolIcon}</span>
+        <span className="text-foreground flex-shrink-0">{toolCall.name}</span>
+        {displayText && (
           <>
             <span
-              className="text-xs text-muted-foreground truncate flex-1 min-w-0"
-              title={displayInfo || ''}
+              className="truncate flex-1 min-w-0 font-mono text-[11px]"
+              title={preview?.text || ''}
             >
-              {displayPath}
+              {displayText}
             </span>
-            {!hideCopyIcon && (
+            {canCopy && (
               <span
                 role="button"
                 tabIndex={0}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (displayInfo) {
-                    navigator.clipboard.writeText(displayInfo);
-                    toast(t('common.copiedPath'));
-                  }
+                  copyPreview();
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.stopPropagation();
-                    if (displayInfo) {
-                      navigator.clipboard.writeText(displayInfo);
-                      toast(t('common.copiedPath'));
-                    }
+                    copyPreview();
                   }
                 }}
-                className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors flex-shrink-0 cursor-pointer"
+                className="p-0.5 rounded opacity-50 hover:opacity-100 hover:text-foreground transition-opacity flex-shrink-0 cursor-pointer"
                 title={t('common.copyAbsPath')}
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
               </span>
@@ -188,14 +126,14 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
           </>
         )}
         {/* Right action area */}
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex items-center gap-2 flex-shrink-0">
           {isSubagentCall && (
             <span
               role="button"
               tabIndex={0}
               onClick={(e) => { e.stopPropagation(); setShowSubagent(true); }}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setShowSubagent(true); } }}
-              className="text-xs text-brand hover:text-teal-10 cursor-pointer"
+              className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
               title={t('chat.subagentViewTitle')}
             >
               {t('chat.subagent')}
@@ -207,7 +145,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
               tabIndex={0}
               onClick={(e) => { e.stopPropagation(); setShowWorkflow(true); }}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setShowWorkflow(true); } }}
-              className="text-xs text-brand hover:text-teal-10 cursor-pointer"
+              className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
               title={t('chat.workflowViewTitle')}
             >
               {t('chat.workflowRun')}
@@ -220,7 +158,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
                 tabIndex={0}
                 onClick={(e) => { e.stopPropagation(); openPreview('input'); }}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openPreview('input'); } }}
-                className="text-xs text-brand hover:text-teal-10 cursor-pointer"
+                className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
                 title={t('toolCall.inputParamsTitle')}
               >
                 {t('toolCall.input')}
@@ -231,7 +169,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
                   tabIndex={0}
                   onClick={(e) => { e.stopPropagation(); openPreview('result'); }}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openPreview('result'); } }}
-                  className="text-xs text-brand hover:text-teal-10 cursor-pointer"
+                  className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
                   title={t('toolCall.resultTitle')}
                 >
                   {t('toolCall.result')}
@@ -240,32 +178,30 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
             </>
           )}
           {toolCall.isLoading ? (
-            <span className="inline-block w-4 h-4 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+            <span className="inline-block w-3 h-3 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+          ) : expanded ? (
+            <ChevronDown className="w-3 h-3 opacity-60" />
           ) : (
-            <span className="text-slate-9 text-xs">
-              {expanded ? '▲' : '▼'}
-            </span>
+            <ChevronRight className="w-3 h-3 opacity-60" />
           )}
         </span>
       </button>
 
+      {/* Detail, indented under its row and lit like the reasoning block rather
+          than like a card — same recipe as the thinking summary body. */}
       {expanded && (
-        <div className="border-t border-border">
-          <div className="px-3 py-2">
-            <div className="mb-1">
-              <span className="text-xs text-muted-foreground">{t('toolCall.inputParams')}:</span>
-            </div>
-            <pre className="text-xs bg-secondary p-2 rounded overflow-x-auto max-h-24 overflow-y-auto text-foreground">
+        <div className="ml-6 mb-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[11px] leading-relaxed">
+          <div>
+            <div className="mb-0.5 text-muted-foreground">{t('toolCall.inputParams')}</div>
+            <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-foreground/90">
               {JSON.stringify(toolCall.input, null, 2)}
             </pre>
           </div>
 
           {toolCall.result && (
-            <div className="px-3 py-2 border-t border-border">
-              <div className="mb-1">
-                <span className="text-xs text-muted-foreground">{t('toolCall.resultLabel')}:</span>
-              </div>
-              <pre className="text-xs bg-secondary p-2 rounded overflow-x-auto max-h-24 overflow-y-auto text-foreground">
+            <div className="mt-1.5 border-t border-border/60 pt-1.5">
+              <div className="mb-0.5 text-muted-foreground">{t('toolCall.resultLabel')}</div>
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-foreground/90">
                 {typeof toolCall.result === 'string' ? toolCall.result : JSON.stringify(toolCall.result, null, 2)}
               </pre>
             </div>
@@ -273,13 +209,11 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
 
           {/* Skill body loaded by this call — folded here instead of shown as a user bubble */}
           {toolCall.skillContent && (
-            <div className="px-3 py-2 border-t border-border">
-              <div className="mb-1">
-                <span className="text-xs text-muted-foreground">
-                  {t('toolCall.skillContent', { defaultValue: 'Skill content' })}:
-                </span>
+            <div className="mt-1.5 border-t border-border/60 pt-1.5">
+              <div className="mb-0.5 text-muted-foreground">
+                {t('toolCall.skillContent', { defaultValue: 'Skill content' })}
               </div>
-              <pre className="text-xs bg-secondary p-2 rounded overflow-x-auto max-h-60 overflow-y-auto text-foreground whitespace-pre-wrap">
+              <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words text-foreground/90">
                 {toolCall.skillContent}
               </pre>
             </div>

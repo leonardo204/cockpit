@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useMemo, memo } from 'react';
 import { Portal, toast } from '@cockpit/shared-ui';
-import { MessageCircleQuestion, Circle, Loader, CheckCircle2 } from 'lucide-react';
+import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ToolCallModal } from './ToolCallModal';
+import { filterDisplayToolCalls, shouldGroupUnderHeader } from './toolCallDisplay';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
 import type { ChatMessage, MessageImage } from './types';
 import { MarkdownRenderer } from '@cockpit/shared-ui';
@@ -57,23 +58,19 @@ interface MessageBubbleProps {
   isLoading?: boolean;
 }
 
-// Threshold for collapsing tool calls — any tool call (≥1) renders inside a collapsible header,
-// so special operation entries (AskUserQuestion) on the header are always reachable.
-const TOOL_CALLS_COLLAPSE_THRESHOLD = 0;
-
 // Use memo optimization — only re-render when message or cwd changes
 export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
-  // Single-tool case: default expanded so the content stays visible (we only need the header for special entries).
-  // Multi-tool case: default collapsed (preserves existing behavior).
-  const [toolCallsExpanded, setToolCallsExpanded] = useState(() => (message.toolCalls?.length || 0) === 1);
+  // A long run of calls starts folded; a short one has no header to fold at all
+  // (see toolCallDisplay). There is no longer an "expanded because there is
+  // exactly one" case — that rule existed to keep a lone call visible inside a
+  // header that should never have been drawn for a lone call.
+  const [toolCallsExpanded, setToolCallsExpanded] = useState(false);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
   const [showEventDetail, setShowEventDetail] = useState(false);
   const isUser = message.role === 'user';
   const hasImages = message.images && message.images.length > 0;
-  const toolCallsCount = message.toolCalls?.length || 0;
-  const shouldCollapseToolCalls = toolCallsCount > TOOL_CALLS_COLLAPSE_THRESHOLD;
 
   // Last TodoWrite call
   const lastTodoWrite = useMemo(() => {
@@ -107,9 +104,12 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // Tool calls shown in the generic list — ExitPlanMode is surfaced as a plan card
   // above instead of a (failed-looking) tool entry.
   const displayToolCalls = useMemo(
-    () => message.toolCalls?.filter(tc => tc.name !== 'ExitPlanMode') ?? [],
+    () => filterDisplayToolCalls(message.toolCalls),
     [message.toolCalls]
   );
+  // Only a WALL of calls gets a header. One to three render bare: the old
+  // "1 tool call" header announced nothing the row below it did not say.
+  const useToolCallsHeader = shouldGroupUnderHeader(displayToolCalls.length);
 
   // Extract and parse thoughts from tool call inputs
   const thoughts = useMemo(() => {
@@ -129,6 +129,17 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     }
     return result;
   }, [message.toolCalls]);
+
+  // Is there anything the assistant SAID (or drew) to put in a bubble? Tool
+  // calls no longer count: they render outside the bubble as machinery, so a
+  // turn that only ran tools must not leave an empty speech balloon behind.
+  const hasBubbleContent =
+    !!message.content ||
+    !!hasImages ||
+    !!lastTodoWrite ||
+    !!planCard ||
+    thoughts.length > 0;
+  const showBubble = isUser || hasBubbleContent;
 
   // Copy message content
   const handleCopy = () => {
@@ -254,6 +265,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             </div>
           </details>
         )}
+        {showBubble && (
         <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
         {/* Action buttons for user messages — on the left */}
         {isUser && (
@@ -419,51 +431,6 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             </div>
           )}
 
-          {/* Tool calls */}
-          {displayToolCalls.length > 0 && (
-            <div className={`${message.content || hasImages ? 'mt-2' : ''}`}>
-              {shouldCollapseToolCalls ? (
-                // Collapsed mode: show summary and expand button
-                <div className="border border-border rounded-lg overflow-hidden bg-secondary">
-                  <div className="flex items-center">
-                    <button
-                      onClick={() => setToolCallsExpanded(!toolCallsExpanded)}
-                      className="flex-1 px-3 py-1.5 flex items-center gap-2 text-left hover:bg-accent transition-colors active:bg-muted"
-                    >
-                      <span className="text-sm">🔧</span>
-                      <span className="font-medium text-foreground">
-                        {t('chat.toolCalls', { count: displayToolCalls.length })}
-                      </span>
-                      <span className="ml-auto text-muted-foreground text-sm">
-                        {toolCallsExpanded ? t('chat.collapse') : t('chat.expand')}
-                      </span>
-                    </button>
-                    {askQuestionCalls.length > 0 && (
-                      <button
-                        onClick={() => setShowAskQuestionViewer(true)}
-                        className="px-3 py-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors border-l border-border"
-                        title={t('chat.viewQuestions')}
-                      >
-                        <MessageCircleQuestion className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                  {toolCallsExpanded && (
-                    <div className="border-t border-border p-2 space-y-1">
-                      {displayToolCalls.map((toolCall, index) => (
-                        <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                // Normal mode: show all tool calls directly
-                displayToolCalls.map((toolCall, index) => (
-                  <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
-                ))
-              )}
-            </div>
-          )}
         </div>
         {/* Action buttons for AI messages — on the right */}
         {!isUser && (
@@ -482,6 +449,65 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
           </div>
         )}
         </div>
+        )}
+
+        {/* THE MACHINERY, outside the bubble.
+            Tool calls used to live INSIDE the `bg-accent rounded-2xl` balloon,
+            wrapped in a second bordered card — so the work the assistant did
+            wore the same clothes as the things it said, and a turn that ran one
+            tool announced itself with a full-width "1 tool call" panel. Out
+            here they are slim muted rows: legible when you look for them,
+            silent when you are reading the answer. */}
+        {!isUser && displayToolCalls.length > 0 && (
+          <div
+            className={`w-full max-w-[90%] ${showBubble ? 'mt-1' : ''}`}
+            data-testid="tool-call-group"
+          >
+            {useToolCallsHeader ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setToolCallsExpanded(!toolCallsExpanded)}
+                  aria-expanded={toolCallsExpanded}
+                  data-testid="tool-calls-toggle"
+                  className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                >
+                  {toolCallsExpanded ? (
+                    <ChevronDown className="w-3 h-3 opacity-60" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3 opacity-60" />
+                  )}
+                  <span>{t('chat.toolCalls', { count: displayToolCalls.length })}</span>
+                </button>
+                {toolCallsExpanded && (
+                  <div className="mt-0.5">
+                    {displayToolCalls.map((toolCall, index) => (
+                      <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              displayToolCalls.map((toolCall, index) => (
+                <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
+              ))
+            )}
+            {/* Questions the run asked. It used to hang off the collapsed
+                header, which no longer exists for short runs — so it is its own
+                row and is reachable whatever the run's size. */}
+            {askQuestionCalls.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowAskQuestionViewer(true)}
+                className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+                title={t('chat.viewQuestions')}
+              >
+                <MessageCircleQuestion className="w-3.5 h-3.5" />
+                <span>{t('chat.viewQuestions')}</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Image preview modal */}
