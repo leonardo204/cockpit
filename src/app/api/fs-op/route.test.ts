@@ -1,0 +1,236 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/**
+ * /api/fs-op is the only route in the app that DELETES a user's file, so its
+ * refusals matter more than its successes.
+ *
+ * Two properties are pinned here per action:
+ *
+ *   1. It does what it says on a well-formed request (the tree really changes).
+ *   2. It refuses rather than damages — an escaping `rel` or `name` never
+ *      touches anything outside the project, and a colliding name is reported
+ *      instead of overwriting the file that is already there. The existing
+ *      `~/.naby` habit of "skip, never clobber" (see /api/copy-into) is the
+ *      contract; a file browser that eats a file on a typo is worse than one
+ *      that says no.
+ *
+ * The fixture is a throwaway tree with a SIBLING directory next to it, so the
+ * escape tests have a real target to fail to reach.
+ */
+
+const root = mkdtempSync(join(tmpdir(), 'naby-fs-op-'));
+const cwd = join(root, 'proj');
+const outside = join(root, 'outside');
+
+let route: typeof import('./route');
+
+type Res = { ok: boolean; reason?: string; rel?: string };
+
+const post = async (body: unknown): Promise<Res> => {
+  const res = await route.POST(
+    new Request('http://127.0.0.1/api/fs-op', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+  expect(res.status).toBe(200);
+  return (await res.json()) as Res;
+};
+
+beforeAll(async () => {
+  route = await import('./route');
+});
+
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+// A fresh tree per test: these mutate the filesystem, so shared state would
+// make failures depend on ordering.
+beforeEach(() => {
+  rmSync(cwd, { recursive: true, force: true });
+  rmSync(outside, { recursive: true, force: true });
+  mkdirSync(join(cwd, 'src'), { recursive: true });
+  mkdirSync(join(cwd, 'src', 'nested'), { recursive: true });
+  writeFileSync(join(cwd, 'README.md'), 'hello');
+  writeFileSync(join(cwd, 'src', 'a.ts'), 'export const a = 1;');
+  writeFileSync(join(cwd, 'src', 'nested', 'deep.txt'), 'deep');
+  mkdirSync(outside, { recursive: true });
+  writeFileSync(join(outside, 'secret.txt'), 'do not touch');
+});
+
+describe('mkdir / mkfile', () => {
+  it('creates a folder inside the named directory', async () => {
+    const r = await post({ cwd, action: 'mkdir', rel: 'src', name: 'utils' });
+    expect(r).toEqual({ ok: true, rel: 'src/utils' });
+    expect(existsSync(join(cwd, 'src', 'utils'))).toBe(true);
+  });
+
+  it('creates an empty file at the project root', async () => {
+    const r = await post({ cwd, action: 'mkfile', rel: '', name: 'notes.md' });
+    expect(r).toEqual({ ok: true, rel: 'notes.md' });
+    expect(readFileSync(join(cwd, 'notes.md'), 'utf8')).toBe('');
+  });
+
+  it('refuses a name that already exists, leaving the file untouched', async () => {
+    const r = await post({ cwd, action: 'mkfile', rel: '', name: 'README.md' });
+    expect(r).toEqual({ ok: false, reason: 'exists' });
+    // The point of the refusal: the original content survives.
+    expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('hello');
+  });
+
+  it('refuses a name that is really a path', async () => {
+    expect(await post({ cwd, action: 'mkfile', rel: '', name: '../escaped.txt' })).toEqual({
+      ok: false,
+      reason: 'invalid-name',
+    });
+    expect(await post({ cwd, action: 'mkdir', rel: '', name: 'a/b' })).toEqual({
+      ok: false,
+      reason: 'invalid-name',
+    });
+    expect(existsSync(join(root, 'escaped.txt'))).toBe(false);
+  });
+
+  it('refuses a rel that walks out of the project', async () => {
+    const r = await post({ cwd, action: 'mkfile', rel: '../outside', name: 'planted.txt' });
+    expect(r).toEqual({ ok: false, reason: 'escape' });
+    expect(existsSync(join(outside, 'planted.txt'))).toBe(false);
+  });
+});
+
+describe('rename', () => {
+  it('renames in place and answers with the new relative path', async () => {
+    const r = await post({ cwd, action: 'rename', rel: 'src/a.ts', name: 'b.ts' });
+    expect(r).toEqual({ ok: true, rel: 'src/b.ts' });
+    expect(existsSync(join(cwd, 'src', 'a.ts'))).toBe(false);
+    expect(readFileSync(join(cwd, 'src', 'b.ts'), 'utf8')).toBe('export const a = 1;');
+  });
+
+  it('renames a directory with its contents', async () => {
+    const r = await post({ cwd, action: 'rename', rel: 'src/nested', name: 'moved' });
+    expect(r.ok).toBe(true);
+    expect(readFileSync(join(cwd, 'src', 'moved', 'deep.txt'), 'utf8')).toBe('deep');
+  });
+
+  it('refuses a collision instead of overwriting the sibling', async () => {
+    writeFileSync(join(cwd, 'src', 'taken.ts'), 'original');
+    const r = await post({ cwd, action: 'rename', rel: 'src/a.ts', name: 'taken.ts' });
+    expect(r).toEqual({ ok: false, reason: 'exists' });
+    expect(readFileSync(join(cwd, 'src', 'taken.ts'), 'utf8')).toBe('original');
+    expect(existsSync(join(cwd, 'src', 'a.ts'))).toBe(true);
+  });
+
+  it('refuses to rename the project root itself', async () => {
+    expect(await post({ cwd, action: 'rename', rel: '', name: 'whatever' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+  });
+
+  it('reports a target that is not there', async () => {
+    expect(await post({ cwd, action: 'rename', rel: 'src/ghost.ts', name: 'x.ts' })).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
+  });
+
+  it('refuses a rel outside the project', async () => {
+    const r = await post({ cwd, action: 'rename', rel: '../outside/secret.txt', name: 'gone.txt' });
+    expect(r).toEqual({ ok: false, reason: 'escape' });
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('do not touch');
+  });
+});
+
+describe('duplicate', () => {
+  it('copies a file to a " copy" sibling that keeps the extension', async () => {
+    const r = await post({ cwd, action: 'duplicate', rel: 'src/a.ts' });
+    expect(r).toEqual({ ok: true, rel: 'src/a copy.ts' });
+    expect(readFileSync(join(cwd, 'src', 'a copy.ts'), 'utf8')).toBe('export const a = 1;');
+  });
+
+  it('numbers past a duplicate that already exists', async () => {
+    await post({ cwd, action: 'duplicate', rel: 'src/a.ts' });
+    const r = await post({ cwd, action: 'duplicate', rel: 'src/a.ts' });
+    expect(r).toEqual({ ok: true, rel: 'src/a copy 2.ts' });
+    // The first duplicate is still the first duplicate.
+    expect(readFileSync(join(cwd, 'src', 'a copy.ts'), 'utf8')).toBe('export const a = 1;');
+  });
+
+  it('copies a directory recursively', async () => {
+    const r = await post({ cwd, action: 'duplicate', rel: 'src/nested' });
+    expect(r).toEqual({ ok: true, rel: 'src/nested copy' });
+    expect(readFileSync(join(cwd, 'src', 'nested copy', 'deep.txt'), 'utf8')).toBe('deep');
+  });
+
+  it('refuses a rel outside the project', async () => {
+    const r = await post({ cwd, action: 'duplicate', rel: '../outside/secret.txt' });
+    expect(r).toEqual({ ok: false, reason: 'escape' });
+    expect(existsSync(join(outside, 'secret copy.txt'))).toBe(false);
+  });
+
+  it('refuses to duplicate the project root', async () => {
+    expect(await post({ cwd, action: 'duplicate', rel: '' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+  });
+});
+
+describe('delete', () => {
+  it('removes a file', async () => {
+    const r = await post({ cwd, action: 'delete', rel: 'README.md' });
+    expect(r).toEqual({ ok: true, rel: 'README.md' });
+    expect(existsSync(join(cwd, 'README.md'))).toBe(false);
+  });
+
+  it('removes a directory and its contents', async () => {
+    const r = await post({ cwd, action: 'delete', rel: 'src/nested' });
+    expect(r.ok).toBe(true);
+    expect(existsSync(join(cwd, 'src', 'nested'))).toBe(false);
+    // A sibling is untouched.
+    expect(existsSync(join(cwd, 'src', 'a.ts'))).toBe(true);
+  });
+
+  it('refuses to delete the project root', async () => {
+    expect(await post({ cwd, action: 'delete', rel: '' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+    expect(existsSync(cwd)).toBe(true);
+  });
+
+  it('refuses to delete anything outside the project', async () => {
+    const r = await post({ cwd, action: 'delete', rel: '../outside' });
+    expect(r).toEqual({ ok: false, reason: 'escape' });
+    expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('do not touch');
+  });
+
+  it('reports a target that is already gone', async () => {
+    expect(await post({ cwd, action: 'delete', rel: 'ghost.md' })).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
+  });
+});
+
+describe('request validation', () => {
+  it('refuses an unknown action before touching the disk', async () => {
+    expect(await post({ cwd, action: 'chmod', rel: 'README.md' })).toEqual({
+      ok: false,
+      reason: 'invalid-action',
+    });
+  });
+
+  it('refuses a relative or empty cwd', async () => {
+    expect(await post({ cwd: '', action: 'mkdir', rel: '', name: 'x' })).toEqual({
+      ok: false,
+      reason: 'invalid-cwd',
+    });
+    expect(await post({ cwd: 'proj', action: 'mkdir', rel: '', name: 'x' })).toEqual({
+      ok: false,
+      reason: 'invalid-cwd',
+    });
+  });
+});

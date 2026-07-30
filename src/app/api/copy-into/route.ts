@@ -12,9 +12,10 @@
  * overwritten (a copy must not clobber). Results are reported per item.
  */
 import { cp, stat } from "fs/promises"
-import { basename, isAbsolute, join, resolve, sep } from "path"
+import { basename, isAbsolute, join, resolve } from "path"
 import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
+import { withinCwd } from "../../../lib/fsScope"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -28,12 +29,6 @@ interface Body {
 type Reason = "invalid-cwd" | "escape" | "dest-not-dir" | "no-sources"
 
 const fail = (reason: Reason) => ok({ ok: false as const, reason })
-
-function withinCwd(cwd: string, target: string): boolean {
-  const base = resolve(cwd)
-  const t = resolve(target)
-  return t === base || t.startsWith(base + sep)
-}
 
 export const POST = handler((req) =>
   Effect.gen(function* () {

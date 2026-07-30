@@ -11,9 +11,10 @@
  * tree lazy-loads deeper levels with more calls as folders are expanded.
  */
 import { readdir } from "fs/promises"
-import { isAbsolute, join, resolve, sep } from "path"
+import { isAbsolute, join, resolve } from "path"
 import { Effect } from "effect"
 import { handler, ok } from "@cockpit/effect-runtime/server"
+import { withinCwd } from "../../../lib/fsScope"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -26,14 +27,6 @@ interface Entry {
 type Reason = "invalid-cwd" | "escape" | "not-found"
 
 const fail = (reason: Reason) => ok({ ok: false as const, reason })
-
-/** The target must be the project root itself or strictly inside it — never a
- *  sibling or ancestor reached via `..`. */
-function withinCwd(cwd: string, target: string): boolean {
-  const base = resolve(cwd)
-  const t = resolve(target)
-  return t === base || t.startsWith(base + sep)
-}
 
 export const GET = handler((req) =>
   Effect.gen(function* () {
