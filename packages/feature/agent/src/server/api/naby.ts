@@ -85,7 +85,12 @@ import type {
   AgentImportPlan,
   AgentImportReport,
 } from '../../../../../../../dist/naby-runtime.mjs';
-import { resolveMaxSteps } from '../lib/autonomy';
+import { AUTONOMY_STEP_CAP, resolveMaxSteps } from '../lib/autonomy';
+import {
+  readPersonaAutonomy,
+  writePersonaAutonomy,
+  type PersonaAutonomy,
+} from '../lib/personaAutonomy';
 import {
   readTelegramConfig,
   writeTelegramConfig,
@@ -402,6 +407,13 @@ export type NabyAction =
       maxSteps?: number;
     }
   | { action: 'agent.remove'; id: string }
+  // Phase 3 (P3-M9, G1) — HOW MUCH THE USER DELEGATES TO THE BUILT-IN PERSONA.
+  // Not `agent.put` and deliberately not on the agent row: the persona is
+  // read-only, and this is the user's setting about the delegation rather than a
+  // property of the agent's identity (see lib/personaAutonomy.ts). `set` takes
+  // either field on its own, clamps `maxSteps`, and answers with what was kept.
+  | { action: 'personaAutonomy.get' }
+  | { action: 'personaAutonomy.set'; escalation?: string; maxSteps?: number }
   // Phase 3 (P3-M3) — the Telegram escalation channel config. `get` returns the
   // config with the token REDACTED; `set` persists (a token '' is left unchanged
   // so the redacted UI never wipes it); `test` sends a live message.
@@ -473,6 +485,13 @@ export type NabyActionResult =
       agents?: Agent[];
       /** `agent.put`: the agent that was created/updated. */
       agent?: Agent;
+      /** `personaAutonomy.get`/`set`: the persona delegation settings as they now
+       *  stand — already clamped, so the UI renders the effective values rather
+       *  than the ones it asked for. */
+      personaAutonomy?: PersonaAutonomy;
+      /** The ceiling `maxSteps` is clamped to, shipped with the settings so the UI
+       *  states the limit instead of letting the user discover it. */
+      autonomyStepCap?: number;
       /** `telegram.get`: current config with the token REDACTED (never the secret). */
       telegram?: { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
       /** `telegram.detectChat`: the chat id discovered from the bot's latest message. */
@@ -630,6 +649,18 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     }
 
     case 'agent.put': {
+      // THE BUILT-IN PERSONA IS READ-ONLY (user decision, 2026-07-30). Refused
+      // HERE as well as in the store, for two different reasons: the store throw
+      // is the invariant (nothing can get past it), and this is the ANSWER — a
+      // sentence the panel can show, rather than a driver's error text leaking
+      // into a toast. Both spellings of the attempt are caught: the well-known id,
+      // and any id that happens to name a persona row.
+      const targetId = typeof body.id === 'string' && body.id ? body.id : '';
+      const targetKind = targetId ? store.getAgent(targetId)?.kind : undefined;
+      if (targetId === BUILTIN_PERSONA_ID || targetKind === 'persona' || body.kind === 'persona') {
+        return { ok: false, error: 'the built-in persona is read-only and cannot be edited' };
+      }
+
       const name = typeof body.name === 'string' ? body.name.trim() : '';
       if (!name) return { ok: false, error: 'name is required' };
       // The name is the @-routing handle — it must address unambiguously, so no
@@ -638,10 +669,10 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       const systemPrompt = typeof body.systemPrompt === 'string' ? body.systemPrompt.trim() : '';
       if (!systemPrompt) return { ok: false, error: 'systemPrompt is required' };
 
-      // Only the built-in persona row is kind='persona'; every user-created agent
-      // is 'custom'. Editing the persona (its well-known id) keeps it a persona;
-      // any other put is forced to 'custom' so users cannot mint extra personas.
-      const kind: AgentKind = body.id === BUILTIN_PERSONA_ID ? 'persona' : 'custom';
+      // Every agent this route writes is 'custom' — unconditionally, now that the
+      // persona is refused above. Only `seedBuiltinPersona` mints kind='persona',
+      // and it does not come through here.
+      const kind: AgentKind = 'custom';
 
       const memoryScope: MemoryScope =
         body.memoryScope === 'session' ||
@@ -694,6 +725,44 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // it never shows a "removed" persona.
       store.removeAgent(body.id);
       return { ok: true, agents: store.listAgents() };
+    }
+
+    // Phase 3 (P3-M9, G1) — the persona's DELEGATION settings. Read and written
+    // through lib/personaAutonomy, which owns the keys, the defaults and the
+    // clamp; this route only validates what came off the wire.
+    case 'personaAutonomy.get': {
+      return {
+        ok: true,
+        personaAutonomy: readPersonaAutonomy(store),
+        autonomyStepCap: AUTONOMY_STEP_CAP,
+      };
+    }
+
+    case 'personaAutonomy.set': {
+      // Both fields are optional — a save from one control must not reset the
+      // other — but a field that IS present has to be usable. Rejecting here
+      // rather than coercing means a UI bug surfaces as an error the user can
+      // report, not as a setting that quietly became something else.
+      if (body.escalation !== undefined) {
+        if (
+          body.escalation !== 'inline' &&
+          body.escalation !== 'telegram' &&
+          body.escalation !== 'both'
+        ) {
+          return { ok: false, error: "escalation must be 'inline', 'telegram', or 'both'" };
+        }
+      }
+      if (body.maxSteps !== undefined && !Number.isFinite(body.maxSteps)) {
+        return { ok: false, error: 'maxSteps must be a number' };
+      }
+      return {
+        ok: true,
+        personaAutonomy: writePersonaAutonomy(store, {
+          ...(body.escalation !== undefined ? { escalation: body.escalation } : {}),
+          ...(body.maxSteps !== undefined ? { maxSteps: body.maxSteps } : {}),
+        }),
+        autonomyStepCap: AUTONOMY_STEP_CAP,
+      };
     }
 
     case 'telegram.get': {

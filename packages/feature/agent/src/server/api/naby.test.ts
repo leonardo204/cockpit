@@ -6,6 +6,7 @@ import {
   DEFAULT_USER_ID,
   REFLECTION_IDLE_MS,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { AUTONOMY_STEP_CAP } from '../lib/autonomy';
 
 /**
  * `reflection.run` — the on-demand entry point to the session-reflection sweep
@@ -60,6 +61,86 @@ describe('POST /api/naby — reflection.run', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.reflection?.sweptSessions).toBeGreaterThanOrEqual(0);
+  });
+});
+
+/**
+ * `agent.put` and the BUILT-IN PERSONA (user decision, 2026-07-30 — it replaces
+ * M1's "editable but undeletable").
+ *
+ * The persona's system prompt IS the contract every later milestone builds on:
+ * memory injection, escalation, the autonomy budget, and everything the trust
+ * meter scores. A user who edited it got an agent that behaved unlike the one
+ * being measured, with no way back — the row refuses to be deleted. So it is now
+ * read-only, and this route is one of the two places that says so (the store is
+ * the other, and it THROWS; this one answers with a sentence a panel can show).
+ */
+describe('POST /api/naby — agent.put refuses the built-in persona', () => {
+  it('refuses an edit addressed to the well-known persona id', async () => {
+    const store = getStore();
+    const before = store.getAgent(BUILTIN_PERSONA_ID);
+    expect(before, 'the persona is seeded by the engine composition root').toBeDefined();
+
+    const result = await runNabyAction({
+      action: 'agent.put',
+      id: BUILTIN_PERSONA_ID,
+      name: 'aria',
+      systemPrompt: 'you are something else now',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/read-only/i);
+
+    // NOT MERELY REPORTED AS REFUSED — nothing was written.
+    const after = store.getAgent(BUILTIN_PERSONA_ID);
+    expect(after?.systemPrompt).toBe(before?.systemPrompt);
+    expect(after?.name).toBe(before?.name);
+    expect(store.getAgentByName('aria')).toBeUndefined();
+  });
+
+  it('refuses a request that asks for kind=persona, so no second persona is minted', async () => {
+    const store = getStore();
+    const personasBefore = store.listAgents().filter((a) => a.kind === 'persona').length;
+
+    const result = await runNabyAction({
+      action: 'agent.put',
+      name: `impostor-${Date.now()}`,
+      kind: 'persona',
+      systemPrompt: 'me too',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/read-only/i);
+    expect(store.listAgents().filter((a) => a.kind === 'persona')).toHaveLength(personasBefore);
+  });
+
+  it('still writes ordinary custom agents, and always as kind=custom', async () => {
+    // The guard must not have made the route useless: the panel's real job is
+    // custom agents, and they are unaffected.
+    const store = getStore();
+    const name = `scout-${Date.now()}`;
+    const result = await runNabyAction({
+      action: 'agent.put',
+      name,
+      systemPrompt: 'scout the repo',
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.agent?.name).toBe(name);
+    expect(result.agent?.kind).toBe('custom');
+
+    // And editing THAT agent still works — the refusal keys on the persona, not
+    // on the presence of an id.
+    const edited = await runNabyAction({
+      action: 'agent.put',
+      id: result.agent!.id,
+      name,
+      systemPrompt: 'scout the repo, quietly',
+    });
+    expect(edited.ok).toBe(true);
+    expect(store.getAgent(result.agent!.id)?.systemPrompt).toBe('scout the repo, quietly');
+
+    store.removeAgent(result.agent!.id);
   });
 });
 
@@ -165,5 +246,85 @@ describe('POST /api/naby — growth.get and the learning block', () => {
     const result = await runNabyAction({ action: 'growth.get', agentId: BUILTIN_PERSONA_ID });
     if (!result.ok) throw new Error('growth.get failed');
     expect(result.learning!.lastReflectionAt).toBeGreaterThanOrEqual(at);
+  });
+});
+
+/**
+ * `personaAutonomy.get` / `.set` — the persona's DELEGATION settings (P3-M9, G1).
+ *
+ * The rules (defaults, clamp, per-field writes) are unit-tested against a fake
+ * store in lib/personaAutonomy.test.ts. What is tested HERE is the wiring: that
+ * the actions exist, validate what came off the wire, and land in the same store
+ * the engine reads for a persona turn — which is the whole point of moving the
+ * setting off the read-only agent row.
+ */
+describe('POST /api/naby — personaAutonomy', () => {
+  it('reads the defaults on an install that has never chosen', async () => {
+    const result = await runNabyAction({ action: 'personaAutonomy.get' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.personaAutonomy).toEqual({ escalation: 'inline', maxSteps: 1 });
+    // The ceiling ships with the settings so the UI can STATE the limit rather
+    // than letting the user discover it by typing 50.
+    expect(result.autonomyStepCap).toBe(AUTONOMY_STEP_CAP);
+  });
+
+  it('round-trips through the same store the engine reads', async () => {
+    const saved = await runNabyAction({
+      action: 'personaAutonomy.set',
+      escalation: 'both',
+      maxSteps: 6,
+    });
+    expect(saved.ok).toBe(true);
+    if (!saved.ok) return;
+    expect(saved.personaAutonomy).toEqual({ escalation: 'both', maxSteps: 6 });
+
+    // Read back through the store the engine uses, not through the action, so
+    // this cannot pass on an in-memory echo.
+    expect(getStore().getSetting('persona.autonomy.escalation')).toBe('both');
+    expect(getStore().getSetting('persona.autonomy.maxSteps')).toBe('6');
+
+    const read = await runNabyAction({ action: 'personaAutonomy.get' });
+    if (!read.ok) return;
+    expect(read.personaAutonomy).toEqual({ escalation: 'both', maxSteps: 6 });
+  });
+
+  it('answers with the CLAMPED value, so the panel shows what will actually run', async () => {
+    const result = await runNabyAction({ action: 'personaAutonomy.set', maxSteps: 999 });
+    if (!result.ok) throw new Error('personaAutonomy.set failed');
+    expect(result.personaAutonomy!.maxSteps).toBe(AUTONOMY_STEP_CAP);
+    expect(getStore().getSetting('persona.autonomy.maxSteps')).toBe(String(AUTONOMY_STEP_CAP));
+  });
+
+  it('leaves the other field alone on a one-field save', async () => {
+    await runNabyAction({ action: 'personaAutonomy.set', escalation: 'inline', maxSteps: 3 });
+    const result = await runNabyAction({ action: 'personaAutonomy.set', escalation: 'telegram' });
+    if (!result.ok) throw new Error('personaAutonomy.set failed');
+    expect(result.personaAutonomy).toEqual({ escalation: 'telegram', maxSteps: 3 });
+  });
+
+  it('refuses an unusable value rather than quietly coercing it', async () => {
+    // A UI bug should surface as an error the user can report, not as a setting
+    // that silently became something else.
+    const bad = await runNabyAction({
+      action: 'personaAutonomy.set',
+      escalation: 'carrier-pigeon',
+    });
+    expect(bad.ok).toBe(false);
+    const badSteps = await runNabyAction({
+      action: 'personaAutonomy.set',
+      maxSteps: Number.NaN,
+    });
+    expect(badSteps.ok).toBe(false);
+  });
+
+  it('never touches the read-only persona row', async () => {
+    const before = getStore().getAgent(BUILTIN_PERSONA_ID)!;
+    await runNabyAction({ action: 'personaAutonomy.set', escalation: 'both', maxSteps: 8 });
+    const after = getStore().getAgent(BUILTIN_PERSONA_ID)!;
+    // The whole reason this is a setting: the store THROWS on a persona write, so
+    // the delegation config has to live somewhere the user can actually reach.
+    expect(after.autonomy).toEqual(before.autonomy);
+    expect(after.updatedAt).toBe(before.updatedAt);
   });
 });

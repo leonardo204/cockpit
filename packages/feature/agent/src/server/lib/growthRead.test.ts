@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { growthReport, readGrowth, recentQuestions, LEDGER_READ_LIMIT } from './growthRead';
+import {
+  growthReport,
+  isAddressable,
+  readGrowth,
+  recentQuestions,
+  LEDGER_READ_LIMIT,
+} from './growthRead';
+import { canBeAddressed } from '../../../../../../../dist/naby-runtime.mjs';
 import type { EvalEvent, EvalEventKind } from '../../../../../../../dist/naby-runtime.mjs';
 
 let seq = 0;
@@ -192,5 +199,56 @@ describe('growthRead — the implicit axis reaches the wire (P3-M8d)', () => {
     expect(report.implicitHits).toBeUndefined();
     expect(report.implicitWeight).toBeUndefined();
     expect(report.lowerBound).toBe(readGrowth(fakeStore(rows), 'a1').lowerBound);
+  });
+});
+
+/**
+ * THE `@` GATE (P3-M9, G2). One function, one read, two surfaces — the palette
+ * (api/commands.ts) and engine routing both call `isAddressable`, so the menu can
+ * no longer refuse a delegation the engine would perform. The growth read is
+ * mocked here (a fixed ledger), which is what makes "egg → no, butterfly → yes"
+ * assertable without a model or a real store.
+ */
+describe('growthRead — isAddressable, the one @ gate', () => {
+  it('refuses an agent with no measured history — an egg is not delegable', () => {
+    expect(readGrowth(fakeStore([]), 'a1').stage).toBe('egg');
+    expect(isAddressable(fakeStore([]), 'a1')).toBe(false);
+  });
+
+  it('refuses every stage below butterfly, not merely the egg', () => {
+    // 4 of 5 lands at larva, 5 of 5 at pupa (growth.ts stage table). Both are
+    // "measured, and not yet trusted" — the gate must not read "has a ledger" as
+    // "is grown".
+    const larva = [...Array.from({ length: 4 }, () => row({ hit: true })), row({ hit: false })];
+    expect(readGrowth(fakeStore(larva), 'a1').stage).toBe('larva');
+    expect(isAddressable(fakeStore(larva), 'a1')).toBe(false);
+
+    const pupa = Array.from({ length: 5 }, () => row({ hit: true }));
+    expect(readGrowth(fakeStore(pupa), 'a1').stage).toBe('pupa');
+    expect(isAddressable(fakeStore(pupa), 'a1')).toBe(false);
+  });
+
+  it('allows a butterfly — the stage the whole meter exists to certify', () => {
+    const rows = Array.from({ length: 8 }, () => row({ hit: true }));
+    expect(readGrowth(fakeStore(rows), 'a1').stage).toBe('butterfly');
+    expect(isAddressable(fakeStore(rows), 'a1')).toBe(true);
+  });
+
+  it('FAILS CLOSED: a store that throws reads as not addressable', () => {
+    // The same best-effort behaviour the palette has always had, with the
+    // consequence that matters here — an agent whose trust we cannot establish
+    // does not get handed the user's work.
+    expect(isAddressable(brokenStore(), 'a1')).toBe(false);
+  });
+
+  it('agrees with the reading the palette shows, on the same rows', () => {
+    // The regression this exists to prevent: two surfaces answering differently.
+    // Asserted as an equality against `canBeAddressed(readGrowth(...).stage)`,
+    // which is literally what api/commands.ts renders.
+    for (const n of [0, 3, 5, 8, 20]) {
+      const rows = Array.from({ length: n }, () => row({ hit: true }));
+      const store = fakeStore(rows);
+      expect(isAddressable(store, 'a1')).toBe(canBeAddressed(readGrowth(store, 'a1').stage));
+    }
   });
 });

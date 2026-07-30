@@ -1,4 +1,5 @@
 import type { ChatMessage, ToolCallInfo } from './types';
+import { renderHarnessPill } from './harnessPill';
 
 // Single engine-agnostic stream→messages reducer (#10 line 1).
 //
@@ -131,10 +132,16 @@ export function applyStreamEvent(
   // below makes the reducer idempotent, so a replayed/duplicated event cannot stack up
   // repeated bars (the viewer re-runs this reducer over reconnect snapshots).
   if (ev.type === 'system' && ev.subtype === 'harness') {
-    const label = ev.harness_subtype || 'harness event';
-    const detail = ev.harness_detail;
-    const id = `harness-${assistantId}-${label}${detail ? `-${detail}` : ''}`;
+    // The ROW IDENTITY is keyed on the raw codes, not on the rendered text: the
+    // reducer's idempotence must not depend on the UI language, or switching
+    // locale mid-stream would re-add rows it had already collapsed.
+    const id = `harness-${assistantId}-${ev.harness_subtype || 'harness event'}${
+      ev.harness_detail ? `-${ev.harness_detail}` : ''
+    }`;
     if (messages.some((m) => m.id === id)) return messages;
+    // P3-M9: a pill that ADDRESSES the user carries a code (the server has no
+    // locale); everything else passes through verbatim, as before.
+    const { label, detail } = renderHarnessPill(ev.harness_subtype, ev.harness_detail);
     const content = detail ? `${label} · ${detail}` : label;
     const row = {
       id,

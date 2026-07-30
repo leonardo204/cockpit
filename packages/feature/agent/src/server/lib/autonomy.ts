@@ -56,10 +56,30 @@ export function isAutonomous(maxSteps: number): boolean {
   return maxSteps > 1;
 }
 
+/** The marker an agent states its EVIDENCE with, before it is allowed to call
+ *  itself done (P3-M9, G4). `[[VERIFIED: ran the suite, 51/51 green]]`.
+ *
+ *  A deterministic token rather than a judgment call about whether some prose
+ *  "sounds verified": the harness has to decide this on every stop, and a
+ *  fuzzy rule would either nag agents that did check or wave through ones that
+ *  did not. Only the PREFIX is matched, because what follows is free text — the
+ *  content is for the human reading the transcript, not for this code.
+ *
+ *  Visible in the transcript on purpose, exactly like [[DONE]]: the user can see
+ *  what the agent claims to have checked, which is what makes the claim
+ *  falsifiable. */
+export const VERIFIED_MARKER_PREFIX = '[[VERIFIED:';
+
 /** Did the agent declare completion? Case-insensitive so a model that lowercases
  *  the marker is still believed. */
 export function sawDoneMarker(text: string): boolean {
   return text.toLowerCase().includes(DONE_MARKER.toLowerCase());
+}
+
+/** Did the agent state what it verified? Case-insensitive, prefix-only — see
+ *  VERIFIED_MARKER_PREFIX. */
+export function sawVerifiedMarker(text: string): boolean {
+  return text.toLowerCase().includes(VERIFIED_MARKER_PREFIX.toLowerCase());
 }
 
 /** The system-prompt block that tells the agent the protocol it is running under.
@@ -75,10 +95,15 @@ export function autonomyInstruction(maxSteps: number): string {
     `  up to ${maxSteps} times — so do not ask the user to run things for you; do the work.`,
     '- Use your tools to make real progress in every step, then say briefly what you did',
     '  and what is next.',
+    `- Before you finish, CHECK THE RESULT against the goal's success criteria, then`,
+    `  state what you checked as ${VERIFIED_MARKER_PREFIX} what you checked]] — e.g.`,
+    `  ${VERIFIED_MARKER_PREFIX} ran the test suite, 51/51 pass]].`,
     `- When the goal is fully achieved — or you genuinely cannot proceed — end your`,
-    `  message with ${DONE_MARKER} on its own line, and stop.`,
+    `  message with that verification line and then ${DONE_MARKER} on its own line, and stop.`,
     '- A step that uses NO tool ends the run: if work remains, do it with a tool in the',
     '  same step instead of only describing it.',
+    '- Stopping WITHOUT the verification line buys you one more step to go and check.',
+    '  Use it — do not simply repeat the claim.',
     '- Permissions are unchanged: a tool call that needs approval pauses for the user',
     '  (in the app or over Telegram) and then continues. Never work around a denial.',
   ].join('\n');
@@ -96,6 +121,25 @@ export function continuationPrompt(step: number, maxSteps: number): string {
   );
 }
 
+/** The user-turn text for the ONE verification step a run may be granted (P3-M9,
+ *  G4). Sent in place of the ordinary continuation when the agent tried to stop
+ *  without saying what it checked.
+ *
+ *  It asks for a CHECK, not for more work and not for a restatement — the failure
+ *  mode this exists to catch is an agent that believes it is finished, so
+ *  "continue toward the goal" would just get the same claim again. It also names
+ *  the exit explicitly, both ways: verified-and-done, or keep going. An agent
+ *  that cannot tell which it is has learned something worth reporting. */
+export function verificationNudgePrompt(step: number, maxSteps: number): string {
+  return (
+    `[naby autonomy] Before this run ends — step ${step} of ${maxSteps}. ` +
+    `You have not said what you checked. Verify the result against the goal and its ` +
+    `success criteria, using your tools rather than your memory of what you did. ` +
+    `If something is missing or wrong, fix it. If it holds up, say what you checked as ` +
+    `${VERIFIED_MARKER_PREFIX} ...]] and end with ${DONE_MARKER}.`
+  );
+}
+
 /** Why a run stopped (or kept going) — reported to the log and the step marker so
  *  "why did it stop after two steps?" is always answerable. */
 export type AutonomyStopReason =
@@ -105,7 +149,10 @@ export type AutonomyStopReason =
   | 'max-steps'
   | 'error'
   | 'aborted'
-  | 'not-autonomous';
+  | 'not-autonomous'
+  /** P3-M9: the step tried to stop with nothing said about verification, and the
+   *  run had a nudge and a step left to spend. Proceeds — once per run. */
+  | 'verify-nudge';
 
 export type AutonomyDecision = {
   /** Run another step. */
@@ -116,9 +163,29 @@ export type AutonomyDecision = {
 /** THE decision, after a step's `result` event: does the agent get another step?
  *
  *  Order matters — the most authoritative signal wins, so the reported reason is
- *  the true one: an abort or an error beats the agent's own opinion, the agent's
- *  [[DONE]] beats the tool-use heuristic, and the budget is checked last so a
- *  finished-anyway step is never mislabelled 'max-steps'. */
+ *  the true one:
+ *
+ *    1. not-autonomous  a single-turn run never continues, whatever else is true
+ *    2. aborted         the user's stop beats every opinion in this list
+ *    3. error           a failed step is not a step to reason about
+ *    4. done-marker  ┐  the agent's own "I am finished"…
+ *    5. no-tool-use  ┘  …and the anti-chatter heuristic. Both are STOPS, and both
+ *                       are what the P3-M9 verification gate intercepts (below):
+ *                       a stop with no verification evidence can be converted,
+ *                       ONCE per run, into 'verify-nudge' — proceed, not stop.
+ *    6. max-steps       checked last, so a finished-anyway step is never
+ *                       mislabelled as having run out of budget.
+ *
+ *  THE VERIFICATION GATE (G4) is deliberately wedged between "wants to stop" and
+ *  "stops", not bolted on afterwards, because that is exactly the moment the
+ *  claim "it is done" is made and has not yet been checked. It costs a step, so
+ *  it is bounded twice over: once per run (`verification.nudgeSent`) and never
+ *  past the budget (`step < maxSteps`) — the nudge continuation is an ordinary
+ *  step and is counted like one.
+ *
+ *  OPT-IN BY SHAPE. With `verification` absent the function is byte-for-byte its
+ *  pre-M9 self, so every existing caller and test keeps its exact behaviour and
+ *  the new rule cannot leak in through a default. */
 export function decideAutonomyStep(input: {
   /** 1-based index of the step that just finished. */
   step: number;
@@ -131,21 +198,48 @@ export function decideAutonomyStep(input: {
   /** The step's result event `ok`. */
   ok: boolean;
   aborted: boolean;
+  /** P3-M9 (G4). Present = the run enforces "verify before done". Absent = the
+   *  pre-M9 rules exactly. */
+  verification?: {
+    /** Has this run already spent its one nudge? */
+    nudgeSent: boolean;
+  };
 }): AutonomyDecision {
   if (!isAutonomous(input.maxSteps)) return { proceed: false, reason: 'not-autonomous' };
   if (input.aborted) return { proceed: false, reason: 'aborted' };
   if (!input.ok) return { proceed: false, reason: 'error' };
-  if (sawDoneMarker(input.text)) return { proceed: false, reason: 'done-marker' };
-  if (!input.usedTools) return { proceed: false, reason: 'no-tool-use' };
+  // The two ways an agent asks to stop, in their existing precedence.
+  const wantsToStop: AutonomyStopReason | undefined = sawDoneMarker(input.text)
+    ? 'done-marker'
+    : !input.usedTools
+      ? 'no-tool-use'
+      : undefined;
+  if (wantsToStop) {
+    if (
+      input.verification &&
+      !input.verification.nudgeSent &&
+      !sawVerifiedMarker(input.text) &&
+      input.step < input.maxSteps
+    ) {
+      return { proceed: true, reason: 'verify-nudge' };
+    }
+    return { proceed: false, reason: wantsToStop };
+  }
   if (input.step >= input.maxSteps) return { proceed: false, reason: 'max-steps' };
   return { proceed: true, reason: 'continue' };
 }
 
 /** One-line label for the muted step bar in the transcript (and the log). The
  *  client renders harness events as a single muted row, so this is what the user
- *  sees between steps. */
+ *  sees between steps.
+ *
+ *  The nudge gets its own wording rather than the generic "continuing": the user
+ *  is watching a run that looked finished take another step, and "verifying" is
+ *  the difference between that reading as the protocol working and as the agent
+ *  failing to stop. */
 export function stepMarker(step: number, maxSteps: number, decision: AutonomyDecision): string {
-  return decision.proceed
-    ? `step ${step}/${maxSteps} — continuing`
-    : `step ${step}/${maxSteps} — stopped (${decision.reason})`;
+  if (!decision.proceed) return `step ${step}/${maxSteps} — stopped (${decision.reason})`;
+  return decision.reason === 'verify-nudge'
+    ? `step ${step}/${maxSteps} — verifying before it stops`
+    : `step ${step}/${maxSteps} — continuing`;
 }

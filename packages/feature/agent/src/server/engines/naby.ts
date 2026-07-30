@@ -149,8 +149,11 @@ import {
   isAutonomous,
   resolveMaxSteps,
   stepMarker,
+  verificationNudgePrompt,
   type AutonomyDecision,
 } from '../lib/autonomy';
+import { isAddressable } from '../lib/growthRead';
+import { readPersonaAutonomy } from '../lib/personaAutonomy';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -625,9 +628,29 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // the agent's `memoryScope` as the default scope for what it captures.
         // Everything else derived from the agent stays below the toolset.
         const addressed = parseAgentAddress(ctx.prompt ?? '');
-        const routedAgent: Agent | undefined = addressed
+        // The agent the `@name` NAMES. Whether it may actually be delegated to is
+        // a separate question, answered immediately below.
+        const addressedAgent: Agent | undefined = addressed
           ? store.getAgentByName(addressed.name)
           : undefined;
+
+        // ---- ONE `@` GATE (Phase 3, P3-M9 — G2) ---------------------------
+        //
+        // The `@` palette has always greyed out an agent that is not yet a
+        // butterfly (api/commands.ts, `canBeAddressed`), but ROUTING never
+        // checked — so typing the name by hand delegated to an agent the product
+        // had just said could not be delegated to. Two surfaces, two answers, and
+        // the one that mattered was the permissive one.
+        //
+        // Now both read `isAddressable` — the same call over the same `readGrowth`
+        // result, not the same rule written twice — so they cannot drift. It is
+        // fail-closed (an unreadable ledger is an egg), exactly as the palette is.
+        const addressable = addressedAgent ? isAddressable(store, addressedAgent.id) : false;
+        // A REFUSED ADDRESS DOES NOT ADOPT AN IDENTITY — no system prompt, no
+        // model, no toolRefs, no autonomy. `routedAgent` staying undefined is what
+        // makes that true everywhere below, in one place, rather than in the five
+        // places that read it.
+        const routedAgent: Agent | undefined = addressable ? addressedAgent : undefined;
 
         // ---- WHOSE AGENT THIS TURN BELONGS TO (Phase 3, P3-M5) ------------
         //
@@ -850,10 +873,32 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         //
         // `routedAgent` was resolved ABOVE the toolset (the learning sink needs
         // its memory scope); everything derived from it is here.
-        if (addressed && !routedAgent) {
+        if (addressed && !addressedAgent) {
           // `@something` that is not a registered agent: leave the prompt intact
           // (it may be prose, or a harness `@verb` the expander already handled).
           console.log(`[engine:naby] @${addressed.name}: no such agent — not routed`);
+        }
+        if (addressedAgent && !addressable) {
+          // THE REFUSED ADDRESS IS NOT A DEAD TURN (spec §3). The user asked for
+          // something; the only thing we decline is the delegation, so the work
+          // still runs — as an ordinary turn, on the task text they typed.
+          //
+          // And they are TOLD, on a muted harness pill, because a turn that
+          // silently ignored the `@` would look like the agent answered while
+          // behaving nothing like it. The pill carries CODES, not sentences: the
+          // server has no locale (the same reason `growthReport.change` is a
+          // code), so the client renders these in the user's language.
+          console.log(
+            `[engine:naby] @${addressedAgent.name}: not addressable yet (not a butterfly)` +
+              ` — running unrouted`,
+          );
+          ctx.emit({
+            type: 'system',
+            subtype: 'harness',
+            session_id: sessionId,
+            harness_subtype: 'routing-gate',
+            harness_detail: `not-butterfly:${addressedAgent.name}`,
+          } satisfies RunEvent);
         }
         if (routedAgent) {
           console.log(
@@ -864,13 +909,32 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         }
         // The task text after the address is what the model answers; the address
         // itself is consumed by routing and never sent.
-        const turnText = routedAgent ? addressed!.taskText : ctx.prompt ?? '';
-        // Phase 3 P3-M3b: WHERE THIS TURN'S CRITICAL DECISIONS GO. An agent's
-        // `autonomy.escalation` picks the channel: 'inline' (default) is the M2
-        // in-app prompt alone, 'telegram'/'both' ALSO send the question — and the
-        // end-of-turn report — out over Telegram. Only a routed agent can opt in,
-        // so an ordinary turn is byte-for-byte unchanged (no config read, no send).
-        const escalation = routedAgent?.autonomy.escalation ?? 'inline';
+        //
+        // Keyed on `addressedAgent`, not `routedAgent`: a refused address was
+        // still an address, and the words after it were the user's actual request.
+        // Leaving the `@name` in would send the model a handle it has no reason to
+        // understand, and stripping the whole line would throw the request away.
+        const turnText = addressedAgent ? addressed!.taskText : ctx.prompt ?? '';
+        // ---- how much this turn is allowed to do on its own ----------------
+        //
+        // Phase 3 P3-M9 (G1): FOR THE PERSONA, THAT IS THE USER'S SETTING, NOT THE
+        // ROW'S. The persona is read-only, so its `autonomy` field can never say
+        // anything but what the seed said — reading it would pin every install to
+        // "ask inline, one turn" forever. The user's answer lives in settings
+        // (`persona.autonomy.*`), which is the surface they can actually reach.
+        //
+        // Custom agents keep reading their own row: it is editable, so the config
+        // is already where the user can change it, and a second surface would only
+        // split the answer in two.
+        const personaDelegation =
+          routedAgent?.kind === 'persona' ? readPersonaAutonomy(store) : undefined;
+        // Phase 3 P3-M3b: WHERE THIS TURN'S CRITICAL DECISIONS GO. 'inline'
+        // (default) is the M2 in-app prompt alone, 'telegram'/'both' ALSO send the
+        // question — and the end-of-turn report — out over Telegram. Only a routed
+        // agent can opt in, so an ordinary turn is byte-for-byte unchanged (no
+        // config read, no send).
+        const escalation =
+          personaDelegation?.escalation ?? routedAgent?.autonomy.escalation ?? 'inline';
         const escalateToTelegram = escalation === 'telegram' || escalation === 'both';
         // A routed agent limited to `toolRefs` may call ONLY those tools; the gate
         // denies anything else (an allowlist, engine-independent). No toolRefs =
@@ -888,7 +952,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // around runTurn drive the agent until it is done, errors, is stopped, or
         // spends the budget. Clamped in `resolveMaxSteps`, so the store cannot ask
         // for an unbounded agent. See lib/autonomy.ts for the three safety rules.
-        const maxSteps = resolveMaxSteps(routedAgent?.autonomy.maxSteps);
+        //
+        // P3-M9: for a persona turn the number comes from the user's settings (see
+        // `personaDelegation` above). It is already clamped on the way in AND on
+        // the way out of the store, so what Settings shows is what runs; passing it
+        // through `resolveMaxSteps` again is idempotent and keeps ONE clamp in the
+        // codebase rather than two that could disagree.
+        const maxSteps = resolveMaxSteps(
+          personaDelegation ? personaDelegation.maxSteps : routedAgent?.autonomy.maxSteps,
+        );
         const autonomous = isAutonomous(maxSteps);
         if (autonomous) {
           console.log(`[engine:naby] autonomy: up to ${maxSteps} steps (@${routedAgent?.name})`);
@@ -1187,6 +1259,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         let sawPartialText = false;
         let stepUsedTool = false;
         let stepDecision: AutonomyDecision = { proceed: false, reason: 'not-autonomous' };
+        // P3-M9 (G4): the run's ONE verification nudge, spent at most once. Per
+        // RUN, not per step — that is the whole bound. Without it, an agent that
+        // answers a nudge with the same unverified claim would be nudged again,
+        // and "verify before you finish" would become a way of never finishing.
+        let verifyNudgeSent = false;
         // Whether a terminal `result` RunEvent has reached the client. Distinct
         // from `sawResult` (= the engine produced one): an intermediate step's
         // result is deliberately SUPPRESSED, so the two disagree mid-loop, and
@@ -1275,7 +1352,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // message because it IS what drove the model — the transcript should
               // never imply the user typed something they did not, nor hide what
               // did (it is labelled `[naby autonomy]`).
-              userText: step === 1 ? turnText : continuationPrompt(step, maxSteps),
+              //
+              // P3-M9: WHICH continuation depends on why the previous step did not
+              // end the run. `stepDecision` still holds that step's verdict here —
+              // it is only reassigned inside this call's `result` case — so a
+              // 'verify-nudge' verdict swaps in the nudge, which asks the agent to
+              // CHECK rather than to carry on. Asking an agent that thinks it is
+              // finished to "continue toward the goal" only gets the same claim back.
+              userText:
+                step === 1
+                  ? turnText
+                  : stepDecision.reason === 'verify-nudge'
+                    ? verificationNudgePrompt(step, maxSteps)
+                    : continuationPrompt(step, maxSteps),
               // Multimodal input: hand this turn's images to the runtime, which
               // attaches them (transiently) to the user message so each engine can
               // build a native image block. ImageData -> RuntimeImage (drop the
@@ -1519,7 +1608,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     text: stepText,
                     ok: ev.ok,
                     aborted: ctx.signal.aborted,
+                    // P3-M9 (G4): the verification gate, and the only state it
+                    // needs. The rule itself is in lib/autonomy.ts so it can be
+                    // unit-tested without a model; this passes the run's one bit.
+                    verification: { nudgeSent: verifyNudgeSent },
                   });
+                  // Spend the nudge the moment it is granted, not when the step it
+                  // buys finishes: the decision for THAT step is taken by this same
+                  // line, and a nudge still marked unspent would grant a second one.
+                  if (stepDecision.reason === 'verify-nudge') verifyNudgeSent = true;
                   // A continuing step must NOT emit `result`: the client ends its
                   // turn on that event, so an intermediate one would close the
                   // bubble and leave the remaining steps streaming into a

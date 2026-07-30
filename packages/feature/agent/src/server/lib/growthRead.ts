@@ -63,6 +63,28 @@ export function readGrowth(store: GrowthLedgerStore, agentId: string): GrowthSta
   return computeGrowth(readLedger(store, agentId) as CheckinRecord[]);
 }
 
+/**
+ * MAY THIS AGENT BE `@`-ADDRESSED? (Phase 3, P3-M9 — G2.)
+ *
+ * The one gate, in one function, over the one read. It existed as a rule before
+ * it existed as a function: the palette greyed out a non-butterfly (commands.ts)
+ * while the engine routed to it anyway, so the product refused a delegation in
+ * the menu and performed it when the name was typed by hand. Two implementations
+ * of one policy is how that happens; there is now only one.
+ *
+ * FAIL-CLOSED. `readGrowth` already turns an unreadable ledger into an egg — the
+ * honest reading for an agent with no measured history — and the catch covers
+ * anything else. An agent whose trust cannot be established is not one the user's
+ * work gets handed to.
+ */
+export function isAddressable(store: GrowthLedgerStore, agentId: string): boolean {
+  try {
+    return canBeAddressed(readGrowth(store, agentId).stage);
+  } catch {
+    return false;
+  }
+}
+
 /** The agent's recent check-in questions, NEWEST FIRST — what `degenerateReason`
  *  compares a new question against. Excluded rows are included on purpose: a
  *  question that was already thrown out for being a repeat still counts as having

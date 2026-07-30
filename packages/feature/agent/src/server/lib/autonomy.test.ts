@@ -9,6 +9,9 @@ import {
   continuationPrompt,
   decideAutonomyStep,
   stepMarker,
+  sawVerifiedMarker,
+  verificationNudgePrompt,
+  VERIFIED_MARKER_PREFIX,
 } from './autonomy';
 
 describe('autonomy — step budget (P3-M3c)', () => {
@@ -102,5 +105,124 @@ describe('autonomy — the step decision', () => {
     expect(stepMarker(5, 5, { proceed: false, reason: 'max-steps' })).toBe(
       'step 5/5 — stopped (max-steps)',
     );
+  });
+});
+
+/**
+ * THE VERIFICATION STEP (P3-M9, G4).
+ *
+ * The loop's stop conditions were all about the agent's INTENT (it said done) or
+ * its behaviour (it used no tool); none of them asked whether the claim had been
+ * checked. This wedges one question in front of the stop — once per run, never
+ * past the budget — and it is opt-in BY SHAPE, so every pre-M9 call above is
+ * unaffected. That last property is the one worth guarding: a default-on rule
+ * here would have silently changed every existing caller.
+ */
+describe('autonomy — verification before done (P3-M9)', () => {
+  const base = { step: 2, maxSteps: 5, usedTools: true, text: 'working', ok: true, aborted: false };
+
+  it('reads the verification marker in any case, and only as a prefix', () => {
+    expect(sawVerifiedMarker(`${VERIFIED_MARKER_PREFIX} ran the suite]]`)).toBe(true);
+    expect(sawVerifiedMarker('done [[verified: checked the output]]')).toBe(true);
+    expect(sawVerifiedMarker('I verified it, honestly')).toBe(false);
+    expect(sawVerifiedMarker('')).toBe(false);
+  });
+
+  it('is a NO-OP when the caller does not opt in — every pre-M9 decision stands', () => {
+    expect(decideAutonomyStep({ ...base, text: DONE_MARKER })).toEqual({
+      proceed: false,
+      reason: 'done-marker',
+    });
+    expect(decideAutonomyStep({ ...base, usedTools: false })).toEqual({
+      proceed: false,
+      reason: 'no-tool-use',
+    });
+  });
+
+  it('converts an UNVERIFIED stop into one more step — both ways of stopping', () => {
+    expect(
+      decideAutonomyStep({ ...base, text: DONE_MARKER, verification: { nudgeSent: false } }),
+    ).toEqual({ proceed: true, reason: 'verify-nudge' });
+    expect(
+      decideAutonomyStep({ ...base, usedTools: false, verification: { nudgeSent: false } }),
+    ).toEqual({ proceed: true, reason: 'verify-nudge' });
+  });
+
+  it('does not nudge an agent that said what it checked', () => {
+    expect(
+      decideAutonomyStep({
+        ...base,
+        text: `${VERIFIED_MARKER_PREFIX} suite is green]]\n${DONE_MARKER}`,
+        verification: { nudgeSent: false },
+      }),
+    ).toEqual({ proceed: false, reason: 'done-marker' });
+  });
+
+  it('nudges at most ONCE per run — the second stop always stops', () => {
+    expect(
+      decideAutonomyStep({ ...base, text: DONE_MARKER, verification: { nudgeSent: true } }),
+    ).toEqual({ proceed: false, reason: 'done-marker' });
+  });
+
+  it('never spends a step the budget does not have', () => {
+    // The nudge continuation IS a step, so the cap outranks the protocol.
+    expect(
+      decideAutonomyStep({
+        ...base,
+        step: 5,
+        maxSteps: 5,
+        text: DONE_MARKER,
+        verification: { nudgeSent: false },
+      }),
+    ).toEqual({ proceed: false, reason: 'done-marker' });
+  });
+
+  it('leaves the single-turn invariant untouched', () => {
+    // maxSteps 1 short-circuits before anything else is consulted, so a turn
+    // that was never autonomous cannot be nudged into a second one.
+    expect(
+      decideAutonomyStep({
+        ...base,
+        step: 1,
+        maxSteps: 1,
+        text: DONE_MARKER,
+        verification: { nudgeSent: false },
+      }),
+    ).toEqual({ proceed: false, reason: 'not-autonomous' });
+  });
+
+  it('an abort or an error still outranks the verification gate', () => {
+    expect(
+      decideAutonomyStep({
+        ...base,
+        text: DONE_MARKER,
+        aborted: true,
+        verification: { nudgeSent: false },
+      }).reason,
+    ).toBe('aborted');
+    expect(
+      decideAutonomyStep({ ...base, text: DONE_MARKER, ok: false, verification: { nudgeSent: false } })
+        .reason,
+    ).toBe('error');
+  });
+
+  it('says "verifying" on the step bar, not "continuing"', () => {
+    expect(stepMarker(2, 5, { proceed: true, reason: 'verify-nudge' })).toBe(
+      'step 2/5 — verifying before it stops',
+    );
+  });
+
+  it('the nudge prompt asks for a CHECK and names both exits', () => {
+    const text = verificationNudgePrompt(3, 5);
+    expect(text).toContain('step 3 of 5');
+    expect(text).toMatch(/not said what you checked/i);
+    expect(text).toContain(VERIFIED_MARKER_PREFIX);
+    expect(text).toContain(DONE_MARKER);
+  });
+
+  it('the injected protocol tells the agent the marker is required before done', () => {
+    const text = autonomyInstruction(4);
+    expect(text).toContain(VERIFIED_MARKER_PREFIX);
+    expect(text).toMatch(/CHECK THE RESULT/i);
   });
 });

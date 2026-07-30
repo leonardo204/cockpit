@@ -8,8 +8,11 @@
  * agents the user adds. Agents are addressed by `@name` in the composer. This
  * panel is CRUD over `store.listAgents/putAgent/removeAgent` via `/api/naby`.
  *
- * The persona is EDITABLE but UNDELETABLE (kind='persona'): the store no-ops its
- * delete, and this panel hides the Remove button for it.
+ * The persona is BUILT-IN AND READ-ONLY (kind='persona'): naby owns its prompt,
+ * scope and autonomy, the store refuses both a delete and an edit, and this panel
+ * offers neither button for it. What stays available on a persona row is
+ * everything that only READS it — the growth panel and the export — because those
+ * are how the user inspects an agent they cannot rewrite.
  */
 
 import { memo, useCallback, useEffect, useState } from 'react';
@@ -41,6 +44,155 @@ async function agentAction(body: Record<string, unknown>): Promise<
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** The persona's DELEGATION settings (P3-M9, G1) — the user's answer to "how much
+ *  do I hand this agent", stored in settings rather than on the read-only row. */
+type PersonaAutonomy = { escalation: Escalation; maxSteps: number };
+
+async function personaAutonomyAction(
+  body: Record<string, unknown>,
+): Promise<
+  { ok: true; personaAutonomy?: PersonaAutonomy; autonomyStepCap?: number } | { ok: false; error: string }
+> {
+  try {
+    const res = await fetch('/api/naby', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { ok: boolean; personaAutonomy?: PersonaAutonomy; autonomyStepCap?: number; error?: string }
+      | null;
+    if (!res.ok || !json?.ok) {
+      return { ok: false, error: json?.error ?? `request failed (${res.status})` };
+    }
+    return {
+      ok: true,
+      ...(json.personaAutonomy ? { personaAutonomy: json.personaAutonomy } : {}),
+      ...(json.autonomyStepCap !== undefined ? { autonomyStepCap: json.autonomyStepCap } : {}),
+    };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * The persona card's DELEGATION SETTINGS (P3-M9, G1).
+ *
+ * The identity above it stays read-only, and this section is not a way around
+ * that — it is a different question. The row says WHO the agent is (naby owns
+ * that, and the store refuses to let anyone rewrite it); this says HOW MUCH OF
+ * YOUR WORK YOU HAND IT, which is the delegating user's call and nobody else's.
+ * The copy has to carry that distinction, because two edit controls on a card
+ * labelled "cannot be edited" otherwise read as a contradiction.
+ *
+ * Saves land immediately (no separate Save button): each control is one
+ * independent setting, and `personaAutonomy.set` takes them one at a time. The
+ * server answers with the CLAMPED values and those are what the fields then show,
+ * so a typed 999 visibly becomes 20 rather than being silently downgraded at run
+ * time.
+ */
+const PersonaDelegation = memo(function PersonaDelegation() {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<PersonaAutonomy | null>(null);
+  const [cap, setCap] = useState(20);
+  const [saving, setSaving] = useState(false);
+  // Held separately from `settings` so the field can be mid-edit (or empty)
+  // without the committed value flickering under the cursor.
+  const [stepsDraft, setStepsDraft] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const res = await personaAutonomyAction({ action: 'personaAutonomy.get' });
+      if (!alive || !res.ok || !res.personaAutonomy) return;
+      setSettings(res.personaAutonomy);
+      setStepsDraft(String(res.personaAutonomy.maxSteps));
+      if (res.autonomyStepCap !== undefined) setCap(res.autonomyStepCap);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const save = useCallback(
+    async (patch: { escalation?: Escalation; maxSteps?: number }) => {
+      setSaving(true);
+      const res = await personaAutonomyAction({ action: 'personaAutonomy.set', ...patch });
+      setSaving(false);
+      if (res.ok && res.personaAutonomy) {
+        setSettings(res.personaAutonomy);
+        setStepsDraft(String(res.personaAutonomy.maxSteps));
+        return;
+      }
+      toast(
+        (!res.ok && res.error) ||
+          t('agentManager.delegationError', { defaultValue: 'Could not save the delegation settings.' }),
+        'error',
+      );
+    },
+    [t],
+  );
+
+  if (!settings) return null;
+
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted/30 p-2.5">
+      <p className="text-[11px] font-medium text-foreground">
+        {t('agentManager.delegationTitle', { defaultValue: 'How you delegate' })}
+      </p>
+      <p className="mt-0.5 text-[10px] text-muted-foreground leading-relaxed">
+        {t('agentManager.delegationHint', {
+          defaultValue:
+            'These are your settings, not the persona’s. You are not editing who it is — you are choosing how much of your work it may carry on its own, and where it reaches you when something critical comes up.',
+        })}
+      </p>
+
+      <div className="mt-2 flex gap-2 flex-wrap">
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] text-muted-foreground">
+            {t('agentManager.delegationEscalation', { defaultValue: 'Reach me via' })}
+          </span>
+          <select
+            value={settings.escalation}
+            disabled={saving}
+            onChange={(e) => void save({ escalation: e.target.value as Escalation })}
+            className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground disabled:opacity-50"
+          >
+            <option value="inline">{t('agentManager.esc_inline', { defaultValue: 'Ask inline' })}</option>
+            <option value="telegram">{t('agentManager.esc_telegram', { defaultValue: 'Telegram' })}</option>
+            <option value="both">{t('agentManager.esc_both', { defaultValue: 'Inline + Telegram' })}</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="text-[10px] text-muted-foreground">
+            {t('agentManager.delegationMaxSteps', { defaultValue: 'Steps it may take alone' })}
+          </span>
+          <input
+            value={stepsDraft}
+            disabled={saving}
+            onChange={(e) => setStepsDraft(e.target.value.replace(/[^0-9]/g, ''))}
+            onBlur={() => {
+              const n = Number(stepsDraft);
+              // An emptied field means "off", which is 1 — not "unchanged", or the
+              // user could never turn autonomy back off by clearing the box.
+              void save({ maxSteps: stepsDraft.trim() === '' || !Number.isFinite(n) ? 1 : n });
+            }}
+            className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground w-28 disabled:opacity-50"
+          />
+        </label>
+      </div>
+
+      <p className="mt-1.5 text-[10px] text-muted-foreground leading-relaxed">
+        {t('agentManager.delegationStepsHint', {
+          cap,
+          defaultValue:
+            '1 = one turn per message (off). 2+ lets it keep working on its own, up to {{cap}} steps; it stops when it reports done, uses no tool, or spends the budget.',
+        })}
+      </p>
+    </div>
+  );
+});
 
 /** Blank form for a new custom agent. */
 type Form = {
@@ -119,6 +271,16 @@ const AgentRow = memo(function AgentRow({
         {agent.description ? (
           <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-2">{agent.description}</p>
         ) : null}
+        {/* Says WHY there are no Edit/Remove buttons on this row. Without it the
+            persona just looks like an agent whose controls failed to render. */}
+        {isPersona ? (
+          <p className="mt-1 text-[10px] text-muted-foreground italic">
+            {t('agentManager.personaReadOnly', {
+              defaultValue:
+                'Built in to naby — it cannot be edited or removed. It grows by learning from you, not by being rewritten.',
+            })}
+          </p>
+        ) : null}
       </div>
       <div className="flex gap-1.5 shrink-0">
         <button
@@ -128,24 +290,34 @@ const AgentRow = memo(function AgentRow({
         >
           {t('agentManager.growth', { defaultValue: 'Growth' })}
         </button>
-        <button
-          onClick={() => onEdit(agent)}
-          disabled={busy}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-brand/10 hover:border-brand/40 text-foreground disabled:opacity-50"
-        >
-          {t('agentManager.edit', { defaultValue: 'Edit' })}
-        </button>
+        {/* Both write actions are hidden for the built-in persona — the store
+            refuses either one, so showing a button that can only fail would be a
+            promise the product does not keep. */}
         {!isPersona ? (
-          <button
-            onClick={() => onRemove(agent)}
-            disabled={busy}
-            className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
-          >
-            {t('agentManager.remove', { defaultValue: 'Remove' })}
-          </button>
+          <>
+            <button
+              onClick={() => onEdit(agent)}
+              disabled={busy}
+              className="text-xs px-2 py-1 rounded border border-border hover:bg-brand/10 hover:border-brand/40 text-foreground disabled:opacity-50"
+            >
+              {t('agentManager.edit', { defaultValue: 'Edit' })}
+            </button>
+            <button
+              onClick={() => onRemove(agent)}
+              disabled={busy}
+              className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+            >
+              {t('agentManager.remove', { defaultValue: 'Remove' })}
+            </button>
+          </>
         ) : null}
       </div>
     </div>
+    {/* P3-M9 (G1): the persona's identity is read-only, but how much the USER
+        delegates to it is the user's own setting — see PersonaDelegation. Only
+        on the persona row: a custom agent's autonomy lives on its (editable) row
+        and is set in the editor above. */}
+    {isPersona ? <PersonaDelegation /> : null}
     {/* `cwd` reaches the panel for the SAME reason the export button gets it
         (P3-M8c): it decides whether project-scope memory is counted in the
         learning block. The trust reading itself ignores it. */}
@@ -166,7 +338,9 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<Form | null>(null);
 
-  const editingPersona = form?.id != null && agents.find((a) => a.id === form.id)?.kind === 'persona';
+  // NOTE: there is deliberately no "editing the persona" state any more. The
+  // editor only ever opens on a custom agent, because the persona row offers no
+  // Edit button and `agent.put` refuses it even if something else asked.
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -324,12 +498,6 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
                 'Empty or 1 = a single turn. 2+ lets the agent keep working on its own (hard cap 20); it stops when it reports done, uses no tool, or spends the budget.',
             })}
           </p>
-
-          {editingPersona ? (
-            <p className="text-[10px] text-muted-foreground italic">
-              {t('agentManager.personaHint', { defaultValue: 'This is your built-in persona — editable, but it cannot be deleted.' })}
-            </p>
-          ) : null}
 
           <div className="flex gap-2 justify-end pt-1">
             <button
