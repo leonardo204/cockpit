@@ -43,6 +43,27 @@ function transcript(corrected = true): RuntimeMessage[] {
   return rows;
 }
 
+/** The same shape with only ONE user message — below
+ *  `REFLECTION_MIN_USER_MESSAGES`, so it never triggers the M8c memory-only call
+ *  (§6.4) and a case-less sweep over it stays silent. */
+function briefTranscript(): RuntimeMessage[] {
+  return [
+    { role: 'user', content: 'update the config' },
+    { role: 'assistant', content: '', toolCalls: [{ toolCallId: 'c1', toolName: 'Write', input: {} }] },
+    { role: 'tool', toolCallId: 'c1', toolName: 'Write', output: { content: 'wrote it' } },
+    { role: 'assistant', content: 'Done.' },
+  ];
+}
+
+/** A conversation with NO tool call and no ledger row at all: the session shape
+ *  that produced no cases and therefore taught nothing at all before M8c. */
+function conversationOnly(userMessages: string[]): RuntimeMessage[] {
+  return userMessages.flatMap((content): RuntimeMessage[] => [
+    { role: 'user', content },
+    { role: 'assistant', content: 'Understood.' },
+  ]);
+}
+
 function autonomousRow(sessionId: string, id = 'ev-1'): EvalEvent {
   return {
     id,
@@ -288,15 +309,26 @@ describe('runReflectionSweep — what it writes', () => {
   });
 
   it('advances the cursor for a session with no judgeable action, without calling the judge', async () => {
-    const { store, cursorWrites } = fakeStore([{ sessionId: 's1', events: [] }]);
+    // P3-M8c NOTE: "no judgeable action" is no longer sufficient on its own — a
+    // case-less session with enough conversation in it now earns a memory-only
+    // call (§6.4, covered in its own describe below). What is asserted HERE is
+    // the other half of that rule, unchanged since M8a: a session with too
+    // little to say costs nothing and is still marked as read.
+    const { store, cursorWrites } = fakeStore([
+      { sessionId: 's1', events: [], messages: briefTranscript() },
+    ]);
     const out = await runReflectionSweep(store, neverCalled, { now: NOW });
     expect(out.sweptSessions).toBe(1);
-    expect(cursorWrites).toEqual([{ sessionId: 's1', lastSeq: 4, reflectedAt: NOW }]);
+    expect(cursorWrites).toEqual([{ sessionId: 's1', lastSeq: 3, reflectedAt: NOW }]);
   });
 
   it('never re-judges an action already marked corrected', async () => {
     const already = { ...autonomousRow('s1', 'ev-s1'), correctedAfter: true };
-    const { store } = fakeStore([{ sessionId: 's1', events: [already] }]);
+    // Brief, so the M8c memory-only path does not fire and `neverCalled` still
+    // proves what it did before: an already-marked row builds no case.
+    const { store } = fakeStore([
+      { sessionId: 's1', events: [already], messages: briefTranscript() },
+    ]);
     const out = await runReflectionSweep(store, neverCalled, { now: NOW });
     expect(out.sweptSessions).toBe(1);
     expect(out.markedEvents).toBe(0);
@@ -436,6 +468,104 @@ function candidate(over: Partial<ReflectionMemoryCandidate> = {}): ReflectionMem
     ...over,
   };
 }
+
+describe('runReflectionSweep — the widened trigger (P3-M8c §6.4)', () => {
+  const SQL_FIRST = 'always give me the SQL before the explanation';
+
+  /** A judge that RECORDS every call, so "it was not called" is asserted rather
+   *  than inferred from a store that happens to be unchanged. */
+  function countingJudge(memories: ReflectionMemoryCandidate[]): {
+    judge: ReflectionJudge;
+    calls: ReflectionCase[][];
+  } {
+    const calls: ReflectionCase[][] = [];
+    const judge: ReflectionJudge = async (cases) => {
+      calls.push([...cases]);
+      return { corrections: [], memories };
+    };
+    return { judge, calls };
+  }
+
+  it('calls the judge for a case-less session once it has said enough, with NO cases', async () => {
+    // THE GAP M8b LEFT (§5.6): no autonomous action meant no call, so the purely
+    // conversational sessions — the ones where a person actually says how they
+    // want to be worked with — produced nothing at all.
+    const { store, writes } = fakeStore([
+      { sessionId: 's1', events: [], messages: conversationOnly([SQL_FIRST, 'and snake_case columns']) },
+    ]);
+    const { judge, calls } = countingJudge([
+      candidate({ key: 'sql-first', value: 'Wants the SQL first.', evidenceQuote: SQL_FIRST }),
+    ]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(calls).toHaveLength(1);
+    // MEMORY-EXTRACTION ONLY: there is no action to judge, so no case is put.
+    expect(calls[0]).toEqual([]);
+    expect(out.proposedMemories).toBe(1);
+    expect(out.markedEvents).toBe(0);
+    expect(writes[0]).toMatchObject({ key: 'sql-first', requestedStatus: 'proposed' });
+  });
+
+  it('does NOT call the judge below the threshold, and still advances the cursor', async () => {
+    // One message is "thanks" — putting a model call behind every one of those
+    // would attach a cost to closing a window.
+    const { store, cursorWrites } = fakeStore([
+      { sessionId: 's1', events: [], messages: conversationOnly(['thanks!']) },
+    ]);
+    const { judge, calls } = countingJudge([candidate()]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(calls).toHaveLength(0);
+    expect(out.proposedMemories).toBe(0);
+    // Swept anyway: the span is spent, so the next sweep does not re-read it.
+    expect(out.sweptSessions).toBe(1);
+    expect(cursorWrites).toEqual([{ sessionId: 's1', lastSeq: 1, reflectedAt: NOW }]);
+  });
+
+  it('counts only messages NEW since the cursor, not the whole transcript', async () => {
+    // Two user messages, but the cursor has already covered the first. Only one
+    // is new, so this is below the threshold — otherwise a long-since-judged
+    // conversation would earn a fresh call every time one message was added.
+    const { store } = fakeStore([
+      {
+        sessionId: 's1',
+        events: [],
+        messages: conversationOnly([SQL_FIRST, 'and snake_case columns']),
+        cursor: { lastSeq: 1, reflectedAt: 1 },
+      },
+    ]);
+    const { judge, calls } = countingJudge([candidate()]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(calls).toHaveLength(0);
+    expect(out.sweptSessions).toBe(1);
+  });
+
+  it('still spends at most ONE call on a session that has cases AND conversation', async () => {
+    // The widening must not turn into two calls per session: a session with a
+    // case already asks both tasks in the one call M8b established.
+    const { store } = fakeStore([{ sessionId: 's1' }]);
+    const { judge, calls } = countingJudge([candidate()]);
+    await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(1);
+  });
+
+  it('the sweep cap still bounds the cost when every session is conversation-only', async () => {
+    const specs = Array.from({ length: REFLECTION_SWEEP_CAP + 2 }, (_, i) => ({
+      sessionId: `s${i}`,
+      events: [],
+      messages: conversationOnly([SQL_FIRST, 'and snake_case columns']),
+    }));
+    const { store } = fakeStore(specs);
+    const { judge, calls } = countingJudge([]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(out.sweptSessions).toBe(REFLECTION_SWEEP_CAP);
+    expect(calls.length).toBe(REFLECTION_SWEEP_CAP);
+  });
+});
 
 describe('runReflectionSweep — memory proposals (P3-M8b §5.2)', () => {
   it('writes a grounded proposal as proposed/artifact with the evidence coordinate', async () => {

@@ -24,6 +24,12 @@
  *  4. `boundDeltaPoints` is deliberately NOT rendered as a percentage — it is on
  *     the raw-bound scale, not the gauge's. The sentence leads with the counts a
  *     user can check against their own conversation instead.
+ *  5. P3-M8c: the LEARNING block sits below a divider, in its own box, with its
+ *     own heading and a closing line that says outright that none of it enters
+ *     the butterfly judgement. It is the one place on this screen where counts
+ *     appear, and rule 3 above is exactly why it has to disown the gauge: a user
+ *     who reads "47 facts learned" next to "Egg — not measured yet" will believe
+ *     the bigger number unless told, in that spot, which question each answers.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -85,6 +91,17 @@ type GrowthWire = {
   }>;
 };
 
+/** The wire shape of the P3-M8c learning block. A SIBLING of `growth`, not a
+ *  field inside it — see note 5 in the header. */
+type LearningWire = {
+  confirmedByScope: { session?: number; project?: number; user: number; org?: number };
+  confirmedTotal: number;
+  proposedCount: number;
+  corroborated2Plus: number;
+  distinctTaskTypes: number;
+  lastReflectionAt?: number;
+};
+
 const STAGES: Array<GrowthWire['stage']> = ['egg', 'larva', 'pupa', 'butterfly'];
 const GLYPH: Record<GrowthWire['stage'], string> = {
   egg: '🥚',
@@ -93,34 +110,44 @@ const GLYPH: Record<GrowthWire['stage'], string> = {
   butterfly: '🦋',
 };
 
-async function fetchGrowth(agentId: string): Promise<GrowthWire | null> {
+type GrowthResponse = { growth: GrowthWire; learning: LearningWire | null };
+
+async function fetchGrowth(agentId: string, cwd?: string): Promise<GrowthResponse | null> {
   try {
     const res = await fetch('/api/naby', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'growth.get', agentId }),
+      body: JSON.stringify({ action: 'growth.get', agentId, ...(cwd ? { cwd } : {}) }),
     });
-    const json = (await res.json().catch(() => null)) as { ok?: boolean; growth?: GrowthWire } | null;
+    const json = (await res.json().catch(() => null)) as
+      | { ok?: boolean; growth?: GrowthWire; learning?: LearningWire }
+      | null;
     if (!res.ok || !json?.ok || !json.growth) return null;
-    return json.growth;
+    // The learning block is OPTIONAL on the wire: an older server (or a store
+    // that could not be read) simply omits it, and the section is not rendered.
+    // The meter must never depend on it — that is the same separation the
+    // section's own copy states to the user.
+    return { growth: json.growth, learning: json.learning ?? null };
   } catch {
     return null;
   }
 }
 
-export function GrowthPanel({ agentId }: { agentId: string }) {
+export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string }) {
   const { t } = useTranslation();
   const [g, setG] = useState<GrowthWire | null>(null);
+  const [learning, setLearning] = useState<LearningWire | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const next = await fetchGrowth(agentId);
-    setG(next);
+    const next = await fetchGrowth(agentId, cwd);
+    setG(next?.growth ?? null);
+    setLearning(next?.learning ?? null);
     setFailed(next === null);
     setLoading(false);
-  }, [agentId]);
+  }, [agentId, cwd]);
 
   useEffect(() => {
     void load();
@@ -422,6 +449,106 @@ export function GrowthPanel({ agentId }: { agentId: string }) {
             'This does not rise with the number of conversations or stored memories. It moves only when naby asks how to proceed and its own recommendation turns out to match what you chose — and it can fall when your patterns change.',
         })}
       </p>
+
+      {/* ------------------------------------------------------------------
+          P3-M8c — WHAT IT HAS LEARNED. Its own bordered box, below everything
+          the meter said, because these are counts and the paragraph directly
+          above has just finished explaining that counts do not move the gauge.
+          Reading the two in that order is the point: the disclaimer arrives
+          before the numbers, and again after them.
+          ------------------------------------------------------------------ */}
+      {learning ? (
+        <div
+          className="rounded-md border border-border bg-background/60 px-2.5 py-2"
+          data-testid="growth-learning"
+        >
+          <div className="text-[10px] font-medium text-foreground/80">
+            {t('growth.learning.title', { defaultValue: 'What it has learned so far' })}
+          </div>
+          <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <dt className="text-muted-foreground">
+              {t('growth.learning.confirmed', { defaultValue: 'Facts in use' })}
+            </dt>
+            <dd className="text-foreground text-right">
+              {t('growth.learning.confirmedValue', {
+                defaultValue: '{{count}}',
+                count: learning.confirmedTotal,
+              })}
+            </dd>
+            {/* The per-scope split only when there IS a split to show. On a
+                machine with no project open, "user 4 / project 0" would invent a
+                distinction the user cannot act on. */}
+            {learning.confirmedByScope.project !== undefined ? (
+              <>
+                <dt className="text-muted-foreground">
+                  {t('growth.learning.byScope', { defaultValue: 'Of those, by where they apply' })}
+                </dt>
+                <dd className="text-foreground text-right">
+                  {t('growth.learning.byScopeValue', {
+                    defaultValue: '{{user}} everywhere · {{project}} in this project',
+                    user: learning.confirmedByScope.user,
+                    project: learning.confirmedByScope.project,
+                  })}
+                </dd>
+              </>
+            ) : null}
+            {learning.proposedCount > 0 ? (
+              <>
+                <dt className="text-muted-foreground">
+                  {t('growth.learning.proposed', { defaultValue: 'Waiting for your review' })}
+                </dt>
+                <dd className="text-foreground text-right">
+                  {t('growth.learning.proposedValue', {
+                    defaultValue: '{{count}}',
+                    count: learning.proposedCount,
+                  })}
+                </dd>
+              </>
+            ) : null}
+            {learning.corroborated2Plus > 0 ? (
+              <>
+                <dt className="text-muted-foreground">
+                  {t('growth.learning.corroborated', { defaultValue: 'Said in more than one chat' })}
+                </dt>
+                <dd className="text-foreground text-right">
+                  {t('growth.learning.corroboratedValue', {
+                    defaultValue: '{{count}}',
+                    count: learning.corroborated2Plus,
+                  })}
+                </dd>
+              </>
+            ) : null}
+            <dt className="text-muted-foreground">
+              {t('growth.learning.taskTypes', { defaultValue: 'Kinds of work seen' })}
+            </dt>
+            <dd className="text-foreground text-right">
+              {t('growth.learning.taskTypesValue', {
+                defaultValue: '{{count}}',
+                count: learning.distinctTaskTypes,
+              })}
+            </dd>
+          </dl>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
+            {learning.lastReflectionAt
+              ? t('growth.learning.lastReflection', {
+                  defaultValue: 'It last looked back over a finished conversation on {{when}}.',
+                  when: new Date(learning.lastReflectionAt).toLocaleString(),
+                })
+              : t('growth.learning.neverReflected', {
+                  defaultValue: 'It has not looked back over a finished conversation yet.',
+                })}
+          </p>
+          {/* THE DISOWNING SENTENCE (spec §6.3, trust-meter §9.2 rule 2). Not
+              optional and not a tooltip: it is the only thing standing between
+              these counts and being read as the growth number. */}
+          <p className="mt-1 border-t border-border pt-1.5 text-[10px] leading-relaxed text-muted-foreground/80">
+            {t('growth.learning.notTheGauge', {
+              defaultValue:
+                'These numbers do not enter the butterfly judgement. They show WHAT it has learned; whether it can be trusted is answered by the record above.',
+            })}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

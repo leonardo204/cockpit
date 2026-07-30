@@ -1661,6 +1661,22 @@
       "excludedValue": "{{count}} (padded or repeated)",
       "corrected": "Fixed afterwards",
       "lifetime": "All time"
+    },
+    "learning": {
+      "title": "What it has learned so far",
+      "confirmed": "Facts in use",
+      "confirmedValue": "{{count}}",
+      "byScope": "Of those, by where they apply",
+      "byScopeValue": "{{user}} everywhere · {{project}} in this project",
+      "proposed": "Waiting for your review",
+      "proposedValue": "{{count}}",
+      "corroborated": "Said in more than one chat",
+      "corroboratedValue": "{{count}}",
+      "taskTypes": "Kinds of work seen",
+      "taskTypesValue": "{{count}}",
+      "lastReflection": "It last looked back over a finished conversation on {{when}}.",
+      "neverReflected": "It has not looked back over a finished conversation yet.",
+      "notTheGauge": "These numbers do not enter the butterfly judgement. They show WHAT it has learned; whether it can be trusted is answered by the record above."
     }
   },
   "updates": {

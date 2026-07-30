@@ -72,6 +72,7 @@ import { getStore } from '../engines/naby';
 import { resolveApproval } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
+import { safeLearningReport, type LearningReport } from '../lib/learningRead';
 import {
   modelReflectionJudge,
   runReflectionSweep,
@@ -414,7 +415,10 @@ export type NabyAction =
   // Settings panel renders (stage, gauge, the axes, the regression reason and the
   // per-task-type breakdown); `checkin.resolve` settles a paused check-in the way
   // `approval.resolve` settles a paused tool approval.
-  | { action: 'growth.get'; agentId?: string }
+  // `cwd` (P3-M8c) only widens the LEARNING block, which counts project-scope
+  // memory when the panel is open on a project. The trust reading is per agent
+  // and ignores it — growth must not depend on which folder is open.
+  | { action: 'growth.get'; agentId?: string; cwd?: string }
   // Phase 3 (P3-M8a/M8b) — run the session-reflection sweep on demand. Normally a
   // turn kicks it fire-and-forget; this is the manual/test entry point (spec
   // §4.3). `excludeSessionId` skips a session that is still live. The result
@@ -475,6 +479,12 @@ export type NabyActionResult =
       chatId?: string;
       /** `growth.get`: the full trust-meter reading for one agent. */
       growth?: GrowthReport;
+      /** `growth.get` (P3-M8c): what the agent has LEARNED — counts of confirmed
+       *  and pending facts, corroboration, kinds of work seen, last reflection.
+       *  A SEPARATE field from `growth` on purpose: none of it enters the
+       *  butterfly gate (continuous-learning §6.3), and keeping it out of
+       *  `GrowthReport` is what stops it drifting into the meter. */
+      learning?: LearningReport;
       /** `reflection.run`: what the sweep did — sessions read, ledger rows marked
        *  `correctedAfter`, verdicts the validator threw out, and (P3-M8b) memory
        *  rows proposed, candidates refused, and proposals the consolidation step
@@ -796,7 +806,15 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     // an egg, which is the honest answer rather than an error.
     case 'growth.get': {
       const agentId = typeof body.agentId === 'string' && body.agentId ? body.agentId : BUILTIN_PERSONA_ID;
-      return { ok: true, growth: growthReport(store, agentId) };
+      const cwd = typeof body.cwd === 'string' && body.cwd ? body.cwd : undefined;
+      return {
+        ok: true,
+        growth: growthReport(store, agentId),
+        // P3-M8c: shipped alongside, never folded in. `safeLearningReport`
+        // swallows its own failures so a learning count can never be the reason
+        // the trust meter fails to render.
+        learning: safeLearningReport(store, agentId, { ...(cwd ? { cwd } : {}) }),
+      };
     }
 
     // Phase 3 (P3-M8a) — run a reflection sweep NOW, rather than waiting for the

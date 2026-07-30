@@ -121,6 +121,15 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         // grammatical and say nothing.
         ['memoryReview.corroborated', ['{{count}}']],
         ['memoryReview.autoConfirmHint', ['{{count}}']],
+        // P3-M8c: every value in the learning block IS a number. A translation
+        // that dropped the placeholder would render an empty cell beside a label,
+        // which reads as "zero" rather than as a missing translation.
+        ['growth.learning.confirmedValue', ['{{count}}']],
+        ['growth.learning.proposedValue', ['{{count}}']],
+        ['growth.learning.corroboratedValue', ['{{count}}']],
+        ['growth.learning.taskTypesValue', ['{{count}}']],
+        ['growth.learning.byScopeValue', ['{{user}}', '{{project}}']],
+        ['growth.learning.lastReflection', ['{{when}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');
@@ -137,6 +146,34 @@ describe('growth, check-in and export copy is complete in every locale', () => {
     expect(lookup(ko, 'growth.stage.larva')).toBe('애벌레');
     expect(lookup(ko, 'growth.stage.pupa')).toBe('번데기');
     expect(lookup(ko, 'growth.stage.butterfly')).toBe('나비');
+  });
+
+  it('P3-M8c: the learning block disowns the gauge, in every locale', () => {
+    // THE ONE SENTENCE THIS MILESTONE CANNOT SHIP WITHOUT (continuous-learning
+    // §6.3; trust-meter §9.2 rule 2 — two numbers on one screen must never
+    // disagree). The learning block prints counts directly beneath a gauge that
+    // deliberately ignores counts, so it has to say which question each answers.
+    // Falling back to English here would leave a Korean user reading a number
+    // they cannot place, which is exactly the confusion §9.2 exists to prevent.
+    for (const locale of LOCALES) {
+      const line = String(lookup(dict(locale), 'growth.learning.notTheGauge') ?? '');
+      expect(line.length).toBeGreaterThan(20);
+      // It must NAME the butterfly judgement, not merely gesture at "the score".
+      expect(line).toMatch(locale === 'ko' ? /나비/ : /butterfly/i);
+      // And it must be a DENIAL. A sentence that only describes the counts would
+      // pass the length check while saying nothing about the gate.
+      expect(line).toMatch(locale === 'ko' ? /않습니다|않는다/ : /\bnot\b/i);
+    }
+  });
+
+  it('P3-M8c: the learning labels are translated, not left in English', () => {
+    // A Korean panel with English labels beside Korean ones is how a fallback
+    // hides: nothing errors, and the block reads as a debug surface.
+    const ko = dict('ko');
+    for (const key of ['title', 'confirmed', 'proposed', 'corroborated', 'taskTypes']) {
+      const value = String(lookup(ko, `growth.learning.${key}`) ?? '');
+      expect(value, `growth.learning.${key} must be Korean`).toMatch(/[가-힣]/);
+    }
   });
 
   it('the larva copy does not claim accuracy the stage cannot promise', () => {

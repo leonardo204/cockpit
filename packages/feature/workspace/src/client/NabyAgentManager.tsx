@@ -146,7 +146,10 @@ const AgentRow = memo(function AgentRow({
         ) : null}
       </div>
     </div>
-    {showGrowth ? <GrowthPanel agentId={agent.id} /> : null}
+    {/* `cwd` reaches the panel for the SAME reason the export button gets it
+        (P3-M8c): it decides whether project-scope memory is counted in the
+        learning block. The trust reading itself ignores it. */}
+    {showGrowth ? <GrowthPanel agentId={agent.id} {...(cwd ? { cwd } : {})} /> : null}
     {/* Its own line: the confirm step expands into a panel, which would break the
         header's flex row. */}
     <div className="mt-2">

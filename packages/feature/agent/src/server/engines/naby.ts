@@ -1282,8 +1282,16 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // This is what makes an agent (the persona especially) act on what it
               // has learned. A turn with no confirmed memory is a byte-for-byte
               // no-op. Scoped to user + org + this project's cwd (opts.cwd).
+              // P3-M8c: rank what is injected by RELEVANCE to this turn, not by
+              // recency alone. `turnText` — the user's words with any `@agent`
+              // mention already stripped — is the query on EVERY step, including
+              // the autonomy continuation steps: step 2's stored user message is
+              // the harness saying "carry on", and ranking memory against that
+              // would throw away the only signal about what the work is. A turn
+              // whose words match no memory is ordered exactly as before.
               memoryInjection: {
                 tokenBudget: MEMORY_TOKEN_BUDGET,
+                queryText: turnText,
                 userId: DEFAULT_USER_ID,
                 orgId: DEFAULT_ORG_ID,
               },

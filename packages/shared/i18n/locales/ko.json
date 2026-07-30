@@ -1661,6 +1661,22 @@
       "excludedValue": "{{count}}건 (선택지가 하나거나 같은 질문)",
       "corrected": "나중에 고친 일",
       "lifetime": "전체 기간"
+    },
+    "learning": {
+      "title": "지금까지 배운 것",
+      "confirmed": "쓰고 있는 사실",
+      "confirmedValue": "{{count}}개",
+      "byScope": "어디에 적용되는지",
+      "byScopeValue": "어디서나 {{user}}개 · 이 프로젝트에서 {{project}}개",
+      "proposed": "검토를 기다리는 것",
+      "proposedValue": "{{count}}개",
+      "corroborated": "여러 대화에서 나온 것",
+      "corroboratedValue": "{{count}}개",
+      "taskTypes": "겪어 본 일의 종류",
+      "taskTypesValue": "{{count}}가지",
+      "lastReflection": "끝난 대화를 마지막으로 되돌아본 때는 {{when}}입니다.",
+      "neverReflected": "아직 끝난 대화를 되돌아본 적이 없습니다.",
+      "notTheGauge": "이 숫자는 나비 판정에 들어가지 않습니다. 무엇을 배웠는지를 보여줄 뿐이고, 믿을 수 있는지는 위의 검증 기록이 답합니다."
     }
   },
   "updates": {

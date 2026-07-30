@@ -1,7 +1,7 @@
 // packages/feature/agent/src/server/lib/reflection.ts
 //
-// THE SESSION-REFLECTION SWEEP (Phase 3, P3-M8a + P3-M8b) —
-// specs/phase-3-continuous-learning.md §4 and §5.
+// THE SESSION-REFLECTION SWEEP (Phase 3, P3-M8a + P3-M8b + P3-M8c) —
+// specs/phase-3-continuous-learning.md §4, §5 and §6.4.
 //
 // The runtime owns the rules (when a session is due, which actions become cases,
 // which verdicts and which memory proposals are admissible —
@@ -33,7 +33,9 @@
 // THE CURSOR RULES, which are what make repeated sweeps cheap and safe:
 //
 //   * a session with NO cases still advances its cursor. Otherwise every sweep
-//     would re-scan the same evidence-free transcript forever.
+//     would re-scan the same evidence-free transcript forever. Since M8c such a
+//     session may FIRST earn a memory-only judge call, if it has said enough
+//     since the cursor to be worth one (§6.4) — the cursor advances either way.
 //   * a session whose JUDGE FAILED does not. A failed call is not an answer, and
 //     advancing past unread messages would silently discard the evidence in them.
 //   * one session's failure never ends the sweep — each is wrapped on its own.
@@ -56,6 +58,7 @@ import {
   resolveMemoryScopeKey,
   resolveProviderCredential,
   shouldAutoConfirmMemory,
+  shouldExtractMemoryOnly,
   validateMemoryCandidates,
   validateReflectionVerdicts,
   type Agent,
@@ -223,10 +226,17 @@ export async function runReflectionSweep(
         sinceSeq: cursorSeq,
       });
 
-      // NOTHING TO JUDGE, BUT STILL SCANNED. The cursor advances anyway: the
-      // messages have been looked at and hold no unjudged autonomous action, so
-      // re-reading them on the next sweep could only produce the same nothing.
-      if (cases.length === 0) {
+      // NO CASES IS NO LONGER THE END OF IT (M8c, §6.4). Through M8b a session
+      // with nothing to judge was swept and dropped, which meant every purely
+      // CONVERSATIONAL session — exactly the ones where a person says how they
+      // want things done — taught nothing at all. Now such a session still earns
+      // one memory-extraction call, provided it has said enough since the cursor
+      // to be worth one.
+      //
+      // Below the threshold the old behaviour is unchanged and deliberate: no
+      // call, and the cursor STILL advances, because the messages have been
+      // looked at and re-reading them could only produce the same nothing.
+      if (cases.length === 0 && !shouldExtractMemoryOnly(messages, cursorSeq)) {
         store.setReflectionCursor(session.sessionId, latestSeq, now);
         result.sweptSessions += 1;
         continue;
@@ -236,6 +246,15 @@ export async function runReflectionSweep(
       // space for the memory task AND the coordinate a proposal records as
       // `createdFrom` (§5.2).
       const userMessages = collectReflectionUserMessages(messages);
+      // The threshold is counted over the WHOLE span since the cursor, while the
+      // prompt only ever shows the recent window. On a transcript long enough for
+      // those two to disagree there is nothing to put in a memory-only call, so
+      // it is swept without one rather than sent an empty prompt.
+      if (cases.length === 0 && userMessages.length === 0) {
+        store.setReflectionCursor(session.sessionId, latestSeq, now);
+        result.sweptSessions += 1;
+        continue;
+      }
       const context: ReflectionSessionContext = {
         sessionId: session.sessionId,
         ...(session.cwd ? { cwd: session.cwd } : {}),
@@ -435,7 +454,13 @@ export const REFLECTION_JUDGE_TIMEOUT_MS = 60_000;
  */
 export function modelReflectionJudge(): ReflectionJudge {
   return async (cases: readonly ReflectionCase[], context?: ReflectionSessionContext) => {
-    if (cases.length === 0) return [] as ReflectionVerdict[];
+    // NOTHING TO ASK ABOUT: no case to judge AND no conversation to read facts
+    // out of. Since M8c the first half alone is no longer a reason to skip — a
+    // case-less session with a real conversation in it is precisely what the
+    // memory-only call exists for (§6.4).
+    if (cases.length === 0 && (context?.userMessages.length ?? 0) === 0) {
+      return [] as ReflectionVerdict[];
+    }
     const resolution = await resolveProviderCredential({});
     if (!resolution.ok) {
       // Expected on a machine running only the local Claude sign-in: there is no
