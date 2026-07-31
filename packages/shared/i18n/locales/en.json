@@ -1194,6 +1194,7 @@
     "description": "Bring in and manage skills, subagents, and commands made elsewhere (for example a Claude config folder). Imported items arrive turned OFF for safety — switch on only the ones you want to use.",
     "advancedSets": "Advanced — share a set (export / import a bundle)",
     "reviewNote": "Imported items are disabled until you review and enable them.",
+    "autoScanHint": "Skills added to ~/.claude/skills (including ones an agent installs for you) show up in this list on their own, turned off. Enable one to make it available under \"/\" and during turns.",
     "scope": "Scope",
     "scopeUser": "You (~/.claude)",
     "scopeProject": "This project (.claude)",

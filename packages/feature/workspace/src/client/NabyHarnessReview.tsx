@@ -865,6 +865,12 @@ export function NabyHarnessReview({
       <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
         <p>{t('harnessReview.description')}</p>
         <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
+        {/* The list now re-scans `~/.claude` (and the project `.claude`) on every
+            load, so a skill installed outside this panel appears without pressing
+            Import — but it appears DISABLED, and nothing about a greyed row says
+            why it is not in "/" yet. This line says it. Muted prose, no box: the
+            panel's flat design contract. */}
+        <p className="text-muted-foreground/70">{t('harnessReview.autoScanHint')}</p>
       </div>
 
       {/* Scope filter + banner: whether these harness items are global (every

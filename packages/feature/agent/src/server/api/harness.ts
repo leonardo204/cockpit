@@ -69,6 +69,74 @@ function defaultDeps(store: HarnessStore): HarnessActionDeps {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Scan-on-list (the `.claude` tree is a SECOND source of truth, not a one-shot).
+// ---------------------------------------------------------------------------
+//
+// WHY. Until now `harness_items` was the only thing this route read, and the
+// `.claude` tree on disk was consulted only when the user pressed the import
+// button. That made a skill the model itself installed — the skill-hub flow
+// writes `~/.claude/skills/<name>/SKILL.md` — invisible forever: it is not in
+// `app.db`, so Settings > Harness never lists it and "/" never offers it, and
+// nothing in the UI tells the user an import is the missing step. Listing is the
+// exact moment the two sources should be reconciled, so the list re-runs the
+// (idempotent, upsert-keyed) importer first.
+//
+// THE TRUST GATE IS UNCHANGED. Everything the scan finds is `source:'external'`
+// and the store's gate lands it `status:'disabled'`. Scanning makes an item
+// VISIBLE and reviewable; only the explicit setEnabled action can ever make it
+// live. That invariant is the whole point of the import gate and this must not
+// weaken it.
+//
+// COST CONTROL. A scan walks a directory tree, so it is throttled per
+// scope+key: refetches inside the window skip it. It is deliberately NOT wired
+// into `/api/commands` (per keystroke in the palette) or the per-turn skill
+// injection — those stay pure store reads.
+const SCAN_THROTTLE_MS = 10_000;
+
+/** scope+key -> the last time a scan STARTED for it. */
+const lastScanAt = new Map<string, number>();
+
+/** Test seam: clear the throttle so cases do not leak into each other. */
+export function resetHarnessScanThrottle(): void {
+  lastScanAt.clear();
+}
+
+/**
+ * Reconcile one scope's `.claude` tree into the store before a list read.
+ *
+ * Never throws: a `.claude` directory that is missing, unreadable, or holds one
+ * malformed artifact must not turn the harness panel into an error screen — the
+ * user's own stored items are still listable, which is the more important
+ * guarantee. `org` is never scanned: it has no local `.claude` on disk (it is
+ * populated by a set import), so a scan there could only ever be a no-op walk.
+ */
+function scanClaudeForScope(
+  scope: HarnessScope,
+  scopeKey: string,
+  deps: HarnessActionDeps,
+): void {
+  if (scope === 'org') return;
+  const key = `${scope}:${scopeKey}`;
+  const now = Date.now();
+  const last = lastScanAt.get(key);
+  if (last !== undefined && now - last < SCAN_THROTTLE_MS) return;
+  // Stamped BEFORE the walk so a tree that consistently throws is retried on the
+  // same schedule as a healthy one, not on every single refetch.
+  lastScanAt.set(key, now);
+  try {
+    deps.importClaude({
+      scope,
+      scopeKey,
+      // For `project` the scopeKey IS the cwd (that is how the client addresses
+      // it), and the importer needs it as `cwd` to resolve `<cwd>/.claude`.
+      ...(scope === 'project' ? { cwd: scopeKey } : {}),
+    });
+  } catch {
+    /* a broken .claude tree must never break the list */
+  }
+}
+
 // The store is opened on demand, so this must run on the node runtime and must
 // never be statically rendered.
 export const runtime = 'nodejs';
@@ -191,6 +259,7 @@ export function listHarnessCommands(
     kind?: string | null;
   },
   store: HarnessStore = getStore(),
+  deps: HarnessActionDeps = defaultDeps(store),
 ): { ok: true; data: HarnessListResult } | { ok: false; error: string } {
   if (!isScope(params.scope)) {
     return { ok: false, error: `scope must be one of ${HARNESS_SCOPES.join(', ')}` };
@@ -215,6 +284,12 @@ export function listHarnessCommands(
   if (scopeKey === null) {
     return { ok: false, error: `scopeKey is required for ${params.scope} scope` };
   }
+
+  // Reconcile the on-disk `.claude` tree into the store FIRST, so a skill that
+  // was installed to `~/.claude/skills/` since the last list shows up here (as a
+  // disabled, reviewable row) instead of being invisible until someone thinks to
+  // press Import. Throttled and non-throwing — see scanClaudeForScope.
+  scanClaudeForScope(params.scope, scopeKey, deps);
 
   const items = store.listHarness(params.scope, scopeKey, {
     ...(kindFilter ? { kind: kindFilter } : {}),

@@ -1,11 +1,58 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   DEFAULT_USER_ID,
   type HarnessImportRequest,
   type HarnessItem,
+  type HarnessScope,
   type HarnessSet,
 } from '../../../../../../../dist/naby-runtime.mjs';
-import { listHarnessCommands, runHarnessAction } from './harness';
+import {
+  listHarnessCommands,
+  resetHarnessScanThrottle,
+  runHarnessAction,
+  type HarnessActionDeps,
+} from './harness';
+
+// An empty importer summary — the shape scan-on-list ignores anyway (it re-reads
+// the store afterwards), needed only to satisfy the dep signature.
+function emptySummary(scope: HarnessScope, scopeKey: string) {
+  return {
+    scope,
+    scopeKey,
+    baseDir: '',
+    baseExists: false,
+    imported: { command: 0, skill: 0, subagent: 0 },
+    skippedHooks: 0,
+    skipped: [],
+    failed: [],
+    items: [],
+  };
+}
+
+/** Deps that record every scan the list triggers, so a test can assert WHICH
+ *  scopes were scanned and how often. */
+function scanSpy() {
+  const scans: Array<{ scope: HarnessScope; scopeKey: string; cwd?: string }> = [];
+  const deps: HarnessActionDeps = {
+    importClaude: (args) => {
+      scans.push(args);
+      return emptySummary(args.scope, args.scopeKey);
+    },
+  };
+  return { deps, scans };
+}
+
+// The default deps would walk the REAL `~/.claude`; every list test that is not
+// about scanning passes this instead, so the assertions stay about the store.
+const noScan: HarnessActionDeps = {
+  importClaude: (args) => emptySummary(args.scope, args.scopeKey),
+};
+
+// The scan throttle is module state — cleared between cases so one test's scan
+// cannot suppress the next one's.
+beforeEach(() => {
+  resetHarnessScanThrottle();
+});
 
 // A fake store recording every harness call, so the list/action logic is
 // exercised without opening a real sqlite file. Only the five methods this route
@@ -145,19 +192,19 @@ function makeCommand(over: Partial<HarnessItem> = {}): HarnessItem {
 describe('listHarnessCommands', () => {
   it('rejects an unknown scope', () => {
     const { store } = fakeStore();
-    const res = listHarnessCommands({ scope: 'bogus', scopeKey: null, status: null }, store);
+    const res = listHarnessCommands({ scope: 'bogus', scopeKey: null, status: null }, store, noScan);
     expect(res.ok).toBe(false);
   });
 
   it('rejects an unknown status filter', () => {
     const { store } = fakeStore();
-    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: 'maybe' }, store);
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: 'maybe' }, store, noScan);
     expect(res.ok).toBe(false);
   });
 
   it('defaults the user scopeKey to the runtime constant when omitted', () => {
     const { store, calls } = fakeStore([makeCommand()]);
-    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store);
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, noScan);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.scopeKey).toBe(DEFAULT_USER_ID);
     expect(calls.listHarness[0]).toMatchObject({ scope: 'user', scopeKey: DEFAULT_USER_ID });
@@ -165,19 +212,19 @@ describe('listHarnessCommands', () => {
 
   it('always filters to kind:command', () => {
     const { store, calls } = fakeStore([makeCommand()]);
-    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store);
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, noScan);
     expect(calls.listHarness[0].opts).toMatchObject({ kind: 'command' });
   });
 
   it('requires a scopeKey for project scope', () => {
     const { store } = fakeStore();
-    const res = listHarnessCommands({ scope: 'project', scopeKey: null, status: null }, store);
+    const res = listHarnessCommands({ scope: 'project', scopeKey: null, status: null }, store, noScan);
     expect(res.ok).toBe(false);
   });
 
   it('returns the command rows whole, template included', () => {
     const { store } = fakeStore([makeCommand({ command: { template: 'my body' } })]);
-    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store);
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, noScan);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.items[0].command?.template).toBe('my body');
   });
@@ -326,13 +373,13 @@ describe('runHarnessAction — delete / setEnabled', () => {
 describe('listHarnessCommands — kind filter (HP-06 list-all)', () => {
   it('defaults to kind:command when kind is omitted', () => {
     const { store, calls } = fakeStore([makeCommand()]);
-    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store);
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, noScan);
     expect(calls.listHarness[0].opts).toMatchObject({ kind: 'command' });
   });
 
   it("kind:'all' clears the kind filter so every kind returns", () => {
     const { store, calls } = fakeStore([makeCommand()]);
-    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null, kind: 'all' }, store);
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null, kind: 'all' }, store, noScan);
     expect(res.ok).toBe(true);
     const opts = calls.listHarness[0].opts as { kind?: string } | undefined;
     expect(opts?.kind).toBeUndefined();
@@ -340,14 +387,126 @@ describe('listHarnessCommands — kind filter (HP-06 list-all)', () => {
 
   it('an explicit kind filters to it', () => {
     const { store, calls } = fakeStore([makeCommand()]);
-    listHarnessCommands({ scope: 'user', scopeKey: null, status: null, kind: 'skill' }, store);
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null, kind: 'skill' }, store, noScan);
     expect(calls.listHarness[0].opts).toMatchObject({ kind: 'skill' });
   });
 
   it('rejects an unknown kind', () => {
     const { store } = fakeStore();
-    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null, kind: 'bogus' }, store);
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null, kind: 'bogus' }, store, noScan);
     expect(res.ok).toBe(false);
+  });
+});
+
+// The fix for "a skill installed to ~/.claude/skills is invisible forever": the
+// list reconciles the on-disk tree into the store before reading it.
+describe('listHarnessCommands — scan on list', () => {
+  it('scans the user scope with the resolved scopeKey before listing', () => {
+    const { store } = fakeStore([makeCommand()]);
+    const { deps, scans } = scanSpy();
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    expect(res.ok).toBe(true);
+    expect(scans).toEqual([{ scope: 'user', scopeKey: DEFAULT_USER_ID }]);
+  });
+
+  it('lists what the scan just imported (scan runs BEFORE the store read)', () => {
+    const { store } = fakeStore();
+    // A scan that lands one external skill, exactly as the real importer would.
+    const deps: HarnessActionDeps = {
+      importClaude: (args) => {
+        store.putHarnessItem({
+          item: {
+            scope: args.scope,
+            scopeKey: args.scopeKey,
+            kind: 'skill',
+            name: 'freshly-installed',
+            provenance: { source: 'external', origin: '/home/me/.claude/skills/x/SKILL.md' },
+            skill: { instructions: 'do the thing' },
+          },
+          requestedStatus: 'enabled',
+        });
+        return emptySummary(args.scope, args.scopeKey);
+      },
+    };
+    const res = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      const found = res.data.items.find((i) => i.name === 'freshly-installed');
+      expect(found).toBeDefined();
+      // The trust gate is untouched: a scanned item is visible, never live.
+      expect(found?.status).toBe('disabled');
+    }
+  });
+
+  it('throttles: a second list for the same scope+key does not re-walk the tree', () => {
+    const { store } = fakeStore();
+    const { deps, scans } = scanSpy();
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    expect(scans).toHaveLength(1);
+  });
+
+  it('throttles per scope+key, so a different scope still scans', () => {
+    const { store } = fakeStore();
+    const { deps, scans } = scanSpy();
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    listHarnessCommands({ scope: 'project', scopeKey: '/proj', status: null }, store, deps);
+    listHarnessCommands({ scope: 'project', scopeKey: '/other', status: null }, store, deps);
+    expect(scans.map((s) => s.scopeKey)).toEqual([DEFAULT_USER_ID, '/proj', '/other']);
+  });
+
+  it('passes the project scopeKey through as the cwd', () => {
+    const { store } = fakeStore();
+    const { deps, scans } = scanSpy();
+    listHarnessCommands({ scope: 'project', scopeKey: '/proj', status: null }, store, deps);
+    expect(scans).toEqual([{ scope: 'project', scopeKey: '/proj', cwd: '/proj' }]);
+  });
+
+  it('NEVER scans the org scope (no local .claude on disk)', () => {
+    const { store } = fakeStore();
+    const { deps, scans } = scanSpy();
+    const res = listHarnessCommands({ scope: 'org', scopeKey: null, status: null }, store, deps);
+    expect(res.ok).toBe(true);
+    expect(scans).toEqual([]);
+  });
+
+  it('does not scan when the params are invalid (no scope, no key)', () => {
+    const { store } = fakeStore();
+    const { deps, scans } = scanSpy();
+    listHarnessCommands({ scope: 'bogus', scopeKey: null, status: null }, store, deps);
+    listHarnessCommands({ scope: 'project', scopeKey: null, status: null }, store, deps);
+    expect(scans).toEqual([]);
+  });
+
+  it('a broken .claude tree does not break the list', () => {
+    const { store } = fakeStore([makeCommand()]);
+    const deps: HarnessActionDeps = {
+      importClaude: () => {
+        throw new Error('EACCES: permission denied');
+      },
+    };
+    const res = listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.items).toHaveLength(1);
+  });
+
+  it('a throwing scan is still throttled (no re-walk storm)', () => {
+    const { store } = fakeStore();
+    let calls = 0;
+    const deps: HarnessActionDeps = {
+      importClaude: () => {
+        calls += 1;
+        throw new Error('boom');
+      },
+    };
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    listHarnessCommands({ scope: 'user', scopeKey: null, status: null }, store, deps);
+    expect(calls).toBe(1);
   });
 });
 

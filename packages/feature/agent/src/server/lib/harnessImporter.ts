@@ -235,9 +235,27 @@ function safeRead(fs: ImporterFs, file: string): string | null {
 interface RawArtifact {
   /** The verb / skill / subagent name derived from the path. */
   name: string;
+  /**
+   * A containing folder that must qualify the final name (skill PACKS, below).
+   * Applied by the driver AFTER parsing, because a SKILL.md's frontmatter `name`
+   * overrides the path-derived one — two packs shipping a skill called `review`
+   * would otherwise collide on the store's (scope,scopeKey,kind,name) identity
+   * and silently overwrite each other.
+   */
+  namePrefix?: string;
   /** Absolute path — becomes provenance.origin (rollback/display handle). */
   origin: string;
   content: string;
+}
+
+/** Join a name to its pack qualifier. HYPHEN, not `:` or `/`: an imported item's
+ *  name has to stay TYPABLE and dispatchable in the "/" palette, and both the
+ *  server dispatcher (slashCommands' COMMAND_LINE_RE) and the client
+ *  autocomplete accept `[a-zA-Z][a-zA-Z0-9-]*` only — a `pack:skill` row would
+ *  list in Settings and then refuse to run. Same convention `readCommands`
+ *  already uses for namespaced command folders. */
+function qualify(prefix: string | undefined, name: string): string {
+  return prefix ? `${prefix}-${name}` : name;
 }
 
 /** Recursively read every command `.md` under commands/ so namespaced command
@@ -262,14 +280,44 @@ function readCommands(fs: ImporterFs, commandsDir: string): RawArtifact[] {
   return out;
 }
 
-/** skills/<name>/SKILL.md (canonical) or skills/<name>.md (flat). */
+/**
+ * skills/<name>/SKILL.md (canonical), skills/<name>.md (flat), and ONE extra
+ * level for PACKS: skills/<pack>/<skill>/SKILL.md.
+ *
+ * The nested level is not hypothetical — a marketplace/hub install lands a whole
+ * bundle as `skills/<pack>/<skill>/SKILL.md`, and reading only the top level
+ * meant every skill in such a pack was silently ignored by the importer (the
+ * pack folder has no SKILL.md of its own, so it looked like an empty skill).
+ * Nested items carry the pack as a name qualifier so two packs can ship the same
+ * skill name without one overwriting the other.
+ *
+ * Exactly one extra level, deliberately: deeper trees under a skill folder are
+ * its RESOURCES (references/, scripts/, assets/), not more skills, and walking
+ * them would import documentation as capabilities.
+ */
 function readSkills(fs: ImporterFs, skillsDir: string): RawArtifact[] {
   const out: RawArtifact[] = [];
   for (const ent of safeReaddir(fs, skillsDir)) {
     if (ent.isDirectory()) {
-      const skillFile = path.join(skillsDir, ent.name, 'SKILL.md');
+      const dir = path.join(skillsDir, ent.name);
+      const skillFile = path.join(dir, 'SKILL.md');
       const content = safeRead(fs, skillFile);
       if (content !== null) out.push({ name: ent.name, origin: skillFile, content });
+      // Treat the same directory as a possible PACK. A folder can legitimately be
+      // both (its own SKILL.md plus sub-skills), so this is not an `else`.
+      for (const sub of safeReaddir(fs, dir)) {
+        if (!sub.isDirectory()) continue;
+        const nestedFile = path.join(dir, sub.name, 'SKILL.md');
+        const nested = safeRead(fs, nestedFile);
+        if (nested !== null) {
+          out.push({
+            name: sub.name,
+            namePrefix: ent.name,
+            origin: nestedFile,
+            content: nested,
+          });
+        }
+      }
     } else if (ent.isFile() && ent.name.toLowerCase().endsWith('.md')) {
       const full = path.join(skillsDir, ent.name);
       const content = safeRead(fs, full);
@@ -430,12 +478,17 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
         summary.skipped.push({ origin: raw.origin, kind: job.kind, reason: 'empty body' });
         continue;
       }
+      // Qualify AFTER parsing: a SKILL.md frontmatter `name` wins over the
+      // path-derived one, so the pack prefix has to be applied to whatever the
+      // parser settled on or two packs' same-named skills collide on the store's
+      // (scope,scopeKey,kind,name) identity.
+      const itemName = qualify(raw.namePrefix, parsed.name);
       const req: HarnessImportRequest = {
         item: {
           scope: args.scope,
           scopeKey: args.scopeKey,
           kind: job.kind,
-          name: parsed.name,
+          name: itemName,
           ...(parsed.description ? { description: parsed.description } : {}),
           // source:'external' — the gate FORCES this to disabled (contract §4
           // invariant 1). An imported item is inert until reviewed + enabled.

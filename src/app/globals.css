@@ -281,8 +281,18 @@ html {
 body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  /* Use the --font-inter variable directly (defined on body by Next.js font) */
-  font-family: var(--font-inter), "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Use the --font-inter variable directly (defined on body by Next.js font).
+   *
+   * ORDER IS THE WHOLE POINT. Inter carries Latin but no Hangul, so every
+   * Korean glyph falls through to whatever comes next. With the CJK fonts
+   * listed SC-first, Windows resolved Hangul to Microsoft YaHei — a Simplified
+   * Chinese face whose Korean coverage is a fallback, which is why the UI read
+   * as slightly wrong and blurry there. The Korean faces now sit ahead of the
+   * SC ones (Apple SD Gothic Neo on macOS, Malgun Gothic on Windows), and the
+   * SC entries stay behind them so Chinese text still resolves. No font files
+   * are bundled — these are system faces only. */
+  font-family: var(--font-inter), -apple-system, "Segoe UI", "Apple SD Gothic Neo",
+    "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif;
   /* Disable the browser's default two-finger swipe back/forward navigation */
   overscroll-behavior-x: none;
 }
@@ -616,7 +626,11 @@ code[class*="language-"] .token {
   background: hsl(var(--slate-4));
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  /* Windows entries (Consolas, Cascadia Mono) before the generic keyword: the
+   * mac-only faces ahead of them resolve to nothing on Windows, which left
+   * inline code rendering in the generic monospace default. System faces only. */
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Cascadia Mono',
+    monospace;
   font-size: 0.875em;
 }
 

@@ -69,11 +69,17 @@ type SettingsSectionId =
 // `harness` now owns command/skill/subagent (the old standalone `memory` and
 // `commands` sections were folded in — memory under Agents, commands under
 // Harness) so the two-layer model (`@` agents / `/` harness) shows in Settings.
+//
+// SINGLE-CODEPOINT ICONS ONLY. `agents` used 🧑‍🚀 (person + ZWJ + rocket), the
+// one ZWJ sequence in the codebase: Windows does not compose it and renders TWO
+// glyphs side by side, so the nav row read as a typo. 🦋 (U+1F98B) is one
+// codepoint everywhere — and on-theme, since the butterfly is the agent's own
+// growth/trust symbol.
 const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] = [
   { id: 'theme', labelKey: 'settings.theme', icon: '🎨' },
   { id: 'language', labelKey: 'settings.language', icon: '🌐' },
   { id: 'provider', labelKey: 'settings.aiProvider', icon: '🤖' },
-  { id: 'agents', labelKey: 'agentManager.title', icon: '🧑‍🚀' },
+  { id: 'agents', labelKey: 'agentManager.title', icon: '🦋' },
   { id: 'harness', labelKey: 'harnessReview.title', icon: '🧩' },
   { id: 'permissions', labelKey: 'policyManager.title', icon: '🛡️' },
   { id: 'about', labelKey: 'settings.about', icon: 'ℹ️' },
