@@ -159,18 +159,21 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
     void load();
   }, [load]);
 
+  // Both transient states are one sentence of status text. A bordered, tinted box
+  // around a single line inside a row that is already bordered is three
+  // rectangles to say "loading".
   if (loading) {
     return (
-      <div className="mt-2 rounded-lg border border-border bg-muted/30 p-3 text-[11px] text-muted-foreground">
+      <p className="mt-2.5 border-t border-border pt-2.5 text-[11px] text-muted-foreground">
         {t('growth.loading', { defaultValue: 'Reading the record…' })}
-      </div>
+      </p>
     );
   }
   if (failed || !g) {
     return (
-      <div className="mt-2 rounded-lg border border-border bg-muted/30 p-3 text-[11px] text-muted-foreground">
+      <p className="mt-2.5 border-t border-border pt-2.5 text-[11px] text-muted-foreground">
         {t('growth.unavailable', { defaultValue: 'The growth record could not be read.' })}
-      </div>
+      </p>
     );
   }
 
@@ -221,7 +224,11 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
   const bar = 'h-1.5 rounded-full';
 
   return (
-    <div className="mt-2 space-y-2.5 rounded-lg border border-border bg-muted/30 p-3" data-testid="growth-panel">
+    // Opens with a divider rather than a border: this panel expands INSIDE the
+    // agent row, which is already the one card the list is allowed. Everything
+    // below is separated by spacing and rules — see the reason line and the
+    // learning block, both of which used to be boxes of their own.
+    <div className="mt-2.5 space-y-2.5 border-t border-border pt-2.5" data-testid="growth-panel">
       {/* stage ladder + gauge */}
       <div className="flex items-center gap-1.5">
         {STAGES.map((s, i) => {
@@ -274,12 +281,17 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
         {t(`growth.meaning.${g.stage}`, { defaultValue: '' })}
       </p>
 
-      {/* the reason — the part the user reads when it went down */}
+      {/* the reason — the part the user reads when it went down.
+          A LEFT ACCENT, not a box. This one line does need to stand apart from
+          the prose around it (it is the sentence a falling meter owes its user),
+          and a 2px rule down its edge carries that without adding a fourth
+          rectangle to the row. The colour still switches on direction, so a drop
+          reads as a drop. */}
       <div
-        className={`rounded-md border px-2.5 py-2 text-[11px] leading-relaxed ${
+        className={`border-l-2 pl-2.5 text-[11px] leading-relaxed ${
           c.direction === 'down'
-            ? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-            : 'border-border bg-background/60 text-muted-foreground'
+            ? 'border-amber-500/60 text-amber-800 dark:text-amber-200'
+            : 'border-border text-muted-foreground'
         }`}
         data-testid="growth-reason"
       >
@@ -288,13 +300,13 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
       </div>
 
       {g.blockedByTripwire ? (
-        <div className="rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
           {t('growth.tripwireBlocked', {
             defaultValue:
               'Accuracy has reached the line, but {{count}} action(s) were refused for safety recently. Until those fall out of the recent window it does not become a butterfly — a safety refusal is not averaged away.',
             count: g.tripwires,
           })}
-        </div>
+        </p>
       ) : null}
 
       {/* the axes, stated plainly */}
@@ -428,9 +440,12 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
           <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
             {t('growth.recent', { defaultValue: 'What it asked, and what you chose' })}
           </summary>
-          <div className="mt-1 space-y-1.5">
+          {/* Inset dividers, not one box per decision: these are rows inside an
+              already-nested disclosure, and boxing each would put a rectangle
+              three levels deep. The rule between them does the separating. */}
+          <div className="mt-1 divide-y divide-border/60">
             {g.recentDecisions.map((d, i) => (
-              <div key={`${d.at}:${i}`} className="rounded border border-border bg-background/60 px-2 py-1.5">
+              <div key={`${d.at}:${i}`} className="py-1.5 first:pt-0 last:pb-0">
                 <div className="flex items-start gap-1.5">
                   <span className="text-[11px] leading-4">{d.hit ? '🦋' : '🐛'}</span>
                   <span className="flex-1 text-[11px] leading-4 text-foreground">{d.question}</span>
@@ -482,15 +497,20 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
       </p>
 
       {/* ------------------------------------------------------------------
-          P3-M8c — WHAT IT HAS LEARNED. Its own bordered box, below everything
-          the meter said, because these are counts and the paragraph directly
-          above has just finished explaining that counts do not move the gauge.
-          Reading the two in that order is the point: the disclaimer arrives
-          before the numbers, and again after them.
+          P3-M8c — WHAT IT HAS LEARNED. Below everything the meter said, because
+          these are counts and the paragraph directly above has just finished
+          explaining that counts do not move the gauge. Reading the two in that
+          order is the point: the disclaimer arrives before the numbers, and
+          again after them.
+
+          A DIVIDER AND A HEADING, not a box. The block used to be bordered and
+          tinted so it would read as a separate claim; the heading plus the rule
+          above it says that just as clearly, and the panel it sits in is already
+          inside a bordered row.
           ------------------------------------------------------------------ */}
       {learning ? (
         <div
-          className="rounded-md border border-border bg-background/60 px-2.5 py-2"
+          className="border-t border-border pt-2"
           data-testid="growth-learning"
         >
           <div className="text-[10px] font-medium text-foreground/80">

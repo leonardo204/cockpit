@@ -497,7 +497,11 @@ const HarnessSetTools = memo(function HarnessSetTools({
   );
 
   return (
-    <div className="space-y-4 rounded-lg border border-border p-3">
+    // No border of its own: this already renders INSIDE the `<details>` box that
+    // discloses it, and a second frame drawn one pixel inside the first is the
+    // clearest possible case of card-in-card. The export/import halves stay
+    // separated by the rule between them.
+    <div className="space-y-4">
       {/* EXPORT */}
       <div className="space-y-2">
         <div className="text-xs font-medium text-foreground">{t('harnessSet.exportTitle')}</div>
@@ -580,7 +584,9 @@ const HarnessSetTools = memo(function HarnessSetTools({
 
         {/* Loaded set → item selection + target scope + import */}
         {loaded ? (
-          <div className="space-y-2 rounded-lg border border-border p-2.5 bg-muted/30">
+          // A rule and spacing, not a panel: this is a group wrapper around the
+          // selection UI, three levels deep inside the disclosure already.
+          <div className="space-y-2 border-t border-border pt-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="text-[11px] font-medium text-foreground">
                 {t('harnessSet.loadedSet', {
@@ -853,7 +859,10 @@ export function NabyHarnessReview({
 
   return (
     <div className="space-y-3">
-      <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed space-y-1">
+      {/* Plain muted prose. The review note keeps its amber, which is what makes
+          it read as a caution — the box around it was doing nothing the colour
+          was not already doing. */}
+      <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
         <p>{t('harnessReview.description')}</p>
         <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
       </div>
@@ -879,7 +888,7 @@ export function NabyHarnessReview({
         <summary className="cursor-pointer select-none px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
           {t('harnessReview.advancedSets', { defaultValue: 'Advanced — share a set (export / import a bundle)' })}
         </summary>
-        <div className="p-1">
+        <div className="px-3 pb-3">
           <HarnessSetTools cwd={cwd} onImported={onSetImported} />
         </div>
       </details>
@@ -901,7 +910,10 @@ export function NabyHarnessReview({
           </button>
 
           {summary ? (
-            <div className="rounded-lg border border-border p-2.5 space-y-1 bg-muted/30">
+            // The result of the import you just ran: status prose plus one
+            // action. Flattened to a heading over muted text — a box here framed
+            // a paragraph, and sat directly under another box.
+            <div className="space-y-1">
               <div className="text-[11px] font-medium text-foreground">
                 {t('harnessImport.resultTitle')}
               </div>

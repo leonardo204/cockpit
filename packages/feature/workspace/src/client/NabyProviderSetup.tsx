@@ -303,7 +303,7 @@ function ProviderForm({
       ))}
 
       {insecureWarning && (
-        <div className="rounded border border-amber-500/50 bg-amber-500/10 p-2 space-y-2">
+        <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-2">
           <p className="text-xs text-amber-600 dark:text-amber-400">⚠ {insecureWarning}</p>
           <button
             onClick={() => void save(true)}
@@ -351,7 +351,11 @@ function SecurityBanner({ security }: { security: Security }) {
   const { t } = useTranslation();
   if (security.secure) return null;
   return (
-    <div className="rounded border border-amber-500/50 bg-amber-500/10 p-2">
+    // A LEFT ACCENT rather than a box. This banner renders in two places — the
+    // settings section and the onboarding card — and inside the card a bordered,
+    // tinted rectangle was a box within a box. The amber edge plus amber text
+    // still reads as a warning wherever it lands.
+    <div className="border-l-2 border-amber-500/60 pl-2.5">
       <p className="text-xs text-amber-600 dark:text-amber-400">
         ⚠ {t('providerSetup.insecurePre')}
         <code>{security.backend}</code>{t('providerSetup.insecurePost')}{security.warning ? ` ${security.warning}` : ''}

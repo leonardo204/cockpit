@@ -148,8 +148,13 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
 
   const r = preview.report;
   return (
+    // A LEFT ACCENT, matching the export confirmation. Both are the same kind of
+    // surface — "here is what is about to move, confirm it" — so they get the same
+    // treatment, and neither adds a rectangle to a settings pane that had too
+    // many. The checkbox row below keeps its border: it is a single interactive
+    // row, which is the one thing a border is still for.
     <div
-      className="space-y-2 rounded-lg border border-sky-500/50 bg-sky-500/10 p-3"
+      className="space-y-2 border-l-2 border-sky-500/60 pl-2.5"
       data-testid="agent-import-confirm"
     >
       <div className="text-xs font-medium text-sky-800 dark:text-sky-200">
@@ -192,7 +197,7 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
       </ul>
 
       {/* THE QUESTION */}
-      <label className="flex cursor-pointer items-start gap-1.5 rounded border border-border bg-background/60 px-2 py-1.5">
+      <label className="flex cursor-pointer items-start gap-1.5 rounded border border-border px-2 py-1.5">
         <input
           type="checkbox"
           checked={trustLedger}
@@ -217,16 +222,18 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
       </label>
 
       {r.promptLooksSecret ? (
-        <div className="rounded border border-red-500/50 bg-red-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
           {t('agentImport.promptWarning', {
             defaultValue:
               "This agent's instructions look like they contain a credential. Read them before importing.",
           })}
-        </div>
+        </p>
       ) : null}
 
+      {/* Kept bordered: a disclosure summary is an interactive row, and the
+          border is what makes it look clickable. */}
       {r.warnings.length > 0 ? (
-        <details className="rounded border border-border bg-background/60 px-2 py-1.5">
+        <details className="rounded border border-border px-2 py-1.5">
           <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
             {t('agentImport.skipped', {
               defaultValue: '{{count}} thing(s) this machine will not take',

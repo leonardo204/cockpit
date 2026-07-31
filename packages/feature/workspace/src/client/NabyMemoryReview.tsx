@@ -397,7 +397,10 @@ export function NabyMemoryReview({
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+      {/* Plain muted prose — the section's own description, not a callout. The
+          ITEM rows below keep their borders: a repeated list item is exactly what
+          a border is still for. */}
+      <p className="text-xs text-muted-foreground leading-relaxed">
         {t('memoryReview.description')}
       </p>
 

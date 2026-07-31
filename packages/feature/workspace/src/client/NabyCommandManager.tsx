@@ -360,7 +360,9 @@ export function NabyCommandManager({
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+      {/* Plain muted prose. The create/edit form and the command rows below keep
+          their borders — those are an active surface and repeated list items. */}
+      <p className="text-xs text-muted-foreground leading-relaxed">
         {t('commandManager.description')}
       </p>
 

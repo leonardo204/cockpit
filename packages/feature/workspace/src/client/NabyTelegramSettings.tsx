@@ -115,7 +115,9 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+      {/* Plain muted prose. A description in a tinted box reads as a callout the
+          user has to act on, and stacks another rectangle into the pane. */}
+      <p className="text-xs text-muted-foreground leading-relaxed">
         {t('telegramSettings.description', {
           defaultValue:
             "How an agent reaches you when it hits a critical decision, and where it sends its final report. naby uses its OWN dedicated bot — create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",

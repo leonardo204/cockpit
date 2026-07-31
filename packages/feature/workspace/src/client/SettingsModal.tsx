@@ -37,6 +37,10 @@ import { NabyAgentManager } from './NabyAgentManager';
 // Phase 3 (P3-M3). The Telegram escalation channel config — how an agent reaches
 // the user for a critical decision and sends its final report.
 import { NabyTelegramSettings } from './NabyTelegramSettings';
+// Every section is a flat header + content block; the content pane below draws
+// the full-width rule between them (`divide-y`). Cards were tried first and made
+// the multi-panel sections (Agents, Harness, About) boxes-inside-boxes.
+import { SettingsSection } from './SettingsSection';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -163,8 +167,16 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
 
       {/* Panel — a wide, near-full-screen surface split into a left section nav
           and a right content pane, so the (now many) sections no longer stack
-          into one long scroll. Sits within the shared z-50 modal layer. */}
-      <div className="relative bg-card rounded-lg shadow-xl w-full max-w-4xl h-[85vh] mx-4 flex flex-col overflow-hidden">
+          into one long scroll. Sits within the shared z-50 modal layer.
+
+          WIDTH IS PROPORTIONAL, WITH A FLOOR. `max-w-4xl` (896px) meant the
+          modal stayed the same size on a 27" display as on a laptop, wasting
+          two thirds of the screen while the harness and provider panels
+          scrolled. `min(86vw, 1600px)` scales with the window and stops before
+          it becomes a wall of text; the `min-w` floor keeps a 48px-wide nav plus
+          a usable content pane at ~880px, and yields to the viewport (minus the
+          mx-4 gutters) on windows narrower than that rather than overflowing. */}
+      <div className="relative bg-card rounded-lg shadow-xl w-[min(86vw,1600px)] min-w-[min(880px,calc(100vw-2rem))] h-[85vh] mx-4 flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <h2 className="text-sm font-medium text-foreground">{t('settings.title')}</h2>
@@ -205,13 +217,20 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
 
           {/* Right content — only the selected section renders. Scrolls on its
               own so a tall section (AI provider / harness) never clips its
-              controls. */}
-          <div className="flex-1 min-w-0 overflow-y-auto p-5">
+              controls.
+
+              THE SECTION SEPARATOR LIVES HERE. `divide-y` draws one full-width
+              rule BETWEEN adjacent sections and none above the first or below the
+              last, which is the whole separation contract: a section is a flat
+              header + content, and the only chrome around it is that line. Each
+              branch renders its sections as direct children (a fragment, never a
+              wrapper div) so the rule reaches both edges of the pane. */}
+          <div className="flex-1 min-w-0 overflow-y-auto p-5 divide-y divide-border">
             {section === 'theme' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('settings.theme')}
-                </label>
+              <SettingsSection title={t('settings.theme')}>
+                {/* The button grid keeps its own max-width: three tiles stretched
+                    across a 1600px pane would read as three billboards. The
+                    section fills the pane; its contents stay hand-sized. */}
                 <div className="grid grid-cols-3 gap-2 max-w-md">
                   {themeOptions.map((option) => (
                     <button
@@ -228,14 +247,11 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsSection>
             ) : null}
 
             {section === 'language' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('settings.language')}
-                </label>
+              <SettingsSection title={t('settings.language')}>
                 <div className="grid grid-cols-3 gap-2 max-w-md">
                   {[
                     { value: 'auto', label: t('settings.languageAuto'), icon: '🌐' },
@@ -256,107 +272,92 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                     </button>
                   ))}
                 </div>
-              </div>
+              </SettingsSection>
             ) : null}
 
             {section === 'provider' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">{t('settings.aiProvider')}</label>
+              <SettingsSection title={t('settings.aiProvider')}>
                 <NabyProviderSettings isOpen={isOpen} />
-              </div>
+              </SettingsSection>
             ) : null}
 
             {section === 'agents' ? (
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    {t('agentManager.title', { defaultValue: 'Agents' })}
-                  </label>
+              <>
+                <SettingsSection title={t('agentManager.title', { defaultValue: 'Agents' })}>
                   <NabyAgentManager isOpen={isOpen} cwd={cwd} />
-                </div>
+                </SettingsSection>
                 {/* Telegram escalation — how an agent reaches you (P3-M3). */}
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    {t('telegramSettings.title', { defaultValue: 'Telegram escalation' })}
-                  </label>
+                <SettingsSection
+                  title={t('telegramSettings.title', { defaultValue: 'Telegram escalation' })}
+                >
                   <NabyTelegramSettings isOpen={isOpen} />
-                </div>
+                </SettingsSection>
                 {/* Memory lives with the agents (their learned memory), P3-M1 reorg. */}
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    {t('memoryReview.title')}
-                  </label>
+                <SettingsSection title={t('memoryReview.title')}>
                   <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
-                </div>
-              </div>
+                </SettingsSection>
+              </>
             ) : null}
 
             {section === 'harness' ? (
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    {t('harnessReview.title')}
-                  </label>
+              <>
+                <SettingsSection title={t('harnessReview.title')}>
                   <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
-                </div>
+                </SettingsSection>
                 {/* Commands folded into Harness (command/skill/subagent), P3-M1 reorg. */}
-                <div>
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    {t('commandManager.title')}
-                  </label>
+                <SettingsSection title={t('commandManager.title')}>
                   <NabyCommandManager isOpen={isOpen} cwd={cwd} />
-                </div>
-              </div>
+                </SettingsSection>
+              </>
             ) : null}
 
             {section === 'permissions' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('policyManager.title')}
-                </label>
+              <SettingsSection title={t('policyManager.title')}>
                 <NabyPolicyManager isOpen={isOpen} cwd={cwd} />
-              </div>
+              </SettingsSection>
             ) : null}
 
             {section === 'about' ? (
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">
-                  {t('settings.about')}
-                </label>
-                <div className="text-xs text-muted-foreground space-y-1">
-                  {/* APP_TITLE, not APP_NAME: the About box is exactly where a
-                      tester looks to confirm which build they are reporting on,
-                      and "Alpha" is the most important word there. */}
-                  {/* THE APP VERSION FIRST. This line used to show only the
-                      cockpit shell's package version (1.0.245), which is not the
-                      number on the release, the tag, or the update dialog — a
-                      tester reading "v1.0.245" next to an update that just
-                      installed 1.3.0 has no way to tell which is real. The shell
-                      version stays, demoted, because it is still useful when the
-                      submodule and the app move independently. */}
-                  <p>
-                    {APP_TITLE}
-                    {nabyVersion ? ` · v${nabyVersion}` : ''}
-                  </p>
-                  {appVersion ? (
-                    <p className="text-muted-foreground/60">shell v{appVersion}</p>
-                  ) : null}
-                  <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
-                </div>
+              <>
+                <SettingsSection title={t('settings.about')}>
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    {/* APP_TITLE, not APP_NAME: the About box is exactly where a
+                        tester looks to confirm which build they are reporting on,
+                        and "Alpha" is the most important word there. */}
+                    {/* THE APP VERSION FIRST. This line used to show only the
+                        cockpit shell's package version (1.0.245), which is not the
+                        number on the release, the tag, or the update dialog — a
+                        tester reading "v1.0.245" next to an update that just
+                        installed 1.3.0 has no way to tell which is real. The shell
+                        version stays, demoted, because it is still useful when the
+                        submodule and the app move independently. */}
+                    <p>
+                      {APP_TITLE}
+                      {nabyVersion ? ` · v${nabyVersion}` : ''}
+                    </p>
+                    {appVersion ? (
+                      <p className="text-muted-foreground/60">shell v{appVersion}</p>
+                    ) : null}
+                    <p className="text-muted-foreground/60">{APP_DESCRIPTION}</p>
+                  </div>
+                </SettingsSection>
 
                 {/* Updates live here rather than in a section of their own: the
-                    About box is already where someone goes to find out which
+                    About block is already where someone goes to find out which
                     build they are on, and "which build am I on" and "is there a
-                    newer one" are the same question asked twice. */}
-                <div className="mt-6 pt-4 border-t border-border">
-                  <label className="block text-sm font-medium text-foreground mb-2">
-                    {t('updates.title')}
-                  </label>
+                    newer one" are the same question asked twice. Its own section,
+                    separated by the pane's divider. */}
+                <SettingsSection title={t('updates.title')}>
                   <UpdatePanel />
-                </div>
+                </SettingsSection>
 
+                {/* Renders its own section, or nothing at all when the build has
+                    no dev-mode door — which is why it is not wrapped here: an
+                    empty titled block would advertise a feature this binary
+                    lacks. Returning null also drops its divider, because the rule
+                    is drawn BETWEEN siblings that exist. */}
                 <DevModePanel />
-              </div>
+              </>
             ) : null}
           </div>
         </div>

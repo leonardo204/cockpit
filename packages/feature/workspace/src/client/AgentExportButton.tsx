@@ -141,8 +141,12 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
   }
 
   return (
+    // A LEFT ACCENT, not a box. This confirmation opens inside the agent row,
+    // which is already the one border the list is allowed; an amber rectangle in
+    // there was card-in-card. The 2px amber edge keeps the "read this before you
+    // click" weight without a fourth nested rectangle.
     <div
-      className="mt-2 space-y-2 rounded-lg border border-amber-500/50 bg-amber-500/10 p-3"
+      className="mt-2 space-y-2 border-l-2 border-amber-500/60 pl-2.5"
       data-testid="agent-export-confirm"
     >
       <div className="text-xs font-medium text-amber-800 dark:text-amber-200">
@@ -172,8 +176,10 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
         </li>
       </ul>
 
+      {/* A heading over its list, not a box around it: "Left out" is already the
+          label that separates these lines from the ones above. */}
       {withheld.length > 0 ? (
-        <div className="rounded border border-border bg-background/60 px-2 py-1.5">
+        <div>
           <div className="text-[10px] font-medium text-muted-foreground">
             {t('agentExport.withheld', { defaultValue: 'Left out' })}
           </div>
@@ -186,12 +192,12 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
       ) : null}
 
       {r.promptLooksSecret ? (
-        <div className="rounded border border-red-500/50 bg-red-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
           {t('agentExport.promptWarning', {
             defaultValue:
               "This agent's own instructions look like they contain a credential. It is not removed — that would change how the agent behaves — so check it before saving.",
           })}
-        </div>
+        </p>
       ) : null}
 
       <div className="text-[10px] font-mono text-muted-foreground break-all">

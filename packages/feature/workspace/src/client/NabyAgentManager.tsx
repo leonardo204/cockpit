@@ -137,7 +137,11 @@ const PersonaDelegation = memo(function PersonaDelegation() {
   if (!settings) return null;
 
   return (
-    <div className="mt-2 rounded-md border border-border bg-muted/30 p-2.5">
+    // An INSET DIVIDER inside the agent row, not a box. The row is already the
+    // one border this list is allowed (a repeated list item); a second bordered
+    // panel inside it is card-in-card, and the divider says the same thing —
+    // "a different question starts here" — with a line instead of a rectangle.
+    <div className="mt-2.5 border-t border-border pt-2.5">
       <p className="text-[11px] font-medium text-foreground">
         {t('agentManager.delegationTitle', { defaultValue: 'How you delegate' })}
       </p>
@@ -399,7 +403,10 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+      {/* Plain muted prose, not a tinted box: this is the section's description,
+          and a box around an explanation is the first thing that turns a settings
+          pane into a stack of rectangles. */}
+      <p className="text-xs text-muted-foreground leading-relaxed">
         {t('agentManager.description', {
           defaultValue:
             'Your naby agents. The built-in persona learns how you work and can act on your behalf; add custom agents for focused jobs. Address one in the composer with @name.',

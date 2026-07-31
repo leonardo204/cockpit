@@ -132,7 +132,9 @@ export function NabyPolicyManager({ isOpen, cwd }: { isOpen: boolean; cwd?: stri
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+      {/* Plain muted prose. The rule rows below keep their borders — repeated
+          list items are the one place a border still earns its place. */}
+      <p className="text-xs text-muted-foreground leading-relaxed">
         {t('policyManager.description', {
           defaultValue:
             'Rules that decide whether the agent may run a tool. Allow or block a tool by name (use a trailing * to match a group, or * for all). With no rules, the "Allow changes" toggle decides.',

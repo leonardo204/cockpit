@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { SettingsSection } from './SettingsSection';
 
 /**
  * DevModePanel — unlock the dev-only providers inside a shipped build.
@@ -109,13 +110,13 @@ export function DevModePanel() {
   // all. A disabled control would advertise a feature this binary does not have.
   if (!bridge() || !status?.available) return null;
 
+  // Wraps ITSELF in the card rather than being wrapped by SettingsModal: the
+  // early return above means a build without a dev-mode door renders nothing,
+  // and a card supplied from outside would leave an empty titled box behind.
+  // The title/description move into the card header — same two strings, one
+  // place — replacing the lone `border-t` divider this used to draw.
   return (
-    <div className="mt-6 pt-4 border-t border-border">
-      <label className="block text-sm font-medium text-foreground mb-1">
-        {t('devMode.title')}
-      </label>
-      <p className="text-xs text-muted-foreground/70 mb-2">{t('devMode.description')}</p>
-
+    <SettingsSection title={t('devMode.title')} subtitle={t('devMode.description')}>
       {status.unlocked ? (
         <div className="space-y-2">
           <p className="text-xs text-emerald-500">
@@ -172,6 +173,6 @@ export function DevModePanel() {
           {failure && <p className="text-xs text-red-500">{t(FAILURE_KEY[failure])}</p>}
         </div>
       )}
-    </div>
+    </SettingsSection>
   );
 }
