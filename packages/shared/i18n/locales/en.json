@@ -325,7 +325,8 @@
   },
   "agentManager": {
     "title": "Agents",
-    "description": "Your naby agents. The built-in persona learns how you work and can act on your behalf; add custom agents for focused jobs. Address one in the composer with @name.",
+    "description": "Your naby agents — address one in the composer with @name.",
+    "personaNote": "The built-in persona learns how you work and can act on your behalf; add custom agents for focused jobs.",
     "kindPersona": "Persona",
     "kindCustom": "Custom",
     "growth": "Growth",
@@ -358,7 +359,7 @@
     "empty": "No agents yet.",
     "error": "Something went wrong.",
     "delegationTitle": "How you delegate",
-    "delegationHint": "These are your settings, not the persona’s. You are not editing who it is — you are choosing how much of your work it may carry on its own, and where it reaches you when something critical comes up.",
+    "delegationHint": "These are your settings, not the persona’s: how much of your work it may carry on its own, and where it reaches you.",
     "delegationEscalation": "Reach me via",
     "delegationMaxSteps": "Steps it may take alone",
     "delegationStepsHint": "1 = one turn per message (off). 2+ lets it keep working on its own, up to {{cap}} steps; it stops when it reports done, uses no tool, or spends the budget.",
@@ -404,7 +405,8 @@
   },
   "telegramSettings": {
     "title": "Telegram escalation",
-    "description": "How an agent reaches you when it hits a critical decision, and where it sends its final report. naby uses its OWN dedicated bot — create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",
+    "description": "How an agent reaches you when it hits a critical decision, and where it sends its final report.",
+    "setupNote": "naby uses its OWN dedicated bot: create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",
     "enable": "Enable Telegram escalation",
     "ready": "ready",
     "botToken": "Bot token",
@@ -422,7 +424,8 @@
   },
   "policyManager": {
     "title": "Permissions",
-    "description": "Rules that decide whether the agent may run a tool. Allow or block a tool by name (use a trailing * to match a group like mcp__jira__*, or * for all). With no rules, the \"Allow changes\" toggle decides.",
+    "description": "Rules that decide whether the agent may run a tool.",
+    "syntaxNote": "Allow or block a tool by name; a trailing * matches a group like mcp__jira__*, and * alone matches all. With no rules, the \"Allow changes\" toggle decides.",
     "scopeUser": "All projects",
     "scopeProject": "This project",
     "projectUnavailable": "Open a project to set project rules.",
@@ -920,6 +923,7 @@
   },
   "settings": {
     "title": "Settings",
+    "moreDetails": "Details",
     "theme": "Theme",
     "themeLight": "Light",
     "themeDark": "Dark",
@@ -1006,7 +1010,8 @@
   },
   "systemMcp": {
     "title": "System MCP",
-    "description": "In-house servers Naby already knows how to reach. Fill in what only you can know — the address, the transport and the header names are handled for you, and their tools go through the approval gate like every other tool.",
+    "description": "In-house servers Naby already knows how to reach — fill in what only you can know.",
+    "detailsNote": "The address, the transport and the header names are handled for you, and their tools go through the approval gate like every other tool.",
     "secretKept": "Leave blank to keep what is stored.",
     "connect": "Connect",
     "connecting": "Connecting…",
@@ -1091,7 +1096,8 @@
   },
   "memoryReview": {
     "title": "Memory",
-    "description": "Things Naby has remembered about you from your chats. Delete anything wrong; items marked \"proposed\" only start shaping replies once you confirm them.",
+    "description": "Review what Naby has remembered about you from your chats, and delete anything wrong.",
+    "proposedNote": "Items marked \"proposed\" only start shaping replies once you confirm them.",
     "scope": "Scope",
     "scopeUser": "You",
     "scopeSession": "This session",
@@ -1154,7 +1160,8 @@
   },
   "commandManager": {
     "title": "Commands",
-    "description": "Your own \"/\" shortcuts. Save a prompt you use a lot under a short name, then call it in chat as /name — it shows up in the command menu and works the same on every engine.",
+    "description": "Your own \"/\" shortcuts — save a prompt under a short name and call it in chat as /name.",
+    "engineNote": "It appears in the command menu and expands the same way on every engine.",
     "scope": "Scope",
     "scopeUser": "You",
     "scopeProject": "This project",
@@ -1191,10 +1198,10 @@
   },
   "harnessReview": {
     "title": "Harness",
-    "description": "Bring in and manage skills, subagents, and commands made elsewhere (for example a Claude config folder). Imported items arrive turned OFF for safety — switch on only the ones you want to use.",
+    "description": "Bring in and manage skills, subagents, and commands made elsewhere — for example a Claude config folder.",
     "advancedSets": "Advanced — share a set (export / import a bundle)",
     "reviewNote": "Imported items are disabled until you review and enable them.",
-    "autoScanHint": "Skills added to ~/.claude/skills (including ones an agent installs for you) show up in this list on their own, turned off. Enable one to make it available under \"/\" and during turns.",
+    "autoScanHint": "Skills added to ~/.claude/skills appear here on their own — enable one to use it under \"/\".",
     "scope": "Scope",
     "scopeUser": "You (~/.claude)",
     "scopeProject": "This project (.claude)",
@@ -1712,7 +1719,8 @@
     "recentCorrected": "you answered in your own words: {{text}}",
     "recentRecommended": "it had recommended: {{option}}",
     "recentExcluded": "not counted — {{reason}}",
-    "howItMoves": "This does not rise with the number of conversations or stored memories. It moves when naby asks how to proceed and its own recommendation turns out to match what you chose — and, counting for much less, when something it did without asking was looked back over later and you had left it alone. It can fall when your patterns change.",
+    "howItMoves": "This moves when naby says how it would proceed and you pick the same thing — not with how much you talk to it.",
+    "howItMovesMore": "Something it did without asking, looked back over later and left alone, counts too but for much less. It can fall when your patterns change.",
     "meaning": {
       "egg": "Still watching. It has asked too few times for its record to mean anything yet.",
       "larva": "Being measured now, but it is not guessing right often yet. Too early to hand work over.",
@@ -1755,7 +1763,7 @@
       "taskTypesValue": "{{count}}",
       "lastReflection": "It last looked back over a finished conversation on {{when}}.",
       "neverReflected": "It has not looked back over a finished conversation yet.",
-      "notTheGauge": "These numbers do not enter the butterfly judgement. They show WHAT it has learned; whether it can be trusted is answered by the record above."
+      "notTheGauge": "These numbers do not enter the butterfly judgement — they show WHAT it has learned, not whether it can be trusted."
     }
   },
   "updates": {

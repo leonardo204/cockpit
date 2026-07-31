@@ -50,6 +50,7 @@ import type {
   TrustTier,
 } from '../../../../../../dist/naby-runtime.mjs';
 import { BootstrapCard } from './BootstrapCard';
+import { SettingsDetails } from './SettingsDetails';
 
 // ---------------------------------------------------------------------------
 // Wire helpers — the same shape/style as NabyProviderSetup's nabyGet/nabyPost.
@@ -520,6 +521,15 @@ export function NabyMemoryReview({
           </div>
         </div>
       ) : null}
+
+      {/* What "proposed" means. It used to be the second half of the opening
+          paragraph, where it was read by everyone before they knew there was a
+          proposed row on the page at all. It elaborates a badge that is already
+          visible, so it is supplemental, and supplemental prose waits until it
+          is asked for. */}
+      <SettingsDetails>
+        <p>{t('memoryReview.proposedNote')}</p>
+      </SettingsDetails>
     </div>
   );
 }

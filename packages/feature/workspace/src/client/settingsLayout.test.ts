@@ -50,7 +50,32 @@ const read = (f: string) =>
 
 const MODAL = read('SettingsModal.tsx');
 const SECTION = read('SettingsSection.tsx');
+const DETAILS = read('SettingsDetails.tsx');
 const DEV_MODE = read('DevModePanel.tsx');
+
+/** The locale dictionaries, for the copy-length rules below. */
+const LOCALES = ['en', 'ko'] as const;
+const dict = (locale: string): Record<string, unknown> =>
+  JSON.parse(
+    readFileSync(join(DIR, '../../../..', 'shared/i18n/locales', `${locale}.json`), 'utf8')
+  );
+
+const lookup = (d: Record<string, unknown>, path: string): unknown =>
+  path.split('.').reduce<unknown>((cur, part) => {
+    if (cur && typeof cur === 'object' && part in (cur as Record<string, unknown>)) {
+      return (cur as Record<string, unknown>)[part];
+    }
+    return undefined;
+  }, d);
+
+/**
+ * How many sentences a string ends.
+ *
+ * Counts `.`/`!`/`?` that are followed by a space or the end of the string, so
+ * the dots inside `~/.claude/skills`, `mcp__jira__*` and `1.0.0` are not read as
+ * sentence ends. Works for both locales — Korean UI copy uses the same stops.
+ */
+const sentences = (s: string): number => (s.match(/[.!?](?=\s|$)/g) ?? []).length;
 
 /** Every panel rendered inside a settings section. */
 const PANELS = [
@@ -287,6 +312,175 @@ describe('modal width scales with the window', () => {
   });
 });
 
+/**
+ * THE SECOND THING THIS PANE KEPT ACCUMULATING: words.
+ *
+ * The box problem above has a twin. Every panel was written on its own, each one
+ * opening with a paragraph that explained what it is, then how it works, then the
+ * caveat, then the syntax — and the harness list rendered, per card, a full
+ * frontmatter description plus a preview of the item's instructions plus its
+ * trust tier plus its absolute origin path. Twenty skills was twenty paragraphs,
+ * with the enable button (the only reason anyone opens that panel) below all of
+ * it. Nothing here is wrong in isolation; the failure is cumulative, which is
+ * exactly the kind a reviewer of a single diff will not catch.
+ *
+ * THE CONTRACT, from the published guidance these panels are now written against
+ * (NN/g progressive disclosure and info-tips, Microsoft's settings guidance,
+ * Material's three-line ceiling for list items, GOV.UK hint text, Polaris "weigh
+ * every word"):
+ *
+ *   1. A panel's visible description is ONE sentence.
+ *   2. A list-item card shows a title plus at most one clamped line of support;
+ *      the rest is on demand.
+ *   3. Supplemental prose lives behind ONE shared expander, not a per-panel
+ *      hand-rolled one and not a second level.
+ *
+ * Rule 1 is asserted against the LOCALE FILES rather than the sources, because
+ * that is where the sentences actually get added, and because a rule that only
+ * held in English would leave Korean users reading the wall this removed.
+ */
+describe('a panel introduces itself in one sentence', () => {
+  // Every string a settings panel renders as its standing description or intro
+  // hint. Adding a panel means adding its key here.
+  const INTRO_KEYS = [
+    'harnessReview.description',
+    'harnessReview.reviewNote',
+    'harnessReview.autoScanHint',
+    'memoryReview.description',
+    'telegramSettings.description',
+    'policyManager.description',
+    'agentManager.description',
+    'agentManager.delegationHint',
+    'commandManager.description',
+    'systemMcp.description',
+    'growth.howItMoves',
+    'growth.learning.notTheGauge',
+  ] as const;
+
+  for (const locale of LOCALES) {
+    const d = dict(locale);
+    for (const key of INTRO_KEYS) {
+      it(`${locale}: ${key} is one sentence`, () => {
+        const value = String(lookup(d, key) ?? '');
+        expect(value, `${key} missing from ${locale}.json`).not.toBe('');
+        expect(
+          sentences(value),
+          `${key} (${locale}) is ${sentences(value)} sentences:\n  ${value}`
+        ).toBeLessThanOrEqual(1);
+      });
+    }
+  }
+
+  it('keeps the moved text, rather than deleting the explanation outright', () => {
+    // The shortening is progressive disclosure, not amnesia: what was cut from an
+    // intro has to still exist somewhere the user can reach. A missing key here
+    // means a sentence was dropped on the floor.
+    for (const locale of LOCALES) {
+      const d = dict(locale);
+      for (const key of [
+        'settings.moreDetails',
+        'memoryReview.proposedNote',
+        'telegramSettings.setupNote',
+        'policyManager.syntaxNote',
+        'agentManager.personaNote',
+        'commandManager.engineNote',
+        'systemMcp.detailsNote',
+        'growth.howItMovesMore',
+      ]) {
+        expect(String(lookup(d, key) ?? ''), `${key} missing from ${locale}.json`).not.toBe('');
+      }
+    }
+  });
+});
+
+describe('the shared disclosure is flat, and is the only one panels roll', () => {
+  it('draws no border, rounding or tint of its own', () => {
+    // It very often opens INSIDE a list-item card, which already has the one
+    // border this pane allows. A frame in there is card-in-card again — the same
+    // violation as a section that draws a box, one level deeper. Asserted on the
+    // individual utility TOKENS: `border-border` is a colour and legitimate,
+    // while a bare `border` is the all-sides box this must never draw.
+    const tokens = classTokens(DETAILS);
+    expect(tokens).not.toContain('border');
+    for (const side of ['border-r', 'border-b', 'border-l']) {
+      expect(tokens).not.toContain(side);
+    }
+    expect(tokens.filter((c) => c.startsWith('rounded'))).toEqual([]);
+    expect(tokens.filter((c) => /^bg-(?:muted|card|accent|background)/.test(c))).toEqual([]);
+    // The rule that separates the disclosed text from what sits above it — the
+    // thing it uses INSTEAD of a box.
+    expect(DETAILS).toContain('border-t border-border');
+  });
+
+  it('is declared at module scope', () => {
+    // Same reason as SettingsSection: a type created during render remounts
+    // everything below it, and these panels refetch on mount.
+    expect(DETAILS).toMatch(/^export function SettingsDetails/m);
+  });
+
+  it('is collapsed by default', () => {
+    // `open` would make the disclosure decorative — the wall would be back, with
+    // a triangle in front of it.
+    expect(DETAILS).not.toMatch(/<details[^>]*\bopen\b/);
+  });
+
+  it('is what the panels use for their supplemental prose', () => {
+    for (const file of [
+      'NabyHarnessReview.tsx',
+      'NabyMemoryReview.tsx',
+      'NabyTelegramSettings.tsx',
+      'NabyPolicyManager.tsx',
+      'NabyAgentManager.tsx',
+      'NabyCommandManager.tsx',
+      'NabyProviderSetup.tsx',
+      'GrowthPanel.tsx',
+    ]) {
+      const src = read(file);
+      expect(src, `${file} does not use the shared disclosure`).toContain('<SettingsDetails>');
+    }
+  });
+});
+
+describe('a harness card shows a name and a state, not a document', () => {
+  const HARNESS = read('NabyHarnessReview.tsx');
+
+  /** The card markup: from the row component to the end of its return. */
+  const CARD = HARNESS.slice(HARNESS.indexOf('const HarnessRow = memo'));
+  const COLLAPSED = CARD.slice(0, CARD.indexOf('<SettingsDetails>'));
+  const EXPANDED = CARD.slice(CARD.indexOf('<SettingsDetails>'));
+
+  it('clamps the description to a single line', () => {
+    // It renders the item's frontmatter description verbatim, which is written by
+    // whoever authored the skill and is routinely a paragraph.
+    expect(COLLAPSED).toContain('line-clamp-1');
+  });
+
+  it('keeps the enable and delete buttons on the collapsed card', () => {
+    // The entire point of the panel. Behind an expander they would be one click
+    // further away than before the change.
+    expect(COLLAPSED).toContain("t('harnessReview.enable')");
+    expect(COLLAPSED).toContain("t('harnessReview.delete')");
+  });
+
+  it('moves the instructions preview and the provenance behind the expander', () => {
+    // These three were the bulk of the wall: a preview of the item's body, its
+    // trust tier and its absolute path, on every card.
+    expect(COLLAPSED).not.toContain("t('harnessReview.trustLabel')");
+    expect(COLLAPSED).not.toContain("t('harnessReview.originLabel')");
+    expect(COLLAPSED).not.toContain('whitespace-pre-wrap');
+    expect(EXPANDED).toContain("t('harnessReview.trustLabel')");
+    expect(EXPANDED).toContain("t('harnessReview.originLabel')");
+    expect(EXPANDED).toContain('whitespace-pre-wrap');
+  });
+
+  it('keeps the tool-bearing caveat visible', () => {
+    // Task-critical, not supplemental: it says that enabling this particular item
+    // does not yet give a working capability, and the button that does the
+    // enabling is right there.
+    expect(COLLAPSED).toContain("t('harnessReview.needsPhase25')");
+  });
+});
+
 /** Everything from the first section branch to the end of the content pane. */
 function contentPane(): string {
   return MODAL.slice(MODAL.indexOf("{section === 'theme'"));
@@ -311,4 +505,9 @@ function attrsOf(src: string, testId: string): string {
 
 function occurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
+}
+
+/** Every individual utility class used in a source file's literal classNames. */
+function classTokens(src: string): string[] {
+  return [...src.matchAll(/className="([^"]*)"/g)].flatMap((m) => m[1]!.split(/\s+/)).filter(Boolean);
 }

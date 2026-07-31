@@ -34,6 +34,10 @@ import { ScopeBadge, ScopeHeader, ScopeSelector, projectName, type NabyScopeId }
 // browser bundle. The shapes are the runtime's own (contract §3) — never
 // redefined here.
 import type { HarnessItem, HarnessScope, HarnessStatus } from '../../../../../../dist/naby-runtime.mjs';
+import { SettingsDetails } from './SettingsDetails';
+// Shared with NabyHarnessReview: a command IS a harness item, and creating or
+// enabling one changes what the "/" palette in the composer iframe may offer.
+import { announceHarnessChanged } from './harnessChanged';
 
 // ---------------------------------------------------------------------------
 // Wire helpers — same shape/style as NabyMemoryReview's memoryGet/memoryPost.
@@ -313,6 +317,11 @@ export function NabyCommandManager({
       const res = await harnessPost(body);
       if (res.ok) {
         toast(t(draft.id === null ? 'commandManager.created' : 'commandManager.updated'), 'success');
+        // A created command joins the "/" palette and an edited one changes its
+        // name or body there. That palette is fetched once per composer mount in
+        // a project iframe that never unmounts, so without this the new command
+        // is invisible until the app restarts.
+        announceHarnessChanged();
         setDraft(null);
         await reload();
       } else {
@@ -330,6 +339,8 @@ export function NabyCommandManager({
         const res = await harnessPost(body);
         if (res.ok) {
           toast(t(successKey), 'success');
+          // setEnabled and delete both add or remove a "/" entry.
+          announceHarnessChanged();
           await reload();
         } else {
           toast(t('commandManager.actionError', { error: res.error ?? '' }), 'error');
@@ -360,8 +371,10 @@ export function NabyCommandManager({
 
   return (
     <div className="space-y-3">
-      {/* Plain muted prose. The create/edit form and the command rows below keep
-          their borders — those are an active surface and repeated list items. */}
+      {/* Plain muted prose, and ONE sentence: what a command is and how you call
+          it. Where it shows up and how it behaves across engines is reassurance
+          about behaviour the user cannot act on here, so it waits in the shared
+          disclosure at the foot of the panel. */}
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('commandManager.description')}
       </p>
@@ -482,6 +495,11 @@ export function NabyCommandManager({
           ))}
         </div>
       )}
+
+      {/* Where a command shows up, and that it behaves the same on every engine. */}
+      <SettingsDetails>
+        <p>{t('commandManager.engineNote')}</p>
+      </SettingsDetails>
     </div>
   );
 }

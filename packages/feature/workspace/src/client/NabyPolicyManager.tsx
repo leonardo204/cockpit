@@ -17,6 +17,7 @@ import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import type { PolicyRule } from '../../../../../../dist/naby-runtime.mjs';
+import { SettingsDetails } from './SettingsDetails';
 
 type Scope = 'user' | 'project';
 
@@ -132,12 +133,13 @@ export function NabyPolicyManager({ isOpen, cwd }: { isOpen: boolean; cwd?: stri
 
   return (
     <div className="space-y-3">
-      {/* Plain muted prose. The rule rows below keep their borders — repeated
-          list items are the one place a border still earns its place. */}
+      {/* Plain muted prose, and ONE sentence: what a rule is. The pattern syntax
+          and the no-rules fallback are reference material — needed once, by the
+          person actually typing a pattern — so they wait in the disclosure at the
+          foot of the panel. */}
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('policyManager.description', {
-          defaultValue:
-            'Rules that decide whether the agent may run a tool. Allow or block a tool by name (use a trailing * to match a group, or * for all). With no rules, the "Allow changes" toggle decides.',
+          defaultValue: 'Rules that decide whether the agent may run a tool.',
         })}
       </p>
 
@@ -211,6 +213,11 @@ export function NabyPolicyManager({ isOpen, cwd }: { isOpen: boolean; cwd?: stri
               ))}
             </div>
           )}
+
+          {/* The pattern syntax, on request. */}
+          <SettingsDetails>
+            <p>{t('policyManager.syntaxNote')}</p>
+          </SettingsDetails>
         </>
       )}
     </div>

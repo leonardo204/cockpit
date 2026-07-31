@@ -34,6 +34,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { SettingsDetails } from './SettingsDetails';
 
 /** The wire shape of `growth.get`. Declared locally, like the other naby action
  *  responses in this package: the panel is an HTTP client, not a server import. */
@@ -489,12 +490,26 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
           being true the day reviewed actions started entering the bound, and a
           disclaimer that is slightly false is worse than none — it is the
           sentence a user checks the rest of the panel against. */}
-      <p className="border-t border-border pt-2 text-[10px] leading-relaxed text-muted-foreground/80">
-        {t('growth.howItMoves', {
-          defaultValue:
-            'This does not rise with the number of conversations or stored memories. It moves when naby asks how to proceed and its own recommendation turns out to match what you chose — and, counting for much less, when something it did without asking was looked back over later and you had left it alone. It can fall when your patterns change.',
-        })}
-      </p>
+      <div className="border-t border-border pt-2">
+        <p className="text-[10px] leading-relaxed text-muted-foreground/80">
+          {t('growth.howItMoves', {
+            defaultValue:
+              'This moves when naby says how it would proceed and you pick the same thing — not with how much you talk to it.',
+          })}
+        </p>
+        {/* The claim above is the load-bearing one and stays visible; what it
+            said in its other two sentences — how a reviewed silent action is
+            weighted, and that the number can fall — is elaboration of the same
+            claim, so it moved one tap away rather than staying in the wall. */}
+        <SettingsDetails>
+          <p>
+            {t('growth.howItMovesMore', {
+              defaultValue:
+                'Something it did without asking, looked back over later and left alone, counts too but for much less. It can fall when your patterns change.',
+            })}
+          </p>
+        </SettingsDetails>
+      </div>
 
       {/* ------------------------------------------------------------------
           P3-M8c — WHAT IT HAS LEARNED. Below everything the meter said, because
@@ -594,8 +609,12 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
               these counts and being read as the growth number. */}
           <p className="mt-1 border-t border-border pt-1.5 text-[10px] leading-relaxed text-muted-foreground/80">
             {t('growth.learning.notTheGauge', {
+              // Shortened to one sentence, but it still NAMES the butterfly
+              // judgement and still denies it — `growthCopy.test.ts` enforces
+              // both, because a disowning sentence that only gestures at "the
+              // score" leaves two numbers on one screen disagreeing.
               defaultValue:
-                'These numbers do not enter the butterfly judgement. They show WHAT it has learned; whether it can be trusted is answered by the record above.',
+                'These numbers do not enter the butterfly judgement — they show WHAT it has learned, not whether it can be trusted.',
             })}
           </p>
         </div>

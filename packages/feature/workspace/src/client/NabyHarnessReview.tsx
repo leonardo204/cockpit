@@ -28,10 +28,14 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+// Shared with NabyCommandManager: both panels change what the "/" palette may
+// offer, and the palette lives in another frame.
+import { announceHarnessChanged } from './harnessChanged';
 // Shared scope identity. The org/team scope is UI-gated here via ScopeSelector +
 // visibleScopes — the store / server API / HP-08 org logic below are untouched,
 // only the org filter/target buttons are hidden until org infra exists.
 import { ScopeBadge, ScopeHeader, ScopeSelector, type NabyScopeId } from './nabyScope';
+import { SettingsDetails } from './SettingsDetails';
 // Type-only: erased at compile time, so no runtime/node code enters the browser
 // bundle. Shapes are the runtime's own (contract §3).
 import type {
@@ -51,6 +55,9 @@ interface ImportSummary {
   baseDir: string;
   baseExists: boolean;
   imported: { command: number; skill: number; subagent: number };
+  /** How many of `imported` were already stored unchanged, so the scan wrote
+   *  nothing for them. Optional: older servers do not send it. */
+  unchanged?: number;
   skippedHooks: number;
   skipped: Array<{ origin: string; kind?: HarnessKind; reason: string }>;
   failed: Array<{ origin: string; error: string }>;
@@ -217,6 +224,13 @@ const HarnessRow = memo(function HarnessRow({
 
   return (
     <div className="rounded-lg border border-border p-3 space-y-2">
+      {/* THE COLLAPSED CARD — identity, state, and the two actions. Nothing else.
+          It used to also render the item's full frontmatter description, a
+          three-line preview of its instructions body, its trust tier and its
+          absolute origin path, so a list of twenty skills was twenty paragraphs
+          and the enable button — the only reason anyone opens this panel — sat
+          below all of it. The description is clamped to one line and everything
+          else moved into the disclosure below. */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -228,25 +242,20 @@ const HarnessRow = memo(function HarnessRow({
             </span>
           </div>
           {item.description ? (
-            <div className="text-xs text-muted-foreground break-words mt-0.5">{item.description}</div>
-          ) : null}
-          {body ? (
-            <div className="text-sm text-foreground/90 break-words whitespace-pre-wrap mt-1 line-clamp-3">
-              {body}
+            // One line, ellipsized. `title` keeps the full text reachable on
+            // hover for the reader who only wants to confirm what this is;
+            // the disclosure below has it in full for everyone else.
+            <div
+              className="text-xs text-muted-foreground break-words mt-0.5 line-clamp-1"
+              title={item.description}
+            >
+              {item.description}
             </div>
           ) : null}
-          <div className="text-[10px] text-muted-foreground mt-1 space-y-0.5">
-            <div>
-              {t('harnessReview.trustLabel')}:{' '}
-              <span className="font-medium">{t(TRUST_LABEL[item.provenance.source])}</span>
-            </div>
-            {item.provenance.origin ? (
-              <div className="break-all">
-                {t('harnessReview.originLabel')}:{' '}
-                <span className="font-mono">{item.provenance.origin}</span>
-              </div>
-            ) : null}
-          </div>
+          {/* Stays on the collapsed card: enabling a tool-bearing subagent does
+              NOT give a working capability yet, and that is exactly the thing the
+              button next to it is about to do. Task-critical, so it is not
+              something the user has to go looking for. */}
           {needsPhase25(item) ? (
             <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
               {t('harnessReview.needsPhase25')}
@@ -284,6 +293,33 @@ const HarnessRow = memo(function HarnessRow({
           {t('harnessReview.delete')}
         </button>
       </div>
+
+      {/* ON DEMAND — the full description, what the item actually instructs, and
+          where it came from. The shared disclosure, so this card obeys the same
+          one-expander rule as every settings panel and draws no second frame
+          inside the card's own border. */}
+      <SettingsDetails>
+        {item.description ? (
+          <div className="break-words">{item.description}</div>
+        ) : null}
+        {body ? (
+          <div className="text-foreground/90 break-words whitespace-pre-wrap line-clamp-6">
+            {body}
+          </div>
+        ) : null}
+        <div className="text-[10px] space-y-0.5">
+          <div>
+            {t('harnessReview.trustLabel')}:{' '}
+            <span className="font-medium">{t(TRUST_LABEL[item.provenance.source])}</span>
+          </div>
+          {item.provenance.origin ? (
+            <div className="break-all">
+              {t('harnessReview.originLabel')}:{' '}
+              <span className="font-mono">{item.provenance.origin}</span>
+            </div>
+          ) : null}
+        </div>
+      </SettingsDetails>
     </div>
   );
 });
@@ -472,6 +508,10 @@ const HarnessSetTools = memo(function HarnessSetTools({
         const count = res.data.landed?.length ?? 0;
         setLanded({ count, conflicts: res.data.conflicts ?? [] });
         toast(t('harnessSet.importDone', { count }), 'success');
+        // Landed items arrive DISABLED, so "/" gains nothing yet — but a set
+        // import can also relocate/rename an existing item, so anything derived
+        // from the harness has to re-read rather than assume no change.
+        announceHarnessChanged();
         onImported(importScope);
       } else {
         toast(t('harnessSet.importError', { error: res.error }), 'error');
@@ -780,6 +820,7 @@ export function NabyHarnessReview({
         const s = res.data.summary;
         const total = s.imported.command + s.imported.skill + s.imported.subagent;
         toast(t('harnessImport.done', { count: total }), 'success');
+        announceHarnessChanged();
         await reload();
       } else {
         toast(t('harnessImport.error', { error: res.ok ? 'no summary' : res.error }), 'error');
@@ -796,6 +837,9 @@ export function NabyHarnessReview({
         const res = await post(body);
         if (res.ok) {
           toast(t(successKey), 'success');
+          // setEnabled / delete / revertOrigin all change what the composer's
+          // "/" palette may list, and that palette lives in another frame.
+          announceHarnessChanged();
           await reload();
         } else {
           toast(t('harnessReview.actionError', { error: res.error }), 'error');
@@ -835,6 +879,8 @@ export function NabyHarnessReview({
       });
       if (res.ok) {
         toast(t('harnessReview.reverted', { count: res.data.removed ?? 0 }), 'success');
+        // A revert can remove ENABLED items, so "/" must drop them too.
+        announceHarnessChanged();
         setSummary(null);
         await reload();
       } else {
@@ -859,17 +905,20 @@ export function NabyHarnessReview({
 
   return (
     <div className="space-y-3">
-      {/* Plain muted prose. The review note keeps its amber, which is what makes
-          it read as a caution — the box around it was doing nothing the colour
-          was not already doing. */}
+      {/* Plain muted prose, and now ONE sentence each. The intro used to open
+          with five sentences across three paragraphs, two of which said the same
+          thing twice — that imported items arrive turned off. The caution keeps
+          its amber, which is what makes it read as a caution; the sentence that
+          only elaborated it was deleted rather than moved, because a line the
+          user has already read one paragraph above is not disclosure, it is
+          repetition. */}
       <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
         <p>{t('harnessReview.description')}</p>
         <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
-        {/* The list now re-scans `~/.claude` (and the project `.claude`) on every
+        {/* The list re-scans `~/.claude` (and the project `.claude`) on every
             load, so a skill installed outside this panel appears without pressing
             Import — but it appears DISABLED, and nothing about a greyed row says
-            why it is not in "/" yet. This line says it. Muted prose, no box: the
-            panel's flat design contract. */}
+            why it is not in "/" yet. This line says it, in one sentence. */}
         <p className="text-muted-foreground/70">{t('harnessReview.autoScanHint')}</p>
       </div>
 

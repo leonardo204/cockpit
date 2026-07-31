@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+import { SettingsDetails } from './SettingsDetails';
 
 type TelegramView = { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
 
@@ -115,12 +116,13 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
 
   return (
     <div className="space-y-3">
-      {/* Plain muted prose. A description in a tinted box reads as a callout the
-          user has to act on, and stacks another rectangle into the pane. */}
+      {/* Plain muted prose, and ONE sentence: what this channel is for. The
+          three sentences that followed it were a setup walkthrough, which has
+          moved below the fields it walks through. */}
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('telegramSettings.description', {
           defaultValue:
-            "How an agent reaches you when it hits a critical decision, and where it sends its final report. naby uses its OWN dedicated bot — create one with @BotFather, paste its token, message the bot once, then tap Detect. Reply or tap a button to approve remotely.",
+            'How an agent reaches you when it hits a critical decision, and where it sends its final report.',
         })}
       </p>
 
@@ -187,6 +189,14 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
           {t('telegramSettings.test', { defaultValue: 'Send test message' })}
         </button>
       </div>
+
+      {/* The setup recipe — make a bot, paste the token, message it, detect —
+          used to be sentences two through four of the opening paragraph, read
+          before the reader had seen a single field. It is a walkthrough of the
+          controls now directly above it, so it belongs here and on request. */}
+      <SettingsDetails>
+        <p>{t('telegramSettings.setupNote')}</p>
+      </SettingsDetails>
     </div>
   );
 }

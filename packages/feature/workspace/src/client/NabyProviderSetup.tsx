@@ -43,6 +43,7 @@ import {
   type SystemMcpPresetView,
   type SystemMcpStatus,
 } from './systemMcpPresets';
+import { SettingsDetails } from './SettingsDetails';
 
 // ---------------------------------------------------------------------------
 // The preload bridge (electron/preload.ts). Typed locally so this file compiles
@@ -1341,6 +1342,10 @@ function NabySystemMcpSection({
   return (
     <div className="space-y-1.5" data-testid="system-mcp-section">
       <p className="text-xs font-medium text-foreground">{t('systemMcp.title')}</p>
+      {/* ONE sentence: what these are and what is asked of you. What is handled
+          for you, and the fact that their tools are gated like any other, is
+          reassurance rather than instruction — it changes nothing the reader has
+          to do — so it waits below. */}
       <p className="text-xs text-muted-foreground">{t('systemMcp.description')}</p>
       {SYSTEM_MCP_PRESETS.map((preset) => (
         <SystemMcpRow
@@ -1352,6 +1357,9 @@ function NabySystemMcpSection({
           onChanged={onChanged}
         />
       ))}
+      <SettingsDetails>
+        <p>{t('systemMcp.detailsNote')}</p>
+      </SettingsDetails>
     </div>
   );
 }

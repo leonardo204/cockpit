@@ -22,6 +22,7 @@ import type { Agent } from '../../../../../../dist/naby-runtime.mjs';
 import { GrowthPanel } from './GrowthPanel';
 import { AgentExportButton } from './AgentExportButton';
 import { AgentImportButton } from './AgentImportButton';
+import { SettingsDetails } from './SettingsDetails';
 
 type Escalation = 'inline' | 'telegram' | 'both';
 type MemoryScope = 'session' | 'project' | 'user' | 'org';
@@ -148,7 +149,7 @@ const PersonaDelegation = memo(function PersonaDelegation() {
       <p className="mt-0.5 text-[10px] text-muted-foreground leading-relaxed">
         {t('agentManager.delegationHint', {
           defaultValue:
-            'These are your settings, not the persona’s. You are not editing who it is — you are choosing how much of your work it may carry on its own, and where it reaches you when something critical comes up.',
+            'These are your settings, not the persona’s: how much of your work it may carry on its own, and where it reaches you.',
         })}
       </p>
 
@@ -403,13 +404,13 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
 
   return (
     <div className="space-y-3">
-      {/* Plain muted prose, not a tinted box: this is the section's description,
-          and a box around an explanation is the first thing that turns a settings
-          pane into a stack of rectangles. */}
+      {/* Plain muted prose, and ONE sentence: what this list is and how you call
+          something in it. What the built-in persona is, versus a custom agent,
+          is background — true and worth having, but not needed to read the list
+          below — so it waits in the disclosure at the foot of the panel. */}
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('agentManager.description', {
-          defaultValue:
-            'Your naby agents. The built-in persona learns how you work and can act on your behalf; add custom agents for focused jobs. Address one in the composer with @name.',
+          defaultValue: 'Your naby agents — address one in the composer with @name.',
         })}
       </p>
 
@@ -553,6 +554,11 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
           ))}
         </div>
       )}
+
+      {/* What the built-in persona is, on request. */}
+      <SettingsDetails>
+        <p>{t('agentManager.personaNote')}</p>
+      </SettingsDetails>
     </div>
   );
 }
