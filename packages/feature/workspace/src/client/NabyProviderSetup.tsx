@@ -37,6 +37,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  SYSTEM_MCP_PRESETS,
+  SYSTEM_MCP_PRESET_NAMES,
+  type SystemMcpPresetView,
+  type SystemMcpStatus,
+} from './systemMcpPresets';
 
 // ---------------------------------------------------------------------------
 // The preload bridge (electron/preload.ts). Typed locally so this file compiles
@@ -447,6 +453,15 @@ export function NabyOnboardingWizard() {
   const [checked, setChecked] = useState(false);
   const { data, reload } = useProviders(needed);
   const [choice, setChoice] = useState<string | null>(null);
+  // WHICH STEP THE WIZARD IS ON (skill-hub-builtin §2.3). The provider step
+  // resolves in two ways — a key was saved, or the user chose to skip it — and
+  // BOTH land here rather than closing the wizard, because the in-house servers
+  // are the same one-paste setup and asking for them now costs the user nothing.
+  const [step, setStep] = useState<'provider' | 'systemMcp'>('provider');
+  const [systemMcp, setSystemMcp] = useState<Record<string, SystemMcpStatus>>({});
+  // Which presets answered a live connect. Presence, not a count of all of them:
+  // each preset is independently connectable and NONE of them is required.
+  const [connected, setConnected] = useState<string[]>([]);
 
   const refreshState = useCallback(async () => {
     const api = bridge();
@@ -463,18 +478,89 @@ export function NabyOnboardingWizard() {
     void refreshState();
   }, [refreshState]);
 
+  const reloadSystemMcp = useCallback(async () => {
+    const state = await nabyGet();
+    setSystemMcp(state?.systemMcp ?? {});
+  }, []);
+
+  useEffect(() => {
+    // Read the presets' state when the step opens, so a user who already
+    // connected one (or an agent that proposed it) sees the truth rather than a
+    // blank form.
+    if (step === 'systemMcp') void reloadSystemMcp();
+  }, [step, reloadSystemMcp]);
+
   const selected = useMemo(
     () => data?.providers.find((p) => p.kind === choice) ?? null,
     [choice, data],
   );
 
-  // Outside the desktop app, or already set up: render nothing at all.
+  // Outside the desktop app, or already set up: render nothing at all. The
+  // System MCP step lives INSIDE this same guard — it is a step of the wizard,
+  // not a second overlay that could appear on its own in a browser.
   if (!checked || !needed) return null;
 
-  const skip = async () => {
+  /** Finish onboarding. EXACTLY what "Skip for now" did before this step
+   *  existed: mark it done and close. No preset is a completion condition. */
+  const finish = async () => {
     await bridge()?.onboarding.complete();
     setNeeded(false);
   };
+
+  if (step === 'systemMcp') {
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background">
+        <div className="w-full max-w-lg mx-4 rounded-lg border border-border bg-card p-5 space-y-4">
+          <div>
+            <h1 className="text-lg font-medium text-foreground">{t('systemMcp.onboardingTitle')}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">{t('systemMcp.onboardingBody')}</p>
+          </div>
+
+          {/* Stacked, and INDEPENDENT: a user with a hub token but no Atlassian
+              account connects one and leaves the other alone. */}
+          {SYSTEM_MCP_PRESETS.map((preset, index) => (
+            <div key={preset.name} className="space-y-1.5">
+              <p className="text-xs font-medium text-foreground">{t(preset.titleKey)}</p>
+              <p className="text-xs text-muted-foreground">{t(preset.descriptionKey)}</p>
+              <SystemMcpForm
+                preset={preset}
+                state={systemMcp[preset.name] ?? { configured: false }}
+                variant="wizard"
+                autoFocus={index === 0}
+                onChanged={() => void reloadSystemMcp()}
+                onConnected={() =>
+                  setConnected((prev) =>
+                    prev.includes(preset.name) ? prev : [...prev, preset.name],
+                  )
+                }
+              />
+            </div>
+          ))}
+
+          <div className="flex items-center justify-between pt-1 border-t border-border">
+            <button
+              onClick={() => void finish()}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              {t('systemMcp.later')}
+            </button>
+            {connected.length === 0 ? (
+              <span className="text-xs text-muted-foreground">{t('systemMcp.changeLater')}</span>
+            ) : (
+              // A live connect happened: the form is already showing the tool
+              // count, so this is the door out rather than another message.
+              <button
+                onClick={() => void finish()}
+                className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white"
+              >
+                {t('common.done')}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background">
@@ -526,8 +612,11 @@ export function NabyOnboardingWizard() {
               autoFocus
               onSaved={() => {
                 // Reloading first means "did that actually store a key" is
-                // answered by the vault, not assumed from a click.
-                void reload().then(() => void refreshState());
+                // answered by the vault, not assumed from a click. Note what is
+                // NOT called: `refreshState`, which would see the new key, flip
+                // `needed` to false and unmount the wizard mid-flow. The state is
+                // re-read when the last step finishes instead.
+                void reload().then(() => setStep('systemMcp'));
               }}
             />
           </div>
@@ -535,7 +624,7 @@ export function NabyOnboardingWizard() {
 
         <div className="flex items-center justify-between pt-1 border-t border-border">
           <button
-            onClick={() => void skip()}
+            onClick={() => setStep('systemMcp')}
             className="text-xs text-muted-foreground hover:text-foreground"
           >
             {t('providerSetup.skipForNow')}
@@ -570,6 +659,11 @@ type NabyEngineState = {
   devEngineAvailable: boolean;
   providers: { id: string; label: string; model: string; ready: boolean }[];
   mcp: McpRow[];
+  /** Every built-in System MCP preset's connection state, keyed by preset name.
+   *  Computed server-side by `readSystemMcpStatus` — this UI never re-derives it
+   *  from the `mcp` list, because two answers to "is this connected" is how a row
+   *  ends up disagreeing with the list under it. */
+  systemMcp?: Record<string, SystemMcpStatus>;
 };
 
 async function nabyGet(): Promise<NabyEngineState | null> {
@@ -582,18 +676,43 @@ async function nabyGet(): Promise<NabyEngineState | null> {
   }
 }
 
-async function nabyPost(body: unknown): Promise<{ ok: boolean; error?: string; message?: string }> {
+type NabyPostResult = {
+  ok: boolean;
+  error?: string;
+  /** An i18n key the server offers for a refusal it knows how to phrase (a
+   *  missing preset field, a bad email, a missing uvx). Preferred over `error`,
+   *  which stays the English truth for logs. */
+  errorKey?: string;
+  /** The field id `errorKey` is about, so the caller can name it with the field's
+   *  own translated label. */
+  errorField?: string;
+  message?: string;
+  toolCount?: number;
+};
+
+async function nabyPost(body: unknown): Promise<NabyPostResult> {
   try {
     const res = await fetch('/api/naby', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const json = (await res.json().catch(() => null)) as
-      | { error?: string; message?: string }
-      | null;
-    if (!res.ok) return { ok: false, error: json?.error ?? `request failed (${res.status})` };
-    return { ok: true, ...(json?.message ? { message: json.message } : {}) };
+    const json = (await res.json().catch(() => null)) as NabyPostResult | null;
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: json?.error ?? `request failed (${res.status})`,
+        ...(json?.errorKey ? { errorKey: json.errorKey } : {}),
+        ...(json?.errorField ? { errorField: json.errorField } : {}),
+      };
+    }
+    return {
+      ok: true,
+      ...(json?.message ? { message: json.message } : {}),
+      // `systemMcp.test` answers with a COUNT rather than a sentence, so the two
+      // surfaces that show it can phrase it in the user's own language.
+      ...(typeof json?.toolCount === 'number' ? { toolCount: json.toolCount } : {}),
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -925,16 +1044,333 @@ function McpAddForm({
   );
 }
 
+// ---------------------------------------------------------------------------
+// The built-in System MCP presets (skill-hub-builtin §2.4)
+// ---------------------------------------------------------------------------
+//
+// The general form above asks for a name, a transport, a URL or a command, and a
+// `Key: Value` block. For an in-house server every one of those answers is fixed
+// and known to the product, so asking for them would be four or five chances to
+// mistype a setup that has one or two variables: a token, maybe an email.
+//
+// ONE COMPONENT, EVERY PRESET. Nothing below names a preset or branches on one —
+// it iterates `SYSTEM_MCP_PRESETS` and renders whatever fields a preset declares.
+// A third in-house server is a registry entry plus its copy, and this file does
+// not change.
+//
+// SECRETS GO ONE WAY. Values are posted to `systemMcp.set`, which assembles the
+// entry server-side; a secret is never returned by any read (redactEntry hands
+// back header/env NAMES only), so — exactly like the API-key field at the top of
+// this file — a stored secret renders as a status word and never as characters.
+// Blank input means "keep what is stored", the same convention as the Telegram
+// token, and the merge happens on the server where the stored value actually is.
+// A NON-secret field (the Atlassian account email) IS shown back, because
+// "connected as who?" is a question the user should not have to guess at.
+
+/** The fields of one preset plus its buttons, shared by the settings row and the
+ *  onboarding step. `variant` decides WHICH BUTTONS APPEAR, never what they do:
+ *  Connect (save + probe) is identical in both, and the wizard simply has no Test
+ *  or Remove, because a first-run user has nothing stored to diagnose or delete. */
+function SystemMcpForm({
+  preset,
+  state,
+  variant,
+  onChanged,
+  onConnected,
+  autoFocus,
+}: {
+  preset: SystemMcpPresetView;
+  /** What the server says is stored. `nonSecretFields` seeds the visible inputs. */
+  state: SystemMcpStatus;
+  variant: 'settings' | 'wizard';
+  /** Re-read the server state after a write. */
+  onChanged: () => void;
+  /** The wizard's success signal — a live connect, with its tool count. */
+  onConnected?: (toolCount: number) => void;
+  autoFocus?: boolean;
+}) {
+  const { t } = useTranslation();
+  // ONLY WHAT THE USER TYPED. Everything else falls back to the server state on
+  // read, so a status that arrives after the first paint fills the visible boxes
+  // without overwriting anything already being typed into them.
+  const [typed, setTyped] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const configured = state.configured;
+  const proposed = configured && state.status === 'proposed';
+  const stored = state.nonSecretFields ?? {};
+
+  /** What a field's box shows: the typed value, else the stored non-secret value,
+   *  else nothing. A secret has no stored value to fall back to, by construction. */
+  const valueOf = useCallback(
+    (field: SystemMcpPresetView['fields'][number]) =>
+      typed[field.id] ?? (field.secret ? '' : (stored[field.id] ?? '')),
+    [stored, typed],
+  );
+
+  /** Any box holding something other than what the server has. Used to disable
+   *  Test: probing the stored credentials while the user looks at new ones would
+   *  answer a question nobody asked. */
+  const dirty = preset.fields.some((f) => {
+    const value = typed[f.id];
+    if (value === undefined) return false;
+    return value.trim() !== (f.secret ? '' : (stored[f.id] ?? '')).trim();
+  });
+
+  /** Turn a server refusal into a sentence in the user's language. */
+  const failure = useCallback(
+    (res: NabyPostResult): string => {
+      if (res.errorKey) {
+        const field = preset.fields.find((f) => f.id === res.errorField);
+        return t(res.errorKey, { field: field ? t(field.labelKey) : res.errorField });
+      }
+      return t('systemMcp.failed', { error: res.error });
+    },
+    [preset.fields, t],
+  );
+
+  /** Store the typed values. Blank fields are OMITTED rather than sent empty, so
+   *  the server keeps what it has — which is the only way an unchanged secret can
+   *  survive an edit of the field beside it. */
+  const save = useCallback(async (): Promise<boolean> => {
+    const fields: Record<string, string> = {};
+    for (const field of preset.fields) {
+      const value = valueOf(field).trim();
+      if (value) fields[field.id] = value;
+      else if (!configured) {
+        // Nothing stored to fall back on: say which box, in its own words.
+        setNote({ text: t('systemMcp.fieldRequired', { field: t(field.labelKey) }), ok: false });
+        return false;
+      }
+    }
+    const res = await nabyPost({ action: 'systemMcp.set', preset: preset.name, fields });
+    if (!res.ok) {
+      setNote({ text: failure(res), ok: false });
+      return false;
+    }
+    // No secret lingers in component state past the save; a non-secret value is
+    // dropped too, because the server state now carries it.
+    setTyped({});
+    onChanged();
+    return true;
+  }, [configured, failure, onChanged, preset.fields, preset.name, t, valueOf]);
+
+  /** Connect and count the tools — the server's one-shot probe, which lists tools
+   *  and calls none of them. */
+  const probe = useCallback(async () => {
+    const res = await nabyPost({ action: 'systemMcp.test', preset: preset.name });
+    if (!res.ok) {
+      setNote({ text: failure(res), ok: false });
+      return;
+    }
+    const tools = res.toolCount ?? 0;
+    setNote({ text: t('systemMcp.toolCount', { tools }), ok: true });
+    onConnected?.(tools);
+  }, [failure, onConnected, preset.name, t]);
+
+  /** Save, then immediately connect. "Saved" is not an answer anybody wants: the
+   *  question a pasted credential raises is whether it WORKS, and the probe
+   *  answers it in one round trip. */
+  const connect = useCallback(async () => {
+    setBusy(true);
+    setNote({ text: t('systemMcp.connecting'), ok: true });
+    try {
+      if (!(await save())) return;
+      await probe();
+    } finally {
+      setBusy(false);
+    }
+  }, [probe, save, t]);
+
+  /** Re-connect what is ALREADY STORED — the diagnosis for a server that worked
+   *  last month and does not today (an expired token reads as a connect failure,
+   *  spec §4). It deliberately saves nothing. */
+  const test = useCallback(async () => {
+    setBusy(true);
+    setNote({ text: t('systemMcp.connecting'), ok: true });
+    try {
+      await probe();
+    } finally {
+      setBusy(false);
+    }
+  }, [probe, t]);
+
+  const remove = useCallback(async () => {
+    setBusy(true);
+    try {
+      await nabyPost({ action: 'systemMcp.remove', preset: preset.name });
+      setTyped({});
+      setNote(null);
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }, [onChanged, preset.name]);
+
+  return (
+    <div className="space-y-1.5" data-testid={`system-mcp-form-${preset.name}`}>
+      {preset.fields.map((field, index) => {
+        // A preset can ask for more than one thing (Atlassian wants an email AND
+        // a token), and a placeholder disappears the moment the box has content —
+        // so the label is a standing line rather than hint text inside the input.
+        const id = `system-mcp-${preset.name}-${field.id}`;
+        return (
+          <div key={field.id} className="space-y-1">
+            <label htmlFor={id} className="block text-xs text-muted-foreground">
+              {t(field.labelKey)}
+            </label>
+            <input
+              id={id}
+              type={field.secret ? 'password' : 'text'}
+              autoComplete="off"
+              spellCheck={false}
+              autoFocus={autoFocus && index === 0}
+              value={valueOf(field)}
+              onChange={(e) => setTyped((prev) => ({ ...prev, [field.id]: e.target.value }))}
+              placeholder={t(field.placeholderKey)}
+              className={`${inputClass} ${field.secret ? 'font-mono' : ''}`}
+            />
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => void connect()}
+          disabled={busy}
+          className="shrink-0 px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
+        >
+          {busy ? t('systemMcp.connecting') : t('systemMcp.connect')}
+        </button>
+        {variant === 'settings' && configured && (
+          <>
+            <button
+              onClick={() => void test()}
+              disabled={busy || dirty}
+              className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+            >
+              {t('systemMcp.test')}
+            </button>
+            <button
+              onClick={() => void remove()}
+              disabled={busy}
+              className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-red-500 disabled:opacity-40"
+            >
+              {t('systemMcp.remove')}
+            </button>
+          </>
+        )}
+      </div>
+      {configured && !proposed && preset.fields.some((f) => f.secret) && (
+        <p className="text-xs text-muted-foreground">{t('systemMcp.secretKept')}</p>
+      )}
+      {note && (
+        <p className={`text-xs ${note.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+          {note.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One preset's row: name, connection state, description, form, and — when an
+ *  agent proposed the same server — the approval the existing HITL path expects.
+ *  A single bordered interactive row: the description is plain muted text and the
+ *  proposed warning is a left accent, so this adds one frame rather than three. */
+function SystemMcpRow({
+  preset,
+  state,
+  onChanged,
+}: {
+  preset: SystemMcpPresetView;
+  state: SystemMcpStatus;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const proposed = state.configured && state.status === 'proposed';
+
+  const approve = useCallback(async () => {
+    // The EXISTING HITL path, not a second one: an agent-proposed server is
+    // approved exactly like any other agent-proposed server.
+    await nabyPost({ action: 'mcp.approve', name: preset.name });
+    onChanged();
+  }, [onChanged, preset.name]);
+
+  return (
+    <div className="space-y-1.5 pt-2" data-testid={`system-mcp-row-${preset.name}`}>
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-foreground">{t(preset.titleKey)}</p>
+        <span className="text-xs">
+          {proposed ? (
+            <span className="text-amber-600 dark:text-amber-400">{t('systemMcp.proposed')}</span>
+          ) : state.configured ? (
+            <span className="text-green-600 dark:text-green-400">{t('systemMcp.connected')}</span>
+          ) : (
+            <span className="text-muted-foreground">{t('systemMcp.notConfigured')}</span>
+          )}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">{t(preset.descriptionKey)}</p>
+      <div className="border border-border rounded px-2 py-2">
+        <SystemMcpForm preset={preset} state={state} variant="settings" onChanged={onChanged} />
+      </div>
+      {proposed && (
+        <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-1.5">
+          <p className="text-xs text-amber-600 dark:text-amber-400">{t('systemMcp.proposedHint')}</p>
+          <button
+            onClick={() => void approve()}
+            className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10"
+          >
+            {t('systemMcp.approve')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The System MCP subsection: one row per preset, above the user-added list. */
+function NabySystemMcpSection({
+  status,
+  onChanged,
+}: {
+  status: Record<string, SystemMcpStatus>;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1.5" data-testid="system-mcp-section">
+      <p className="text-xs font-medium text-foreground">{t('systemMcp.title')}</p>
+      <p className="text-xs text-muted-foreground">{t('systemMcp.description')}</p>
+      {SYSTEM_MCP_PRESETS.map((preset) => (
+        <SystemMcpRow
+          key={preset.name}
+          preset={preset}
+          // A preset the server has not answered for yet reads as not configured
+          // rather than as a blank row.
+          state={status[preset.name] ?? { configured: false }}
+          onChanged={onChanged}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<McpRow[] | null>(null);
+  const [systemMcp, setSystemMcp] = useState<Record<string, SystemMcpStatus>>({});
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<McpRow | null>(null);
   const [status, setStatus] = useState<Record<string, { text: string; ok: boolean }>>({});
 
   const reload = useCallback(async () => {
     const state = await nabyGet();
-    setRows(state?.mcp ?? []);
+    // Each preset has its own row above, so its entry is filtered out of the
+    // general list rather than shown twice — once with the URL/command and secret
+    // block the preset exists to hide, and once without.
+    setRows((state?.mcp ?? []).filter((r) => !SYSTEM_MCP_PRESET_NAMES.includes(r.name)));
+    setSystemMcp(state?.systemMcp ?? {});
   }, []);
 
   useEffect(() => {
@@ -972,7 +1408,11 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
 
   return (
     <div className="space-y-2 pt-2">
-      <div className="flex items-center justify-between">
+      {/* The presets come first: they are the MCP servers most users will ever
+          connect, and they need no knowledge of what an MCP server is. */}
+      <NabySystemMcpSection status={systemMcp} onChanged={() => void reload()} />
+
+      <div className="flex items-center justify-between pt-2">
         <p className="text-xs font-medium text-foreground">{t('providerSetup.mcpServers')}</p>
         <button
           onClick={() => setAdding((v) => !v)}

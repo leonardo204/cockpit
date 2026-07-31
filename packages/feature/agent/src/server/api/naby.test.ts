@@ -1,6 +1,20 @@
-import { describe, it, expect } from 'vitest';
-import { runNabyAction } from './naby';
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readNabyState, runNabyAction } from './naby';
 import { getStore } from '../engines/naby';
+import {
+  ATLASSIAN_PACKAGE,
+  ATLASSIAN_SERVER_NAME,
+  ATLASSIAN_URL_KEY,
+  DEFAULT_CONFLUENCE_URL,
+  DEFAULT_SKILL_HUB_URL,
+  SKILL_HUB_SERVER_NAME,
+  SKILL_HUB_URL_KEY,
+  SYSTEM_MCP_PRESET_NAMES,
+} from '../lib/systemMcp';
+import { commandPathEnvVar } from '../lib/commandPath';
 import {
   BUILTIN_PERSONA_ID,
   DEFAULT_USER_ID,
@@ -326,5 +340,495 @@ describe('POST /api/naby — personaAutonomy', () => {
     // the delegation config has to live somewhere the user can actually reach.
     expect(after.autonomy).toEqual(before.autonomy);
     expect(after.updatedAt).toBe(before.updatedAt);
+  });
+});
+/**
+ * `systemMcp.set` / `.test` / `.remove` and the GET status (skill-hub-builtin §2.2).
+ *
+ * The registry's rules are unit-tested against a fake store in lib/systemMcp.test.ts.
+ * What is tested HERE is the boundary: that a secret travels INWARDS ONLY. The user
+ * types one or two strings, the server assembles the entry from the registry, and
+ * no response on this route — not the write, not the probe, not the state read —
+ * ever contains what they typed. That is asserted against the SERIALIZED response
+ * rather than field by field, because a leak would arrive in a field nobody
+ * thought to check.
+ *
+ * BOTH PRESETS ARE RUN THROUGH THE SAME CASES, because they leak differently:
+ * skill-hub puts its secret in `headers`, atlassian in `env`, and `redactEntry`
+ * has to strip both.
+ */
+
+const HUB_TOKEN = 'shub_test_secret_do_not_leak';
+const ATLASSIAN_TOKEN = 'atl_test_secret_do_not_leak';
+const ATLASSIAN_EMAIL = 'tester@altimedia.com';
+
+/** Every response is JSON on the way to the renderer; search the whole of it. */
+const leaks = (value: unknown, secret: string) => JSON.stringify(value ?? null).includes(secret);
+
+const storedEntry = (name: string) =>
+  getStore()
+    .listMcpEntries()
+    .find((e) => e.name === name);
+
+/** Wipe both presets and both URL overrides, so no case inherits another's state. */
+const clear = () => {
+  const store = getStore();
+  for (const name of SYSTEM_MCP_PRESET_NAMES) store.removeMcpEntry(name);
+  store.setSetting(SKILL_HUB_URL_KEY, '');
+  store.setSetting(ATLASSIAN_URL_KEY, '');
+};
+
+/**
+ * A stand-in for uvx: a file that exists and is executable.
+ *
+ * The suite must be able to assert BOTH "uvx is present" and "uvx is absent"
+ * regardless of whether the machine running it has uv installed, so the resolver's
+ * explicit override (NABY_UVX_PATH) is pointed at this for the success cases and
+ * at nothing for the refusal case. The entry that results is a real stdio entry
+ * with a real absolute command — which is what makes the probe case below
+ * meaningful: it fails at the MCP handshake, not at spawn.
+ */
+const UVX_ENV = commandPathEnvVar('uvx');
+const fakeUvx = join(mkdtempSync(join(tmpdir(), 'naby-uvx-')), 'uvx');
+
+beforeAll(() => {
+  writeFileSync(fakeUvx, '#!/bin/sh\nexit 0\n');
+  chmodSync(fakeUvx, 0o755);
+});
+
+afterAll(() => {
+  delete process.env[UVX_ENV];
+  clear();
+});
+
+/** uvx resolves (to the stand-in above). */
+const withUvx = () => {
+  process.env[UVX_ENV] = fakeUvx;
+};
+
+/** uvx does NOT resolve, whatever this machine has installed: an override that is
+ *  set but wrong refuses rather than falling through to the real search. */
+const withoutUvx = () => {
+  process.env[UVX_ENV] = join(fakeUvx, 'missing', 'uvx');
+};
+
+describe('POST /api/naby — the skill-hub preset', () => {
+  it('assembles the whole entry from the token alone', async () => {
+    clear();
+    const result = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.systemMcp?.[SKILL_HUB_SERVER_NAME]).toEqual({
+      configured: true,
+      status: 'enabled',
+    });
+    // The answer covers EVERY preset, not just the one that changed, so a UI with
+    // several rows refreshes them all from one reply.
+    expect(result.systemMcp?.[ATLASSIAN_SERVER_NAME]).toEqual({ configured: false });
+
+    // Read through the store the engine loads from, so this cannot pass on an
+    // echo: the URL, the transport and the header name came from the server.
+    const entry = storedEntry(SKILL_HUB_SERVER_NAME);
+    expect(entry?.transport).toBe('http');
+    expect(entry && entry.transport === 'http' && entry.url).toBe(DEFAULT_SKILL_HUB_URL);
+    expect(entry && entry.transport === 'http' && entry.headers?.Authorization).toBe(
+      `Bearer ${HUB_TOKEN}`,
+    );
+    clear();
+  });
+
+  it('refuses an empty or whitespace token, and stores nothing', async () => {
+    clear();
+    for (const token of ['', '   ', '\n\t', 'Bearer ']) {
+      const result = await runNabyAction({
+        action: 'systemMcp.set',
+        preset: SKILL_HUB_SERVER_NAME,
+        fields: { token },
+      });
+      expect(result.ok, `"${token}" should be refused`).toBe(false);
+      if (result.ok) continue;
+      // The refusal is translatable and names the field, so the UI can say which
+      // box is empty in the user's own language.
+      expect(result.errorKey).toBe('systemMcp.fieldRequired');
+      expect(result.errorField).toBe('token');
+    }
+    // An `Authorization: Bearer ` entry would read as configured in the settings
+    // row and 401 on the first turn — the worst of both answers.
+    expect(storedEntry(SKILL_HUB_SERVER_NAME)).toBeUndefined();
+  });
+
+  it('strips a Bearer prefix the user pasted along with the token', async () => {
+    clear();
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: `Bearer ${HUB_TOKEN}` },
+    });
+    const entry = storedEntry(SKILL_HUB_SERVER_NAME);
+    expect(entry && entry.transport === 'http' && entry.headers?.Authorization).toBe(
+      `Bearer ${HUB_TOKEN}`,
+    );
+    clear();
+  });
+
+  it('honours the skillHub.url override, which the UI never shows', async () => {
+    clear();
+    getStore().setSetting(SKILL_HUB_URL_KEY, 'https://staging.internal/mcp');
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    const entry = storedEntry(SKILL_HUB_SERVER_NAME);
+    expect(entry && entry.transport === 'http' && entry.url).toBe('https://staging.internal/mcp');
+
+    // And the override is not smuggled back out with the status.
+    const status = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    expect(leaks(status, 'staging.internal')).toBe(false);
+    clear();
+  });
+
+  it('rejects a hand-broken override rather than storing an unreachable entry', async () => {
+    clear();
+    getStore().setSetting(SKILL_HUB_URL_KEY, 'not a url');
+    const result = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    expect(result.ok).toBe(false);
+    expect(storedEntry(SKILL_HUB_SERVER_NAME)).toBeUndefined();
+    clear();
+  });
+
+  it('keeps the stored token when a save arrives with the box left blank', async () => {
+    // The box IS blank every time the form opens — the value has no way back out
+    // of the server — so a re-save must not wipe what is there.
+    clear();
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    const again = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: '' },
+    });
+    expect(again.ok).toBe(true);
+    const entry = storedEntry(SKILL_HUB_SERVER_NAME);
+    expect(entry && entry.transport === 'http' && entry.headers?.Authorization).toBe(
+      `Bearer ${HUB_TOKEN}`,
+    );
+    clear();
+  });
+
+  it('never puts the token in ANY response', async () => {
+    clear();
+    const set = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    expect(leaks(set, HUB_TOKEN)).toBe(false);
+
+    // The probe reaches a real network address it cannot open, which is the
+    // interesting case: the FAILURE path must not report the request it made.
+    getStore().setSetting(SKILL_HUB_URL_KEY, 'http://127.0.0.1:1/mcp');
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    const probe = await runNabyAction({ action: 'systemMcp.test', preset: SKILL_HUB_SERVER_NAME });
+    expect(probe.ok, 'nothing is listening on port 1').toBe(false);
+    expect(leaks(probe, HUB_TOKEN)).toBe(false);
+
+    // The state read carries the entry in `mcp` too — through redactEntry, so it
+    // is the header NAME that survives and never the value.
+    const state = await readNabyState(null);
+    expect(leaks(state, HUB_TOKEN)).toBe(false);
+    const row = state.mcp.find((e) => e.name === SKILL_HUB_SERVER_NAME);
+    expect(row?.headerKeys).toEqual(['Authorization']);
+    expect(row).not.toHaveProperty('headers');
+
+    const removed = await runNabyAction({
+      action: 'systemMcp.remove',
+      preset: SKILL_HUB_SERVER_NAME,
+    });
+    expect(leaks(removed, HUB_TOKEN)).toBe(false);
+    clear();
+  }, 20_000);
+
+  it('reports the status on the GET, from the same reader the row uses', async () => {
+    clear();
+    const before = await readNabyState(null);
+    expect(before.systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({ configured: false });
+
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    const after = await readNabyState(null);
+    expect(after.systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({ configured: true, status: 'enabled' });
+    // Nothing non-secret to show: the token is all there is.
+    expect(after.systemMcp[SKILL_HUB_SERVER_NAME]).not.toHaveProperty('nonSecretFields');
+    clear();
+  }, 20_000);
+
+  it('shows an agent-proposed hub as proposed rather than connected', async () => {
+    clear();
+    // What `naby_add_mcp` writes: the agent may name the hub, but a server it
+    // added does not run until a human approves it.
+    getStore().upsertMcpEntry({
+      name: SKILL_HUB_SERVER_NAME,
+      transport: 'http',
+      url: DEFAULT_SKILL_HUB_URL,
+      status: 'proposed',
+    });
+    const state = await readNabyState(null);
+    expect(state.systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({
+      configured: true,
+      status: 'proposed',
+    });
+
+    // The existing approval path settles it — the preset adds no second one.
+    const approved = await runNabyAction({ action: 'mcp.approve', name: SKILL_HUB_SERVER_NAME });
+    expect(approved.ok).toBe(true);
+    expect((await readNabyState(null)).systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({
+      configured: true,
+      status: 'enabled',
+    });
+    clear();
+  }, 20_000);
+
+  it('removes the hub, and says so even when there was none', async () => {
+    clear();
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: SKILL_HUB_SERVER_NAME,
+      fields: { token: HUB_TOKEN },
+    });
+    const removed = await runNabyAction({
+      action: 'systemMcp.remove',
+      preset: SKILL_HUB_SERVER_NAME,
+    });
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    expect(removed.systemMcp?.[SKILL_HUB_SERVER_NAME]).toEqual({ configured: false });
+    expect(storedEntry(SKILL_HUB_SERVER_NAME)).toBeUndefined();
+
+    // Idempotent: removing what is not there is the state the caller asked for.
+    const again = await runNabyAction({
+      action: 'systemMcp.remove',
+      preset: SKILL_HUB_SERVER_NAME,
+    });
+    expect(again.ok).toBe(true);
+  });
+
+  it('refuses to probe a hub that was never configured', async () => {
+    clear();
+    const result = await runNabyAction({ action: 'systemMcp.test', preset: SKILL_HUB_SERVER_NAME });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toMatch(/skill-hub/);
+  });
+});
+
+describe('POST /api/naby — the atlassian preset', () => {
+  it('assembles a stdio entry around the RESOLVED uvx path', async () => {
+    clear();
+    withUvx();
+    const result = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: `  ${ATLASSIAN_EMAIL}  `, apiToken: ATLASSIAN_TOKEN },
+    });
+    expect(result.ok).toBe(true);
+
+    const entry = storedEntry(ATLASSIAN_SERVER_NAME);
+    expect(entry?.transport).toBe('stdio');
+    if (!entry || entry.transport !== 'stdio') return;
+    // ABSOLUTE, not the bare name: the packaged app's children do not inherit a
+    // login-shell PATH, so a stored `uvx` would ENOENT on the user's machine.
+    expect(entry.command).toBe(fakeUvx);
+    expect(entry.command.startsWith('/')).toBe(true);
+    expect(entry.args).toEqual([ATLASSIAN_PACKAGE]);
+    expect(entry.env).toEqual({
+      CONFLUENCE_URL: DEFAULT_CONFLUENCE_URL,
+      CONFLUENCE_USERNAME: ATLASSIAN_EMAIL,
+      CONFLUENCE_API_TOKEN: ATLASSIAN_TOKEN,
+    });
+    clear();
+  });
+
+  it('REFUSES the save when uvx cannot be resolved, and stores nothing', async () => {
+    // The refusal is the feature (§2.1): failing here, with the user still
+    // looking at the form, beats an entry that dies at the first turn weeks later.
+    clear();
+    withoutUvx();
+    const result = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errorKey).toBe('systemMcp.uvxMissing');
+    // The English fallback is actionable on its own.
+    expect(result.error).toContain('uv');
+    expect(storedEntry(ATLASSIAN_SERVER_NAME)).toBeUndefined();
+    clear();
+  });
+
+  it('refuses a missing field and a username that is not an email', async () => {
+    clear();
+    withUvx();
+    const missing = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: ATLASSIAN_EMAIL },
+    });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.errorKey).toBe('systemMcp.fieldRequired');
+      expect(missing.errorField).toBe('apiToken');
+    }
+
+    const badEmail = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: 'tester', apiToken: ATLASSIAN_TOKEN },
+    });
+    expect(badEmail.ok).toBe(false);
+    if (!badEmail.ok) {
+      expect(badEmail.errorKey).toBe('systemMcp.presets.atlassian.badEmail');
+      expect(badEmail.errorField).toBe('username');
+    }
+    expect(storedEntry(ATLASSIAN_SERVER_NAME)).toBeUndefined();
+    clear();
+  });
+
+  it('keeps the stored API token when only the email is edited', async () => {
+    // THE MULTI-FIELD CASE the one-field version could not have. The token box is
+    // blank whenever the form opens, so a save that rebuilt from the typed values
+    // alone would silently disconnect the server the user was merely renaming.
+    clear();
+    withUvx();
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
+    });
+    const edited = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: 'other@altimedia.com', apiToken: '' },
+    });
+    expect(edited.ok).toBe(true);
+    const entry = storedEntry(ATLASSIAN_SERVER_NAME);
+    expect(entry && entry.transport === 'stdio' && entry.env).toEqual({
+      CONFLUENCE_URL: DEFAULT_CONFLUENCE_URL,
+      CONFLUENCE_USERNAME: 'other@altimedia.com',
+      CONFLUENCE_API_TOKEN: ATLASSIAN_TOKEN,
+    });
+    clear();
+  });
+
+  it('honours the atlassian.confluenceUrl override', async () => {
+    clear();
+    withUvx();
+    getStore().setSetting(ATLASSIAN_URL_KEY, 'https://other.atlassian.net/wiki');
+    const result = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
+    });
+    expect(result.ok).toBe(true);
+    const entry = storedEntry(ATLASSIAN_SERVER_NAME);
+    expect(entry && entry.transport === 'stdio' && entry.env?.CONFLUENCE_URL).toBe(
+      'https://other.atlassian.net/wiki',
+    );
+    clear();
+  });
+
+  it('shows the email back and NEVER the token, in every response', async () => {
+    clear();
+    withUvx();
+    const set = await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
+    });
+    expect(leaks(set, ATLASSIAN_TOKEN)).toBe(false);
+    expect(set.ok && set.systemMcp?.[ATLASSIAN_SERVER_NAME]).toEqual({
+      configured: true,
+      status: 'enabled',
+      // Non-secret: the user should see WHICH account is connected.
+      nonSecretFields: { username: ATLASSIAN_EMAIL },
+    });
+
+    // The probe spawns the stand-in, which exits without speaking MCP — so this
+    // is the failure path, where a naive implementation would report the command
+    // line (and with it the env) it just tried to run.
+    const probe = await runNabyAction({ action: 'systemMcp.test', preset: ATLASSIAN_SERVER_NAME });
+    expect(probe.ok, 'the stand-in uvx speaks no MCP').toBe(false);
+    expect(leaks(probe, ATLASSIAN_TOKEN)).toBe(false);
+
+    // The state read carries the entry in `mcp` too — through redactEntry, which
+    // must strip `env` VALUES exactly as it strips `headers` values.
+    const state = await readNabyState(null);
+    expect(leaks(state, ATLASSIAN_TOKEN)).toBe(false);
+    const row = state.mcp.find((e) => e.name === ATLASSIAN_SERVER_NAME);
+    expect(row?.envKeys).toEqual([
+      'CONFLUENCE_URL',
+      'CONFLUENCE_USERNAME',
+      'CONFLUENCE_API_TOKEN',
+    ]);
+    expect(row).not.toHaveProperty('env');
+
+    const removed = await runNabyAction({
+      action: 'systemMcp.remove',
+      preset: ATLASSIAN_SERVER_NAME,
+    });
+    expect(leaks(removed, ATLASSIAN_TOKEN)).toBe(false);
+    expect(storedEntry(ATLASSIAN_SERVER_NAME)).toBeUndefined();
+    clear();
+  }, 30_000);
+
+  it('reports its status on the GET, alongside the other preset', async () => {
+    clear();
+    withUvx();
+    await runNabyAction({
+      action: 'systemMcp.set',
+      preset: ATLASSIAN_SERVER_NAME,
+      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
+    });
+    const state = await readNabyState(null);
+    expect(state.systemMcp[ATLASSIAN_SERVER_NAME]?.configured).toBe(true);
+    expect(state.systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({ configured: false });
+    // Every preset in the registry has a key, so no row renders blank.
+    expect(Object.keys(state.systemMcp).sort()).toEqual([...SYSTEM_MCP_PRESET_NAMES].sort());
+    clear();
+  }, 20_000);
+});
+
+describe('POST /api/naby — systemMcp rejects what it does not know', () => {
+  it('refuses an unknown preset on every action', async () => {
+    for (const action of ['systemMcp.set', 'systemMcp.test', 'systemMcp.remove'] as const) {
+      const result = await runNabyAction({ action, preset: 'not-a-preset', fields: {} });
+      expect(result.ok, `${action} accepted an unknown preset`).toBe(false);
+      if (result.ok) continue;
+      expect(result.error).toContain('not-a-preset');
+    }
   });
 });

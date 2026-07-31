@@ -1004,6 +1004,55 @@
     "edit": "edit",
     "couldNotSave": "could not save"
   },
+  "systemMcp": {
+    "title": "System MCP",
+    "description": "In-house servers Naby already knows how to reach. Fill in what only you can know — the address, the transport and the header names are handled for you, and their tools go through the approval gate like every other tool.",
+    "secretKept": "Leave blank to keep what is stored.",
+    "connect": "Connect",
+    "connecting": "Connecting…",
+    "test": "Test",
+    "remove": "Remove",
+    "connected": "connected",
+    "notConfigured": "not connected",
+    "proposed": "awaiting approval",
+    "proposedHint": "The assistant added this server. Approve it to let it run.",
+    "approve": "Approve",
+    "toolCount": "Connected — {{tools}} tool(s) available.",
+    "failed": "Failed: {{error}}",
+    "fieldRequired": "{{field}} is required.",
+    "uvxMissing": "uvx was not found on this machine. Install uv (https://docs.astral.sh/uv/) and try again.",
+    "onboardingTitle": "Connect the in-house servers",
+    "onboardingBody": "These give Naby a shared set of ready-made skills and access to the company wiki. Fill in the ones you have credentials for — you can also do it later.",
+    "later": "Skip for now",
+    "changeLater": "You can connect these any time in Settings → AI provider.",
+    "presets": {
+      "skillHub": {
+        "title": "Skill Hub",
+        "description": "Altimedia's shared skill server. Paste the token you were given — that is the whole setup.",
+        "fields": {
+          "token": {
+            "label": "Token",
+            "placeholder": "shub_…"
+          }
+        }
+      },
+      "atlassian": {
+        "title": "Atlassian (Confluence)",
+        "description": "Reads the company Confluence. Use your work email and an Atlassian API token; it runs locally through uvx.",
+        "badEmail": "Atlassian signs in with your account email address, not a username.",
+        "fields": {
+          "username": {
+            "label": "Work email",
+            "placeholder": "you@altimedia.com"
+          },
+          "apiToken": {
+            "label": "API token",
+            "placeholder": "Created at id.atlassian.com → API tokens"
+          }
+        }
+      }
+    }
+  },
   "chatgptOauth": {
     "title": "ChatGPT (subscription)",
     "devBadge": "Dev only · subscription · ToS caution",

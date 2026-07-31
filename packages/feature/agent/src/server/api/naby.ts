@@ -100,6 +100,14 @@ import {
   detectChatId,
   type TelegramConfig,
 } from '../lib/telegram';
+import {
+  findSystemMcpPreset,
+  mergeSystemMcpFields,
+  readPresetUrl,
+  readSystemMcpStatus,
+  type SystemMcpStatus,
+} from '../lib/systemMcp';
+import { resolveCommandPath } from '../lib/commandPath';
 
 // The store is opened on demand and the MCP test path spawns child processes,
 // so this must run on the node runtime and must never be statically rendered.
@@ -161,6 +169,45 @@ function redactEntry(entry: McpEntry): RedactedMcpEntry {
   return headers && Object.keys(headers).length > 0
     ? { ...rest, headerKeys: Object.keys(headers) }
     : rest;
+}
+
+// ---------------------------------------------------------------------------
+// "Does this server actually work" — ONE implementation
+// ---------------------------------------------------------------------------
+
+/**
+ * Connect one configured MCP server and list its tools, then close.
+ *
+ * The same code path a real turn takes (`loadMcpToolset`), so a green answer here
+ * means what a turn would find. It deliberately does not CALL anything:
+ * connecting is safe, invoking is the thing the gate exists to mediate.
+ *
+ * Both `mcp.test` and `systemMcp.test` go through this. A second copy for the
+ * presets would be a second thing to keep in step with the loader — and the two
+ * would drift on exactly the day the connect semantics changed.
+ */
+type McpProbeResult =
+  | { ok: true; toolCount: number; toolNames: string[] }
+  | { ok: false; error: string };
+
+async function probeMcpServer(
+  store: { listMcpEntries(): McpEntry[] },
+  name: string,
+): Promise<McpProbeResult> {
+  const entry = store.listMcpEntries().find((e) => e.name === name);
+  if (!entry) return { ok: false, error: `no MCP server named "${name}"` };
+  const load = await loadMcpToolset([entry]);
+  try {
+    const failure = load.failures[0];
+    if (failure) return { ok: false, error: failure.message };
+    return {
+      ok: true,
+      toolCount: load.toolSchemas.length,
+      toolNames: load.toolSchemas.map((t) => t.name),
+    };
+  } finally {
+    await load.closeAll();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +319,13 @@ export async function readNabyState(
   selectedModels: Record<string, string>;
   usage: ReturnType<typeof summarizeSessionUsage> | null;
   mcp: RedactedMcpEntry[];
+  /** The BUILT-IN presets' connection state, keyed by preset name
+   *  (skill-hub-builtin §2.2). Their entries are also present in `mcp` above —
+   *  this is the same row read through the one function that answers "is this
+   *  connected", so the dedicated System MCP rows and the general list can never
+   *  disagree. Nothing here can carry a secret: the shape is a boolean, a status
+   *  word, and the values of the fields explicitly marked non-secret. */
+  systemMcp: Record<string, SystemMcpStatus>;
 }> {
   const store = getStore();
   const settings = readSettings(store);
@@ -347,6 +401,7 @@ export async function readNabyState(
     // been spent", which the UI renders as an empty state rather than a crash.
     usage: sessionId ? summarizeSessionUsage(store, sessionId) : null,
     mcp: store.listMcpEntries().map(redactEntry),
+    systemMcp: readSystemMcpStatus(store),
   };
 }
 
@@ -372,6 +427,20 @@ export type NabyAction =
   // intact) so approval never needs the redacted UI to resend them.
   | { action: 'mcp.approve'; name: string }
   | { action: 'mcp.test'; name: string }
+  // The BUILT-IN System MCP presets (skill-hub-builtin §2.2). SECRETS ONLY EVER
+  // TRAVEL INWARDS: `set` takes the typed values and the SERVER assembles the
+  // whole entry from the registry (transport, url/command, header and env names),
+  // so the client never has to know — or echo back — anything but what the user
+  // typed. Every response is a redacted status; no reply on this route contains a
+  // secret field's value.
+  //
+  // `preset` is a registry name ('skill-hub', 'atlassian'), and `fields` is keyed
+  // by the preset's own field ids. A blank value on a configured preset means
+  // "keep the stored one" — the merge happens server-side, where the stored
+  // secret actually is.
+  | { action: 'systemMcp.set'; preset: string; fields?: Record<string, string> }
+  | { action: 'systemMcp.test'; preset: string }
+  | { action: 'systemMcp.remove'; preset: string }
   // Phase 2 (M1) tool-execution policy rules. `scopeKey` is optional for the
   // user scope (server-defaulted); required (a cwd) for project.
   | { action: 'policy.list'; scope?: string; scopeKey?: string }
@@ -476,6 +545,18 @@ export type NabyActionResult =
        *  resolves, so the chip updates without waiting for the next GET poll
        *  (mirrors the old preload bridge, which resolved with the new status). */
       chatgpt?: ChatgptLoginState;
+      /** `systemMcp.*`: every preset's connection state after the operation — the
+       *  ONLY thing these actions ever answer with. Booleans, status words and
+       *  the non-secret field values; no URL, no header name, never a secret.
+       *  The WHOLE map rather than the one preset that changed, so a UI showing
+       *  several rows refreshes them all from one reply. */
+      systemMcp?: Record<string, SystemMcpStatus>;
+      /** `systemMcp.test`: how many tools the server offered on connect. The
+       *  number is the whole point of the test — "connected" without it does not
+       *  tell the user whether their credentials reach a populated server. */
+      toolCount?: number;
+      /** `systemMcp.test`: the namespaced tool names, for the curious. */
+      toolNames?: string[];
       /** `policy.*`: the scope's rules after the operation. */
       rules?: PolicyRule[];
       /** `approval.resolve`: whether a pending prompt was actually settled (false
@@ -537,7 +618,19 @@ export type NabyActionResult =
         ledgerWritten?: number;
       };
     }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      /** Always English, always present: it is what a log, a script or a client
+       *  with no dictionary reads. */
+      error: string;
+      /** An i18n key the UI should prefer over `error` when it has one
+       *  (`systemMcp.*` refusals — a missing field, a bad email, a missing uvx).
+       *  The English text stays authoritative; this only makes it readable. */
+      errorKey?: string;
+      /** The field id `errorKey` refers to, so the UI can name it with the
+       *  field's own translated label instead of the server guessing a language. */
+      errorField?: string;
+    };
 
 /** Setting key holding the last successful model probe. */
 const CLAUDE_MODELS_CACHE_KEY = 'models.claude.cache';
@@ -1163,24 +1256,106 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     }
 
     case 'mcp.test': {
-      // "Does this server actually work" answered by CONNECTING to it and
-      // listing its tools — the same code path a real turn uses, so a green
-      // result here means the same thing a turn would find. It deliberately
-      // does not CALL anything: connecting is safe, invoking is not.
-      const entry = store.listMcpEntries().find((e) => e.name === body.name);
-      if (!entry) return { ok: false, error: `no MCP server named "${body.name}"` };
-      const load = await loadMcpToolset([entry]);
-      try {
-        const failure = load.failures[0];
-        if (failure) return { ok: false, error: failure.message };
-        return {
-          ok: true,
-          message: `Connected. ${load.toolSchemas.length} tool(s) available, each of which will go through the approval gate.`,
-          tools: load.toolSchemas.map((t) => t.name),
-        };
-      } finally {
-        await load.closeAll();
+      // Connect, list, close — see `probeMcpServer`. This case owns only the
+      // SENTENCE; the connecting is shared with `systemMcp.test` so the two can
+      // never come to mean different things.
+      const probe = await probeMcpServer(store, body.name);
+      if (!probe.ok) return { ok: false, error: probe.error };
+      return {
+        ok: true,
+        message: `Connected. ${probe.toolCount} tool(s) available, each of which will go through the approval gate.`,
+        tools: probe.toolNames,
+      };
+    }
+
+    // -----------------------------------------------------------------------
+    // The BUILT-IN System MCP presets (skill-hub-builtin §2.2)
+    // -----------------------------------------------------------------------
+    //
+    // WHY THESE EXIST AT ALL, given `mcp.upsert` could store the same rows: the
+    // client would then have to know the URL or the command, the transport, and
+    // the header/env names, and would have to SEND a block containing the secret —
+    // which is the one thing `redactEntry` refuses to hand back, so the UI could
+    // never show or preserve what it had just written. Assembling server-side from
+    // the registry means secrets move in exactly one direction and the user types
+    // exactly what only they can know.
+    //
+    // THREE CASES, NO PER-PRESET BRANCHING. Everything specific to a server lives
+    // in lib/systemMcp.ts; adding a third preset changes nothing here.
+
+    case 'systemMcp.set': {
+      const preset = findSystemMcpPreset(body.preset);
+      if (!preset) return { ok: false, error: `unknown system MCP preset "${body.preset}"` };
+
+      // Only strings, only declared field ids — `mergeSystemMcpFields` drops the
+      // rest, so a client cannot smuggle an extra key into a built entry.
+      const incoming: Record<string, string> = {};
+      for (const [key, value] of Object.entries(body.fields ?? {})) {
+        if (typeof value === 'string') incoming[key] = value;
       }
+
+      // BLANK MEANS KEEP. A secret has no way back out to the client, so its box
+      // is empty every time the form opens; rebuilding from the typed values
+      // alone would wipe the token whenever the user edited anything else.
+      const existing = store.listMcpEntries().find((e) => e.name === preset.name);
+      const fields = mergeSystemMcpFields(preset, existing, incoming);
+
+      // The launcher's absolute path is resolved HERE, at save time, while the
+      // user is still looking at the form (skill-hub-builtin §2.1). A stored bare
+      // `uvx` works in dev and ENOENTs in the packaged app, where the child
+      // process inherits a PATH with no user bin directories on it.
+      let commandPath: string | undefined;
+      if (preset.launcher) {
+        commandPath = (await resolveCommandPath(preset.launcher)) ?? undefined;
+      }
+
+      // The URL override is read HERE, not inside the pure builder, so the policy
+      // ("settings win, otherwise the built-in URL") lives on the server side of
+      // the boundary and the builder stays a function of its arguments.
+      const built = preset.build(fields, { url: readPresetUrl(store, preset), commandPath });
+      if (!built.ok) {
+        return {
+          ok: false,
+          error: built.error,
+          ...(built.errorKey ? { errorKey: built.errorKey } : {}),
+          ...(built.errorField ? { errorField: built.errorField } : {}),
+        };
+      }
+
+      // Validated like any other entry — the thing most likely to be wrong is a
+      // hand-edited URL override, and a malformed URL should be an error the user
+      // can read rather than a connect failure later.
+      const problems = validateMcpEntry(built.entry);
+      if (problems.length > 0) return { ok: false, error: problems.join('; ') };
+
+      store.upsertMcpEntry(built.entry);
+      // The status, and only the status. The secrets are now in the store and
+      // have no way back out through this route.
+      return { ok: true, systemMcp: readSystemMcpStatus(store) };
+    }
+
+    case 'systemMcp.test': {
+      // The same one-shot connect `mcp.test` runs, named for the preset so the
+      // client does not have to know the registry name.
+      const preset = findSystemMcpPreset(body.preset);
+      if (!preset) return { ok: false, error: `unknown system MCP preset "${body.preset}"` };
+      const probe = await probeMcpServer(store, preset.name);
+      if (!probe.ok) return { ok: false, error: probe.error };
+      return {
+        ok: true,
+        toolCount: probe.toolCount,
+        toolNames: probe.toolNames,
+        systemMcp: readSystemMcpStatus(store),
+      };
+    }
+
+    case 'systemMcp.remove': {
+      const preset = findSystemMcpPreset(body.preset);
+      if (!preset) return { ok: false, error: `unknown system MCP preset "${body.preset}"` };
+      // Idempotent, like `mcp.remove`: removing a server that is not there is the
+      // state the caller asked for, not an error.
+      store.removeMcpEntry(preset.name);
+      return { ok: true, systemMcp: readSystemMcpStatus(store) };
     }
 
     default:
@@ -1208,10 +1383,21 @@ export const POST = handler((request) =>
     const body = (yield* parseJsonRaw(request)) as NabyAction;
     const result = yield* Effect.promise(() => runNabyAction(body));
     if (!result.ok) {
-      return new Response(JSON.stringify({ error: result.error }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      // `errorKey`/`errorField` ride along when the refusal has a translation
+      // (a missing preset field, a bad email, a missing uvx). They are hints, not
+      // a replacement: `error` is always the English truth, and a client without
+      // a dictionary reads that.
+      return new Response(
+        JSON.stringify({
+          error: result.error,
+          ...(result.errorKey ? { errorKey: result.errorKey } : {}),
+          ...(result.errorField ? { errorField: result.errorField } : {}),
+        }),
+        {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      );
     }
     return ok(result);
   })

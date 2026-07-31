@@ -1004,6 +1004,55 @@
     "edit": "수정",
     "couldNotSave": "저장할 수 없습니다"
   },
+  "systemMcp": {
+    "title": "시스템 MCP",
+    "description": "naby가 주소를 이미 아는 사내 서버입니다. 나만 알 수 있는 값만 채우면 됩니다. 주소와 전송 방식, 헤더 이름은 naby가 알아서 채우고, 이 서버들의 도구도 다른 도구와 똑같이 승인 게이트를 지납니다.",
+    "secretKept": "비워 두면 저장된 값을 그대로 씁니다.",
+    "connect": "연결",
+    "connecting": "연결 중…",
+    "test": "테스트",
+    "remove": "삭제",
+    "connected": "연결됨",
+    "notConfigured": "미연결",
+    "proposed": "승인 대기",
+    "proposedHint": "어시스턴트가 추가한 서버입니다. 승인하면 실행됩니다.",
+    "approve": "승인",
+    "toolCount": "연결됨 — 도구 {{tools}}개를 쓸 수 있습니다.",
+    "failed": "실패: {{error}}",
+    "fieldRequired": "{{field}} 값이 필요합니다.",
+    "uvxMissing": "이 컴퓨터에서 uvx를 찾지 못했습니다. uv(https://docs.astral.sh/uv/)를 설치한 뒤 다시 시도하세요.",
+    "onboardingTitle": "사내 서버 연결",
+    "onboardingBody": "사내 서버를 연결하면 naby가 공용 스킬 묶음과 회사 위키를 바로 씁니다. 자격값이 있는 것만 채우면 되고, 나중에 해도 됩니다.",
+    "later": "나중에 하기",
+    "changeLater": "설정 → AI 프로바이더에서 언제든 연결할 수 있습니다.",
+    "presets": {
+      "skillHub": {
+        "title": "스킬 허브",
+        "description": "알티미디어 공용 스킬 서버입니다. 받은 토큰만 붙여넣으면 설정은 끝입니다.",
+        "fields": {
+          "token": {
+            "label": "토큰",
+            "placeholder": "shub_…"
+          }
+        }
+      },
+      "atlassian": {
+        "title": "Atlassian (Confluence)",
+        "description": "회사 Confluence를 읽습니다. 회사 이메일과 Atlassian API 토큰이 필요하고, uvx로 로컬에서 실행됩니다.",
+        "badEmail": "Atlassian은 사용자 이름이 아니라 계정 이메일 주소로 로그인합니다.",
+        "fields": {
+          "username": {
+            "label": "회사 이메일",
+            "placeholder": "you@altimedia.com"
+          },
+          "apiToken": {
+            "label": "API 토큰",
+            "placeholder": "id.atlassian.com → API 토큰에서 발급"
+          }
+        }
+      }
+    }
+  },
   "chatgptOauth": {
     "title": "ChatGPT (구독)",
     "devBadge": "개발 전용 · 구독 · ToS 주의",
