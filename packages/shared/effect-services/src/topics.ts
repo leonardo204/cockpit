@@ -107,6 +107,17 @@ export const Topics = {
   ScheduledTasksChanged: defineTopic<Record<string, never>>(
     "scheduled-tasks-changed"
   ),
+  // "A harness item's visibility changed — re-read anything derived from it."
+  //
+  // Enabling a skill/command/subagent changes what `/` may offer, but the
+  // Settings modal that flips it lives in the TOP window while the composer that
+  // renders the palette lives in a per-project iframe that never unmounts. With
+  // no signal crossing that boundary the palette kept whatever it fetched when
+  // the project was opened, so a freshly enabled skill stayed invisible until the
+  // app restarted. Publishers must reach BOTH directions — see
+  // `broadcastTopicToFrames` (parent → children); `publishTopic` alone only ever
+  // reaches window.parent. legacyType → "HARNESS_CHANGED".
+  HarnessChanged: defineTopic<Record<string, never>>("harness-changed"),
   ScreenshotPrepare: defineTopic<ScreenshotPreparePayload>(
     "screenshot-prepare"
   ),

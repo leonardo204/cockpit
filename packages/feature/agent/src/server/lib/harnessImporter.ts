@@ -21,6 +21,22 @@
  * `(scope, scopeKey, kind, name)`, so importing the same `~/.claude` twice
  * updates the rows in place rather than piling up copies.
  *
+ * A RE-IMPORT MUST NOT UNDO THE USER'S REVIEW. Since v1.8.1 this walk also runs
+ * before every Settings list (scan-on-list), which turned "upsert" into a repeat
+ * offender: each re-run pushed the same rows through the gate as fresh external
+ * imports, and the gate pins external writes to 'disabled' — so enabling an
+ * imported skill was silently reverted by the next list and "/" stayed empty.
+ * Two things fix that here, in order:
+ *   1. UNCHANGED ARTIFACTS ARE NOT WRITTEN AT ALL. The walk reads the store's
+ *      current rows first and skips any artifact whose content still matches,
+ *      so the common re-scan is a pure read (no status churn, no updatedAt
+ *      churn, no sqlite writes per keystroke of panel refreshing).
+ *   2. CHANGED ARTIFACTS ARE WRITTEN AS A REFRESH (`refresh: true`), which tells
+ *      the gate to carry the existing row's status through (harness-gate.ts
+ *      invariant 5). Content may change on a re-read; the trust decision may not.
+ * Neither weakens the gate for NEW rows: a first sighting has no stored status,
+ * so it still lands disabled and inert until reviewed.
+ *
  * INJECTABLE fs + store + homeDir. The filesystem, the store slice, and the home
  * directory are all parameters (defaulting to node `fs` / `getStore()` /
  * `os.homedir()`), so the whole walk+parse+gate flow is unit-testable against an
@@ -53,9 +69,18 @@ export interface ImporterFs {
   ): Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
 }
 
-/** The store slice the importer writes through — only the gate entry point. */
+/** The store slice the importer writes through — the gate entry point, plus an
+ *  OPTIONAL read used to skip re-writing artifacts that have not changed. The
+ *  read is optional so a caller with a write-only fake still works; without it
+ *  the walk simply writes every artifact as a refresh (still status-preserving,
+ *  just less frugal). */
 export interface ImporterStore {
   putHarnessItem(req: HarnessImportRequest): HarnessItem;
+  listHarness?(
+    scope: HarnessScope,
+    scopeKey: string,
+    opts?: { kind?: HarnessKind; status?: 'enabled' | 'disabled' },
+  ): HarnessItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -76,8 +101,14 @@ export interface HarnessImportSummary {
   baseDir: string;
   /** Whether that base existed at all — a clean "nothing to import" signal. */
   baseExists: boolean;
-  /** Count of rows that landed, per kind (all disabled by the gate). */
+  /** Count of rows PRESENT after the walk, per kind — written this run or
+   *  already stored unchanged. (A new row lands disabled; an existing one keeps
+   *  the status the user gave it.) */
   imported: { command: number; skill: number; subagent: number };
+  /** How many of those needed no write because the file's content already
+   *  matched the stored row. On a steady-state re-scan this equals the total —
+   *  the signal that scan-on-list is costing nothing. */
+  unchanged: number;
   /** How many hook definitions were seen and DROPPED (never imported). */
   skippedHooks: number;
   /** Artifacts skipped without an error (e.g. an empty body). */
@@ -377,6 +408,76 @@ function countHooks(fs: ImporterFs, baseDir: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Change detection — "is this artifact already stored exactly as it is on disk?"
+// ---------------------------------------------------------------------------
+
+/** The store's upsert identity, minus the scope pair the index is already keyed
+ *  by: kind + name. */
+function identityKey(kind: HarnessKind, name: string): string {
+  return `${kind} ${name}`;
+}
+
+/** Read the rows already stored for this scope, indexed by (kind, name). Falls
+ *  back to an EMPTY index when the store exposes no read or the read throws: an
+ *  empty index only costs writes, it never changes what lands. */
+function readExistingRows(
+  store: ImporterStore,
+  scope: HarnessScope,
+  scopeKey: string,
+): Map<string, HarnessItem> {
+  const index = new Map<string, HarnessItem>();
+  if (!store.listHarness) return index;
+  try {
+    for (const row of store.listHarness(scope, scopeKey)) {
+      index.set(identityKey(row.kind, row.name), row);
+    }
+  } catch {
+    /* a failed read just means every artifact is written */
+  }
+  return index;
+}
+
+/** Order-insensitive-free comparison of an optional string list (order IS part
+ *  of the value here — `tools: Read, Bash` is stored as authored). */
+function sameList(a?: string[], b?: string[]): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/**
+ * Does the stored row already carry exactly what this artifact parsed to?
+ *
+ * Compares the FIELDS THE IMPORTER AUTHORS only — description and the kind
+ * payload. Deliberately NOT compared: `provenance.importedAt` (a fresh timestamp
+ * every walk, which would make every scan look changed) and `status` (the user's
+ * decision, which the importer never authors). The caller checks `origin`
+ * separately, because a different file claiming the same identity must be
+ * written even when its body happens to match.
+ */
+export function sameHarnessContent(existing: HarnessItem, parsed: ParsedHarness): boolean {
+  if ((existing.description ?? undefined) !== (parsed.description ?? undefined)) return false;
+
+  if (existing.command || parsed.command) {
+    if (!existing.command || !parsed.command) return false;
+    if (existing.command.template !== parsed.command.template) return false;
+    if (existing.command.argumentHint !== parsed.command.argumentHint) return false;
+  }
+  if (existing.skill || parsed.skill) {
+    if (!existing.skill || !parsed.skill) return false;
+    if (existing.skill.instructions !== parsed.skill.instructions) return false;
+    if (!sameList(existing.skill.triggers, parsed.skill.triggers)) return false;
+    if (!sameList(existing.skill.toolRefs, parsed.skill.toolRefs)) return false;
+  }
+  if (existing.subagent || parsed.subagent) {
+    if (!existing.subagent || !parsed.subagent) return false;
+    if (existing.subagent.systemPrompt !== parsed.subagent.systemPrompt) return false;
+    if (existing.subagent.model !== parsed.subagent.model) return false;
+    if (!sameList(existing.subagent.toolRefs, parsed.subagent.toolRefs)) return false;
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // The import driver.
 // ---------------------------------------------------------------------------
 
@@ -424,6 +525,7 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
     baseDir: baseDir ?? '',
     baseExists: false,
     imported: { command: 0, skill: 0, subagent: 0 },
+    unchanged: 0,
     skippedHooks: 0,
     skipped: [],
     failed: [],
@@ -435,6 +537,10 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
 
   // Hooks: count, then drop. Never read a hook body into the store.
   summary.skippedHooks = countHooks(fs, baseDir);
+
+  // What is already stored for this scope — read ONCE, before the walk, so an
+  // artifact that has not changed can be recognized and left alone.
+  const existingRows = readExistingRows(args.store, args.scope, args.scopeKey);
 
   const importedAt = Date.now();
 
@@ -483,6 +589,24 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
       // parser settled on or two packs' same-named skills collide on the store's
       // (scope,scopeKey,kind,name) identity.
       const itemName = qualify(raw.namePrefix, parsed.name);
+
+      // UNCHANGED? Then write NOTHING. Scan-on-list runs this walk before every
+      // harness list, and the steady state is "nothing on disk moved" — a write
+      // there would only bump updated_at and re-run the gate on a row the user
+      // has already ruled on. The origin must match too: a different file
+      // claiming this name is a takeover and has to go through the gate.
+      const stored = existingRows.get(identityKey(job.kind, itemName));
+      if (
+        stored &&
+        stored.provenance.origin === raw.origin &&
+        sameHarnessContent(stored, parsed)
+      ) {
+        summary.items.push(stored);
+        summary.imported[job.kind] += 1;
+        summary.unchanged += 1;
+        continue;
+      }
+
       const req: HarnessImportRequest = {
         item: {
           scope: args.scope,
@@ -490,8 +614,9 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
           kind: job.kind,
           name: itemName,
           ...(parsed.description ? { description: parsed.description } : {}),
-          // source:'external' — the gate FORCES this to disabled (contract §4
-          // invariant 1). An imported item is inert until reviewed + enabled.
+          // source:'external' — for a NEW row the gate FORCES this to disabled
+          // (contract §4 invariant 1): an imported item is inert until reviewed
+          // and enabled. For an EXISTING row see `refresh` below.
           provenance: {
             source: 'external',
             origin: raw.origin,
@@ -502,9 +627,15 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
           ...(parsed.skill ? { skill: parsed.skill } : {}),
           ...(parsed.subagent ? { subagent: parsed.subagent } : {}),
         },
-        // Ask for enabled; the gate downgrades external to disabled regardless —
-        // asserting the import is genuinely inert, not merely defaulted.
+        // Ask for enabled; for a new row the gate downgrades external to disabled
+        // regardless — asserting the import is genuinely inert, not merely
+        // defaulted.
         requestedStatus: 'enabled',
+        // This walk is a RE-READ of the local tree, so a row that already exists
+        // at this same origin keeps the status the user gave it (harness-gate
+        // invariant 5). Only this path sets the flag: an agent-driven write goes
+        // through the ordinary gate and can never move a status.
+        refresh: true,
       };
       try {
         const item = args.store.putHarnessItem(req);

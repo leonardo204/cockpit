@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   DEFAULT_USER_ID,
+  // A VALUE import: the enable→list regression at the bottom of this file runs
+  // the real store (hence the real import gate) instead of the fake below.
+  MemoryStore,
   type HarnessImportRequest,
   type HarnessItem,
   type HarnessScope,
   type HarnessSet,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { importClaudeHarness } from '../lib/harnessImporter';
 import {
   listHarnessCommands,
   resetHarnessScanThrottle,
@@ -22,6 +26,7 @@ function emptySummary(scope: HarnessScope, scopeKey: string) {
     baseDir: '',
     baseExists: false,
     imported: { command: 0, skill: 0, subagent: 0 },
+    unchanged: 0,
     skippedHooks: 0,
     skipped: [],
     failed: [],
@@ -519,6 +524,7 @@ describe('runHarnessAction — import (HP-04)', () => {
       baseDir: '/home/me/.claude',
       baseExists: true,
       imported: { command: 1, skill: 0, subagent: 0 },
+      unchanged: 0,
       skippedHooks: 2,
       skipped: [],
       failed: [],
@@ -561,6 +567,7 @@ describe('runHarnessAction — import (HP-04)', () => {
             baseDir: '/proj/.claude',
             baseExists: true,
             imported: { command: 0, skill: 0, subagent: 0 },
+            unchanged: 0,
             skippedHooks: 0,
             skipped: [],
             failed: [],
@@ -774,5 +781,134 @@ describe('runHarnessAction — importSet (HP-05)', () => {
     const { store } = fakeStore();
     const res = runHarnessAction({ action: 'importSet', set: makeSet(), scope: 'project' }, store);
     expect(res.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The reported v1.8.1 bug, end to end at the route surface: enabling an imported
+// skill in Settings > Harness "succeeded" and the item stayed 비활성, because the
+// next list re-ran the scan and the scan re-imported the row as a fresh external
+// item, which the gate pins to 'disabled'.
+//
+// This case runs the REAL store (MemoryStore ⇒ the real import gate) and the REAL
+// importer over a fake `.claude` tree, so nothing between the toggle and the list
+// is stubbed — a fake would have re-encoded the very assumption that was wrong.
+// ---------------------------------------------------------------------------
+
+/** A one-file fake `.claude` tree: <home>/.claude/skills/review/SKILL.md. */
+function fakeClaudeTree(body: string) {
+  const files: Record<string, string> = {
+    '/home/me/.claude/skills/review/SKILL.md': `---\nname: review\n---\n${body}`,
+  };
+  const dirs = new Set(['/home/me/.claude', '/home/me/.claude/skills', '/home/me/.claude/skills/review']);
+  return {
+    existsSync: (p: string) => p in files || dirs.has(p),
+    readFileSync: (p: string) => {
+      if (!(p in files)) throw new Error(`ENOENT: ${p}`);
+      return files[p];
+    },
+    readdirSync: (p: string) => {
+      const prefix = p.replace(/\/+$/, '') + '/';
+      const names = new Set<string>();
+      for (const key of [...Object.keys(files), ...dirs]) {
+        if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split('/')[0]);
+      }
+      return [...names].map((name) => ({
+        name,
+        isDirectory: () => dirs.has(prefix + name),
+        isFile: () => prefix + name in files,
+      }));
+    },
+  };
+}
+
+describe('enable → list: the scan must not undo the review (v1.8.1 regression)', () => {
+  function realWiring(body: string) {
+    const store = new MemoryStore();
+    const deps: HarnessActionDeps = {
+      importClaude: (args) =>
+        importClaudeHarness({
+          ...args,
+          homeDir: '/home/me',
+          store,
+          fs: fakeClaudeTree(body),
+        }),
+    };
+    return { store, deps };
+  }
+
+  function listAll(store: MemoryStore, deps: HarnessActionDeps) {
+    const res = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    if (!res.ok) throw new Error(res.error);
+    return res.data.items;
+  }
+
+  it('an imported skill enabled in Settings is STILL enabled on the next list', () => {
+    const { store, deps } = realWiring('do the review');
+
+    // 1) the panel opens: the scan discovers the skill, disabled and reviewable.
+    const discovered = listAll(store, deps);
+    expect(discovered.map((i) => i.name)).toEqual(['review']);
+    expect(discovered[0].status).toBe('disabled');
+
+    // 2) the user presses 활성화.
+    const toggled = runHarnessAction(
+      { action: 'setEnabled', id: discovered[0].id, enabled: true },
+      store,
+      deps,
+    );
+    expect(toggled.ok).toBe(true);
+
+    // 3) the panel reloads. The throttle would have hidden the bug, so the scan
+    //    is deliberately allowed to run again — as it does after 10s in the app.
+    resetHarnessScanThrottle();
+    expect(listAll(store, deps)[0].status).toBe('enabled');
+  });
+
+  it('the enabled skill is what "/" reads: it appears in the enabled-only list', () => {
+    const { store, deps } = realWiring('do the review');
+    const id = listAll(store, deps)[0].id;
+    runHarnessAction({ action: 'setEnabled', id, enabled: true }, store, deps);
+    resetHarnessScanThrottle();
+
+    const res = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: 'enabled', kind: 'all' },
+      store,
+      deps,
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.items.map((i) => i.name)).toEqual(['review']);
+  });
+
+  it('a scan that finds EDITED content updates the body and keeps it enabled', () => {
+    const { store, deps } = realWiring('do the review');
+    const id = listAll(store, deps)[0].id;
+    runHarnessAction({ action: 'setEnabled', id, enabled: true }, store, deps);
+
+    // The file changed on disk since the last scan.
+    const edited: HarnessActionDeps = {
+      importClaude: (args) =>
+        importClaudeHarness({
+          ...args,
+          homeDir: '/home/me',
+          store,
+          fs: fakeClaudeTree('do the review, then summarize'),
+        }),
+    };
+    resetHarnessScanThrottle();
+    const items = listAll(store, edited);
+    expect(items[0].skill?.instructions).toBe('do the review, then summarize');
+    expect(items[0].status).toBe('enabled');
+  });
+
+  it('a NEVER-reviewed skill still arrives disabled (the gate is not weakened)', () => {
+    const { store, deps } = realWiring('do the review');
+    listAll(store, deps);
+    resetHarnessScanThrottle();
+    expect(listAll(store, deps)[0].status).toBe('disabled');
   });
 });

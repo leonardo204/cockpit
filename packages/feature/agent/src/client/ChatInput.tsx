@@ -8,6 +8,7 @@ import { ImagePreview } from '@cockpit/shared-ui';
 import { ScheduleTaskPopover } from './ScheduleTaskPopover';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSlashCommands } from './effect/agentClient';
+import { isHarnessChangedMessage } from './harnessSignal';
 import {
   FILE_REF_MIME,
   setActiveFileRefInserter,
@@ -231,9 +232,8 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
 
   // Load command list: in-process builtins merged with Naby-owned enabled
   // commands (Phase 1.6 HP-02). Passing `cwd` includes this project's
-  // project-scope owned commands; reloads when the active project changes so a
-  // freshly created command shows without reopening the tab.
-  useEffect(() => {
+  // project-scope owned commands.
+  const reloadCommands = useCallback(() => {
     BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>(cwd)).then((exit) => {
       if (exit._tag === 'Success') {
         setCommands(exit.value as CommandInfo[]);
@@ -242,6 +242,41 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
       }
     });
   }, [cwd]);
+
+  // Reload when the active project changes, so a project-scope command shows
+  // without reopening the tab.
+  useEffect(() => {
+    reloadCommands();
+  }, [reloadCommands]);
+
+  // THE FIX FOR "I enabled a skill and '/' still does not list it".
+  //
+  // This component mounts ONCE per project iframe and that iframe is never
+  // unmounted (Workspace keeps every open project alive), so the fetch above
+  // used to run exactly once in the app's lifetime. Enabling a skill happens in
+  // the Settings modal, which renders in the TOP window — a different frame,
+  // with no shared state and, until now, no signal between them. The palette
+  // therefore kept a list that was correct only at the moment the project was
+  // opened.
+  //
+  // Two triggers, deliberately overlapping. The message is the precise one; the
+  // window focus is the belt-and-braces, because a signal can be missed (a frame
+  // that had not yet been created when the broadcast went out, a modal opened
+  // from a path that does not publish) and a stale palette is invisible — the
+  // user cannot tell it is stale, so there is nothing to retry. Refetching on
+  // focus costs one local request against a sub-10ms endpoint.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (isHarnessChangedMessage(e.data)) reloadCommands();
+    };
+    const onFocus = () => reloadCommands();
+    window.addEventListener('message', onMessage);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('message', onMessage);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [reloadCommands]);
 
   // The line containing the caret — commands are line-led, so autocomplete keys
   // off the current line, not the whole (possibly multi-line) input.

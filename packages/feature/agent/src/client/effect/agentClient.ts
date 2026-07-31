@@ -75,7 +75,14 @@ export const loadSlashCommands = <T = unknown>(
   cwd?: string
 ): Effect.Effect<ReadonlyArray<T>, AppError> =>
   httpJson<ReadonlyArray<T>>(
-    cwd ? `/api/commands?cwd=${encodeURIComponent(cwd)}` : "/api/commands"
+    cwd ? `/api/commands?cwd=${encodeURIComponent(cwd)}` : "/api/commands",
+    // `no-store` because this URL is now REFETCHED, not fetched once. The
+    // composer re-reads it whenever a harness item is enabled or the window
+    // regains focus, and the request is byte-identical to the previous one — a
+    // conditional/heuristic cache hit would hand back the very list the user
+    // just changed, which is indistinguishable from the bug this refetch exists
+    // to fix. Correctness beats a cache on a local sub-10ms endpoint.
+    { cache: "no-store" }
   )
 
 // ─────────────────────────────────────────────────────────
