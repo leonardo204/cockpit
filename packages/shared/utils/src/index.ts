@@ -5,6 +5,7 @@ export type { ImageMediaType, ImageInfo, MessageImage } from './types';
 
 // Utilities
 export * from './branding';
+export * from './bootTheme';
 export * from './shortId';
 export * from './platform';
 export * from './paths';

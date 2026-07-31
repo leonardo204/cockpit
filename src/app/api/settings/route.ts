@@ -14,6 +14,11 @@ import { FSError } from "@cockpit/effect-core"
 
 interface Settings {
   language?: string // 'en' | 'ko' | 'auto'
+  // 'light' | 'dark' | 'system'. Lives here — and not only in localStorage —
+  // because the desktop shell boots on an ephemeral port and localStorage is
+  // scoped per origin, port included: it is empty on every restart. Read back
+  // server-side by src/app/layout.tsx. See shared-utils/bootTheme.ts.
+  theme?: string
   [key: string]: unknown
 }
 

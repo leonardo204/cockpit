@@ -34,13 +34,23 @@
   } catch (_e) {}
 
   try {
-    var theme = localStorage.getItem('theme') || 'dark';
+    // Theme precedence: localStorage → server-persisted value → 'dark'.
+    //
+    // The server value (`window.__cockpitServerTheme`, injected immediately
+    // before this script by app/layout.tsx — see shared-utils/bootTheme.ts)
+    // exists because the desktop shell boots Next on an EPHEMERAL PORT, and
+    // localStorage is per-origin INCLUDING the port: every restart hands us an
+    // empty store. localStorage still wins when it has a value — within a
+    // session it is the newer of the two writes.
+    var stored = null;
+    try { stored = localStorage.getItem('theme'); } catch (_e) {}
+    var theme = stored || window.__cockpitServerTheme || 'dark';
     var resolved = theme;
     if (theme === 'system') {
       resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
     document.documentElement.classList.add(resolved);
-  } catch (e) {}
+  } catch (_e) {}
 
   // Clean up legacy Service Workers from the old PWA era, but KEEP our
   // push-only SW (/push-sw.js) — it powers Web Push notifications and does no

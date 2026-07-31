@@ -1,18 +1,42 @@
 'use client';
 
+import { Effect } from 'effect';
 import { I18nProvider } from './I18nProvider';
 import { ThemeProvider } from '@cockpit/shared-ui';
 import { ToastProvider } from '@cockpit/shared-ui';
 import { TooltipProvider } from '@cockpit/shared-ui';
+import { BrowserRuntime } from '@cockpit/effect-runtime';
+import type { StoredTheme } from '@cockpit/shared-utils';
+import { saveSettings } from './effect/workspaceClient';
 
 interface ProvidersProps {
   children: React.ReactNode;
+  /**
+   * The theme the server has on file, read by the root layout. Passed through
+   * so the first client render agrees with the class boot.js already applied.
+   */
+  initialTheme?: StoredTheme;
 }
 
-export function Providers({ children }: ProvidersProps) {
+/**
+ * Write the theme to `settings.json`, the same file the language preference
+ * lives in. Fire-and-forget, exactly like `handleLanguageChange` — a failed
+ * preference write must never interrupt the UI, and `localStorage` has already
+ * taken the change for this origin.
+ *
+ * Defined at module scope so its identity is stable: it is a dependency of
+ * ThemeProvider's `setTheme`, which every consumer of the context holds.
+ */
+const persistTheme = (theme: StoredTheme): void => {
+  BrowserRuntime.runFork(
+    saveSettings({ theme }).pipe(Effect.orElse(() => Effect.void))
+  );
+};
+
+export function Providers({ children, initialTheme }: ProvidersProps) {
   return (
     <I18nProvider>
-      <ThemeProvider>
+      <ThemeProvider initialTheme={initialTheme} persistTheme={persistTheme}>
         <ToastProvider>
           {children}
           {/* Single global popover for every `data-tooltip` attribute,

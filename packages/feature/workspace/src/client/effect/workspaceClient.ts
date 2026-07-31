@@ -51,6 +51,8 @@ const httpPostJson = <A>(
 
 export interface SettingsResponse {
   language?: string
+  /** 'light' | 'dark' | 'system' — see shared-utils/bootTheme.ts. */
+  theme?: string
   [key: string]: unknown
 }
 
