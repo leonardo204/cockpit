@@ -178,6 +178,13 @@ app.prepare().then(async () => {
   });
   await scheduledTaskManager.init();
 
+  // Telegram two-way chat: one always-on getUpdates loop for the whole process
+  // (telegram-chat §5). Started here so the bot is reachable after a restart —
+  // the user talking to it is the trigger, and nothing inside the app would
+  // otherwise wake the listener. No-op when Telegram is off.
+  const { startTelegramChat } = await import(dev ? '@cockpit/feature-agent/server/lib/telegramChatBoot' : './dist/telegramChat.mjs');
+  startTelegramChat();
+
   // ============================================
   // Token gate — opt-in via `cockpit --token <value>` (COCKPIT_TOKEN).
   // Off by default (open). Local callers (loopback peer + no forwarding header)

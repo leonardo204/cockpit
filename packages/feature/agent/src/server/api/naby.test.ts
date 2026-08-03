@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, afterAll, afterEach, beforeAll, vi } from 'vitest';
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,11 @@ import {
   REFLECTION_IDLE_MS,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { AUTONOMY_STEP_CAP } from '../lib/autonomy';
+import {
+  resetBotCommandRegistration,
+  stopTelegramListener,
+  telegramListenerRunning,
+} from '../lib/telegramEscalation';
 
 /**
  * `reflection.run` — the on-demand entry point to the session-reflection sweep
@@ -830,5 +835,60 @@ describe('POST /api/naby — systemMcp rejects what it does not know', () => {
       if (result.ok) continue;
       expect(result.error).toContain('not-a-preset');
     }
+  });
+});
+
+/**
+ * `telegram.set` — the SAVE is what turns two-way chat on (telegram-chat §2/§5).
+ *
+ * Two things have to happen the moment the config can chat, and neither of them
+ * can wait for an escalation that may never come: the bot's command menu goes up
+ * (so `/sessions` autocompletes in the input box) and the always-on listener
+ * starts (so a message sent right after saving is answered).
+ */
+describe('POST /api/naby — telegram.set starts the chat (telegram-chat §5)', () => {
+  afterEach(async () => {
+    // Leave the throwaway store with Telegram OFF and no loop running: a live
+    // long-poll against a fake token would outlive this file.
+    await runNabyAction({ action: 'telegram.set', enabled: false });
+    stopTelegramListener();
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 5000 });
+    vi.unstubAllGlobals();
+  });
+
+  it('publishes the command menu and starts the listener', async () => {
+    const urls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown) => {
+        urls.push(String(input));
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: [] }) };
+      }),
+    );
+    resetBotCommandRegistration();
+
+    const result = await runNabyAction({
+      action: 'telegram.set',
+      enabled: true,
+      botToken: 'TOKEN',
+      chatId: '4242',
+    });
+    expect(result.ok).toBe(true);
+
+    await vi.waitFor(() => expect(urls.some((u) => u.includes('/setMyCommands'))).toBe(true), {
+      timeout: 4000,
+    });
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4000 });
+  });
+
+  it('does not start a listener for a half-written config', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, result: [] }) })),
+    );
+    // Enabled, but no chat id to send to: nothing to listen for yet.
+    const result = await runNabyAction({ action: 'telegram.set', enabled: true, chatId: '' });
+    expect(result.ok).toBe(true);
+    expect(telegramListenerRunning()).toBe(false);
   });
 });

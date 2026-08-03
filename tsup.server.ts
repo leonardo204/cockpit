@@ -5,6 +5,9 @@ export default defineConfig({
     wsServer:       'src/lib/wsServer.ts',
     auth:           'src/lib/auth.ts',
     scheduledTasks: 'packages/feature/agent/src/server/scheduledTasks.ts',
+    // The always-on Telegram listener (telegram-chat §5) — started by the custom
+    // server so the bot answers after a restart without anyone opening Settings.
+    telegramChat: 'packages/feature/agent/src/server/lib/telegramChatBoot.ts',
   },
   outDir: 'dist',
   format: 'esm',

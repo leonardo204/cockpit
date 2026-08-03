@@ -18,12 +18,18 @@
 //      (`sendFinalReport`) — the user who answered from their phone learns how it
 //      turned out without opening the app.
 //
-// WHY THE LOOP IS REFERENCE-COUNTED, NOT ALWAYS-ON. Telegram allows exactly ONE
-// in-flight `getUpdates` per bot: a permanently running long-poll would make the
-// Settings "Detect" button (which also calls getUpdates) fail with 409, and would
-// hold a socket open forever for a feature that is idle most of the time. So the
-// loop starts on the first pending escalation and exits as soon as the last one is
-// settled. Pending approvals are the only thing it exists to serve.
+// THE LOOP IS NOW ALWAYS-ON (telegram-chat §5). It used to be reference-counted —
+// started by the first pending escalation, ended by the last — because a
+// permanently open long-poll was cost with no benefit while the only thing the
+// chat could say was "yes" or "no" to a question naby had asked first.
+//
+// Two-way chat inverts that: the user starts the conversation, so there is no
+// pending anything to key a loop off. Telegram still allows exactly ONE in-flight
+// `getUpdates` per bot (a second gets 409), so the answer is not a second loop —
+// it is THIS loop, promoted: it runs whenever Telegram is enabled with a chat id,
+// and the approval/check-in watches ride on top of it exactly as before. The
+// Settings "Detect" button, which also calls getUpdates, PAUSES it for the
+// duration (pauseTelegramListener) rather than colliding with it.
 //
 // WHY THE OFFSET IS PERSISTED. `getUpdates` replays every unconfirmed update. A
 // stale "yes" typed hours ago must never resolve the NEXT approval, so the offset
@@ -50,9 +56,11 @@ import {
   pollTelegramUpdates,
   readTelegramConfig,
   sendTelegramMessage,
+  setMyCommands,
   type TelegramConfig,
   type TelegramUpdate,
 } from './telegram';
+import { BOT_COMMANDS } from './telegramChatStrings';
 
 /** Store setting holding the getUpdates watermark (see the header note). */
 export const TELEGRAM_OFFSET_KEY = 'telegram.updateOffset';
@@ -61,8 +69,11 @@ export const TELEGRAM_OFFSET_KEY = 'telegram.updateOffset';
  *  loop costs one socket and no polling churn. */
 const POLL_TIMEOUT_SEC = 25;
 
-/** Floor between iterations. A long-poll that fails (offline, 409) returns at
- *  once; without this the loop would spin hot on a network error. */
+/** Floor between EMPTY iterations. A long-poll that fails (offline, 409) returns
+ *  at once; without this the loop would spin hot on a network error. It does not
+ *  apply when the poll actually delivered something: consecutive messages are
+ *  exactly what the loop exists to carry, and making the second one wait two
+ *  seconds behind the first is latency for nothing. */
 const MIN_ITERATION_MS = 2000;
 
 /** How much of a tool's input is quoted in the escalation message. Enough to
@@ -153,6 +164,10 @@ export type FinalReport = {
   stepsMax?: number;
   /** Why the autonomy loop stopped (`AutonomyDecision.reason`). */
   stopReason?: string;
+  /** The session this report is about. Not printed — it is what makes the sent
+   *  message REPLYABLE (telegram-chat §1.3) and what tells a chat-started turn
+   *  apart from an escalated one (§4). */
+  sessionId?: string;
 };
 
 export function formatFinalReport(opts: FinalReport): string {
@@ -292,7 +307,30 @@ type BridgeState = {
    *  an idle one, which is precisely how a transport fault gets read as "the
    *  user never answered". */
   lastPollError?: string;
+  /** The Settings "Detect" button is holding the bot's single getUpdates slot
+   *  (telegram-chat §5). The loop exits on this and is restarted on resume. */
+  paused: boolean;
+  /** Shutdown (or a test) asked the loop to end regardless of config. */
+  stopRequested: boolean;
+  /** Aborts the poll in flight, so a pause takes effect in milliseconds rather
+   *  than at the end of a 25-second long-poll. */
+  pollAbort?: AbortController;
+  /** Ends the back-off sleep early, for the same reason. */
+  wake?: () => void;
+  /** message_id → the session that message came out of (telegram-chat §1.3).
+   *  Bounded: a reply to a message older than this is answered by the LINK, which
+   *  is the same thing the user would get from a fresh message. */
+  sentBySession: Map<number, string>;
+  /** Sessions with a Telegram-originated turn in flight. Two jobs: the busy
+   *  notice (§4), and suppressing the engine's own final report for a turn whose
+   *  answer the chat path is already going to send. */
+  chatTurns: Set<string>;
+  /** Whether the bot's command menu has been published this process. */
+  commandsRegistered: boolean;
 };
+
+/** How many sent messages stay routable by reply. */
+const SENT_MAP_MAX = 50;
 
 const g = globalThis as unknown as { __nabyTelegramBridge?: BridgeState };
 const state: BridgeState =
@@ -304,7 +342,44 @@ const state: BridgeState =
     offset: 0,
     drained: false,
     loopRunning: false,
+    paused: false,
+    stopRequested: false,
+    sentBySession: new Map(),
+    chatTurns: new Set(),
+    commandsRegistered: false,
   });
+
+// -- what the chat half needs from the bridge --------------------------------
+
+/** Remember which session a bot message came out of, so a REPLY to it routes
+ *  back there (telegram-chat §1.3). Oldest entries fall off — the map is a
+ *  convenience, not a record. */
+export function rememberChatMessage(messageId: number, sessionId: string): void {
+  if (!messageId) return;
+  state.sentBySession.set(messageId, sessionId);
+  while (state.sentBySession.size > SENT_MAP_MAX) {
+    const oldest = state.sentBySession.keys().next();
+    if (oldest.done) break;
+    state.sentBySession.delete(oldest.value);
+  }
+}
+
+/** The session a replied-to bot message belongs to, or undefined when it is
+ *  older than the map or from a previous process. */
+export function sessionForChatMessage(messageId: number): string | undefined {
+  return state.sentBySession.get(messageId);
+}
+
+/** Mark (or clear) a Telegram-originated turn on a session. */
+export function markChatTurn(sessionId: string, running: boolean): void {
+  if (running) state.chatTurns.add(sessionId);
+  else state.chatTurns.delete(sessionId);
+}
+
+/** True while a Telegram-originated turn is in flight on that session. */
+export function isChatTurnInFlight(sessionId: string): boolean {
+  return state.chatTurns.has(sessionId);
+}
 
 /** A short token for one escalation. Process-local and monotonic — it only has to
  *  be unique among what is currently being watched, and a button from a previous
@@ -336,6 +411,26 @@ function idForRef(ref: string): string | undefined {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The back-off between empty polls — INTERRUPTIBLE.
+ *
+ * A plain sleep would make "stop the loop" mean "stop the loop within two
+ * seconds", and both callers of stop are waiting on the answer: the Detect
+ * button holds the user, and a shutdown holds the process. Waking the sleep
+ * makes the pause handshake immediate.
+ */
+function idleSleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      state.wake = undefined;
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    state.wake = done;
+  });
+}
 
 function readOffset(store: Store): number {
   const n = Number(store.getSetting(TELEGRAM_OFFSET_KEY) ?? '0');
@@ -506,8 +601,17 @@ export async function finishCheckinEscalation(opts: {
 export async function sendFinalReport(store: Store, report: FinalReport): Promise<void> {
   const cfg = readTelegramConfig(store);
   if (!isTelegramReady(cfg)) return;
+  // A turn the CHAT started reports itself (telegram-chat §4): the chat path
+  // waits for the run and sends the answer, so letting the engine also report
+  // would put the same answer on the phone twice.
+  if (report.sessionId && state.chatTurns.has(report.sessionId)) return;
   const sent = await sendTelegramMessage(cfg, formatFinalReport(report));
-  if (!sent.ok) console.warn(`[telegram] final report failed: ${sent.error}`);
+  if (!sent.ok) {
+    console.warn(`[telegram] final report failed: ${sent.error}`);
+    return;
+  }
+  // A report is a reply target too: answering it continues THAT session.
+  if (report.sessionId) rememberChatMessage(sent.messageId, report.sessionId);
 }
 
 // -- the polling loop ---------------------------------------------------------
@@ -516,16 +620,80 @@ export async function sendFinalReport(store: Store, report: FinalReport): Promis
  *  caller (a paused turn) must not wait on a long-poll. */
 export function ensureListener(store: Store): void {
   if (state.loopRunning) return;
+  state.stopRequested = false;
   state.loopRunning = true;
   void runListener(store).finally(() => {
     state.loopRunning = false;
     // A watch added during the shutdown window would otherwise be stranded, so
-    // hand it to a fresh loop.
-    if (state.watching.size > 0) ensureListener(store);
+    // hand it to a fresh loop. (Not while paused or stopped: those are deliberate
+    // silences, and the pause handshake below waits for the loop to be gone.)
+    if (state.watching.size > 0 && !state.paused && !state.stopRequested) ensureListener(store);
   });
 }
 
+/**
+ * Hand the bot's single `getUpdates` slot to someone else (the Settings "Detect"
+ * button) — telegram-chat §5.
+ *
+ * Resolves once the loop has actually EXITED, not merely been asked to: two
+ * concurrent getUpdates on one bot is the 409 this exists to prevent, so a
+ * caller that starts polling on the strength of a request that has not landed
+ * yet has gained nothing. The in-flight long-poll is aborted so the handshake
+ * takes milliseconds instead of up to 25 seconds.
+ */
+export async function pauseTelegramListener(): Promise<void> {
+  state.paused = true;
+  interruptLoop();
+  const deadline = Date.now() + 5000;
+  while (state.loopRunning && Date.now() < deadline) await sleep(20);
+}
+
+/** Give the slot back and start listening again (a no-op when Telegram is off —
+ *  `ensureListener` re-reads the config). */
+export function resumeTelegramListener(store: Store): void {
+  state.paused = false;
+  ensureListener(store);
+}
+
+/** Whether a poll loop is alive right now (diagnostics, and test teardown). */
+export function telegramListenerRunning(): boolean {
+  return state.loopRunning;
+}
+
+/** End the loop regardless of config (shutdown, and test teardown). It restarts
+ *  on the next `ensureListener`. */
+export function stopTelegramListener(): void {
+  state.stopRequested = true;
+  interruptLoop();
+}
+
+/** Cut short whatever the loop is currently waiting on — the long-poll in flight
+ *  and the back-off sleep — so a pause/stop lands in milliseconds. */
+function interruptLoop(): void {
+  try {
+    state.pollAbort?.abort();
+  } catch {
+    /* nothing in flight */
+  }
+  state.wake?.();
+}
+
+/**
+ * Whether the loop should keep going. ALWAYS-ON when Telegram can chat (enabled
+ * + token + chat id, telegram-chat §5); before that promotion this was
+ * `watching.size > 0`, and a pending escalation still keeps a loop alive for the
+ * transitional case where the config is half-written.
+ */
+function shouldKeepListening(store: Store): boolean {
+  if (state.stopRequested || state.paused) return false;
+  return isTelegramReady(readTelegramConfig(store));
+}
+
 async function runListener(store: Store): Promise<void> {
+  // Someone else holds the slot (Detect). Return before the backlog drain below,
+  // which is itself a getUpdates and would be the very 409 the pause prevents —
+  // reachable when the first escalation of the process lands mid-detect.
+  if (state.paused || state.stopRequested) return;
   const cfg = readTelegramConfig(store);
   if (!isTelegramReady(cfg)) return;
   if (state.offset === 0) state.offset = readOffset(store);
@@ -540,8 +708,18 @@ async function runListener(store: Store): Promise<void> {
       writeOffset(store, nextOffset);
     }
   }
-  console.log(`[telegram] listening for approvals (offset ${state.offset})`);
-  while (state.watching.size > 0) {
+  // The command menu, published once per process on the way into the loop
+  // (telegram-chat §2). Best-effort: the commands work either way.
+  void registerBotCommands(cfg);
+  console.log(`[telegram] listening (offset ${state.offset})`);
+  // Consecutive polls that came back empty IMMEDIATELY. A long-poll is supposed
+  // to block for 25 seconds, so one fast empty answer is ordinary (a confirm
+  // round-trip); a run of them means something is wrong — offline, or a 409 —
+  // and that is the hot spin the back-off exists to stop. Counting them, rather
+  // than sleeping after every empty poll, keeps the first message after an idle
+  // stretch from waiting two seconds for no reason.
+  let fastEmptyStreak = 0;
+  while (shouldKeepListening(store) || state.watching.size > 0) {
     // Re-read each iteration so disabling Telegram (or clearing the token) in
     // Settings ends the loop rather than being noticed only next turn.
     const live = readTelegramConfig(store);
@@ -549,10 +727,18 @@ async function runListener(store: Store): Promise<void> {
       console.log('[telegram] listener stopping: Telegram disabled');
       return;
     }
+    if (state.stopRequested || state.paused) {
+      console.log(`[telegram] listener ${state.paused ? 'paused' : 'stopped'}`);
+      return;
+    }
     const started = Date.now();
+    const abort = new AbortController();
+    state.pollAbort = abort;
     const { updates, nextOffset, error } = await pollTelegramUpdates(live, state.offset, {
       timeoutSec: POLL_TIMEOUT_SEC,
+      signal: abort.signal,
     });
+    state.pollAbort = undefined;
     // Report the TRANSITION only — first failure, and the recovery — so an
     // outage is visible in the log without burying it under one line per poll.
     if (error && error !== state.lastPollError) {
@@ -566,20 +752,88 @@ async function runListener(store: Store): Promise<void> {
       writeOffset(store, nextOffset);
     }
     for (const update of updates) {
-      await handleUpdate(live, update);
+      // One bad update must not end an ALWAYS-ON loop. While the loop lived only
+      // as long as a pending approval, a throw here ended something that was
+      // about to end anyway; now it would take the whole channel down — every
+      // future message and every future escalation — until the next restart.
+      try {
+        await handleUpdate(store, live, update);
+      } catch (e) {
+        console.error(`[telegram] update ${update.update_id} failed:`, e);
+      }
     }
     const elapsed = Date.now() - started;
-    if (elapsed < MIN_ITERATION_MS && state.watching.size > 0) {
-      await sleep(MIN_ITERATION_MS - elapsed);
+    const fastEmpty = updates.length === 0 && elapsed < MIN_ITERATION_MS;
+    fastEmptyStreak = fastEmpty ? fastEmptyStreak + 1 : 0;
+    // A FAILED poll backs off immediately — that is the hot spin (offline, 409)
+    // the floor was written for. A poll that merely came back empty too fast gets
+    // one free retry first, so the first message after an idle stretch is not
+    // held for two seconds behind a poll that had nothing to say.
+    if ((error || fastEmptyStreak > 1) && !state.paused && !state.stopRequested) {
+      await idleSleep(Math.max(0, MIN_ITERATION_MS - elapsed));
     }
   }
-  console.log('[telegram] listener idle — no pending approvals');
+  console.log('[telegram] listener ended');
 }
 
-/** Apply one update. Unwatches BEFORE resolving so the turn's own `settle`
- *  (which calls finishEscalation) sees nothing left to report — this path already
- *  confirmed in-chat. */
-async function handleUpdate(cfg: TelegramConfig, update: TelegramUpdate): Promise<void> {
+/** Publish the "/" command menu once per process (best-effort, §2). */
+async function registerBotCommands(cfg: TelegramConfig): Promise<void> {
+  if (state.commandsRegistered) return;
+  state.commandsRegistered = true;
+  const done = await setMyCommands(cfg, BOT_COMMANDS);
+  if (!done.ok) {
+    // Not fatal and not retried in a tight loop: the commands themselves work
+    // whether or not the menu lists them.
+    console.warn(`[telegram] setMyCommands failed: ${done.error}`);
+  }
+}
+
+/** Force the next loop start (or save) to publish the menu again — used when the
+ *  bot token changes, since the menu belongs to the bot, not to the process. */
+export function resetBotCommandRegistration(): void {
+  state.commandsRegistered = false;
+}
+
+/** Publish the menu now, for the Settings save path. */
+export async function registerTelegramCommands(store: Store): Promise<void> {
+  const cfg = readTelegramConfig(store);
+  if (!cfg.botToken) return;
+  await registerBotCommands(cfg);
+}
+
+/** The chat an update came from, or undefined when it names none. */
+function updateChatId(update: TelegramUpdate): string | undefined {
+  const id = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+  return id === undefined ? undefined : String(id);
+}
+
+/**
+ * Apply one update — THE ROUTING PRIORITY of telegram-chat §1.
+ *
+ *   1. an answer to a pending approval / check-in (buttons and bare yes/no/N),
+ *   2. a "/" command,
+ *   3. a reply to one of the bot's own messages,
+ *   4. plain text on the linked session.
+ *
+ * 1 outranks the rest because an answer to a question naby ASKED is never a new
+ * request: if a check-in is waiting and the user types "2", they are choosing
+ * option 2, not starting a turn that says "2".
+ *
+ * Unwatches BEFORE resolving so the turn's own `settle` (which calls
+ * finishEscalation) sees nothing left to report — this path already confirmed
+ * in-chat.
+ */
+async function handleUpdate(store: Store, cfg: TelegramConfig, update: TelegramUpdate): Promise<void> {
+  // §6 — the configured chat is the only authenticated one. An update from a
+  // foreign chat is dropped whole, before any interpretation: the bot token is
+  // enough to message the bot, so this check is what stands between a stranger
+  // and a turn on the user's machine.
+  const from = updateChatId(update);
+  if (from !== undefined && from !== String(cfg.chatId)) {
+    console.warn(`[telegram] ignoring update from unknown chat ${from}`);
+    return;
+  }
+
   const newestCheckin = pickTextReplyTarget(
     [...state.watching.values()].filter((w): w is Watched & { kind: 'checkin' } => w.kind === 'checkin'),
   );
@@ -587,7 +841,11 @@ async function handleUpdate(cfg: TelegramConfig, update: TelegramUpdate): Promis
     idForRef,
     pendingOptionCount: newestCheckin?.options.length ?? 0,
   });
-  if (!seen) return;
+  // Nothing pending recognizes it → it belongs to the chat (priorities 2–4).
+  if (!seen) {
+    routeToChat(store, cfg, update);
+    return;
+  }
 
   // -- a button from a question that has already moved on ---------------------
   // (answered in the app, timed out, or a server restart lost the map).
@@ -644,7 +902,13 @@ async function handleUpdate(cfg: TelegramConfig, update: TelegramUpdate): Promis
 
   // -- a bare number answers the newest pending CHECK-IN ----------------------
   if (seen.kind === 'checkinText') {
-    if (!newestCheckin) return;
+    // No check-in is waiting for it after all (it was answered in the app between
+    // the poll and here): a bare number is then ordinary text, and swallowing it
+    // would lose a message the user typed to the linked session.
+    if (!newestCheckin) {
+      routeToChat(store, cfg, update);
+      return;
+    }
     const option = newestCheckin.options[seen.chosen];
     if (option === undefined) return;
     unwatch(newestCheckin.id);
@@ -659,7 +923,13 @@ async function handleUpdate(cfg: TelegramConfig, update: TelegramUpdate): Promis
   const target = pickTextReplyTarget(
     [...state.watching.values()].filter((w) => w.kind === 'approval'),
   );
-  if (!target) return;
+  // Nothing is waiting on a yes/no, so "네" is just a message — send it to the
+  // linked session rather than dropping it (pre-chat, dropping was correct: there
+  // was nowhere for it to go).
+  if (!target) {
+    routeToChat(store, cfg, update);
+    return;
+  }
   unwatch(target.id);
   const resolved = resolveApproval(target.id, telegramDecision(seen.decision));
   if (resolved) {
@@ -669,4 +939,47 @@ async function handleUpdate(cfg: TelegramConfig, update: TelegramUpdate): Promis
     );
     console.log(`[telegram] ${seen.decision} from reply → ${target.id}`);
   }
+}
+
+/**
+ * Hand an update to the chat half (telegram-chat §1.2–1.4).
+ *
+ * FIRE AND FORGET, and that is the load-bearing part: a chat turn can run for
+ * minutes, and awaiting it here would stop the poll — which is exactly the loop
+ * that has to keep running for the approval or check-in THAT TURN raises to reach
+ * the phone. The one thing that must not happen is the loop waiting on a turn
+ * that is waiting on the loop.
+ */
+function routeToChat(store: Store, cfg: TelegramConfig, update: TelegramUpdate): void {
+  if (!update.message) return;
+  void (async () => {
+    try {
+      const chat = await import('./telegramChat');
+      const runtime = await chat.chatRuntimeDeps();
+      await chat.handleChatUpdate(
+        {
+          store,
+          send: (text: string) => sendTelegramMessage(cfg, text),
+          rememberMessage: rememberChatMessage,
+          sessionForMessage: sessionForChatMessage,
+          now: () => Date.now(),
+          isBusy: (sessionId: string) => runtime.isBusy(sessionId) || isChatTurnInFlight(sessionId),
+          runTurn: async (opts) => {
+            markChatTurn(opts.sessionId, true);
+            try {
+              return await runtime.runTurn(opts);
+            } finally {
+              markChatTurn(opts.sessionId, false);
+            }
+          },
+        },
+        cfg,
+        update,
+      );
+    } catch (e) {
+      // A chat failure must never take the listener down with it — the next
+      // update, and every pending approval, still need this loop.
+      console.error('[telegram] chat handling failed:', e);
+    }
+  })();
 }

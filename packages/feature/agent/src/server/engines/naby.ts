@@ -1729,6 +1729,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           await sendFinalReport(store, {
             ok: emittedResult && sawResult && !errorMessage,
             text: assistantText,
+            // Names the session so the sent message becomes a REPLY TARGET
+            // (telegram-chat §1.3) — and so a turn the chat itself started is
+            // recognized and not reported twice.
+            sessionId,
             ...(errorMessage ? { error: errorMessage } : {}),
             ...(routedAgent ? { agentName: routedAgent.name } : {}),
             durationMs: Date.now() - startedAt,

@@ -312,6 +312,39 @@ export async function answerCallbackQuery(
   }
 }
 
+/**
+ * Publish the bot's command menu (`/sessions`, `/use`, …) so Telegram
+ * autocompletes them in the input box.
+ *
+ * DISCOVERABILITY IS THE WHOLE POINT (telegram-chat §2): the alternative to a
+ * command menu is the user remembering a syntax nobody wrote down, which is how
+ * a control surface goes unused. It is also why this is best-effort — the
+ * commands WORK whether or not the menu registered, so a failure is logged and
+ * never propagated to the caller that was doing something else (saving settings,
+ * starting the loop).
+ */
+export async function setMyCommands(
+  cfg: Pick<TelegramConfig, 'botToken'>,
+  commands: ReadonlyArray<{ command: string; description: string }>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/bot${cfg.botToken}/setMyCommands`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commands }),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { ok: boolean; description?: string }
+      | null;
+    if (!res.ok || !json?.ok) {
+      return { ok: false, error: json?.description ?? `telegram setMyCommands failed (${res.status})` };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: describeFetchError(e) };
+  }
+}
+
 /** Discover the chat id to send to by reading the most recent update from the
  *  bot — the naby-native, dotclaude-free way to finish setup: the user messages
  *  their naby bot once, then this returns the chat id to save. Needs only the
@@ -341,7 +374,22 @@ export async function detectChatId(
 
 export type TelegramUpdate = {
   update_id: number;
-  message?: { chat?: { id: number }; text?: string };
+  message?: {
+    /** The incoming message's own id. */
+    message_id?: number;
+    chat?: { id: number };
+    text?: string;
+    /**
+     * The bot message this one is a REPLY to (telegram-chat §1.3). Carries the
+     * routing: a reply to an answer goes back to the session that produced it,
+     * whatever the chat is currently linked to.
+     */
+    reply_to_message?: { message_id?: number };
+    /** Present when the user sent a photo/document instead of text — answered
+     *  with "text only" rather than silence. */
+    photo?: unknown[];
+    document?: unknown;
+  };
   callback_query?: {
     id: string;
     data?: string;

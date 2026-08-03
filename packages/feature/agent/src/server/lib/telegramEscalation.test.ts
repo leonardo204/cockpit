@@ -12,6 +12,15 @@ import {
   escalateApproval,
   finishEscalation,
   pendingEscalations,
+  ensureListener,
+  pauseTelegramListener,
+  rememberChatMessage,
+  resetBotCommandRegistration,
+  resumeTelegramListener,
+  sendFinalReport,
+  sessionForChatMessage,
+  stopTelegramListener,
+  telegramListenerRunning,
   TELEGRAM_OFFSET_KEY,
 } from './telegramEscalation';
 import { registerApproval, hasPendingApproval } from './approvalRegistry';
@@ -231,7 +240,14 @@ function stubTelegram(updateQueue: Batch[]) {
   return { calls };
 }
 
-afterEach(() => {
+// The loop is ALWAYS-ON now (telegram-chat §5): it no longer exits when the last
+// escalation settles, so every test has to hand the bot's single getUpdates slot
+// back before the next one stubs a new fetch. Awaiting the exit (not just asking
+// for it) is the point — a surviving loop would consume the NEXT test's queued
+// updates.
+afterEach(async () => {
+  stopTelegramListener();
+  await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 5000 });
   vi.unstubAllGlobals();
 });
 
@@ -399,6 +415,35 @@ describe('telegramEscalation — bridge (send → poll → resolveApproval)', ()
     expect(pendingEscalations().some((w) => w.id === 'sess-off:tc1')).toBe(false);
   });
 
+  it('ignores an update from a chat that is not the configured one', async () => {
+    const approvalId = 'sess-foreign:tc1';
+    stubTelegram([
+      [],
+      // A stranger who found the bot presses deny. The token alone is not
+      // authorization: chat_id is (telegram-chat §6).
+      () => [
+        {
+          update_id: 4242,
+          callback_query: {
+            id: 'cqx',
+            data: `nbapv:deny:${pendingEscalations()[0]!.ref}`,
+            message: { chat: { id: 999999 } },
+          },
+        },
+      ],
+      [],
+    ]);
+    const store = fakeStore({ ...READY, 'telegram.chatId': '4242' });
+    let decided: unknown;
+    registerApproval(approvalId, (d) => void (decided = d), 9);
+    await escalateApproval({ store, approvalId, toolName: 'Bash', now: 9 });
+    // Give the loop two iterations to prove it did NOT act on it.
+    await vi.waitFor(() => expect(store.getSetting(TELEGRAM_OFFSET_KEY)).toBe('4243'), { timeout: 4000 });
+    expect(decided).toBeUndefined();
+    expect(hasPendingApproval(approvalId)).toBe(true);
+    await finishEscalation({ store, approvalId, decision: 'deny', reason: 'test cleanup' });
+  });
+
   it('stops watching and says so when the app answered first', async () => {
     const approvalId = 'sess-app:tc2';
     const { calls } = stubTelegram([[], []]);
@@ -417,5 +462,149 @@ describe('telegramEscalation — bridge (send → poll → resolveApproval)', ()
     const before = calls.length;
     await finishEscalation({ store, approvalId, decision: 'deny' });
     expect(calls.length).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the always-on loop and the chat it now carries (telegram-chat §1, §5)
+// ---------------------------------------------------------------------------
+
+const CHAT_READY = {
+  'telegram.enabled': 'true',
+  'telegram.botToken': 'TOKEN',
+  'telegram.chatId': '4242',
+};
+
+/** A plain message from the configured chat. */
+function chatMessage(update_id: number, text: string): TelegramUpdate {
+  return { update_id, message: { message_id: update_id, chat: { id: 4242 }, text } };
+}
+
+describe('telegramEscalation — the promoted loop (telegram-chat §5)', () => {
+  it('keeps polling with nothing pending, and publishes the command menu', async () => {
+    const { calls } = stubTelegram([[], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    // The menu is published once per process; an earlier test already spent that
+    // one. A new bot token does the same in production (`telegram.set`).
+    resetBotCommandRegistration();
+
+    ensureListener(store);
+
+    // Before the promotion this loop would have exited at once: there is no
+    // pending approval anywhere.
+    await vi.waitFor(() => expect(calls.filter((c) => c.url.includes('/getUpdates')).length).toBeGreaterThan(1), {
+      timeout: 4000,
+    });
+    expect(telegramListenerRunning()).toBe(true);
+
+    const menu = calls.find((c) => c.url.includes('/setMyCommands'));
+    expect(menu).toBeDefined();
+    const registered = (menu!.body as { commands: { command: string }[] }).commands.map((c) => c.command);
+    expect(registered).toContain('sessions');
+    expect(registered).toContain('use');
+  });
+
+  it('hands the getUpdates slot to Detect and takes it back (the 409 handshake)', async () => {
+    stubTelegram([[], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4000 });
+
+    // Resolves only once the loop is actually gone — a caller that starts its own
+    // getUpdates on a request that has not landed yet gets the 409 this prevents.
+    await pauseTelegramListener();
+    expect(telegramListenerRunning()).toBe(false);
+
+    resumeTelegramListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4000 });
+  });
+
+  it('stops when Telegram is disabled mid-flight (the existing contract)', async () => {
+    stubTelegram([[], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4000 });
+    store.setSetting('telegram.enabled', 'false');
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 6000 });
+  });
+});
+
+describe('telegramEscalation — routing priority (telegram-chat §1)', () => {
+  it('an answer to a pending approval outranks the chat', async () => {
+    const approvalId = 'sess-prio:tc1';
+    const { calls } = stubTelegram([[], [chatMessage(500, '네')], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    let decided: { behavior: string } | undefined;
+    registerApproval(approvalId, (d) => void (decided = d), 11);
+
+    await escalateApproval({ store, approvalId, toolName: 'Bash', now: 11 });
+    await vi.waitFor(() => expect(decided?.behavior).toBe('allow'), { timeout: 4000 });
+    // It resolved the approval and did NOT also start a turn / answer as chat.
+    const texts = calls.filter((c) => c.url.includes('/sendMessage')).map((c) => (c.body as { text: string }).text);
+    expect(texts.some((t) => t.includes('✅ Approved'))).toBe(true);
+    expect(texts.some((t) => t.includes('연결된 세션이 없다'))).toBe(false);
+  });
+
+  it('a "/" command reaches the chat when nothing is pending', async () => {
+    const { calls } = stubTelegram([[], [chatMessage(600, '/help')], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(
+      () =>
+        expect(
+          calls
+            .filter((c) => c.url.includes('/sendMessage'))
+            .some((c) => String((c.body as { text: string }).text).includes('/sessions')),
+        ).toBe(true),
+      { timeout: 6000 },
+    );
+  });
+
+  it('plain text with no link is answered, not swallowed', async () => {
+    const { calls } = stubTelegram([[], [chatMessage(700, '오늘 뭐 했지')], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(
+      () =>
+        expect(
+          calls
+            .filter((c) => c.url.includes('/sendMessage'))
+            .some((c) => String((c.body as { text: string }).text).includes('연결된 세션이 없다')),
+        ).toBe(true),
+      { timeout: 6000 },
+    );
+  });
+
+  it('a bare "yes" with nothing pending is a message, not a lost approval', async () => {
+    const { calls } = stubTelegram([[], [chatMessage(800, '응')], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(
+      () =>
+        expect(
+          calls
+            .filter((c) => c.url.includes('/sendMessage'))
+            .some((c) => String((c.body as { text: string }).text).includes('연결된 세션이 없다')),
+        ).toBe(true),
+      { timeout: 6000 },
+    );
+  });
+});
+
+describe('telegramEscalation — reply routing map (telegram-chat §1.3)', () => {
+  it('a final report becomes replyable to its own session', async () => {
+    const { calls } = stubTelegram([[]]);
+    const store = fakeStore({ ...CHAT_READY });
+    await sendFinalReport(store, { ok: true, text: 'done', sessionId: 'sess-report' });
+    expect(calls.some((c) => c.url.includes('/sendMessage'))).toBe(true);
+    // stubTelegram answers every send with message_id 1.
+    expect(sessionForChatMessage(1)).toBe('sess-report');
+  });
+
+  it('keeps only the most recent messages routable', () => {
+    for (let i = 1; i <= 60; i += 1) rememberChatMessage(10_000 + i, `s${i}`);
+    // The oldest fell off; the newest is still there.
+    expect(sessionForChatMessage(10_001)).toBeUndefined();
+    expect(sessionForChatMessage(10_060)).toBe('s60');
   });
 });

@@ -101,6 +101,14 @@ import {
   type TelegramConfig,
 } from '../lib/telegram';
 import {
+  ensureListener,
+  pauseTelegramListener,
+  registerTelegramCommands,
+  resetBotCommandRegistration,
+  resumeTelegramListener,
+  stopTelegramListener,
+} from '../lib/telegramEscalation';
+import {
   findSystemMcpPreset,
   mergeSystemMcpFields,
   readPresetUrl,
@@ -878,8 +886,24 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // secret because the form showed a mask. A non-blank value replaces it.
       if (typeof body.botToken === 'string' && body.botToken.trim()) patch.botToken = body.botToken.trim();
       if (typeof body.chatId === 'string') patch.chatId = body.chatId.trim();
+      // A NEW TOKEN IS A NEW BOT: its command menu is empty until we publish one,
+      // so the once-per-process guard has to be lifted here or the menu would
+      // only appear after a restart.
+      if (patch.botToken) resetBotCommandRegistration();
       writeTelegramConfig(store, patch);
       const cfg = readTelegramConfig(store);
+      // Saving is what turns two-way chat ON (telegram-chat §5): the loop runs
+      // whenever the config can chat, so it starts here rather than waiting for
+      // an escalation that may never come. Both calls are best-effort and neither
+      // is awaited — Settings must answer at once.
+      if (isTelegramReady(cfg)) {
+        void registerTelegramCommands(store);
+        ensureListener(store);
+      } else {
+        // Disabled or half-configured: the loop notices on its next iteration and
+        // exits (it re-reads the config every pass), so nothing to do here.
+        stopTelegramListener();
+      }
       return {
         ok: true,
         telegram: {
@@ -902,11 +926,22 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
 
     case 'telegram.detectChat': {
       const cfg = readTelegramConfig(store);
-      const found = await detectChatId(cfg);
-      if (!found.ok) return { ok: false, error: found.error };
-      // Persist it so the next get/test uses it, and echo it to the UI.
-      writeTelegramConfig(store, { chatId: found.chatId });
-      return { ok: true, chatId: found.chatId };
+      // ONE getUpdates PER BOT (telegram-chat §5). Detect calls getUpdates too,
+      // and with the listener promoted to always-on the two would collide with a
+      // 409 — which reads to the user as "Detect is broken". So the loop hands
+      // the slot over for the length of the call and takes it back after. The
+      // shared watermark already prevents a double interpretation of whatever
+      // Detect consumes.
+      await pauseTelegramListener();
+      try {
+        const found = await detectChatId(cfg);
+        if (!found.ok) return { ok: false, error: found.error };
+        // Persist it so the next get/test uses it, and echo it to the UI.
+        writeTelegramConfig(store, { chatId: found.chatId });
+        return { ok: true, chatId: found.chatId };
+      } finally {
+        resumeTelegramListener(store);
+      }
     }
 
     case 'approval.resolve': {
