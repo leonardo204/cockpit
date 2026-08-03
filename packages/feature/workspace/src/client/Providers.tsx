@@ -3,7 +3,6 @@
 import { Effect } from 'effect';
 import { I18nProvider } from './I18nProvider';
 import { ThemeProvider } from '@cockpit/shared-ui';
-import { ToastProvider } from '@cockpit/shared-ui';
 import { TooltipProvider } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import type { StoredTheme } from '@cockpit/shared-utils';
@@ -37,14 +36,15 @@ export function Providers({ children, initialTheme }: ProvidersProps) {
   return (
     <I18nProvider>
       <ThemeProvider initialTheme={initialTheme} persistTheme={persistTheme}>
-        <ToastProvider>
-          {children}
-          {/* Single global popover for every `data-tooltip` attribute,
-              including those forwarded by the <Tooltip> wrapper. Lives
-              outside any panel so its `position: fixed` stays viewport-
-              relative under panel `translateX` transforms. */}
-          <TooltipProvider />
-        </ToastProvider>
+        {children}
+        {/* Single global popover for every `data-tooltip` attribute,
+            including those forwarded by the <Tooltip> wrapper. Lives
+            outside any panel so its `position: fixed` stays viewport-
+            relative under panel `translateX` transforms. */}
+        <TooltipProvider />
+        {/* No ToastProvider: `toast()` is imperative and mounts its own
+            singleton container on document.body. The provider that used to
+            wrap this tree rendered a second, unreachable toast stack. */}
       </ThemeProvider>
     </I18nProvider>
   );

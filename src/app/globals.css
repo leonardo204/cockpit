@@ -353,10 +353,14 @@ body {
   display: none;
 }
 
-/* Toast animations */
-@keyframes slideIn {
+/* Toast animations.
+   The stack sits in the bottom-right corner, so a toast rises INTO place and
+   sinks back out — the old pair slid down from the top edge, which fought the
+   new anchor. Durations are mirrored by TOAST_ENTER_MS / TOAST_EXIT_MS in
+   packages/shared/ui/src/Toast.tsx; change both together. */
+@keyframes toastIn {
   from {
-    transform: translateY(-100%);
+    transform: translateY(16px);
     opacity: 0;
   }
   to {
@@ -365,15 +369,27 @@ body {
   }
 }
 
-@keyframes slideOut {
+@keyframes toastOut {
   from {
     transform: translateY(0);
     opacity: 1;
   }
   to {
-    transform: translateY(-100%);
+    transform: translateY(8px);
     opacity: 0;
   }
+}
+
+/* The one hardcoded color in the toast: a shadow alpha, which has no token.
+   Everything else on the card is `bg-popover` / `border-border` / `text-*` and
+   therefore follows the theme on its own. Dark mode needs a deeper, wider
+   shadow because the card and the page behind it are close in luminance. */
+.toast-surface {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.dark .toast-surface {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
 }
 
 /* Session-finished notification animation (bottom-left corner) */

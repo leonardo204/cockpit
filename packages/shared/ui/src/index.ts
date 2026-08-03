@@ -3,8 +3,9 @@
 // Portal
 export { Portal, PanelPortalProvider, usePanelPortalTarget } from './Portal';
 
-// Toast / Confirm
-export { ToastProvider, useToast, toast, confirm } from './Toast';
+// Toast / Confirm — imperative, no Provider. The React ToastProvider/useToast
+// pair that used to be exported here had no consumers and is gone.
+export { toast, confirm } from './Toast';
 
 // i18n: shared-ui no longer exposes a translator IoC slot. Localized
 // strings come from @cockpit/shared-i18n directly — see Toast.tsx /
