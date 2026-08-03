@@ -1,95 +1,92 @@
 'use client';
 
 /**
- * Phase 1.5 P15-06 — the scoped-memory review + delete panel, rendered inside
- * SettingsModal.
+ * The memory SUMMARY CARD, rendered inside SettingsModal.
  *
- * WHY IT IS A UI AND NOT JUST A STORE OP. Scoped memory is durable, cross-session
- * personalization (contract §2/§3): `user`-scope rows outlive the session and
- * project they were learned in. That durability is exactly what makes an
- * `external`-origin memory dangerous — a `proposed` row planted by injected web
- * content persists until someone looks. This panel is the LAST DEFENSIVE LAYER:
- * it shows every memory WITH ITS PROVENANCE (which trust tier it came from, the
- * session it was learned in, why) and lets the user DELETE the wrong ones — one
- * row, or a whole source at once (the poisoning rollback). It is also the only
- * place a `proposed` row is CONFIRMED (contract §4 invariant 1) — no threshold
- * can do it, only a person here.
+ * WHAT IT USED TO BE, AND WHY IT CHANGED (P3-M10, memory-hygiene §1/§4). This was
+ * the full review list: every memory in the selected scope, inline, with its
+ * provenance and its buttons. That made the size of the Settings pane a function
+ * of how much naby had learned — the better the product worked, the longer the
+ * settings screen got, until the panel below it was several scrolls away. The
+ * list moved to a dedicated full-height browser (`MemoryBrowserModal`) and what
+ * stays here is FIXED SIZE, whatever the memory grows to:
  *
- * THE VALUE IS SHOWN ON PURPOSE. Unlike the MCP section (which hides token-ish
- * header values), a memory `value` is the user's own remembered content; you
- * cannot vet a memory you are not allowed to read. So the row is rendered whole.
+ *   * counts per scope (confirmed / waiting / unused),
+ *   * the newest three PROPOSALS with confirm+delete inline, because a pending
+ *     decision is the one thing that should not need a second click to find,
+ *   * the two switches this section owns — learn-at-all (§3) and auto-confirm
+ *     (§5.4) — and the button that opens the browser.
  *
- * SCOPE KEYING. `user` scope needs no key from the client — the server fills the
- * single-user-machine constant. `session`/`project` are addressed by the active
- * `sessionId`/`cwd` this component is handed; when the needed key is absent
- * (e.g. Settings opened with no session) the scope shows an unavailable notice
- * rather than a broken request. `org` has no local id yet, so it is unavailable
- * too — kept in the filter so the surface is complete when in-house rollout adds
- * one.
+ * WHY THE PROPOSALS STAYED AND THE REST WENT. The panel's job in Settings is to
+ * answer "is there anything I need to do?". Three pending rows answer it; four
+ * hundred confirmed ones are a filing cabinet, and a filing cabinet belongs
+ * behind a door.
  *
- * PERF. This lives in a modal that only mounts while open, so it is not on the
- * always-rendered three-panel hot path; still, callbacks are `useCallback`-stable
- * and each row is a `memo`'d child fed per-item primitives, matching the repo's
- * referential-stability rule.
+ * IT IS STILL THE LAST DEFENSIVE LAYER. Confirming a `proposed` row is the ONLY
+ * path external-origin memory becomes confirmed (memory-contracts §4 invariant
+ * 1), and the poisoning rollback (delete-by-source) is still here — both are
+ * things a user reaches for when something has gone wrong, and neither should
+ * have moved further away.
+ *
+ * PERF + LAYOUT. Mounted only while the modal is open. Flat by contract (no
+ * card, no tint — settingsLayout.test.ts asserts it); the proposal rows keep
+ * their borders because a repeated list item is what a border is still for.
  */
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
-// Shared scope identity: icon/colour/label per scope, the scope selector, the
-// full-scope banner, and the per-row scope badge. Org is UI-gated in there.
-import { ScopeBadge, ScopeHeader, ScopeSelector, type NabyScopeId } from './nabyScope';
+import { ScopeBadge, type NabyScopeId } from './nabyScope';
 // Type-only import: erased at compile time, so no runtime/node code enters the
-// browser bundle. The shapes are the runtime's own (contract §3) — never
-// redefined here.
+// browser bundle. The shapes are the runtime's own (contract §3).
 import type {
   MemoryItem,
   MemoryScope,
-  MemoryStatus,
-  MemoryType,
-  TrustTier,
 } from '../../../../../../dist/naby-runtime.mjs';
 import { BootstrapCard } from './BootstrapCard';
+import { MemoryBrowserModal } from './MemoryBrowserModal';
 import { SettingsDetails } from './SettingsDetails';
 
 // ---------------------------------------------------------------------------
-// Wire helpers — the same shape/style as NabyProviderSetup's nabyGet/nabyPost.
+// Wire helpers.
 // ---------------------------------------------------------------------------
 
-type MemoryListResponse = {
+type ScopeSummary = {
   scope: MemoryScope;
   scopeKey: string;
-  items: MemoryItem[];
-  /** P3-M8b: distinct sessions agreeing with each row's current value, by id. */
+  confirmed: number;
+  proposed: number;
+  stale: number;
+};
+
+type SummaryResponse = {
+  scopes: ScopeSummary[];
+  recentProposed: MemoryItem[];
   corroboration?: Record<string, number>;
-  /** P3-M8b: whether corroborated proposals are confirmed without a click. */
   autoConfirm?: boolean;
-  /** P3-M8b: how many sessions that takes. Sent by the server so this file
-   *  never has to hold a copy of a runtime constant (see memory.ts). */
   corroborationThreshold?: number;
 };
 
 type MemoryActionBody =
   | { action: 'confirm'; id: string }
   | { action: 'delete'; id: string }
-  | { action: 'deleteBySource'; source?: TrustTier; sessionId?: string }
+  | { action: 'deleteBySource'; source?: string; sessionId?: string }
   | { action: 'autoConfirm.set'; enabled: boolean };
 
-async function memoryGet(
-  scope: MemoryScope,
-  scopeKey: string | undefined,
-  status: MemoryStatus | undefined,
-): Promise<{ ok: true; data: MemoryListResponse } | { ok: false; error: string }> {
+async function fetchSummary(
+  sessionId?: string,
+  cwd?: string,
+): Promise<{ ok: true; data: SummaryResponse } | { ok: false; error: string }> {
   try {
-    const params = new URLSearchParams({ scope });
-    if (scopeKey) params.set('scopeKey', scopeKey);
-    if (status) params.set('status', status);
+    const params = new URLSearchParams({ view: 'summary' });
+    if (sessionId) params.set('sessionId', sessionId);
+    if (cwd) params.set('cwd', cwd);
     const res = await fetch(`/api/memory?${params.toString()}`);
     const json = (await res.json().catch(() => null)) as
-      | (MemoryListResponse & { error?: string })
+      | (SummaryResponse & { error?: string })
       | null;
     if (!res.ok) return { ok: false, error: json?.error ?? `request failed (${res.status})` };
-    return { ok: true, data: json as MemoryListResponse };
+    return { ok: true, data: json as SummaryResponse };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -110,108 +107,65 @@ async function memoryPost(body: MemoryActionBody): Promise<{ ok: boolean; error?
   }
 }
 
+/** The app-wide learning switch lives on /api/naby with the other settings
+ *  (§3) — see the action union there for why it is not on /api/memory. */
+async function nabyPost(
+  body: Record<string, unknown>,
+): Promise<{ ok: boolean; learningEnabled?: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/naby', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { learningEnabled?: boolean; error?: string }
+      | null;
+    if (!res.ok) return { ok: false, error: json?.error ?? `request failed (${res.status})` };
+    return { ok: true, ...(json ?? {}) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 // ---------------------------------------------------------------------------
-// One row. `memo`'d and fed per-item primitives + stable callbacks so a sibling
-// action does not re-render the whole list.
+// One pending proposal, inline on the card.
 // ---------------------------------------------------------------------------
 
-const TYPE_LABELS: Record<MemoryType, string> = {
-  working: 'memoryReview.typeWorking',
-  episodic: 'memoryReview.typeEpisodic',
-  semantic: 'memoryReview.typeSemantic',
-  procedural: 'memoryReview.typeProcedural',
-};
-
-const TRUST_LABELS: Record<TrustTier, string> = {
-  user: 'memoryReview.trustUser',
-  artifact: 'memoryReview.trustArtifact',
-  external: 'memoryReview.trustExternal',
-};
-
-/** From how many sessions a row is worth BADGING. One is every row that exists;
- *  two is the first moment a fact has outlived the conversation it came from,
- *  which is the thing a reviewer actually wants pointed out. */
-const CORROBORATION_BADGE_MIN = 2;
-
-const MemoryRow = memo(function MemoryRow({
+const ProposalRow = memo(function ProposalRow({
   item,
-  scope,
   cwd,
   busy,
-  corroboration,
   onConfirm,
   onDelete,
 }: {
   item: MemoryItem;
-  scope: NabyScopeId;
   cwd?: string;
   busy: boolean;
-  /** How many distinct sessions agree with this row's current value (P3-M8b). */
-  corroboration: number;
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
-  const isProposed = item.status === 'proposed';
-  const shortSession = item.provenance.sessionId
-    ? item.provenance.sessionId.slice(0, 8)
-    : undefined;
-
   return (
-    <div className="rounded-lg border border-border p-3 space-y-2">
+    <div className="rounded-lg border border-border p-2.5 space-y-1.5" data-testid="memory-proposal">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="text-xs font-medium text-foreground break-words">{item.key}</div>
-          <div className="text-sm text-foreground/90 break-words whitespace-pre-wrap">
-            {item.value}
-          </div>
+          {/* CLAMPED to two lines. The card must not grow with the length of
+              whatever the model wrote; the browser shows the whole thing. */}
+          <div className="text-sm text-foreground/90 break-words line-clamp-2">{item.value}</div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {/* P3-M8b: cross-session corroboration. Shown only once a SECOND
-              session has said the same thing — on every row it would be noise,
-              and the point of the badge is that this one is different. */}
-          {corroboration >= CORROBORATION_BADGE_MIN ? (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-sky-500/15 text-sky-600 dark:text-sky-400">
-              {t('memoryReview.corroborated', { count: corroboration })}
-            </span>
-          ) : null}
-          {/* Which scope this row lives in — global vs this project etc. */}
-          <ScopeBadge scope={scope} cwd={cwd} />
-          <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-              isProposed
-                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-            }`}
-          >
-            {isProposed ? t('memoryReview.badgeProposed') : t('memoryReview.badgeConfirmed')}
-          </span>
-        </div>
+        <ScopeBadge scope={item.scope as NabyScopeId} cwd={cwd} />
       </div>
-
-      {/* Provenance — the load-bearing part of a REVIEW surface. */}
-      <div className="flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
-        <span className="px-1.5 py-0.5 rounded bg-accent">{t(TYPE_LABELS[item.type])}</span>
-        <span className="px-1.5 py-0.5 rounded bg-accent">
-          {t(TRUST_LABELS[item.provenance.source])}
-        </span>
-        {shortSession ? <span>{t('memoryReview.learnedIn', { session: shortSession })}</span> : null}
-        {item.provenance.basis ? (
-          <span className="break-words">{t('memoryReview.basis', { basis: item.provenance.basis })}</span>
-        ) : null}
-      </div>
-
       <div className="flex items-center gap-2">
-        {isProposed ? (
-          <button
-            onClick={() => onConfirm(item.id)}
-            disabled={busy}
-            title={t('memoryReview.confirmTitle')}
-            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
-          >
-            {t('memoryReview.confirm')}
-          </button>
-        ) : null}
+        <button
+          onClick={() => onConfirm(item.id)}
+          disabled={busy}
+          title={t('memoryReview.confirmTitle')}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+        >
+          {t('memoryReview.confirm')}
+        </button>
         <button
           onClick={() => onDelete(item.id)}
           disabled={busy}
@@ -226,18 +180,18 @@ const MemoryRow = memo(function MemoryRow({
 });
 
 // ---------------------------------------------------------------------------
-// The panel.
+// The card.
 // ---------------------------------------------------------------------------
 
-// The scopes memory is addressable by, in display order. `org` is present but
-// UI-gated by the shared ScopeSelector (hidden until org infra exists).
-const MEMORY_SCOPES: NabyScopeId[] = ['user', 'session', 'project', 'org'];
-
-const STATUS_OPTIONS: { value: MemoryStatus | 'all'; labelKey: string }[] = [
-  { value: 'all', labelKey: 'memoryReview.statusAll' },
-  { value: 'proposed', labelKey: 'memoryReview.statusProposed' },
-  { value: 'confirmed', labelKey: 'memoryReview.statusConfirmed' },
-];
+/** Scope → its SHORT label key. `user` reads as "Global" in the UI (the scope
+ *  dictionary's own spelling — the runtime calls it `user` because that is whose
+ *  memory it is; the user sees "everywhere on this machine"). */
+const SCOPE_LABELS: Record<string, string> = {
+  user: 'scope.global',
+  session: 'scope.session',
+  project: 'scope.project',
+  org: 'scope.org',
+};
 
 export function NabyMemoryReview({
   isOpen,
@@ -249,63 +203,39 @@ export function NabyMemoryReview({
   cwd?: string;
 }) {
   const { t } = useTranslation();
-  const [scope, setScope] = useState<MemoryScope>('user');
-  const [status, setStatus] = useState<MemoryStatus | 'all'>('all');
-  const [items, setItems] = useState<MemoryItem[]>([]);
-  const [corroboration, setCorroboration] = useState<Record<string, number>>({});
+  const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [autoConfirm, setAutoConfirm] = useState(false);
-  // Server-supplied; the fallback only ever shows for the instant before the
-  // first response lands.
+  const [learningEnabled, setLearningEnabled] = useState(true);
   const [threshold, setThreshold] = useState(3);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  // The scopeKey the client can supply per scope. `user` is server-defaulted so
-  // it needs none; `session`/`project` are addressed by the active ids; `org`
-  // has no local id yet. `null` => this scope cannot be queried right now.
-  const scopeKey = useMemo<string | null | undefined>(() => {
-    switch (scope) {
-      case 'user':
-        return undefined; // server fills the single-user constant
-      case 'session':
-        return sessionId ?? null;
-      case 'project':
-        return cwd ?? null;
-      case 'org':
-        return null; // no local org id in single-user builds
-    }
-  }, [scope, sessionId, cwd]);
-
-  const available = scopeKey !== null;
+  const [browserOpen, setBrowserOpen] = useState(false);
 
   const reload = useCallback(async () => {
-    if (scopeKey === null) {
-      setItems([]);
-      setError(null);
-      return;
-    }
     setLoading(true);
     setError(null);
-    const res = await memoryGet(
-      scope,
-      scopeKey ?? undefined,
-      status === 'all' ? undefined : status,
-    );
+    const res = await fetchSummary(sessionId, cwd);
     if (res.ok) {
-      setItems(res.data.items);
-      setCorroboration(res.data.corroboration ?? {});
+      setSummary(res.data);
       setAutoConfirm(res.data.autoConfirm === true);
       if (typeof res.data.corroborationThreshold === 'number') {
         setThreshold(res.data.corroborationThreshold);
       }
     } else {
-      setItems([]);
-      setCorroboration({});
+      setSummary(null);
       setError(res.error);
     }
+    // The learning switch is a SETTING and rides the settings route, so it is a
+    // second request. Deliberately not merged into the summary: the summary is
+    // about memory ROWS, and folding an unrelated setting into it would make
+    // /api/memory the home of things that are not memory.
+    const learn = await nabyPost({ action: 'learning.get' });
+    if (learn.ok && typeof learn.learningEnabled === 'boolean') {
+      setLearningEnabled(learn.learningEnabled);
+    }
     setLoading(false);
-  }, [scope, scopeKey, status]);
+  }, [sessionId, cwd]);
 
   useEffect(() => {
     if (isOpen) void reload();
@@ -340,21 +270,8 @@ export function NabyMemoryReview({
   );
 
   const handleBulk = useCallback(
-    async (body: MemoryActionBody) => {
-      setBusyId('__bulk__');
-      try {
-        const res = await memoryPost(body);
-        if (res.ok) {
-          toast(t('memoryReview.deleted'), 'success');
-          await reload();
-        } else {
-          toast(t('memoryReview.actionError', { error: res.error ?? '' }), 'error');
-        }
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [reload, t],
+    (body: MemoryActionBody) => void runAction('__bulk__', body, 'memoryReview.deleted'),
+    [runAction],
   );
 
   const handleAutoConfirm = useCallback(
@@ -375,110 +292,128 @@ export function NabyMemoryReview({
     [reload, t],
   );
 
-  /**
-   * P3-M8b §5.4 — proposals first, best-corroborated first inside that.
-   *
-   * The queue's whole job is to put the reviewer in front of the decisions that
-   * are both PENDING and best evidenced. A `proposed` row is the only one that
-   * needs an answer, and among those the one three separate conversations kept
-   * arriving at is the one most likely to be true — so it should not be sitting
-   * below a one-off from last Tuesday just because it was created earlier.
-   */
-  const sortedItems = useMemo(() => {
-    return [...items].sort((a, b) => {
-      if (a.status !== b.status) return a.status === 'proposed' ? -1 : 1;
-      const ca = corroboration[a.id] ?? 0;
-      const cb = corroboration[b.id] ?? 0;
-      if (ca !== cb) return cb - ca;
-      return b.updatedAt - a.updatedAt;
-    });
-  }, [items, corroboration]);
+  const handleLearning = useCallback(
+    async (enabled: boolean) => {
+      setLearningEnabled(enabled);
+      setBusyId('__setting__');
+      try {
+        const res = await nabyPost({ action: 'learning.set', enabled });
+        if (!res.ok) toast(t('memoryReview.actionError', { error: res.error ?? '' }), 'error');
+        await reload();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [reload, t],
+  );
 
   const busy = busyId !== null;
+  const scopes = summary?.scopes ?? [];
+  const proposals = summary?.recentProposed ?? [];
+  const totalRows = scopes.reduce((n, s) => n + s.confirmed + s.proposed, 0);
 
   return (
     <div className="space-y-3">
-      {/* Plain muted prose — the section's own description, not a callout. The
-          ITEM rows below keep their borders: a repeated list item is exactly what
-          a border is still for. */}
+      {/* Plain muted prose — the section's own description, not a callout. */}
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('memoryReview.description')}
       </p>
 
       {/* P15-07: the cold-start interview, shown only while it still has anything
-          to ask. It writes CONFIRMED user memory, so the list below refreshes. */}
+          to ask. It writes CONFIRMED user memory, so the counts below refresh. */}
       <BootstrapCard isOpen={isOpen} onSaved={() => void reload()} />
 
-      {/* Scope filter + banner: which memories you are looking at (global vs
-          this project vs this session), stated plainly. */}
-      <div className="space-y-2">
+      {/* The counts — the fixed-size replacement for the unbounded inline list. */}
+      <div className="space-y-1.5" data-testid="memory-summary">
         <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          {t('memoryReview.scope')}
+          {t('memoryReview.summaryTitle')}
         </div>
-        <ScopeSelector
-          scopes={MEMORY_SCOPES}
-          value={scope}
-          onChange={(s) => setScope(s as MemoryScope)}
-        />
-        <ScopeHeader scope={scope} cwd={cwd} />
+        {loading && !summary ? (
+          <p className="text-xs text-muted-foreground">{t('memoryReview.loading')}</p>
+        ) : error ? (
+          <p className="text-xs text-red-600 dark:text-red-400">
+            {t('memoryReview.loadError', { error })}
+          </p>
+        ) : totalRows === 0 ? (
+          <p className="text-xs text-muted-foreground">{t('memoryReview.summaryEmpty')}</p>
+        ) : (
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {scopes.map((s) => (
+              <div key={`${s.scope}:${s.scopeKey}`} className="text-xs text-foreground">
+                <span className="text-muted-foreground">{t(SCOPE_LABELS[s.scope] ?? s.scope)}</span>{' '}
+                <span>{t('memoryReview.summaryConfirmed', { count: s.confirmed })}</span>
+                {s.proposed > 0 ? (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    {' · '}
+                    {t('memoryReview.summaryProposed', { count: s.proposed })}
+                  </span>
+                ) : null}
+                {s.stale > 0 ? (
+                  <span className="text-muted-foreground">
+                    {' · '}
+                    {t('memoryReview.summaryStale', { count: s.stale })}
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Status filter */}
-      <div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
-          {t('memoryReview.status')}
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {STATUS_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              onClick={() => setStatus(o.value)}
-              className={`text-xs px-2 py-1 rounded border transition-colors ${
-                status === o.value
-                  ? 'border-brand bg-brand/10 text-brand'
-                  : 'border-border text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {t(o.labelKey)}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* List */}
-      {!available ? (
-        <p className="text-xs text-muted-foreground italic">{t('memoryReview.sessionUnavailable')}</p>
-      ) : loading ? (
-        <p className="text-xs text-muted-foreground">{t('memoryReview.loading')}</p>
-      ) : error ? (
-        <p className="text-xs text-red-600 dark:text-red-400">
-          {t('memoryReview.loadError', { error })}
-        </p>
-      ) : items.length === 0 ? (
-        <div className="text-xs text-muted-foreground space-y-1 py-2">
-          <p>{t('memoryReview.empty')}</p>
-          <p className="text-muted-foreground/60">{t('memoryReview.emptyHint')}</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {sortedItems.map((item) => (
-            <MemoryRow
+      {/* The pending decisions, inline. Nothing else from the list survived here
+          — see the file header for why these did. */}
+      {proposals.length > 0 ? (
+        <div className="space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {t('memoryReview.summaryPending')}
+          </div>
+          {proposals.map((item) => (
+            <ProposalRow
               key={item.id}
               item={item}
-              scope={scope as NabyScopeId}
               cwd={cwd}
               busy={busy}
-              corroboration={corroboration[item.id] ?? 0}
               onConfirm={handleConfirm}
               onDelete={handleDelete}
             />
           ))}
         </div>
-      )}
+      ) : null}
 
-      {/* P3-M8b §5.4 — the opt-in. Off by default and stated plainly, including
-          the one thing it does NOT do: external-origin memory is never confirmed
-          without a person, setting or no setting (memory-contracts §4). */}
+      <div>
+        <button
+          onClick={() => setBrowserOpen(true)}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground"
+          data-testid="memory-open-browser"
+        >
+          {t('memoryReview.openBrowser')}
+        </button>
+      </div>
+
+      {/* P3-M10 §3 — LEARN AT ALL. First of the two switches, because it is the
+          bigger one: it decides whether anything below it ever has input. The
+          hint states the asymmetry that surprises people — off stops CAPTURE,
+          not RECALL. */}
+      <div className="pt-1 border-t border-border/60 space-y-1">
+        <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={learningEnabled}
+            disabled={busy}
+            onChange={(e) => void handleLearning(e.target.checked)}
+            className="mt-0.5 accent-brand disabled:opacity-50"
+            data-testid="memory-learning-toggle"
+          />
+          <span>{t('memoryReview.learningLabel')}</span>
+        </label>
+        <p className="text-[10px] text-muted-foreground leading-relaxed pl-6">
+          {t('memoryReview.learningHint')}
+        </p>
+      </div>
+
+      {/* P3-M8b §5.4 — the auto-confirm opt-in. Off by default and stated
+          plainly, including the one thing it does NOT do: external-origin memory
+          is never confirmed without a person, setting or no setting. */}
       <div className="pt-1 border-t border-border/60 space-y-1">
         <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
           <input
@@ -495,41 +430,54 @@ export function NabyMemoryReview({
         </p>
       </div>
 
-      {/* Bulk cleanup — provenance-addressed delete (the poisoning rollback). */}
-      {available ? (
-        <div className="pt-1 border-t border-border/60 space-y-1.5">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-            {t('memoryReview.bulkTitle')}
-          </div>
-          <div className="flex flex-wrap gap-1.5">
+      {/* Bulk cleanup — provenance-addressed delete (the poisoning rollback).
+          Kept on the card rather than moved into the browser: it is what someone
+          reaches for when memory has gone wrong, and that is not the moment to
+          make them find a new screen first. */}
+      <div className="pt-1 border-t border-border/60 space-y-1.5">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          {t('memoryReview.bulkTitle')}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => handleBulk({ action: 'deleteBySource', source: 'external' })}
+            disabled={busy}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+          >
+            {t('memoryReview.deleteExternal')}
+          </button>
+          {sessionId ? (
             <button
-              onClick={() => void handleBulk({ action: 'deleteBySource', source: 'external' })}
+              onClick={() => handleBulk({ action: 'deleteBySource', sessionId })}
               disabled={busy}
               className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
             >
-              {t('memoryReview.deleteExternal')}
+              {t('memoryReview.deleteThisSession')}
             </button>
-            {sessionId ? (
-              <button
-                onClick={() => void handleBulk({ action: 'deleteBySource', sessionId })}
-                disabled={busy}
-                className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
-              >
-                {t('memoryReview.deleteThisSession')}
-              </button>
-            ) : null}
-          </div>
+          ) : null}
         </div>
-      ) : null}
+      </div>
 
-      {/* What "proposed" means. It used to be the second half of the opening
-          paragraph, where it was read by everyone before they knew there was a
-          proposed row on the page at all. It elaborates a badge that is already
-          visible, so it is supplemental, and supplemental prose waits until it
-          is asked for. */}
+      {/* What "proposed" means — supplemental prose, so it waits until it is
+          asked for (the shared disclosure, settingsLayout.test.ts). */}
       <SettingsDetails>
         <p>{t('memoryReview.proposedNote')}</p>
       </SettingsDetails>
+
+      {/* The browser. Rendered from here because this is where it is opened from,
+          and it stacks ABOVE the settings modal that contains this card. */}
+      <MemoryBrowserModal
+        isOpen={browserOpen}
+        onClose={() => {
+          setBrowserOpen(false);
+          // The browser can confirm, edit and delete; the counts above have to
+          // reflect that when it closes, or the card would keep showing the
+          // numbers from before the user's work.
+          void reload();
+        }}
+        {...(sessionId ? { sessionId } : {})}
+        {...(cwd ? { cwd } : {})}
+      />
     </div>
   );
 }

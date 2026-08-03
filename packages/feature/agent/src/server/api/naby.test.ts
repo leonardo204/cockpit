@@ -892,3 +892,116 @@ describe('POST /api/naby — telegram.set starts the chat (telegram-chat §5)', 
     expect(telegramListenerRunning()).toBe(false);
   });
 });
+
+/**
+ * P3-M10 (specs/phase-3-memory-hygiene.md §3) — the two SOVEREIGNTY switches.
+ *
+ * The behaviour they produce (a missing `naby_remember`, a skipped session) is
+ * proven end to end in spike:learn and spike:reflection against the real engine.
+ * What is covered here is the WIRING and the GUARDS: that the actions reach the
+ * same store the engine reads per turn, and that a malformed request cannot flip
+ * either switch — which for a privacy control is the half that matters, because
+ * the failure is silent in both directions.
+ */
+describe('POST /api/naby — memory.learningEnabled (P3-M10 §3)', () => {
+  afterEach(async () => {
+    // Learning is on by default and every other test in this file runs against
+    // the same store; leaving it off would silently disarm them.
+    await runNabyAction({ action: 'learning.set', enabled: true });
+  });
+
+  it('reads ON before anything has been written — the product working as described', async () => {
+    const result = await runNabyAction({ action: 'learning.get' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.learningEnabled).toBe(true);
+  });
+
+  it('round-trips off and back on, through the store the engine reads', async () => {
+    const off = await runNabyAction({ action: 'learning.set', enabled: false });
+    expect(off).toMatchObject({ ok: true, learningEnabled: false });
+    expect(getStore().getSetting('memory.learningEnabled')).toBe('false');
+    const readBack = await runNabyAction({ action: 'learning.get' });
+    if (readBack.ok) expect(readBack.learningEnabled).toBe(false);
+
+    const on = await runNabyAction({ action: 'learning.set', enabled: true });
+    expect(on).toMatchObject({ ok: true, learningEnabled: true });
+    expect(getStore().getSetting('memory.learningEnabled')).toBe('true');
+  });
+
+  it('refuses a non-boolean rather than reading it as a value', async () => {
+    // A string 'false' is truthy: a loose check here would turn learning ON for
+    // a user who asked for the opposite, from a malformed request.
+    // @ts-expect-error — the whole point is what arrives off the wire.
+    const result = await runNabyAction({ action: 'learning.set', enabled: 'false' });
+    expect(result.ok).toBe(false);
+    const still = await runNabyAction({ action: 'learning.get' });
+    if (still.ok) expect(still.learningEnabled).toBe(true);
+  });
+});
+
+describe('POST /api/naby — session.noLearn (P3-M10 §3)', () => {
+  it('marks a session, lists it, and clears it', async () => {
+    const store = getStore();
+    const sessionId = `no-learn-${Date.now()}`;
+    store.touchSession(sessionId, 'test-provider');
+
+    const set = await runNabyAction({ action: 'session.noLearn.set', sessionId, noLearn: true });
+    expect(set).toMatchObject({ ok: true, noLearn: true });
+    // Read back through the SAME field the engine reads per turn, not through a
+    // second accessor that could disagree with it.
+    expect(store.getSession(sessionId)?.noLearn).toBe(true);
+
+    const listed = await runNabyAction({ action: 'session.noLearn.list' });
+    expect(listed.ok).toBe(true);
+    if (listed.ok) expect(listed.noLearnSessions).toContain(sessionId);
+
+    const cleared = await runNabyAction({
+      action: 'session.noLearn.set',
+      sessionId,
+      noLearn: false,
+    });
+    expect(cleared).toMatchObject({ ok: true, noLearn: false });
+    // Absent, not `false`: the flag is surfaced only when it is on, so every
+    // reader can use `=== true` and mean the same thing.
+    expect(store.getSession(sessionId)?.noLearn).toBeUndefined();
+
+    const after = await runNabyAction({ action: 'session.noLearn.list' });
+    if (after.ok) expect(after.noLearnSessions).not.toContain(sessionId);
+  });
+
+  it('requires a sessionId and a boolean', async () => {
+    expect((await runNabyAction({ action: 'session.noLearn.set', sessionId: '', noLearn: true })).ok)
+      .toBe(false);
+    const bad = await runNabyAction({
+      action: 'session.noLearn.set',
+      sessionId: 's1',
+      // @ts-expect-error — exercising the runtime guard.
+      noLearn: 'yes',
+    });
+    expect(bad.ok).toBe(false);
+  });
+
+  it('marking a session that does not exist is refused work, not a crash', async () => {
+    const result = await runNabyAction({
+      action: 'session.noLearn.set',
+      sessionId: 'no-such-session-at-all',
+      noLearn: true,
+    });
+    expect(result.ok).toBe(true);
+    const listed = await runNabyAction({ action: 'session.noLearn.list' });
+    if (listed.ok) expect(listed.noLearnSessions).not.toContain('no-such-session-at-all');
+  });
+});
+
+describe('POST /api/naby — reflection.run reports the M10 counters', () => {
+  it('carries staleForReview and skippedNoLearn rather than leaving them absent', async () => {
+    // Absent and zero are different answers, and a UI reading `?? 0` cannot tell
+    // "nothing was stale" from "this build does not report staleness".
+    const result = await runNabyAction({ action: 'reflection.run' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(typeof result.reflection?.staleForReview).toBe('number');
+    expect(typeof result.reflection?.skippedNoLearn).toBe('number');
+  });
+});

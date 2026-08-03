@@ -31,9 +31,13 @@ import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
   CORROBORATION_THRESHOLD,
   DEFAULT_USER_ID,
+  MEMORY_DECAY_REVIEW_MS,
+  staleReviewCutoff,
   type MemoryItem,
   type MemoryScope,
   type MemoryStatus,
+  type MemoryType,
+  type ScopedMemoryQuery,
   type Store,
   type TrustTier,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -56,6 +60,13 @@ type MemoryStore = Pick<
   | 'getMemoryCorroboration'
   | 'getSetting'
   | 'setSetting'
+  // P3-M10 (memory-hygiene §3/§4): the browser's page total, the EDIT that
+  // promotes a row to `user` tier, and the "keep this" action — which is
+  // `markMemoriesInjected` for one id, because a person saying "still relevant"
+  // is the same claim the injection step makes when it selects a row (§2.1).
+  | 'countScopedMemory'
+  | 'updateMemoryValue'
+  | 'markMemoriesInjected'
 >;
 
 // The store is opened on demand, so this must run on the node runtime and must
@@ -69,7 +80,13 @@ export const dynamic = 'force-dynamic';
 
 const MEMORY_SCOPES: readonly MemoryScope[] = ['session', 'project', 'user', 'org'];
 const MEMORY_STATUSES: readonly MemoryStatus[] = ['proposed', 'confirmed'];
+const MEMORY_TYPES: readonly MemoryType[] = ['working', 'episodic', 'semantic', 'procedural'];
 const TRUST_TIERS: readonly TrustTier[] = ['user', 'artifact', 'external'];
+
+/** The browser's page size (P3-M10 §4). Also the CEILING a request may ask for:
+ *  the parameter comes off the wire, and `?limit=100000` on a large memory is a
+ *  way to make the app render itself to a halt from a URL. */
+export const MEMORY_PAGE_SIZE = 50;
 
 function isScope(v: unknown): v is MemoryScope {
   return typeof v === 'string' && (MEMORY_SCOPES as readonly string[]).includes(v);
@@ -77,6 +94,19 @@ function isScope(v: unknown): v is MemoryScope {
 
 function isStatus(v: unknown): v is MemoryStatus {
   return typeof v === 'string' && (MEMORY_STATUSES as readonly string[]).includes(v);
+}
+
+function isType(v: unknown): v is MemoryType {
+  return typeof v === 'string' && (MEMORY_TYPES as readonly string[]).includes(v);
+}
+
+/** Parse a non-negative integer query parameter; undefined when absent or
+ *  unparseable, so a junk value falls back to the default rather than to NaN. */
+function parseCount(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.trunc(n);
 }
 
 function isTrustTier(v: unknown): v is TrustTier {
@@ -130,6 +160,22 @@ export interface MemoryListResult {
    * in a Korean sentence is a number that goes wrong silently the day §7 tunes it.
    */
   corroborationThreshold: number;
+  /**
+   * P3-M10 §4 — how many rows match this FILTER, ignoring the page window. What
+   * the browser's "51–100 of 340" and its page buttons are computed from; the
+   * store answers it with the same predicate as the list, so the two cannot
+   * describe different sets.
+   */
+  total: number;
+  /** The window actually applied (echoed so the client never has to assume the
+   *  server honoured what it asked for). */
+  limit: number;
+  offset: number;
+  /** The stale cutoff in force, epoch ms, or null when the "stale" filter is off
+   *  — sent so the client can label the filter with the real window instead of
+   *  hardcoding "90 days" beside a constant it cannot see (§2.2 lists that
+   *  constant as a tunable). */
+  staleBefore: number | null;
 }
 
 export function listScopedMemory(
@@ -137,8 +183,18 @@ export function listScopedMemory(
     scope: string | null;
     scopeKey: string | null;
     status: string | null;
+    // -- P3-M10 §4: the memory browser's filters. Every one of them is optional
+    // and every omission is "no filter", so the pre-M10 three-parameter call is
+    // byte-for-byte the request it always was.
+    type?: string | null;
+    search?: string | null;
+    /** '1'/'true' turns on the derived stale filter (confirmed + unused). */
+    stale?: string | null;
+    limit?: number | undefined;
+    offset?: number | undefined;
   },
   store: MemoryStore = getStore(),
+  now: number = Date.now(),
 ): { ok: true; data: MemoryListResult } | { ok: false; error: string } {
   if (!isScope(params.scope)) {
     return { ok: false, error: `scope must be one of ${MEMORY_SCOPES.join(', ')}` };
@@ -146,18 +202,42 @@ export function listScopedMemory(
   if (params.status !== null && !isStatus(params.status)) {
     return { ok: false, error: `status must be one of ${MEMORY_STATUSES.join(', ')}` };
   }
+  if (params.type != null && params.type !== '' && !isType(params.type)) {
+    return { ok: false, error: `type must be one of ${MEMORY_TYPES.join(', ')}` };
+  }
   const scopeKey = resolveScopeKey(params.scope, params.scopeKey);
   if (scopeKey === null) {
     return { ok: false, error: `scopeKey is required for ${params.scope} scope` };
   }
 
-  const items = store.getScopedMemory(
-    params.scope,
-    scopeKey,
-    params.status ? { status: params.status } : undefined,
+  // CLAMPED, not trusted. `limit` comes off the wire and a request for a million
+  // rows is a way to hang the renderer from a URL; 0 is refused too, since a page
+  // that can never contain anything is not a page.
+  const limit = Math.min(
+    MEMORY_PAGE_SIZE,
+    Math.max(1, params.limit ?? MEMORY_PAGE_SIZE),
   );
+  const offset = Math.max(0, params.offset ?? 0);
+  const stale = params.stale === '1' || params.stale === 'true';
+  // The SAME cutoff the reflection sweep derives its review queue from — one
+  // expression in the runtime, two callers, so the filter and the log can never
+  // mean different windows.
+  const staleBefore = stale ? staleReviewCutoff(now, MEMORY_DECAY_REVIEW_MS) : null;
+
+  const filter: ScopedMemoryQuery = {
+    ...(params.status ? { status: params.status } : {}),
+    ...(params.type ? { type: params.type as MemoryType } : {}),
+    ...(params.search && params.search.trim() ? { search: params.search.trim() } : {}),
+    ...(staleBefore !== null ? { staleBefore } : {}),
+  };
+
+  const items = store.getScopedMemory(params.scope, scopeKey, { ...filter, limit, offset });
+  // The total for the SAME filter without the window. One extra COUNT(*) per
+  // page — the alternative (reading every row to count them) is what pagination
+  // exists to avoid.
+  const total = store.countScopedMemory(params.scope, scopeKey, filter);
   // ONE extra store call for the ids just listed — the store answers them in a
-  // single grouped query, so this stays two statements however long the list is.
+  // single grouped query, so this stays three statements however long the list is.
   const corroboration = store.getMemoryCorroboration(items.map((item) => item.id));
   return {
     ok: true,
@@ -168,7 +248,100 @@ export function listScopedMemory(
       corroboration,
       autoConfirm: readAutoConfirmSetting(store),
       corroborationThreshold: CORROBORATION_THRESHOLD,
+      total,
+      limit,
+      offset,
+      staleBefore,
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The summary card's read (P3-M10 §4).
+// ---------------------------------------------------------------------------
+
+/** Per-scope counts, for the compact card that replaced the inline list. */
+export interface MemoryScopeSummary {
+  scope: MemoryScope;
+  scopeKey: string;
+  confirmed: number;
+  proposed: number;
+  /** Confirmed rows nobody has used inside the review window (§2.2). */
+  stale: number;
+}
+
+export interface MemorySummaryResult {
+  scopes: MemoryScopeSummary[];
+  /** The newest few `proposed` rows across every reachable scope — the ones the
+   *  card offers inline confirm/delete for. Newest first. */
+  recentProposed: MemoryItem[];
+  corroboration: Record<string, number>;
+  autoConfirm: boolean;
+  corroborationThreshold: number;
+}
+
+/** How many proposals the summary card shows inline (§4). Three, because the
+ *  card's job is to say "there are decisions waiting" and offer the nearest ones
+ *  — the rest belong in the browser, which is the whole point of splitting them. */
+export const SUMMARY_PROPOSED_LIMIT = 3;
+
+/**
+ * Counts per scope plus the newest proposals — everything the settings summary
+ * card renders, in ONE request.
+ *
+ * WHY COUNTS AND NOT ROWS. The card exists because the old panel listed every
+ * memory inline and therefore grew without bound inside Settings (§1). Answering
+ * it with the rows again would rebuild exactly that; a count is O(1) to render
+ * however large the memory gets.
+ *
+ * A scope with no reachable key (no open session, no project, no org id) is
+ * simply OMITTED rather than reported as zero — "you have no project memory" and
+ * "there is no project open" are different statements, and only one of them is
+ * true here.
+ */
+export function summarizeMemory(
+  params: { sessionId?: string | null; cwd?: string | null },
+  store: MemoryStore = getStore(),
+  now: number = Date.now(),
+): MemorySummaryResult {
+  const staleBefore = staleReviewCutoff(now, MEMORY_DECAY_REVIEW_MS);
+  const targets: { scope: MemoryScope; scopeKey: string }[] = [
+    { scope: 'user', scopeKey: DEFAULT_USER_ID },
+  ];
+  if (params.sessionId) targets.push({ scope: 'session', scopeKey: params.sessionId });
+  if (params.cwd) targets.push({ scope: 'project', scopeKey: params.cwd });
+
+  const scopes: MemoryScopeSummary[] = [];
+  const proposals: MemoryItem[] = [];
+  for (const target of targets) {
+    scopes.push({
+      ...target,
+      confirmed: store.countScopedMemory(target.scope, target.scopeKey, {
+        status: 'confirmed',
+      }),
+      proposed: store.countScopedMemory(target.scope, target.scopeKey, {
+        status: 'proposed',
+      }),
+      stale: store.countScopedMemory(target.scope, target.scopeKey, { staleBefore }),
+    });
+    // The proposals themselves, capped per scope BEFORE the merge: the store
+    // orders by createdAt asc, so the newest are at the END — hence the window is
+    // taken from the tail rather than the head.
+    const pending = store.getScopedMemory(target.scope, target.scopeKey, {
+      status: 'proposed',
+    });
+    proposals.push(...pending.slice(-SUMMARY_PROPOSED_LIMIT));
+  }
+
+  const recentProposed = proposals
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, SUMMARY_PROPOSED_LIMIT);
+  return {
+    scopes,
+    recentProposed,
+    corroboration: store.getMemoryCorroboration(recentProposed.map((item) => item.id)),
+    autoConfirm: readAutoConfirmSetting(store),
+    corroborationThreshold: CORROBORATION_THRESHOLD,
   };
 }
 
@@ -189,10 +362,18 @@ export type MemoryAction =
   // Off by default, and `external`-origin memory is untouched by it either way
   // (memory-contracts §4 invariant 1 is not a setting).
   | { action: 'autoConfirm.get' }
-  | { action: 'autoConfirm.set'; enabled: boolean };
+  | { action: 'autoConfirm.set'; enabled: boolean }
+  // -- P3-M10 (memory-hygiene §3) — the sovereignty actions -----------------
+  // EDIT one row's value. Promotes it to the `user` trust tier and resets its
+  // corroboration when the claim actually changed; the store owns both rules.
+  | { action: 'edit'; id: string; value: string }
+  // "KEEP THIS" from the stale-review filter (§2.2). Stamps access, which is the
+  // same thing the injection step does when it selects a row — a person saying
+  // "still relevant" is at least as good a signal as a retrieval saying it.
+  | { action: 'keepAlive'; id: string };
 
 export type MemoryActionResult =
-  | { ok: true; autoConfirm?: boolean }
+  | { ok: true; autoConfirm?: boolean; item?: MemoryItem }
   | { ok: false; error: string };
 
 export function runMemoryAction(
@@ -260,6 +441,33 @@ export function runMemoryAction(
       return { ok: true, autoConfirm: body.enabled };
     }
 
+    case 'edit': {
+      if (typeof body.id !== 'string' || !body.id) {
+        return { ok: false, error: 'id is required' };
+      }
+      // A BLANK VALUE IS REFUSED, not stored. An empty memory is not an edit, it
+      // is a delete performed by accident — and the row would still be injected,
+      // spending budget on a line that says nothing. Delete is right there.
+      if (typeof body.value !== 'string' || body.value.trim().length === 0) {
+        return { ok: false, error: 'value must be a non-empty string' };
+      }
+      const item = store.updateMemoryValue(body.id, body.value.trim());
+      if (!item) return { ok: false, error: 'no such memory' };
+      return { ok: true, item };
+    }
+
+    case 'keepAlive': {
+      if (typeof body.id !== 'string' || !body.id) {
+        return { ok: false, error: 'id is required' };
+      }
+      // Deliberately NOT reported as missing when the id is unknown: the store
+      // matches no row and the outcome the caller wanted ("this is not stale
+      // any more") is true either way, since a row that no longer exists cannot
+      // be in the queue.
+      store.markMemoriesInjected([body.id]);
+      return { ok: true };
+    }
+
     default:
       return { ok: false, error: 'unknown action' };
   }
@@ -272,11 +480,29 @@ export function runMemoryAction(
 export const GET = handler((request) =>
   Effect.gen(function* () {
     const params = new URL(request.url).searchParams;
+    // `?view=summary` answers the settings CARD (counts + the newest proposals)
+    // rather than a page of rows. One route, because both reads are "memory, as
+    // this client needs it" and a second endpoint would duplicate the scope-key
+    // resolution that is the fiddly half of either.
+    if (params.get('view') === 'summary') {
+      const summary = yield* Effect.sync(() =>
+        summarizeMemory({
+          sessionId: params.get('sessionId'),
+          cwd: params.get('cwd'),
+        }),
+      );
+      return ok(summary);
+    }
     const result = yield* Effect.sync(() =>
       listScopedMemory({
         scope: params.get('scope'),
         scopeKey: params.get('scopeKey'),
         status: params.get('status'),
+        type: params.get('type'),
+        search: params.get('search'),
+        stale: params.get('stale'),
+        limit: parseCount(params.get('limit')),
+        offset: parseCount(params.get('offset')),
       }),
     );
     if (!result.ok) {

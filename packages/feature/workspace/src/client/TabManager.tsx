@@ -21,6 +21,7 @@ import { useTabState } from './useTabState';
 import { TabManagerTopBar } from './TabManagerTopBar';
 import { TabBar } from './TabBar';
 import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
+import { useNoLearnSessions } from './useNoLearnSessions';
 import { orderTabs, planDrop, pinRankOf } from './tabOrder';
 import {
   FileBrowserPanel,
@@ -77,6 +78,24 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     const tab = tabs.find(t => t.id === tabId);
     return tab?.sessionId ? isPinned(tab.sessionId) : false;
   }, [tabs, isPinned]);
+
+  // P3-M10 (memory-hygiene §3): which sessions are TEMPORARY — nothing is
+  // learned from them. Loaded as a set in one request; see the hook.
+  const { isNoLearn, setNoLearn } = useNoLearnSessions();
+
+  const isTabNoLearn = useCallback((tabId: string) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    return isNoLearn(tab?.sessionId);
+  }, [tabs, isNoLearn]);
+
+  const handleToggleNoLearn = useCallback((tabId: string) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    // Per SESSION, like pinning: a blank tab is not one until its first turn
+    // creates it, so there is nothing to mark yet. The menu item is disabled in
+    // that state, and this is the matching guard.
+    if (!tab?.sessionId) return;
+    void setNoLearn(tab.sessionId, !isNoLearn(tab.sessionId));
+  }, [tabs, isNoLearn, setNoLearn]);
 
   const handleTogglePin = useCallback((tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
@@ -175,8 +194,17 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
 
   const openTabMenu = useCallback((tabId: string, x: number, y: number) => {
     const tab = tabs.find((t) => t.id === tabId);
-    setMenu({ tabId, x, y, isPinned: pinRankOf(pinnedIds, tab?.sessionId) >= 0 });
-  }, [tabs, pinnedIds]);
+    setMenu({
+      tabId,
+      x,
+      y,
+      isPinned: pinRankOf(pinnedIds, tab?.sessionId) >= 0,
+      // Read at OPEN time, like `isPinned`, so each label states what the click
+      // will do rather than being recomputed while the menu is on screen.
+      isNoLearn: isNoLearn(tab?.sessionId),
+      hasSession: Boolean(tab?.sessionId),
+    });
+  }, [tabs, pinnedIds, isNoLearn]);
 
   /**
    * Commit a rename. An EMPTY name is not a name — it clears the override and
@@ -370,6 +398,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                 dragTabIndex={dragTabIndex}
                 dragOverTabIndex={dragOverTabIndex}
                 isPinned={isTabPinned}
+                isNoLearn={isTabNoLearn}
                 onTabContextMenu={openTabMenu}
                 renamingTabId={renamingTabId}
                 onRenameCommit={commitRename}
@@ -390,6 +419,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                   onClose={() => setMenu(null)}
                   onTogglePin={handleTogglePin}
                   onRename={setRenamingTabId}
+                  onToggleNoLearn={handleToggleNoLearn}
                 />
               )}
               <div className="flex-1 overflow-hidden relative">

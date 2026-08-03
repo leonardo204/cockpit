@@ -3,16 +3,26 @@
 /**
  * Phase 3 (P3-M1) — the naby AGENT layer panel, rendered in SettingsModal.
  *
- * This is naby's own agent layer: the built-in PERSONA (the agent that learns
- * the user and, once wired in P3-M2+, acts on their behalf) plus any custom
- * agents the user adds. Agents are addressed by `@name` in the composer. This
- * panel is CRUD over `store.listAgents/putAgent/removeAgent` via `/api/naby`.
+ * This is naby's own agent layer: `@naby` itself (the agent that learns the user
+ * and acts on their behalf) plus any custom agents that arrived by IMPORT. Agents
+ * are addressed by `@name` in the composer. The panel reads
+ * `store.listAgents/putAgent/removeAgent` via `/api/naby`.
  *
- * The persona is BUILT-IN AND READ-ONLY (kind='persona'): naby owns its prompt,
- * scope and autonomy, the store refuses both a delete and an edit, and this panel
- * offers neither button for it. What stays available on a persona row is
- * everything that only READS it — the growth panel and the export — because those
- * are how the user inspects an agent they cannot rewrite.
+ * `@naby` is BUILT-IN AND READ-ONLY (kind='persona'): naby owns its prompt, scope
+ * and autonomy, the store refuses both a delete and an edit, and this panel offers
+ * neither button for it. What stays available on that row is everything that only
+ * READS it — the growth panel and the export — because those are how the user
+ * inspects an agent they cannot rewrite.
+ *
+ * THERE IS NO "ADD AGENT" (2026-08-03 user decision). naby is ONE agent, not a
+ * roster: a hand-made custom agent went through the same trust gate as naby and
+ * competed with it for the same `@`, while the thing users actually wanted from
+ * one — a specialist role — is what harness SUBAGENTS already are. So the create
+ * path is gone from the UI. What is deliberately NOT gone: the runtime still
+ * supports kind='custom' rows, IMPORT still creates them, and this panel still
+ * lists, edits and removes them — an agent someone already carries must keep
+ * working. Hence the editor below survives with no way to open it on a blank
+ * form.
  */
 
 import { memo, useCallback, useEffect, useState } from 'react';
@@ -149,7 +159,7 @@ const PersonaDelegation = memo(function PersonaDelegation() {
       <p className="mt-0.5 text-[10px] text-muted-foreground leading-relaxed">
         {t('agentManager.delegationHint', {
           defaultValue:
-            'These are your settings, not the persona’s: how much of your work it may carry on its own, and where it reaches you.',
+            'These are your settings, not naby’s: how much of your work it may carry on its own, and where it reaches you.',
         })}
       </p>
 
@@ -199,7 +209,10 @@ const PersonaDelegation = memo(function PersonaDelegation() {
   );
 });
 
-/** Blank form for a new custom agent. */
+/** The editor's draft of an EXISTING custom agent. There is no blank variant any
+ *  more: `toForm` is the only way one is made, so the editor can only ever open on
+ *  a row that already exists (imported, or created before the create path was
+ *  removed). `id` stays optional because `Agent.id` types it that way upstream. */
 type Form = {
   id?: string;
   name: string;
@@ -209,16 +222,6 @@ type Form = {
   memoryScope: MemoryScope;
   escalation: Escalation;
   maxSteps: string;
-};
-
-const BLANK: Form = {
-  name: '',
-  description: '',
-  systemPrompt: '',
-  model: '',
-  memoryScope: 'user',
-  escalation: 'inline',
-  maxSteps: '',
 };
 
 function toForm(a: Agent): Form {
@@ -268,8 +271,13 @@ const AgentRow = memo(function AgentRow({
                 : 'bg-muted text-muted-foreground'
             }`}
           >
+            {/* The badge says BUILT-IN, not "Naby": the handle beside it already
+                reads `@naby`, so repeating the name would spend a badge saying
+                nothing. What the row actually needs to declare is which of the
+                two kinds it is — the one naby ships, or one that came in from
+                outside. */}
             {isPersona
-              ? t('agentManager.kindPersona', { defaultValue: 'Persona' })
+              ? t('agentManager.kindPersona', { defaultValue: 'Built-in' })
               : t('agentManager.kindCustom', { defaultValue: 'Custom' })}
           </span>
         </div>
@@ -405,12 +413,22 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
   return (
     <div className="space-y-3">
       {/* Plain muted prose, and ONE sentence: what this list is and how you call
-          something in it. What the built-in persona is, versus a custom agent,
-          is background — true and worth having, but not needed to read the list
-          below — so it waits in the disclosure at the foot of the panel. */}
+          something in it. What naby is, versus an imported agent, is background —
+          true and worth having, but not needed to read the list below — so it
+          waits in the disclosure at the foot of the panel. */}
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('agentManager.description', {
-          defaultValue: 'Your naby agents — address one in the composer with @name.',
+          defaultValue: 'naby, and anything you imported — address one in the composer with @name.',
+        })}
+      </p>
+
+      {/* Where the "+ Add agent" button used to be. A removed affordance leaves a
+          question behind ("so how do I make one?"), and the honest answer is that
+          the thing they wanted has a different name and a different home. One
+          line, no link: Harness is the next section of this same modal. */}
+      <p className="text-[11px] text-muted-foreground leading-relaxed">
+        {t('agentManager.subagentHint', {
+          defaultValue: 'For a specialist role, add a harness subagent under Harness.',
         })}
       </p>
 
@@ -426,7 +444,7 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
               <input
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
-                placeholder="persona"
+                placeholder="reviewer"
                 className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground font-mono"
               />
             </label>
@@ -451,7 +469,7 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
           </label>
 
           <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">{t('agentManager.instructions', { defaultValue: 'Instructions (persona / system prompt)' })}</span>
+            <span className="text-[10px] text-muted-foreground">{t('agentManager.instructions', { defaultValue: 'Instructions (system prompt)' })}</span>
             <textarea
               value={form.systemPrompt}
               onChange={(e) => set('systemPrompt', e.target.value)}
@@ -524,14 +542,7 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
             </button>
           </div>
         </div>
-      ) : (
-        <button
-          onClick={() => setForm({ ...BLANK })}
-          className="text-xs px-3 py-1.5 rounded border border-brand bg-brand/10 text-brand hover:bg-brand/20"
-        >
-          {t('agentManager.addAgent', { defaultValue: '+ Add agent' })}
-        </button>
-      )}
+      ) : null}
 
       {/* List */}
       {loading ? (
@@ -555,7 +566,7 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
         </div>
       )}
 
-      {/* What the built-in persona is, on request. */}
+      {/* What naby is, versus an imported agent, on request. */}
       <SettingsDetails>
         <p>{t('agentManager.personaNote')}</p>
       </SettingsDetails>

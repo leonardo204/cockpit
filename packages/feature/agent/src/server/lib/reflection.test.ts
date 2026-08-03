@@ -86,6 +86,8 @@ type FakeSessionSpec = {
   /** The session's project directory, if any — what decides whether a
    *  `project`-scope proposal can be keyed at all (P3-M8b). */
   cwd?: string;
+  /** P3-M10 §3: a TEMPORARY session, which the sweep must skip outright. */
+  noLearn?: boolean;
 };
 
 /** How the fake store may be set up for the memory half (P3-M8b). */
@@ -116,6 +118,8 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
       createdAt: 1,
       lastUsedAt: s.lastUsedAt ?? IDLE_AT,
       ...(s.cwd ? { cwd: s.cwd } : {}),
+      // Surfaced only when on, exactly as both real drivers do it.
+      ...(s.noLearn ? { noLearn: true } : {}),
     };
   });
 
@@ -169,6 +173,16 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
       for (const id of ids) if (corroboration[id]) out[id] = corroboration[id]!;
       return out;
     },
+    // P3-M10 §2.2 — the same derivation the real stores run: confirmed rows whose
+    // last access (lastInjectedAt, falling back to updatedAt) precedes the cutoff.
+    listStaleConfirmedMemory: (before, opts) => {
+      const rows = memory
+        .filter(
+          (m) => m.status === 'confirmed' && (m.lastInjectedAt ?? m.updatedAt) < before,
+        )
+        .sort((a, b) => (a.lastInjectedAt ?? a.updatedAt) - (b.lastInjectedAt ?? b.updatedAt));
+      return typeof opts?.limit === 'number' ? rows.slice(0, opts.limit) : rows;
+    },
     getSetting: (key) => settings.get(key),
     getMessages: (sessionId) => messages.get(sessionId) ?? [],
     listAgents: () =>
@@ -219,7 +233,17 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
 
 /** The counts a sweep that touched no memory returns — spelled out once so the
  *  M8a assertions stay readable. */
-const NO_MEMORY = { proposedMemories: 0, droppedCandidates: 0, autoConfirmed: 0 } as const;
+/** The memory-half counters, all zero — spread into the sweeps that are only
+ *  about corrections. `staleForReview`/`skippedNoLearn` (P3-M10) join it for the
+ *  same reason: a sweep over sessions with no stale memory and no temporary flag
+ *  reports zero for both. */
+const NO_MEMORY = {
+  proposedMemories: 0,
+  droppedCandidates: 0,
+  autoConfirmed: 0,
+  staleForReview: 0,
+  skippedNoLearn: 0,
+} as const;
 
 /** A judge that quotes the user's own words when they pushed back. */
 function honestJudge(): { judge: ReflectionJudge; calls: ReflectionCase[][] } {
@@ -998,5 +1022,180 @@ describe('kickReflectionSweep — the turn must not feel it', () => {
     expect(started).toBe(1);
     release?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P3-M10 — the sweep and the two sovereignty switches
+// (specs/phase-3-memory-hygiene.md §2.2 / §3)
+// ---------------------------------------------------------------------------
+
+describe('runReflectionSweep — temporary sessions are skipped (P3-M10 §3)', () => {
+  it('never reads a noLearn session: no judge call, no cursor, nothing learned', async () => {
+    // "Skipped" rather than "swept with the memory half off" is the whole
+    // promise: a corrections-only pass would still read the transcript and still
+    // stamp ledger rows naming it.
+    const { store, cursorWrites, writes } = fakeStore([
+      { sessionId: 'temp', noLearn: true },
+    ]);
+    const { judge, seen } = proposingJudge([candidate()]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(out.skippedNoLearn).toBe(1);
+    expect(out.sweptSessions).toBe(0);
+    expect(seen).toEqual([]);
+    expect(cursorWrites).toEqual([]);
+    expect(writes).toEqual([]);
+  });
+
+  it('skips only the marked session, and sweeps the others beside it', async () => {
+    const { store, cursorWrites } = fakeStore([
+      { sessionId: 'temp', noLearn: true },
+      { sessionId: 'normal' },
+    ]);
+    const { judge, seen } = proposingJudge([]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(out.skippedNoLearn).toBe(1);
+    expect(out.sweptSessions).toBe(1);
+    expect(seen.map((s) => s.sessionId)).toEqual(['normal']);
+    expect(cursorWrites.map((c) => c.sessionId)).toEqual(['normal']);
+  });
+
+  it('does not spend the sweep CAP on sessions it skipped', async () => {
+    // A skip that consumed a slot would let a handful of temporary sessions
+    // starve every real one on a busy machine.
+    const specs = [
+      ...Array.from({ length: REFLECTION_SWEEP_CAP }, (_, i) => ({
+        sessionId: `temp-${i}`,
+        noLearn: true,
+      })),
+      { sessionId: 'real' },
+    ];
+    const { store, cursorWrites } = fakeStore(specs);
+    const { judge } = proposingJudge([]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(out.skippedNoLearn).toBe(REFLECTION_SWEEP_CAP);
+    expect(out.sweptSessions).toBe(1);
+    expect(cursorWrites.map((c) => c.sessionId)).toEqual(['real']);
+  });
+});
+
+describe('runReflectionSweep — memory.learningEnabled off (P3-M10 §3)', () => {
+  const OFF = { 'memory.learningEnabled': 'false' };
+
+  it('still marks corrections but writes no memory', async () => {
+    // The asymmetry §3 draws: a correction is the agent being told it got
+    // something wrong, not a durable fact recorded about the user — and the
+    // trust meter would go blind without them.
+    const { store, writes } = fakeStore([{ sessionId: 's1' }], { settings: OFF });
+    const { judge } = proposingJudge([candidate()]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(out.sweptSessions).toBe(1);
+    expect(out.reviewedEvents).toBe(1);
+    expect(out.proposedMemories).toBe(0);
+    expect(writes).toEqual([]);
+  });
+
+  it('does not report the skipped proposals as REFUSED', async () => {
+    // Counting them would make "the user turned learning off" indistinguishable
+    // from "the guards rejected what the model proposed".
+    const { store } = fakeStore([{ sessionId: 's1' }], { settings: OFF });
+    const { judge } = proposingJudge([candidate(), candidate({ key: 'another' })]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+    expect(out.droppedCandidates).toBe(0);
+  });
+
+  it('does not spend a model call on a case-less session', async () => {
+    // The memory-only call (M8c §6.4) exists solely to extract facts. With
+    // learning off there is nothing for it to produce, so making it would be
+    // spending the user's money on an answer that must then be discarded.
+    const chatty: RuntimeMessage[] = [
+      { role: 'user', content: 'always give me the SQL before the explanation' },
+      { role: 'assistant', content: 'noted' },
+      { role: 'user', content: 'and keep every reply under five lines please' },
+    ];
+    const { store, cursorWrites } = fakeStore(
+      [{ sessionId: 's1', messages: chatty, events: [] }],
+      { settings: OFF },
+    );
+    const { judge, seen } = proposingJudge([candidate()]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(seen).toEqual([]);
+    // The cursor STILL advances: the messages have been looked at, and re-reading
+    // them could only produce the same nothing.
+    expect(cursorWrites.map((c) => c.sessionId)).toEqual(['s1']);
+    expect(out.sweptSessions).toBe(1);
+  });
+
+  it('proposes again as soon as the switch goes back on', async () => {
+    const { store, writes } = fakeStore([{ sessionId: 's1' }]);
+    const { judge } = proposingJudge([candidate()]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+    expect(out.proposedMemories).toBe(1);
+    expect(writes).toHaveLength(1);
+  });
+});
+
+describe('runReflectionSweep — the stale-review derivation (P3-M10 §2.2)', () => {
+  /** A confirmed row last used `ageMs` ago. */
+  const usedAgo = (id: string, ageMs: number): MemoryItem => ({
+    id,
+    scope: 'user',
+    scopeKey: DEFAULT_USER_ID,
+    type: 'semantic',
+    key: id,
+    value: `a fact called ${id}`,
+    provenance: { source: 'user' },
+    confidence: 1,
+    status: 'confirmed',
+    createdAt: 1,
+    updatedAt: 1,
+    lastInjectedAt: NOW - ageMs,
+  });
+
+  const NINETY_DAYS = 90 * 86_400_000;
+
+  it('counts the confirmed rows nobody has used inside the window', async () => {
+    const { store } = fakeStore([{ sessionId: 's1' }], {
+      memory: [usedAgo('stale', NINETY_DAYS + 1), usedAgo('fresh', 1_000)],
+    });
+    const { judge } = proposingJudge([]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+    expect(out.staleForReview).toBe(1);
+  });
+
+  it('CHANGES NOTHING — no deletion, no status change (§2.2: deletion is a person\'s act)', async () => {
+    const rows = [usedAgo('stale', NINETY_DAYS + 1)];
+    const { store, confirmed } = fakeStore([{ sessionId: 's1' }], { memory: rows });
+    const { judge } = proposingJudge([]);
+    await runReflectionSweep(store, judge, { now: NOW });
+
+    expect(rows[0]!.status).toBe('confirmed');
+    expect(rows[0]!.value).toBe('a fact called stale');
+    expect(confirmed).toEqual([]);
+  });
+
+  it('reports zero when nothing has gone stale', async () => {
+    const { store } = fakeStore([{ sessionId: 's1' }], { memory: [usedAgo('fresh', 1_000)] });
+    const { judge } = proposingJudge([]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+    expect(out.staleForReview).toBe(0);
+  });
+
+  it('runs even with the auto-confirm opt-in OFF — it is a separate step', async () => {
+    // Consolidation returns early when the opt-in is off; the stale derivation
+    // must not be behind that early return.
+    const { store } = fakeStore([{ sessionId: 's1' }], {
+      memory: [usedAgo('stale', NINETY_DAYS + 1)],
+      settings: {},
+    });
+    const { judge } = proposingJudge([]);
+    const out = await runReflectionSweep(store, judge, { now: NOW });
+    expect(out.autoConfirmed).toBe(0);
+    expect(out.staleForReview).toBe(1);
   });
 });

@@ -68,13 +68,16 @@ import {
   isClaudeAgentSdkAvailable,
   isSessionDueForReflection,
   makeModelResolver,
+  MEMORY_DECAY_REVIEW_MS,
   normalizeReflectionAnswer,
   parseReflectionAnswer,
+  readLearningEnabled,
   REFLECTION_IDLE_MS,
   REFLECTION_SWEEP_CAP,
   resolveMemoryScopeKey,
   resolveProviderCredential,
   shouldAutoConfirmMemory,
+  staleReviewCutoff,
   shouldExtractMemoryOnly,
   validateMemoryCandidates,
   validateReflectionVerdicts,
@@ -119,6 +122,8 @@ export interface ReflectionStore {
   listCorroboratedProposed(threshold: number): MemoryItem[];
   getMemoryCorroboration(memoryIds: readonly string[]): Record<string, number>;
   getSetting(key: string): string | undefined;
+  // -- P3-M10: the stale-review derivation the consolidation step reports ----
+  listStaleConfirmedMemory(before: number, opts?: { limit?: number }): MemoryItem[];
 }
 
 /** The opt-in that lets consolidation confirm a corroborated proposal without a
@@ -172,6 +177,25 @@ export type ReflectionSweepResult = {
   /** Proposals the consolidation step confirmed on corroboration (P3-M8b §5.4).
    *  Always 0 while the opt-in setting is off. */
   autoConfirmed: number;
+  /**
+   * Confirmed memories nobody has used in `MEMORY_DECAY_REVIEW_MS` (P3-M10 §2.2)
+   * — the size of the stale-review queue as of this sweep.
+   *
+   * A COUNT, and deliberately nothing more. The sweep does not delete these, does
+   * not flag them and does not store the number: it is derived on every read from
+   * `COALESCE(lastInjectedAt, updatedAt)`, reported here so the log says the queue
+   * exists, and shown to the user behind the browser's "stale" filter, where a
+   * PERSON decides between deleting a row and keeping it. §2.2 is explicit that
+   * automatic deletion is not on the table.
+   */
+  staleForReview: number;
+  /**
+   * Sessions skipped because they are TEMPORARY (`noLearn`, §3). Reported so a
+   * user who wonders why a long conversation taught nothing can see that it was
+   * the flag rather than a failure — and so a spike can assert the skip happened
+   * rather than merely that nothing was written.
+   */
+  skippedNoLearn: number;
 };
 
 /** Every agent whose ledger might hold rows for these sessions. Best-effort: with
@@ -222,8 +246,38 @@ export async function runReflectionSweep(
     proposedMemories: 0,
     droppedCandidates: 0,
     autoConfirmed: 0,
+    staleForReview: 0,
+    skippedNoLearn: 0,
   };
   if (cap === 0) return result;
+
+  // P3-M10 (§3): the app-wide learning switch, read ONCE for the whole sweep.
+  // Per-session would let a user flipping the setting mid-sweep get half a pass
+  // with proposals and half without, which is a state nobody asked for.
+  //
+  // IT ONLY SILENCES THE MEMORY HALF. Corrections still run with learning off:
+  // they are the agent being told it got something wrong, not a durable fact
+  // being learned about the user, and the trust meter would go blind without
+  // them (§3 scopes the switch to memory capture and says so).
+  //
+  // A THROWN READ MEANS "DO NOT LEARN", which is the opposite of
+  // `readLearningEnabled`'s own default, and the two are answering different
+  // questions. That function decides what an ABSENT or malformed VALUE means,
+  // where the documented behaviour (learning on) is the right answer. Here the
+  // STORE ITSELF could not be asked — so we do not know whether the user turned
+  // learning off, and writing durable memory about them on a guess is the one
+  // mistake a sovereignty switch must not make. Nothing is lost by waiting: the
+  // next sweep with a readable store learns everything this one skipped, because
+  // a session whose cursor did not advance is still due.
+  //
+  // It also keeps the sweep's oldest promise — it NEVER throws (see the
+  // `listSessions` catch below and the per-session catch further down).
+  let learningEnabled = false;
+  try {
+    learningEnabled = readLearningEnabled(store);
+  } catch {
+    console.warn('[reflection] learning setting unreadable — proposing no memory this sweep');
+  }
 
   let sessions: SessionRef[];
   try {
@@ -237,6 +291,19 @@ export async function runReflectionSweep(
   for (const session of sessions) {
     if (result.sweptSessions >= cap) break;
     if (session.sessionId === opts.excludeSessionId) continue;
+    // A TEMPORARY SESSION IS NOT REFLECTED ON AT ALL (P3-M10 §3). Not "reflected
+    // on but with the memory half suppressed" — skipped, before the transcript is
+    // even read. The whole promise of the flag is that the conversation is not
+    // mined afterwards, and a corrections-only pass would still be reading it and
+    // still be writing `reviewedAt` rows that name it.
+    //
+    // The cursor is deliberately NOT advanced: the session simply never becomes
+    // due, so if the user later clears the flag the backlog is still there to be
+    // read rather than having been silently marked as already seen.
+    if (session.noLearn === true) {
+      result.skippedNoLearn += 1;
+      continue;
+    }
     // Cheap test first: the transcript is only loaded for a session that is
     // already idle, so a busy machine's active sessions cost nothing here.
     if (session.lastUsedAt + REFLECTION_IDLE_MS > now) continue;
@@ -263,7 +330,16 @@ export async function runReflectionSweep(
       // Below the threshold the old behaviour is unchanged and deliberate: no
       // call, and the cursor STILL advances, because the messages have been
       // looked at and re-reading them could only produce the same nothing.
-      if (cases.length === 0 && !shouldExtractMemoryOnly(messages, cursorSeq)) {
+      //
+      // P3-M10: WITH LEARNING OFF THERE IS NO MEMORY-ONLY CALL. That call exists
+      // for one purpose — extracting durable facts — so making it while the user
+      // has said "do not learn from me" would spend their money on an answer the
+      // sweep must then throw away. A case-less session is therefore swept and
+      // dropped exactly as it was before M8c, and the cursor still advances,
+      // because the messages HAVE been looked at (for corrections) and re-reading
+      // them could only produce the same nothing.
+      const mayExtractMemory = learningEnabled && shouldExtractMemoryOnly(messages, cursorSeq);
+      if (cases.length === 0 && !mayExtractMemory) {
         store.setReflectionCursor(session.sessionId, latestSeq, now);
         result.sweptSessions += 1;
         continue;
@@ -324,7 +400,15 @@ export async function runReflectionSweep(
         if (store.markEvalEventCorrected(verdict.caseId)) result.markedEvents += 1;
       }
 
-      proposeMemories(store, answer.memories, context, userMessages, result);
+      // P3-M10: proposals are the half the learning switch silences (§3). The
+      // judge may still have answered with some — the prompt asks for both tasks
+      // — and they are dropped here rather than counted as refused: they were
+      // never eligible, and inflating `droppedCandidates` would make "the model
+      // proposed things the guards rejected" indistinguishable from "the user
+      // turned learning off".
+      if (learningEnabled) {
+        proposeMemories(store, answer.memories, context, userMessages, result);
+      }
 
       store.setReflectionCursor(session.sessionId, latestSeq, now);
       result.sweptSessions += 1;
@@ -355,14 +439,15 @@ export async function runReflectionSweep(
   // session this pass will read has had its say, so a fact corroborated by two
   // sessions read in the SAME sweep is promoted in that sweep rather than
   // waiting for the next one.
-  consolidateMemory(store, result);
+  consolidateMemory(store, result, now);
 
   if (result.sweptSessions > 0 || result.markedEvents > 0 || result.proposedMemories > 0) {
     console.log(
       `[reflection] swept ${result.sweptSessions} session(s), reviewed ${result.reviewedEvents} action(s), ` +
         `marked ${result.markedEvents} corrected, ` +
         `dropped ${result.droppedVerdicts} verdict(s), proposed ${result.proposedMemories} memory row(s), ` +
-        `dropped ${result.droppedCandidates} candidate(s), auto-confirmed ${result.autoConfirmed}`,
+        `dropped ${result.droppedCandidates} candidate(s), auto-confirmed ${result.autoConfirmed}, ` +
+        `stale-for-review ${result.staleForReview}, skipped-no-learn ${result.skippedNoLearn}`,
     );
   }
   return result;
@@ -460,7 +545,39 @@ function proposeMemories(
  * NEVER THROWS. Consolidation is a tidy-up at the end of a background pass; a
  * store hiccup here must not turn a successful sweep into a failed one.
  */
-function consolidateMemory(store: ReflectionStore, result: ReflectionSweepResult): void {
+function consolidateMemory(
+  store: ReflectionStore,
+  result: ReflectionSweepResult,
+  now: number,
+): void {
+  // -- THE STALE-REVIEW DERIVATION (P3-M10 §2.2) ---------------------------
+  //
+  // Runs FIRST, and unconditionally: it is independent of the auto-confirm
+  // opt-in below (which returns early when off) and it must not be skipped by it.
+  //
+  // IT WRITES NOTHING. No status change, no flag, no deletion — it counts the
+  // confirmed rows whose last use is older than the review window so the sweep
+  // log can say the queue is there. The browser's "stale" filter re-derives the
+  // same set on demand from the same cutoff (`staleReviewCutoff`), which is why
+  // there is no stored state to keep in sync between them.
+  //
+  // Wrapped separately from the consolidation below so a store that cannot answer
+  // this read still gets its proposals promoted, and vice versa.
+  try {
+    const stale = store.listStaleConfirmedMemory(staleReviewCutoff(now, MEMORY_DECAY_REVIEW_MS));
+    result.staleForReview = stale.length;
+    if (stale.length > 0) {
+      console.log(
+        `[reflection] ${stale.length} confirmed memory row(s) unused for over ` +
+          `${Math.round(MEMORY_DECAY_REVIEW_MS / 86_400_000)} days — offered for review, not deleted`,
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[reflection] stale review skipped: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
   try {
     const enabled = readAutoConfirmSetting(store);
     // The read is skipped entirely while the opt-in is off, so the default costs

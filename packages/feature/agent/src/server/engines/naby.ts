@@ -65,6 +65,7 @@ import {
   AiSdkEngine,
   buildToolset,
   buildWorkspaceTools,
+  canCaptureMemory,
   isMcpEntryActive,
   ClaudeAgentSdkEngine,
   CHATGPT_OAUTH_DEFAULT_MODEL,
@@ -87,6 +88,7 @@ import {
   makeModelResolver,
   Outbox,
   preflightEngine,
+  readLearningEnabled,
   readSettings,
   resolveProviderCredential,
   runTurn,
@@ -438,6 +440,30 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         }
         if (projectCwd) store.touchProject(projectCwd);
 
+        // ---- may this turn LEARN? (Phase 3, P3-M10 — memory-hygiene §3) ----
+        //
+        // TWO SWITCHES, ONE ANSWER. `memory.learningEnabled` is the app-wide
+        // setting (default ON) and `SessionRef.noLearn` is this conversation's own
+        // temporary-session flag; `canCaptureMemory` is the ONE place they
+        // combine, so the tool, the instruction and the reflection sweep cannot
+        // end up disagreeing about whether learning is on.
+        //
+        // READ PER TURN, like `gate.allowChanges`, so flipping either one lands on
+        // the very next message rather than on the next app start.
+        //
+        // WHAT IT DOES NOT TOUCH: memory INJECTION. Both switches mean "do not
+        // learn from this", never "forget what you know" — already-confirmed
+        // memory keeps shaping the turn in both states (§3). That asymmetry is the
+        // whole reason the flag is not simply "memory off".
+        const learningEnabled = readLearningEnabled(store);
+        const sessionNoLearn = store.getSession(sessionId)?.noLearn === true;
+        const capturesMemory = canCaptureMemory({ learningEnabled, sessionNoLearn });
+        if (!capturesMemory) {
+          console.log(
+            `[engine:naby] learning: OFF (${sessionNoLearn ? 'temporary session' : 'memory.learningEnabled=false'})`,
+          );
+        }
+
         // ---- session reflection, fire-and-forget (Phase 3, P3-M8a) ---------
         //
         // The next conversation is what makes the previous ones learnable (spec
@@ -703,8 +729,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // a question and writes the answer to the eval-event ledger — the labelled
         // predictions the trust meter is computed from. Built per turn because it
         // closes over this turn's emit and abort signal.
+        //
+        // P3-M10: a TEMPORARY session checks in about nothing. A check-in writes a
+        // labelled prediction to the growth ledger, which is the agent learning
+        // about itself from this conversation — the same thing the flag switches
+        // off for memory. The app-wide `memory.learningEnabled` switch does NOT
+        // reach here (§3 scopes it to memory capture); only `noLearn` does, which
+        // is why this reads `sessionNoLearn` rather than `capturesMemory`.
         const checkinSink =
-          growthSubject && canCheckIn(growthSubject)
+          growthSubject && canCheckIn(growthSubject) && !sessionNoLearn
             ? makeCheckinSink({
                 store,
                 agentId: growthSubject.id,
@@ -788,10 +821,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
         const planMode = ctx.params.permissionMode === 'plan';
 
+        //
+        // P3-M10 (§3): with learning off — app-wide or for this one session — the
+        // sink is ABSENT, so `naby_remember` is not in the toolset at all. Not
+        // gated, not denied: absent. A tool the model can see but never use
+        // produces a turn that keeps trying and keeps being refused, which reads
+        // as the assistant being broken rather than as the setting working (the
+        // same reasoning as plan mode and the workspace tools above).
         const builtin = buildToolset(
           outbox,
           store,
-          growthSubject
+          growthSubject && capturesMemory
             ? {
                 putMemory: (req) => store.putMemory(req),
                 sessionId,
@@ -974,7 +1014,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // P3-M5: keyed on `growthSubject`, so the persona learns from ordinary
         // turns too — the tool is built for the same subject, so the instruction
         // and the tool's presence can never disagree.
-        const learns = canLearn(growthSubject);
+        //
+        // P3-M10: AND the two sovereignty switches. `capturesMemory` is the exact
+        // condition the memory sink above was built on, so the instruction and the
+        // tool's presence still cannot disagree — which is what this line has
+        // always been for; it just has one more reason the tool might be missing.
+        const learns = capturesMemory && canLearn(growthSubject);
         if (learns) {
           console.log(
             `[engine:naby] learning: on (@${growthSubject?.name}, scope=${growthSubject?.memoryScope})`,
@@ -1180,6 +1225,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const mcpAnnotations = mcp?.toolAnnotations ?? {};
         const observeForGrowth = (call: ToolCall, allowed: boolean, reason?: string): void => {
           if (!growthSubject) return;
+          // P3-M10 (§3): a TEMPORARY session leaves no trace in the growth ledger
+          // either. An `eval_events` row names the session it came from and is
+          // read back by the trust meter, so writing one here would be exactly the
+          // record the flag promises not to keep. Spec §6 accepts the cost openly:
+          // fewer samples for the meter, in exchange for a session that means what
+          // it says. The app-wide learning switch does NOT reach here — it is
+          // about MEMORY, and an agent still has to know how well it is doing.
+          if (sessionNoLearn) return;
           const bare = normalizeToolName(call.toolName);
           const readOnlyHint = mcpAnnotations[bare]?.readOnlyHint;
           const effect = resolvePolicyEffect(policyRules, bare);

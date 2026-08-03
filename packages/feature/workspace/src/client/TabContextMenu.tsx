@@ -23,6 +23,19 @@ export interface TabContextMenuState {
   x: number;
   y: number;
   isPinned: boolean;
+  /**
+   * P3-M10 (memory-hygiene §3): whether this session is a TEMPORARY one — one
+   * nothing is learned from. Read at open time like `isPinned`, so the label
+   * says what the click will do rather than what the state is.
+   */
+  isNoLearn: boolean;
+  /**
+   * Whether the tab HAS a session yet. A blank tab has nothing to mark: the flag
+   * is per session, and a tab becomes one only on its first turn. The item is
+   * disabled rather than hidden, so the menu does not change shape between two
+   * tabs that look identical to the user.
+   */
+  hasSession: boolean;
 }
 
 interface TabContextMenuProps {
@@ -31,6 +44,8 @@ interface TabContextMenuProps {
   onTogglePin: (tabId: string) => void;
   /** Opens the rename flow; the menu closes first so the input takes focus. */
   onRename: (tabId: string) => void;
+  /** P3-M10: mark/unmark this session as one nothing is learned from. */
+  onToggleNoLearn: (tabId: string) => void;
 }
 
 /** Keeps the menu on screen when the click lands near an edge. */
@@ -38,7 +53,13 @@ function clamp(value: number, size: number, viewport: number): number {
   return Math.max(8, Math.min(value, viewport - size - 8));
 }
 
-export function TabContextMenu({ state, onClose, onTogglePin, onRename }: TabContextMenuProps) {
+export function TabContextMenu({
+  state,
+  onClose,
+  onTogglePin,
+  onRename,
+  onToggleNoLearn,
+}: TabContextMenuProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: state.x, top: state.y });
@@ -112,6 +133,29 @@ export function TabContextMenu({ state, onClose, onTogglePin, onRename }: TabCon
           <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
         </svg>
         {t('tabBar.rename')}
+      </button>
+      {/* P3-M10 §3 — THE TEMPORARY SESSION. It lives here, beside pin and rename,
+          because it is the same KIND of thing: a per-session property the user
+          sets on the tab that holds it. A Settings switch would have been a
+          worse home — by the time you have decided this particular conversation
+          should not be learned from, you are looking at its tab. */}
+      <button
+        role="menuitem"
+        disabled={!state.hasSession}
+        className={`${item} disabled:opacity-40 disabled:cursor-not-allowed`}
+        data-testid="tab-menu-no-learn"
+        onClick={() => {
+          onToggleNoLearn(state.tabId);
+          onClose();
+        }}
+      >
+        <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          {/* An eye with a stroke through it: "this is not being watched". */}
+          <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+          <circle cx="12" cy="12" r="2.5" />
+          <path d="M3 3l18 18" />
+        </svg>
+        {t(state.isNoLearn ? 'tabBar.noLearnOff' : 'tabBar.noLearn')}
       </button>
     </div>
   );

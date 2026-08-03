@@ -69,6 +69,10 @@ interface TabBarProps {
   dragTabIndex: number | null;
   dragOverTabIndex: number | null;
   isPinned?: (tabId: string) => boolean;
+  /** P3-M10 (memory-hygiene §3): whether this tab's session is TEMPORARY —
+   *  nothing is learned from it. Reported as a badge, never toggled here: the
+   *  toggle is in the context menu, next to pin and rename. */
+  isNoLearn?: (tabId: string) => boolean;
   /** Right-click on a tab. Pin/unpin and rename live in that menu now — the
    *  hover icon they replaced was read as a bell and never found. */
   onTabContextMenu?: (tabId: string, x: number, y: number) => void;
@@ -98,6 +102,7 @@ export function TabBar({
   dragTabIndex,
   dragOverTabIndex,
   isPinned,
+  isNoLearn,
   onTabContextMenu,
   renamingTabId,
   onRenameCommit,
@@ -216,6 +221,26 @@ export function TabBar({
                 />
               ) : (
                 <span className="flex-1 min-w-0 truncate">{tab.title}</span>
+              )}
+              {/* P3-M10 §3 — the TEMPORARY-session marker. Beside the title
+                  rather than stacked in the corner with the pin/unread badges,
+                  which already contend for that spot: this one has to be visible
+                  at a glance WHILE typing, because it is the difference between a
+                  conversation naby learns from and one it does not. State only,
+                  never a button — the toggle is in the right-click menu. */}
+              {isNoLearn?.(tab.id) && (
+                <span
+                  className="shrink-0 text-muted-foreground"
+                  title={t('tabBar.noLearnBadge')}
+                  aria-label={t('tabBar.noLearnBadge')}
+                  data-testid="tab-no-learn-badge"
+                >
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" />
+                    <circle cx="12" cy="12" r="2.5" />
+                    <path d="M3 3l18 18" />
+                  </svg>
+                </span>
               )}
               {/* No per-tab engine badge: Naby runs a single engine, so every
                   tab is the same runtime and a tag would be noise. */}

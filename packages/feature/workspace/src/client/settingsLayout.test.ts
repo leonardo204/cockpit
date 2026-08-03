@@ -350,6 +350,10 @@ describe('a panel introduces itself in one sentence', () => {
     'telegramSettings.description',
     'policyManager.description',
     'agentManager.description',
+    // The line that stands where "+ Add agent" used to (2026-08-03): custom-agent
+    // creation is gone from the UI, and the panel now points at harness subagents
+    // instead. It is a standing hint, so it lives under the same one-sentence rule.
+    'agentManager.subagentHint',
     'agentManager.delegationHint',
     'commandManager.description',
     'systemMcp.description',

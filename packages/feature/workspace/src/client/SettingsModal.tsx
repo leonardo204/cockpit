@@ -65,7 +65,10 @@ type SettingsSectionId =
 // Left-nav sections. Each `labelKey` reuses an existing i18n string, so no new
 // nav copy is introduced. `icon` is decorative only.
 //
-// Phase 3 (P3-M1) reorg: `agents` is the naby agent layer (persona + memory);
+// Phase 3 (P3-M1) reorg: `agents` is the naby agent layer (the naby agent itself
+// + memory); 2026-08-03 the section is LABELLED for that agent ("Naby" / "나비")
+// rather than "Agents" — there is one, and calling the row a roster invited the
+// question of how to add another;
 // `harness` now owns command/skill/subagent (the old standalone `memory` and
 // `commands` sections were folded in — memory under Agents, commands under
 // Harness) so the two-layer model (`@` agents / `/` harness) shows in Settings.
@@ -289,7 +292,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
 
             {section === 'agents' ? (
               <>
-                <SettingsSection title={t('agentManager.title', { defaultValue: 'Agents' })}>
+                <SettingsSection title={t('agentManager.title', { defaultValue: 'Naby' })}>
                   <NabyAgentManager isOpen={isOpen} cwd={cwd} />
                 </SettingsSection>
                 {/* Telegram escalation — how an agent reaches you (P3-M3). */}

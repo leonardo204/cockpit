@@ -56,7 +56,9 @@ import {
   BOOTSTRAP_DONE_KEY,
   BOOTSTRAP_QUESTIONS,
   answersToMemory,
+  readLearningEnabled,
   shouldOfferBootstrap,
+  writeLearningEnabled,
   type ClaudeLoginAccount,
   type McpEntry,
   type HarnessScope,
@@ -535,7 +537,20 @@ export type NabyAction =
   | { action: 'models.list'; refresh?: boolean }
   | { action: 'bootstrap.get' }
   | { action: 'bootstrap.save'; answers?: Record<string, string>; dismiss?: boolean }
-  | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string };
+  | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string }
+  // -- P3-M10 (memory-hygiene §3) — the two sovereignty switches -------------
+  //
+  // The app-wide "learn from my conversations" setting. It rides /api/naby
+  // rather than /api/memory because it is a SETTING, like `gate.allowChanges`,
+  // and because /api/memory is the review surface for memory ROWS — a switch
+  // that decides whether rows are ever written is a different kind of thing.
+  | { action: 'learning.get' }
+  | { action: 'learning.set'; enabled: boolean }
+  // The per-session temporary flag, toggled from the tab context menu. `list`
+  // exists so the tab bar can mark every affected tab from ONE request rather
+  // than asking per tab as tabs open.
+  | { action: 'session.noLearn.list' }
+  | { action: 'session.noLearn.set'; sessionId: string; noLearn: boolean };
 
 export type NabyActionResult =
   | {
@@ -598,6 +613,14 @@ export type NabyActionResult =
        *  rows proposed, candidates refused, and proposals the consolidation step
        *  auto-confirmed. */
       reflection?: ReflectionSweepResult;
+      /** `learning.get`/`set` (P3-M10): whether new memory may be captured at all.
+       *  Injection is unaffected either way — see memory-hygiene §3. */
+      learningEnabled?: boolean;
+      /** `session.noLearn.set`: the flag as it now stands. */
+      noLearn?: boolean;
+      /** `session.noLearn.list`: every session currently marked temporary, so the
+       *  tab bar can badge them in one pass. */
+      noLearnSessions?: string[];
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
       /** `models.list`: the live model catalog for the Claude sign-in. */
@@ -714,6 +737,42 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       store.setSetting('gate.allowChanges', body.allowChanges ? 'true' : 'false');
       return { ok: true, allowChanges: body.allowChanges };
+    }
+
+    // -- P3-M10 (memory-hygiene §3): the sovereignty switches ---------------
+
+    case 'learning.get':
+      return { ok: true, learningEnabled: readLearningEnabled(store) };
+
+    case 'learning.set': {
+      // STRICTLY boolean, like `autoConfirm.set` and for the mirror reason: a
+      // malformed request must not be able to silently turn learning OFF, which
+      // would look exactly like an agent that had stopped working.
+      if (typeof body.enabled !== 'boolean') {
+        return { ok: false, error: 'enabled must be a boolean' };
+      }
+      writeLearningEnabled(store, body.enabled);
+      return { ok: true, learningEnabled: body.enabled };
+    }
+
+    case 'session.noLearn.list':
+      return {
+        ok: true,
+        noLearnSessions: store
+          .listSessions()
+          .filter((s) => s.noLearn === true)
+          .map((s) => s.sessionId),
+      };
+
+    case 'session.noLearn.set': {
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId is required' };
+      }
+      if (typeof body.noLearn !== 'boolean') {
+        return { ok: false, error: 'noLearn must be a boolean' };
+      }
+      store.setSessionNoLearn(body.sessionId, body.noLearn);
+      return { ok: true, noLearn: body.noLearn };
     }
 
     case 'policy.list': {

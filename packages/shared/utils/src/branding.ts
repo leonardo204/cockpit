@@ -43,5 +43,5 @@ export function appTitleForCwd(_cwd?: string | null): string {
 
 /** One sentence describing the product, for HTML metadata and the PWA manifest. */
 export const APP_DESCRIPTION =
-  'Naby is a personalized persona agent — a local-first desktop app for chatting with an AI ' +
+  'Naby is your personal agent — a local-first desktop app for chatting with an AI ' +
   'that remembers your projects. Your keys and your history stay on your own machine.';
