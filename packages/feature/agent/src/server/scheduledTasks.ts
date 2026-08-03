@@ -1,12 +1,10 @@
-import { existsSync } from 'fs';
 import {
   SCHEDULED_TASKS_FILE, readJsonFile, writeJsonFile, mutateJsonFile, withFileLock,
-  getClaudeSessionPath,
 } from '@cockpit/shared-utils';
 import { updateGlobalState } from './state/globalState';
 import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from './sessionRunHub';
 import { dispatchChat } from './engines/orchestrator';
-import { getEngineSpec } from './engines/registry';
+import { getStore, nabySpec } from './engines/naby';
 import { Effect } from 'effect';
 import { AgentError, type AgentProvider } from '@cockpit/effect-core';
 import { AppRuntime } from '@cockpit/effect-runtime/server';
@@ -20,7 +18,11 @@ export interface ScheduledTask {
   cwd: string;
   tabId: string;
   sessionId: string;       // chat session id
-  engine?: string;         // ChatEngine at creation; absent = 'claude' (pre-persistence tasks)
+  // The engine a task was created with. Kept for the tasks already on disk;
+  // every task RUNS on naby now (harness-standalone §2.4). A value naming a
+  // vendor engine is refused rather than silently redirected — see
+  // sendChatMessageEff.
+  engine?: string;
   model?: string;          // ollama/deepseek: model name snapshot at creation
   message: string;
   type: 'once' | 'interval' | 'cron';
@@ -112,20 +114,25 @@ export function getNextCronTime(cronExpr: string, after: Date = new Date()): num
 // ============================================
 
 /**
- * Single execution path for ALL engines (claude / claude2 / ollama / codex / kimi /
- * deepseek). Since #10 ws-converge every engine's /api/chat[/<engine>] route only STARTS a
- * detached run and returns its runKey as JSON (no SSE to drain); the route owns session
- * persistence, 'loading'/'unread' global state, the run registry and the 409 concurrent-run
- * guard. We POST to start the run, then poll the registry until it leaves "running".
+ * The scheduled turn, dispatched through THE SAME orchestrator + engine an
+ * interactive turn uses.
  *
- * claude/claude2 used to bypass the route with a direct SDK query(), which left them OUT of
- * the run registry — so the 409 guard couldn't see them and two writers could corrupt the
- * jsonl. Routing them through /api/chat closes that hole and makes scheduled claude runs
- * stream live to viewers like every other engine. The route covers everything the old
- * direct path did (resume, cwd, bypassPermissions, claude2 CLAUDE_CONFIG_DIR via `engine`,
- * settingSources, the 1-compaction retry) and additionally expands slash commands.
+ * ONE SPEC, NAMED DIRECTLY (harness-standalone §2.4). This used to look the
+ * engine up in the cockpit registry, which meant a task's persisted `engine`
+ * string chose the backend — and the vendor specs (claude / codex / deepseek /
+ * kimi / ollama) were reachable from here and nowhere else in the product. The
+ * import is now `nabySpec` itself: there is no name to look up, so there is
+ * nothing a stale task field can select. The registry survives for the vendor
+ * specs it still holds, but no product path reaches it (asserted in
+ * removedEngineSurface.test.ts).
  *
- * Scheduled tasks always resume an existing session, so the runKey is the task's sessionId.
+ * Since #10 ws-converge the orchestrator only STARTS a detached run and hands
+ * back its runKey; it owns session persistence, 'loading'/'unread' global state,
+ * the run registry and the 409 concurrent-run guard. We start the run, then poll
+ * the registry until it leaves "running".
+ *
+ * Scheduled tasks always resume an existing session, so the runKey is the task's
+ * sessionId.
  */
 const dispatchEngineMessageEff = (
   task: ScheduledTask,
@@ -134,10 +141,7 @@ const dispatchEngineMessageEff = (
 ): Effect.Effect<boolean, AgentError> =>
   Effect.tryPromise({
     try: async () => {
-      const spec = getEngineSpec(engine);
-      if (!spec) {
-        throw new Error(`no engine spec for ${engine}`);
-      }
+      const spec = nabySpec;
       // In-process dispatch — backend triggers backend directly via the orchestrator. No HTTP
       // loopback, so scheduled tasks need no port and can't mis-target a sibling dev/prod
       // instance. The run registers in sessionRunHub and streams to viewers via
@@ -148,7 +152,10 @@ const dispatchEngineMessageEff = (
         // the engine generates a fresh id (captured below via getRunSessionId).
         ...(startFresh ? {} : { sessionId: task.sessionId }),
         cwd: task.cwd,
-        engine, // selects claude2's CLAUDE_CONFIG_DIR; no-op for the others
+        engine, // always 'naby' — kept on the params so the run is labelled
+        // The model snapshot a task was created with. It is a REQUEST: naby's
+        // preflight resolves it against the configured providers and answers
+        // with a clear error if it cannot be honoured.
         ...(task.model && { model: task.model }),
       });
       if (!outcome.ok) {
@@ -192,54 +199,93 @@ const dispatchEngineMessageEff = (
       }
       return true as const;
     },
-    // claude2 shares the 'claude' provider for error classification (same SDK).
+    // 'claude' is the provider label for error classification: naby's dev engine
+    // is the Claude Agent SDK, and a naby turn on an API provider still reports
+    // through the same AgentError channel. The engine name is in the message.
     catch: (cause) =>
-      new AgentError({
-        provider: (engine === 'claude2' ? 'claude' : engine) as AgentProvider,
-        kind: 'unknown',
-        cause,
-      }),
+      new AgentError({ provider: 'claude' as AgentProvider, kind: 'unknown', cause }),
   });
 
 /**
- * resume-target session file for the pre-flight existence check. Naby is
- * single-engine, so this always resolves the Claude Agent SDK transcript path.
- * (The alt-engine — codex/kimi/ollama/deepseek/claude2 — path branches were
- * removed with the engine picker.)
+ * THE ONE ENGINE A SCHEDULED TASK MAY RUN (harness-standalone §2.4).
+ *
+ * A scheduled task is a turn nobody is watching. Running it on a vendor cockpit
+ * engine (claude / claude2 / codex / kimi / deepseek / ollama) meant a background
+ * prompt executed through a path that inherits the vendor's MCP config and
+ * settings, writes the vendor's transcripts, and never touches naby's store — the
+ * least supervised turn in the product taking the least owned route through it.
+ * Pinning to naby puts unattended turns through exactly the same engine, gate,
+ * policy and ledger as an interactive one.
  */
-function sessionPathFor(_engine: string, task: ScheduledTask): string | null {
-  return getClaudeSessionPath(task.cwd, task.sessionId);
+const SCHEDULED_ENGINE = 'naby';
+
+/**
+ * Is the resume target still there?
+ *
+ * naby sessions live in `app.db`, not in a provider's jsonl tree — so this asks
+ * the STORE. (It used to stat `~/.claude/projects/<encoded-cwd>/<id>.jsonl`,
+ * which for a naby session is a file that never existed: every scheduled run
+ * would have "recovered" by starting a fresh session and rebinding the task,
+ * quietly losing the thread it was supposed to continue.)
+ *
+ * Failure to read is treated as PRESENT: the caller's fallback is to start a
+ * fresh session, and abandoning a live thread because one store read threw is
+ * the more destructive of the two mistakes. The engine's own resume will fail
+ * loudly if the session is genuinely gone.
+ */
+function resumeTargetExists(task: ScheduledTask): boolean {
+  try {
+    return getStore().getSession(task.sessionId) !== undefined;
+  } catch (e) {
+    console.warn(`[ScheduledTask] could not read session ${task.sessionId}:`, e);
+    return true;
+  }
 }
 
 /**
- * Engine dispatcher. Tasks without an engine field predate engine persistence
- * and are treated as 'claude' (their historical behavior).
+ * Engine dispatcher. Every task runs on the naby engine — including the ones
+ * persisted before the engine picker was removed, whose `engine` field still
+ * says 'claude' (or nothing at all).
  *
- * Pre-flight: the resume-target session file must exist, otherwise fail with
- * a semantic 'session-not-found' instead of the engine's opaque error.
+ * A task that NAMES a vendor engine is REFUSED rather than silently upgraded:
+ * the user asked for a specific backend, and answering with a different one
+ * without saying so is how a scheduled prompt ends up somewhere nobody expects.
+ * The refusal is recorded as the task's error, which is visible in the panel.
+ * (An ABSENT engine field is not a request — those pre-date persistence — and a
+ * legacy 'claude'/'claude2' value is what every task written by the old picker
+ * carries, so both run on naby.)
  */
+const LEGACY_ENGINE_VALUES = ['claude', 'claude2'];
+
 export const sendChatMessageEff = (task: ScheduledTask): Effect.Effect<boolean, never> =>
   Effect.gen(function* () {
-    const engine = task.engine ?? 'claude';
+    const requested = task.engine;
 
-    if (!['claude', 'claude2', 'ollama', 'codex', 'kimi', 'deepseek'].includes(engine)) {
+    if (
+      requested !== undefined &&
+      requested !== SCHEDULED_ENGINE &&
+      !LEGACY_ENGINE_VALUES.includes(requested)
+    ) {
       return yield* Effect.fail(
         new AgentError({
           provider: 'claude',
           kind: 'unsupported-engine',
-          cause: new Error(`scheduled tasks not supported for engine '${engine}' (task ${task.id})`),
+          cause: new Error(
+            `scheduled tasks run on the '${SCHEDULED_ENGINE}' engine only; task ${task.id} asks for '${requested}'`,
+          ),
         }),
       );
     }
 
-    // Resume target gone (cleared history, session-id rotation, retention pruning,
-    // or codex/kimi glob miss) → don't fail; start a FRESH session running the same
-    // message and write the new session id back to the task (see dispatchEngineMessageEff).
-    const sessionPath = sessionPathFor(engine, task);
-    const startFresh = !sessionPath || !existsSync(sessionPath);
+    const engine = SCHEDULED_ENGINE;
+
+    // Resume target gone (cleared history, session-id rotation, retention
+    // pruning) → don't fail; start a FRESH session running the same message and
+    // write the new session id back to the task (see dispatchEngineMessageEff).
+    const startFresh = !resumeTargetExists(task);
     if (startFresh) {
       console.warn(
-        `[ScheduledTask] resume session missing (${sessionPath ?? `no session for ${task.sessionId}`}) for task ${task.id}, engine ${engine}; starting a fresh session`,
+        `[ScheduledTask] resume session ${task.sessionId} not in the store for task ${task.id}; starting a fresh session`,
       );
     }
 

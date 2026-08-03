@@ -32,7 +32,16 @@ const HELPER = read('harnessChanged.ts');
  *  the palette bug was fixed in the first one while the second kept it — which
  *  is precisely why the list is spelled out rather than assumed. */
 const PANELS = {
-  'NabyHarnessReview.tsx': ['runRowAction', 'runImport', 'doImport', 'revertImport'],
+  // `handleDelete` posts its own request rather than delegating to
+  // `runRowAction`, because the two-tier delete has to confirm first and then
+  // report what the server actually did — so it owns its own announcement.
+  'NabyHarnessReview.tsx': [
+    'runRowAction',
+    'runImport',
+    'doImport',
+    'revertImport',
+    'handleDelete',
+  ],
   'NabyCommandManager.tsx': ['submitDraft', 'runRowAction'],
 } as const;
 

@@ -4,12 +4,15 @@
  * turn), NOT from the provider's `~/.claude/projects/*.jsonl` transcripts.
  *
  * This is the stats counterpart to the session/project re-backing (see
- * `sessions/nabyBrowse.ts`): the old `/api/claude-stats` route scanned every
- * JSONL the underlying `claude` CLI ever wrote, i.e. UPSTREAM Claude Code's
- * numbers. Per the Naby-layer realignment, the statistics a Naby user sees must
- * be NABY'S OWN records — the turns run through this app — and are keyed and
- * priced by the same store + pricing table the per-session cost strip
- * (NabySessionCost / F1-07) already uses.
+ * `sessions/nabyBrowse.ts`): the route this replaced scanned every JSONL the
+ * underlying `claude` CLI ever wrote, i.e. UPSTREAM Claude Code's numbers. Per
+ * the Naby-layer realignment, the statistics a Naby user sees must be NABY'S OWN
+ * records — the turns run through this app — and are keyed and priced by the
+ * same store + pricing table the per-session cost strip (NabySessionCost /
+ * F1-07) already uses. That older route is now DELETED outright, along with the
+ * client wrapper that no longer called it (harness-standalone §2.5): a dead code
+ * path that reads a vendor directory is still a code path that reads a vendor
+ * directory.
  *
  * IT TOUCHES NO FILESYSTEM TRANSCRIPT SOURCE — only `getStore()`. There is no
  * `CLAUDE_PROJECTS_DIR`, no `.jsonl` read, no stats cache file. The store reads

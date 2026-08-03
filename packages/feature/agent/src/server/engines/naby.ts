@@ -133,6 +133,7 @@ import {
   sendFinalReport,
 } from '../lib/telegramEscalation';
 import { canLearn, learningInstruction } from '../lib/learning';
+import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { kickReflectionSweep } from '../lib/reflection';
 import { runNestedTurn } from '../lib/delegation';
 import { planTextRender } from './textRender';
@@ -985,6 +986,16 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         if (checksIn) {
           console.log(`[engine:naby] check-ins: on (@${growthSubject?.name})`);
         }
+        // skill-hub-builtin §2.5: TELL THE AGENT WHERE INSTALLS GO. A hub's own
+        // install instructions name `~/.claude` (they are written for another
+        // product), so without this the model installs the user's new skills into
+        // the vendor's directory instead of naby's own harness home. Gated on a
+        // configured skill-hub entry, not on this turn's MCP connection: see
+        // lib/harnessHome.ts for why the registry read is the stable test.
+        const steersInstalls = canSteerInstalls(store);
+        if (steersInstalls) {
+          console.log('[engine:naby] install steering: on (naby harness home)');
+        }
         const turnSystem =
           [
             routedAgent?.systemPrompt,
@@ -992,6 +1003,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             autonomous ? autonomyInstruction(maxSteps) : undefined,
             learns && growthSubject ? learningInstruction(growthSubject) : undefined,
             checksIn ? checkinInstruction() : undefined,
+            steersInstalls ? harnessHomeInstruction(projectCwd) : undefined,
           ]
             .filter(Boolean)
             .join('\n\n') || undefined;

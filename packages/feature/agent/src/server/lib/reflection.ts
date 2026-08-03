@@ -565,18 +565,20 @@ async function resolveJudgeBackend(): Promise<JudgeBackend | undefined> {
   }
 
   if (isClaudeAgentSdkAvailable()) {
-    // ISOLATED, and that flag is doing real work. The judge names no cwd, so
-    // without it the SDK would default to `process.cwd()` and load THAT
-    // directory's CLAUDE.md, settings and hooks — naby's own harness, in a
-    // development checkout — into a background call the user never made and
-    // cannot see. `isolated` sets `settingSources: []` so nothing is adopted.
+    // The judge names no cwd, and the SDK defaults `cwd` to `process.cwd()` — so
+    // a background call would once have loaded THAT directory's CLAUDE.md,
+    // settings and hooks (naby's own harness, in a development checkout) into a
+    // call the user never made and cannot see. This constructor used to take an
+    // `isolated: true` for exactly that. It no longer does, because the engine
+    // now passes `settingSources: []` on EVERY call (harness-standalone §2.3) —
+    // the judge gets the isolation unconditionally, and so does the user's turn.
     //
     // The model is left unset on purpose: the SDK picks the sign-in's default,
     // which is the same thing a dev-engine turn does (engines/naby.ts). Inventing
     // a model id here would be a guess that outlives the sign-in that made it
     // true.
     return {
-      engine: new ClaudeAgentSdkEngine({ isolated: true }),
+      engine: new ClaudeAgentSdkEngine(),
       model: { providerId: 'dev-claude' },
       label: 'claude-agent-sdk (subscription)',
     };

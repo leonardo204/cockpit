@@ -36,9 +36,17 @@ import {
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 import {
-  importClaudeHarness,
+  importHarness,
   type HarnessImportSummary,
+  type HarnessWalkMode,
 } from '../lib/harnessImporter';
+import {
+  deleteHarnessSource,
+  nabyHarnessBases,
+  planHarnessDelete,
+  type HarnessDeletePlan,
+  type HarnessSourceDeleteResult,
+} from '../lib/harnessSource';
 
 // The slice of the store this route touches. Named so the handlers depend on an
 // injectable seam (default `getStore()`), keeping the list/action logic unit-
@@ -49,6 +57,9 @@ type HarnessStore = Pick<
   | 'putHarnessItem'
   | 'getHarnessItem'
   | 'setHarnessEnabled'
+  // The TOMBSTONE write (status:'removed'). A delete whose source file naby does
+  // not own keeps the row so scan-on-list cannot re-import the artifact as new.
+  | 'setHarnessStatus'
   | 'removeHarness'
   // HP-05: set export/import — serialize a scope's enabled items into a portable
   // HarnessSet, and merge an incoming set through the same gate (contract §5/§6).
@@ -57,30 +68,53 @@ type HarnessStore = Pick<
 >;
 
 // Injectable deps for the actions that reach beyond the store (the filesystem
-// importer). Default binds the real `~/.claude` importer; tests pass a fake so
+// importer). Default binds the real harness-home importer; tests pass a fake so
 // the action wiring is exercised without touching a disk.
 export interface HarnessActionDeps {
-  importClaude: (args: { scope: HarnessScope; scopeKey: string; cwd?: string }) => HarnessImportSummary;
+  /** Walk a scope's harness tree. `mode` is the whole safety property here: the
+   *  list passes 'scan' (naby home only) and the explicit Import action passes
+   *  'import' (naby home + a COPY out of the vendor tree) — harness-standalone
+   *  §2.1/§2.2. Nothing else in this route may name a vendor directory. */
+  importHarness: (args: {
+    scope: HarnessScope;
+    scopeKey: string;
+    cwd?: string;
+    mode: HarnessWalkMode;
+  }) => HarnessImportSummary;
+  /** Unlink a tier-1 (naby-owned) source file/directory, after the containment
+   *  re-check. Injected so delete tests never risk a real `~/.naby`. */
+  deleteSource: (plan: Extract<HarnessDeletePlan, { tier: 'source' }>) => HarnessSourceDeleteResult;
+  /** Test seam for `~` — the base a `user`-scope naby home resolves under. */
+  homeDir?: string;
 }
 
 function defaultDeps(store: HarnessStore): HarnessActionDeps {
   return {
-    importClaude: (args) => importClaudeHarness({ ...args, store }),
+    importHarness: (args) => importHarness({ ...args, store }),
+    deleteSource: (plan) => deleteHarnessSource(plan),
   };
 }
 
 // ---------------------------------------------------------------------------
-// Scan-on-list (the `.claude` tree is a SECOND source of truth, not a one-shot).
+// Scan-on-list (the on-disk trees are a SECOND source of truth, not a one-shot).
 // ---------------------------------------------------------------------------
 //
 // WHY. Until now `harness_items` was the only thing this route read, and the
-// `.claude` tree on disk was consulted only when the user pressed the import
-// button. That made a skill the model itself installed — the skill-hub flow
-// writes `~/.claude/skills/<name>/SKILL.md` — invisible forever: it is not in
+// on-disk tree was consulted only when the user pressed the import button. That
+// made a skill the model itself installed — the skill-hub flow writes
+// `skills/<name>/SKILL.md` under a harness home — invisible forever: it is not in
 // `app.db`, so Settings > Harness never lists it and "/" never offers it, and
 // nothing in the UI tells the user an import is the missing step. Listing is the
-// exact moment the two sources should be reconciled, so the list re-runs the
+// exact moment the sources should be reconciled, so the list re-runs the
 // (idempotent, upsert-keyed) importer first.
+//
+// THE NABY HOME AND NOTHING ELSE (harness-standalone §2.2). This scan passes
+// mode:'scan', so it walks `~/.naby` / `<cwd>/.naby` only. It used to also read
+// the vendor `.claude`, which made a directory naby does not own a live second
+// source of truth on a timer nobody set: files appeared unbidden and deleted
+// items came back. A vendor tree is now read in exactly one place — the explicit
+// `import` action below — and reading it COPIES it in, so what this scan finds
+// afterwards is naby's own file.
 //
 // THE TRUST GATE IS UNCHANGED. Everything the scan finds is `source:'external'`
 // and the store's gate lands it `status:'disabled'`. Scanning makes an item
@@ -103,15 +137,19 @@ export function resetHarnessScanThrottle(): void {
 }
 
 /**
- * Reconcile one scope's `.claude` tree into the store before a list read.
+ * Reconcile one scope's NABY HARNESS HOME into the store before a list read.
  *
- * Never throws: a `.claude` directory that is missing, unreadable, or holds one
+ * Named for what it reads, because the old name (`scanClaudeForScope`) outlived
+ * the behaviour by a whole release and that is how nobody noticed the vendor tree
+ * was still being walked on every refresh.
+ *
+ * Never throws: a base directory that is missing, unreadable, or holds one
  * malformed artifact must not turn the harness panel into an error screen — the
  * user's own stored items are still listable, which is the more important
- * guarantee. `org` is never scanned: it has no local `.claude` on disk (it is
+ * guarantee. `org` is never scanned: it has no local harness home on disk (it is
  * populated by a set import), so a scan there could only ever be a no-op walk.
  */
-function scanClaudeForScope(
+function scanNabyHome(
   scope: HarnessScope,
   scopeKey: string,
   deps: HarnessActionDeps,
@@ -125,15 +163,18 @@ function scanClaudeForScope(
   // same schedule as a healthy one, not on every single refetch.
   lastScanAt.set(key, now);
   try {
-    deps.importClaude({
+    deps.importHarness({
       scope,
       scopeKey,
+      // NEVER 'import' here: no user action stands behind a list refresh, so it
+      // may not open a vendor directory and may not copy anything.
+      mode: 'scan',
       // For `project` the scopeKey IS the cwd (that is how the client addresses
-      // it), and the importer needs it as `cwd` to resolve `<cwd>/.claude`.
+      // it), and the importer needs it as `cwd` to resolve `<cwd>/.naby`.
       ...(scope === 'project' ? { cwd: scopeKey } : {}),
     });
   } catch {
-    /* a broken .claude tree must never break the list */
+    /* a broken harness tree must never break the list */
   }
 }
 
@@ -150,7 +191,9 @@ export const dynamic = 'force-dynamic';
 // per-conversation state (contract §2). `org` is kept in the surface for the
 // in-house rollout though single-user builds have no local org id.
 const HARNESS_SCOPES: readonly HarnessScope[] = ['user', 'project', 'org'];
-const HARNESS_STATUSES: readonly HarnessStatus[] = ['enabled', 'disabled'];
+// 'removed' is a queryable status (the review UI's "deleted" filter) but never a
+// DEFAULT one — see listHarnessCommands.
+const HARNESS_STATUSES: readonly HarnessStatus[] = ['enabled', 'disabled', 'removed'];
 const HARNESS_KINDS: readonly HarnessKind[] = ['command', 'skill', 'subagent'];
 
 // HP-08: the single-tenant in-house org key. The runtime does not (yet) export a
@@ -246,6 +289,12 @@ export interface HarnessListResult {
   /** The rows WHOLE — template included; this is the user's own authored content.
    *  Ordered by the store. */
   items: HarnessItem[];
+  /** The naby harness homes this scope's items may live under (absolute). The
+   *  client cannot resolve `~`, and it needs the answer to WORD the delete
+   *  confirmation — "the file will be deleted too" vs "the vendor file stays".
+   *  DISPLAY ONLY: the delete action re-decides the tier server-side, from the
+   *  same function, and never trusts anything the client says about it. */
+  nabyBases: string[];
 }
 
 export function listHarnessCommands(
@@ -257,6 +306,8 @@ export function listHarnessCommands(
      *  explicit kind filters to it; the sentinel 'all' returns EVERY kind, which
      *  the HP-06 review UI needs to inspect imported skills/subagents too. */
     kind?: string | null;
+    /** Include status:'removed' tombstones in the result. Off by default. */
+    includeRemoved?: boolean;
   },
   store: HarnessStore = getStore(),
   deps: HarnessActionDeps = defaultDeps(store),
@@ -285,17 +336,38 @@ export function listHarnessCommands(
     return { ok: false, error: `scopeKey is required for ${params.scope} scope` };
   }
 
-  // Reconcile the on-disk `.claude` tree into the store FIRST, so a skill that
-  // was installed to `~/.claude/skills/` since the last list shows up here (as a
-  // disabled, reviewable row) instead of being invisible until someone thinks to
-  // press Import. Throttled and non-throwing — see scanClaudeForScope.
-  scanClaudeForScope(params.scope, scopeKey, deps);
+  // Reconcile the naby harness home into the store FIRST, so a skill installed to
+  // `~/.naby/skills/` since the last list shows up here (as a disabled,
+  // reviewable row) instead of being invisible until someone thinks to press
+  // Import. Throttled and non-throwing — see scanNabyHome.
+  scanNabyHome(params.scope, scopeKey, deps);
 
-  const items = store.listHarness(params.scope, scopeKey, {
+  const rows = store.listHarness(params.scope, scopeKey, {
     ...(kindFilter ? { kind: kindFilter } : {}),
     ...(params.status ? { status: params.status as HarnessStatus } : {}),
   });
-  return { ok: true, data: { scope: params.scope, scopeKey, items } };
+
+  // TOMBSTONES ARE HIDDEN UNLESS ASKED FOR. A 'removed' row is a delete the user
+  // already performed; it stays in the table only so the on-disk artifact is not
+  // re-imported as a new row. Every caller of this list that is not the review
+  // panel — the command manager, anything counting items — would otherwise show
+  // a deleted item back to the user, which is the bug this whole change is about.
+  //
+  // Two ways to see them, both explicit: `status=removed` (only tombstones) or
+  // `includeRemoved` (everything, which the review panel uses so its status chips
+  // can filter client-side without a second round trip).
+  const includeRemoved = params.includeRemoved === true || params.status === 'removed';
+  const items = includeRemoved ? rows : rows.filter((r) => r.status !== 'removed');
+
+  return {
+    ok: true,
+    data: {
+      scope: params.scope,
+      scopeKey,
+      items,
+      nabyBases: nabyHarnessBases({ scope: params.scope, scopeKey }),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,16 +398,18 @@ export type HarnessAction =
   | { action: 'delete'; id: string }
   | { action: 'setEnabled'; id: string; enabled: boolean }
   | {
-      // HP-04: import a scope's on-disk `~/.claude` / `.claude` harness
-      // (commands/skills/subagents) through the gate — everything lands disabled.
+      // HP-04: COPY a scope's on-disk `~/.claude` / `.claude` harness
+      // (commands/skills/subagents) INTO the naby harness home and put the copies
+      // through the gate — everything lands disabled. The only action allowed to
+      // read a vendor directory, and it leaves nothing pointing back at one.
       action: 'import';
       scope: HarnessScope;
       scopeKey?: string;
       cwd?: string;
     }
   | {
-      // HP-06: roll back a whole import by its origin prefix (the `.claude` base
-      // the items were read from). Every EXTERNAL item whose provenance.origin
+      // HP-06: roll back a whole import by its origin prefix (a base the items
+      // were recorded under). Every EXTERNAL item whose provenance.origin
       // starts with the prefix is removed. Scoped so it can never reach across to
       // another project's rows.
       action: 'revertOrigin';
@@ -377,17 +451,76 @@ export interface HarnessImportSetConflict {
   landedName: string;
 }
 
+/**
+ * What a delete actually did — the two tiers, reported so the UI can say it.
+ *
+ *   'source'    the row's file was naby's own (`~/.naby/...`, `<cwd>/.naby/...`)
+ *               and was UNLINKED; the row is gone. `file` is what was removed
+ *               (for `skills/<name>/SKILL.md` that is the `<name>` directory).
+ *   'tombstone' the file was not ours (or is not a file at all), so nothing on
+ *               disk was touched and the row is kept as status:'removed'. This
+ *               is what stops scan-on-list re-importing the artifact as new.
+ *   'row'       there was no row to begin with (idempotent re-delete).
+ */
+export interface HarnessDeleteOutcome {
+  tier: 'source' | 'tombstone' | 'row';
+  /** tier:'source' — the path that was removed. */
+  file?: string;
+  /** tier:'tombstone' — why no file was touched. */
+  reason?: string;
+}
+
 export type HarnessActionResult =
   | {
       ok: true;
       item?: HarnessItem;
       summary?: HarnessImportSummary;
       removed?: number;
+      deleted?: HarnessDeleteOutcome;
       set?: HarnessSet;
       landed?: HarnessItem[];
       conflicts?: HarnessImportSetConflict[];
     }
   | { ok: false; error: string };
+
+/**
+ * THE TWO-TIER DELETE, applied to one row. Shared by the per-item `delete` action
+ * and `revertOrigin`, which is the same operation in bulk and had the same bug.
+ *
+ * TIER 1 — naby owns the file: unlink it, then remove the row. With the source
+ * gone the scan finds nothing, so nothing comes back.
+ * TIER 2 — the file is the vendor's (`.claude`) or there is none: DO NOT TOUCH
+ * IT. Keep the row as a tombstone (status:'removed') so the next scan recognizes
+ * the artifact as already-seen — unchanged content is skipped, changed content is
+ * written as a refresh that carries 'removed' through (gate invariant 5). Either
+ * way it never returns as a fresh disabled row, which was the reported bug: A, B,
+ * C deleted, then reappearing below D…Z after the next list.
+ *
+ * A REFUSED unlink (a symlink that escapes the harness home, an unreadable home,
+ * a target that is not what the row described) FALLS BACK to the tombstone. The
+ * safe failure of "I could not delete that file" is to not delete a file, and to
+ * still honour the user's delete in the only place that is ours to honour it.
+ */
+function deleteOneRow(
+  row: HarnessItem,
+  store: HarnessStore,
+  deps: HarnessActionDeps,
+): HarnessDeleteOutcome {
+  const plan = planHarnessDelete(row, deps.homeDir ? { homeDir: deps.homeDir } : undefined);
+
+  if (plan.tier === 'source') {
+    const res = deps.deleteSource(plan);
+    if (res.outcome === 'deleted' || res.outcome === 'missing') {
+      store.removeHarness({ id: row.id });
+      return { tier: 'source', file: res.target };
+    }
+    store.setHarnessStatus(row.id, 'removed');
+    return { tier: 'tombstone', reason: res.reason };
+  }
+
+  store.setHarnessStatus(row.id, 'removed');
+  return { tier: 'tombstone', reason: plan.reason };
+}
 
 export function runHarnessAction(
   body: HarnessAction,
@@ -500,8 +633,15 @@ export function runHarnessAction(
       if (typeof body.id !== 'string' || !body.id) {
         return { ok: false, error: 'id is required' };
       }
-      store.removeHarness({ id: body.id });
-      return { ok: true };
+      const row = store.getHarnessItem(body.id);
+      // Nothing stored under that id: the delete has already happened (double
+      // click, stale list). Stay idempotent and keep the hard delete as the
+      // answer — there is no row to tombstone.
+      if (!row) {
+        store.removeHarness({ id: body.id });
+        return { ok: true, deleted: { tier: 'row' } };
+      }
+      return { ok: true, deleted: deleteOneRow(row, store, deps) };
     }
 
     case 'setEnabled': {
@@ -527,13 +667,17 @@ export function runHarnessAction(
         return { ok: false, error: `scopeKey is required for ${body.scope} scope` };
       }
       try {
-        // The importer walks the `.claude` base, drops hooks, and pushes every
-        // command/skill/subagent through the gate — external, so all land
-        // DISABLED (contract §4 invariant 1). The summary carries what landed +
-        // the hooks-skipped count for the review UI.
-        const summary = deps.importClaude({
+        // THE ONE PLACE A VENDOR TREE IS READ (harness-standalone §2.1/§2.2).
+        // mode:'import' walks the naby home and then `.claude`, COPIES each
+        // accepted vendor artifact into the naby home, records the copy as
+        // `provenance.origin` (the vendor path stays behind as the inert
+        // `importedFrom`), drops hooks, and pushes everything through the gate —
+        // external, so all land DISABLED (contract §4 invariant 1). The summary
+        // carries what landed, what was copied, and the hooks-skipped count.
+        const summary = deps.importHarness({
           scope: body.scope,
           scopeKey,
+          mode: 'import',
           ...(body.cwd ? { cwd: body.cwd } : {}),
         });
         return { ok: true, summary };
@@ -554,21 +698,28 @@ export function runHarnessAction(
         return { ok: false, error: `scopeKey is required for ${body.scope} scope` };
       }
       // Remove every EXTERNAL row in this scope whose origin sits under the given
-      // base. Deleting by id (not the store's exact origin selector) lets one
-      // click undo a whole `~/.claude` import whose files each have a distinct
-      // origin path, while staying scoped so it can never cross into another
-      // project's rows. Only external provenance is touched — a user-authored row
-      // that happens to share a path is never swept up.
+      // base. Row by row (not the store's exact origin selector) lets one click
+      // undo a whole `~/.claude` import whose files each have a distinct origin
+      // path, while staying scoped so it can never cross into another project's
+      // rows. Only external provenance is touched — a user-authored row that
+      // happens to share a path is never swept up.
+      //
+      // EACH ROW GOES THROUGH THE SAME TWO-TIER DELETE as the per-item button.
+      // Revert had the identical bug: it removed the rows and the next list
+      // re-imported every file it had just "reverted". Under a naby home the
+      // files go with it; under `.claude` the rows are tombstoned and the vendor
+      // files are left exactly where they are.
       const rows = store.listHarness(body.scope, scopeKey);
       let removed = 0;
       for (const row of rows) {
         const origin = row.provenance.origin;
         if (
+          row.status !== 'removed' &&
           row.provenance.source === 'external' &&
           typeof origin === 'string' &&
           origin.startsWith(body.originPrefix)
         ) {
-          store.removeHarness({ id: row.id });
+          deleteOneRow(row, store, deps);
           removed += 1;
         }
       }
@@ -672,6 +823,11 @@ export const GET = handler((request) =>
         scopeKey: params.get('scopeKey'),
         status: params.get('status'),
         kind: params.get('kind'),
+        // Any present, non-'false' value opts in — the review panel sends '1'.
+        includeRemoved: (() => {
+          const raw = params.get('includeRemoved');
+          return raw !== null && raw !== 'false' && raw !== '0';
+        })(),
       }),
     );
     if (!result.ok) {

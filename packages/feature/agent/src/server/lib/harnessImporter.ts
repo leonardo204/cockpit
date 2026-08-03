@@ -1,15 +1,56 @@
 /**
- * `~/.claude` / `.claude` harness importer (Phase 1.6 HP-04).
+ * The naby harness importer — walks a harness home, parses artifacts, writes rows
+ * (Phase 1.6 HP-04; harness-standalone §2.1/§2.2).
  *
  * WHY THIS EXISTS. The owner's original question — "import someone else's harness,
  * pull in just certain skills" — needs a way to read the on-disk Claude Code
  * artifacts (command `.md`, `SKILL.md`, agent `.md`) and turn them
  * into Naby-OWNED, scoped rows. This module does the READ + PARSE + gate-write:
- * it walks a `.claude` base directory, parses the YAML-frontmatter + markdown of
+ * it walks a harness base directory, parses the YAML-frontmatter + markdown of
  * each artifact into a normalized `HarnessItem` payload, and pushes it through the
  * store's import gate (`putHarnessItem`, contract §4) with `provenance.source =
  * 'external'`. The gate FORCES every imported item to `status:'disabled'` — the
  * item is inert until the owner reviews and enables it in the HP-06 review UI.
+ *
+ * TWO MODES, AND THE DIFFERENCE IS THE WHOLE POINT (harness-standalone §1).
+ * naby is a STANDALONE app: it has no standing connection to another product's
+ * harness directory. But importing one is fine — importing it MAKES IT NABY'S.
+ *
+ *   mode:'scan' (the default, and what scan-on-list runs before every harness
+ *     list) reads the NABY HARNESS HOME ONLY — `~/.naby/{commands,skills,agents}`
+ *     or `<cwd>/.naby/...`. It never opens `.claude`. That is what stops a vendor
+ *     directory being a live second source of truth that reappears in the list
+ *     after every refresh, forever, with no user action behind it.
+ *
+ *   mode:'import' (the explicit Import button, and nothing else) ALSO reads the
+ *     vendor bases (`~/.claude`, `<cwd>/.claude`) — and MATERIALIZES what it
+ *     finds: each accepted artifact is COPIED into the corresponding naby home
+ *     path FIRST, and the row's `provenance.origin` names the COPY. The vendor
+ *     path survives only as `provenance.importedFrom`, which nothing reads back.
+ *     After an import there is no live path from a naby row to a vendor file.
+ *
+ * WHY COPY RATHER THAN POINT. A row whose origin lives under `~/.claude` is a
+ * standing dependency on another product's directory: the file can change or
+ * vanish underneath us, deleting the item cannot delete the file (so it needs a
+ * tombstone), and "my harness" turns out to be a set of pointers into a vendor
+ * tree. Copying makes the import mean what the button says. The vendor file is
+ * left exactly where it is — naby reads it once and never writes to it.
+ *
+ * A COPY NEVER OVERWRITES A NABY FILE. If the destination already exists the
+ * artifact is SKIPPED and reported, because the naby home is the owner's own
+ * directory and an import is not a licence to rewrite it. If the copy FAILS
+ * (permissions, a vanished source) the artifact is skipped and reported too — a
+ * DB row pointing at a file that was never written is the one outcome worse than
+ * not importing.
+ *
+ * WHEN BOTH BASES CLAIM ONE NAME, THE NABY HOME WINS and the vendor file is
+ * skipped for the rest of that walk. Not merely a preference: the two files are
+ * different origins for one `(scope,scopeKey,kind,name)` identity, so importing
+ * both would send the second through the gate as a TAKEOVER — overwriting the
+ * body and (correctly, for a takeover) forcing the row back to disabled. It is
+ * also what makes re-pressing Import idempotent: the copy made on the first press
+ * is found in the naby home on the second, and its vendor twin is shadowed before
+ * anything is copied again.
  *
  * HOOKS ARE NEVER IMPORTED (contract §4 invariant 3). Claude Code hooks are
  * arbitrary executable code; importing them would be arbitrary-code-execution.
@@ -37,6 +78,18 @@
  * Neither weakens the gate for NEW rows: a first sighting has no stored status,
  * so it still lands disabled and inert until reviewed.
  *
+ * NOR MUST IT UNDO THE USER'S DELETE (v1.8.2). The same two paths carry a
+ * TOMBSTONE (status:'removed') for free, and that is what makes a delete stick:
+ * deleting an item whose file naby does not own removes the row's visibility but
+ * not the file, so without a remembered row this walk re-imported the artifact on
+ * the very next list as a brand-new disabled item — the user deleted A, B, C and
+ * watched them reappear after D…Z. Unchanged ⇒ skipped, changed ⇒ refreshed with
+ * 'removed' carried through. Neither ever produces a second row. Since §2.2 the
+ * tombstone is mostly a BACKWARD-COMPATIBILITY device (harness-standalone §2.6):
+ * a new import owns its file and deletes it outright, so only rows imported
+ * before this change — and set imports, which have no file at all — still need
+ * one. It stays because those rows are on real disks.
+ *
  * INJECTABLE fs + store + homeDir. The filesystem, the store slice, and the home
  * directory are all parameters (defaulting to node `fs` / `getStore()` /
  * `os.homedir()`), so the whole walk+parse+gate flow is unit-testable against an
@@ -47,11 +100,13 @@ import * as nodeFs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
+import { CLAUDE_HARNESS_DIR, NABY_HARNESS_DIR } from './harnessHome';
 import type {
   HarnessImportRequest,
   HarnessItem,
   HarnessKind,
   HarnessScope,
+  HarnessStatus,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
 // ---------------------------------------------------------------------------
@@ -59,7 +114,13 @@ import type {
 // ---------------------------------------------------------------------------
 
 /** The tiny slice of node `fs` the importer reads through — an injectable seam so
- *  tests can drive it with an in-memory tree instead of a real disk. */
+ *  tests can drive it with an in-memory tree instead of a real disk.
+ *
+ *  THE WRITE CALLS ARE OPTIONAL, and only the materializing import (mode:'import',
+ *  harness-standalone §2.1) uses them. A fake fs that omits them is not broken —
+ *  it simply cannot materialize, and every vendor artifact is skipped with that
+ *  said in the summary. Read-only by default is the right default for a module
+ *  whose day job is a read. */
 export interface ImporterFs {
   existsSync(p: string): boolean;
   readFileSync(p: string, encoding: 'utf8'): string;
@@ -67,6 +128,19 @@ export interface ImporterFs {
     p: string,
     opts: { withFileTypes: true },
   ): Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  /** Create the destination's parent chain. Recursive, so an untouched naby home
+   *  materializes on the first import. */
+  mkdirSync?(p: string, opts: { recursive: true }): unknown;
+  /** Copy ONE file (a flat `skills/<name>.md`, a command, an agent). */
+  copyFileSync?(src: string, dest: string): void;
+  /** Copy a whole skill DIRECTORY — `SKILL.md` plus its references/, scripts/,
+   *  assets/. `errorOnExist` + `force:false` is a second guard under the caller's
+   *  own existence check: an import must never rewrite a naby-owned file. */
+  cpSync?(
+    src: string,
+    dest: string,
+    opts: { recursive: true; errorOnExist: true; force: false },
+  ): void;
 }
 
 /** The store slice the importer writes through — the gate entry point, plus an
@@ -79,7 +153,7 @@ export interface ImporterStore {
   listHarness?(
     scope: HarnessScope,
     scopeKey: string,
-    opts?: { kind?: HarnessKind; status?: 'enabled' | 'disabled' },
+    opts?: { kind?: HarnessKind; status?: HarnessStatus },
   ): HarnessItem[];
 }
 
@@ -96,10 +170,17 @@ export interface HarnessImportSkip {
 export interface HarnessImportSummary {
   scope: HarnessScope;
   scopeKey: string;
-  /** The `.claude` base the importer read from (absolute); also the origin
-   *  prefix the review UI reverts an import by. */
+  /** The FIRST base that actually existed (absolute) — or, when none did, the
+   *  first base that WOULD have been read (the naby home), which is the path the
+   *  "nothing to import" message should name. Kept as a single string because it
+   *  is what the review UI prints; use `baseDirs` for anything that must cover
+   *  every base (e.g. reverting an import by origin prefix). */
   baseDir: string;
-  /** Whether that base existed at all — a clean "nothing to import" signal. */
+  /** Every base this run considered, in read order. A SCAN lists the naby harness
+   *  home and nothing else; an explicit IMPORT lists the naby home first and the
+   *  vendor `.claude` second. Present even for bases that do not exist. */
+  baseDirs: string[];
+  /** Whether ANY of those bases existed — a clean "nothing to import" signal. */
   baseExists: boolean;
   /** Count of rows PRESENT after the walk, per kind — written this run or
    *  already stored unchanged. (A new row lands disabled; an existing one keeps
@@ -109,6 +190,11 @@ export interface HarnessImportSummary {
    *  matched the stored row. On a steady-state re-scan this equals the total —
    *  the signal that scan-on-list is costing nothing. */
   unchanged: number;
+  /** How many artifacts were COPIED into the naby harness home by this run
+   *  (harness-standalone §2.1). Always 0 for a scan, which reads only files that
+   *  are already naby's. A non-zero count is the proof the import materialized
+   *  rather than merely pointing at a vendor tree. */
+  copied: number;
   /** How many hook definitions were seen and DROPPED (never imported). */
   skippedHooks: number;
   /** Artifacts skipped without an error (e.g. an empty body). */
@@ -419,7 +505,13 @@ function identityKey(kind: HarnessKind, name: string): string {
 
 /** Read the rows already stored for this scope, indexed by (kind, name). Falls
  *  back to an EMPTY index when the store exposes no read or the read throws: an
- *  empty index only costs writes, it never changes what lands. */
+ *  empty index only costs writes, it never changes what lands.
+ *
+ *  DELIBERATELY UNFILTERED BY STATUS — the tombstones (status:'removed') are the
+ *  most important rows in it. A tombstone is a delete the user performed on an
+ *  artifact whose file naby does not own; leaving it out of this index would make
+ *  its file look unseen, and the walk would import it as a fresh disabled row,
+ *  which is the exact bug the tombstone exists to prevent. */
 function readExistingRows(
   store: ImporterStore,
   scope: HarnessScope,
@@ -481,76 +573,101 @@ export function sameHarnessContent(existing: HarnessItem, parsed: ParsedHarness)
 // The import driver.
 // ---------------------------------------------------------------------------
 
-export interface ImportClaudeArgs {
+/** What a walk is FOR — and, therefore, which directories it may open.
+ *
+ *  'scan'   the naby harness home only. Runs before every harness list; no user
+ *           action stands behind it, so it may not reach into another product's
+ *           directory (harness-standalone §2.2).
+ *  'import' the naby home PLUS the vendor bases, with every vendor artifact
+ *           copied into the naby home before its row is written (§2.1). Only the
+ *           explicit Import button asks for this. */
+export type HarnessWalkMode = 'scan' | 'import';
+
+export interface ImportHarnessArgs {
   scope: HarnessScope;
   scopeKey: string;
-  /** For user scope, the `.claude` under this home dir. Defaults to os.homedir(). */
+  /** Default 'scan'. See HarnessWalkMode — this is the ONLY thing that decides
+   *  whether a vendor directory is opened. */
+  mode?: HarnessWalkMode;
+  /** For user scope, the `.naby` (and, on an import, `.claude`) under this home
+   *  dir. Defaults to os.homedir(). An injected seam so tests never read a real
+   *  home. */
   homeDir?: string;
-  /** For project scope, the project root whose `.claude/` is imported. */
+  /** For project scope, the project root whose `.naby/` (and, on an import,
+   *  `.claude/`) is read. */
   cwd?: string;
   store: ImporterStore;
   fs?: ImporterFs;
 }
 
-/** Resolve the `.claude` base directory for a scope. */
-export function resolveBaseDir(args: {
+/**
+ * Resolve a scope's NABY harness bases — the only directories a walk reads
+ * unconditionally (harness-standalone §2.2).
+ *
+ * `.claude` is deliberately absent. It used to be here, which made every harness
+ * list a re-read of a vendor tree naby does not own: an item deleted there came
+ * back, a file installed there arrived without anyone asking, and "standalone
+ * app" was not true of the code. Vendor bases now come from `resolveVendorBases`
+ * and are reachable from ONE call site (the explicit import), which is what makes
+ * that property checkable rather than merely intended.
+ *
+ * Returns null for a scope with no on-disk home at all: `org` is populated by a
+ * set import, and `project` without a cwd has no root to look under. Bases that
+ * do not exist are NOT filtered here; the walk treats a missing directory as
+ * empty, which is the ordinary case for a user who has never installed anything.
+ */
+export function resolveBaseDirs(args: {
   scope: HarnessScope;
   homeDir?: string;
   cwd?: string;
-}): string | null {
+}): string[] | null {
   if (args.scope === 'user') {
-    return path.join(args.homeDir ?? os.homedir(), '.claude');
+    return [path.join(args.homeDir ?? os.homedir(), NABY_HARNESS_DIR)];
   }
   if (args.scope === 'project') {
-    return args.cwd ? path.join(args.cwd, '.claude') : null;
+    return args.cwd ? [path.join(args.cwd, NABY_HARNESS_DIR)] : null;
   }
-  // org scope has no local `.claude` on disk in single-user builds.
+  // org scope has no local harness directory on disk in single-user builds.
   return null;
+}
+
+/**
+ * Resolve a scope's VENDOR bases — the directories an explicit import may read
+ * FROM, once, in order to copy out of them.
+ *
+ * SEPARATE FROM `resolveBaseDirs` ON PURPOSE. These two answers were one function
+ * and the result was that everything which walked a harness tree walked `.claude`
+ * too, whether or not the user had asked for it. Keeping them apart means a
+ * vendor path can only enter the program through a caller that named this
+ * function, and there is exactly one (importHarness, under mode:'import').
+ */
+export function resolveVendorBases(args: {
+  scope: HarnessScope;
+  homeDir?: string;
+  cwd?: string;
+}): string[] {
+  if (args.scope === 'user') {
+    return [path.join(args.homeDir ?? os.homedir(), CLAUDE_HARNESS_DIR)];
+  }
+  if (args.scope === 'project') {
+    return args.cwd ? [path.join(args.cwd, CLAUDE_HARNESS_DIR)] : [];
+  }
+  return [];
 }
 
 const KIND_ORDER: HarnessKind[] = ['command', 'skill', 'subagent'];
 
-/**
- * Walk a scope's `.claude` base and import every command/skill/subagent through
- * the gate (all land disabled). Hooks are counted and dropped. Returns a full
- * summary for the review UI.
- */
-export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummary {
-  const fs = args.fs ?? (nodeFs as unknown as ImporterFs);
-  const baseDir = resolveBaseDir({ scope: args.scope, homeDir: args.homeDir, cwd: args.cwd });
-
-  const summary: HarnessImportSummary = {
-    scope: args.scope,
-    scopeKey: args.scopeKey,
-    baseDir: baseDir ?? '',
-    baseExists: false,
-    imported: { command: 0, skill: 0, subagent: 0 },
-    unchanged: 0,
-    skippedHooks: 0,
-    skipped: [],
-    failed: [],
-    items: [],
-  };
-
-  if (!baseDir || !fs.existsSync(baseDir)) return summary;
-  summary.baseExists = true;
-
-  // Hooks: count, then drop. Never read a hook body into the store.
-  summary.skippedHooks = countHooks(fs, baseDir);
-
-  // What is already stored for this scope — read ONCE, before the walk, so an
-  // artifact that has not changed can be recognized and left alone.
-  const existingRows = readExistingRows(args.store, args.scope, args.scopeKey);
-
-  const importedAt = Date.now();
-
-  // Gather each kind's raw artifacts + how to parse them.
-  const jobs: Array<{
-    kind: HarnessKind;
-    format: NonNullable<HarnessItem['provenance']['format']>;
-    raws: RawArtifact[];
-    parse: (name: string, content: string) => ParsedHarness | null;
-  }> = [
+/** One base's three kinds of raw artifacts, paired with how to parse them. */
+function jobsForBase(
+  fs: ImporterFs,
+  baseDir: string,
+): Array<{
+  kind: HarnessKind;
+  format: NonNullable<HarnessItem['provenance']['format']>;
+  raws: RawArtifact[];
+  parse: (name: string, content: string) => ParsedHarness | null;
+}> {
+  return [
     {
       kind: 'command',
       format: 'claude-command-md',
@@ -570,6 +687,165 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
       parse: parseSubagentArtifact,
     },
   ];
+}
+
+// ---------------------------------------------------------------------------
+// Materialization — "importing it makes it mine" (harness-standalone §2.1).
+// ---------------------------------------------------------------------------
+
+/** What a copy attempt produced. `origin` is the path the ROW must record: the
+ *  file naby now owns. */
+export type MaterializeResult =
+  | { outcome: 'copied'; origin: string }
+  | { outcome: 'conflict'; origin: string; reason: string }
+  | { outcome: 'failed'; reason: string };
+
+/**
+ * Copy ONE vendor artifact into the naby harness home, preserving its layout, and
+ * report the naby path the row should point at.
+ *
+ * WHAT GETS COPIED. A `SKILL.md` takes its WHOLE DIRECTORY — a skill is not one
+ * markdown file, it is that file plus the `references/`, `scripts/` and assets it
+ * tells the model to read, and importing the manifest without the material it
+ * names produces a skill that instructs its way into a missing file. Everything
+ * else (`commands/<verb>.md`, `agents/<name>.md`, a flat `skills/<name>.md`) is
+ * exactly its own file.
+ *
+ * WHERE IT LANDS. The path RELATIVE TO THE BASE is preserved, so
+ * `~/.claude/skills/pack/review/SKILL.md` becomes
+ * `~/.naby/skills/pack/review/SKILL.md`. That matters beyond tidiness: the naby
+ * home is re-walked by every later scan, and the pack qualifier that keeps two
+ * packs' same-named skills apart is derived from the directory nesting. Flatten
+ * it and the copy would re-import under a different name than the original.
+ *
+ * WHAT IS REFUSED. An existing destination is a CONFLICT, never an overwrite:
+ * the naby home is the owner's own directory, and "I imported someone's harness"
+ * is not consent to rewrite a file already in it. The caller skips the artifact
+ * and reports it. (`cpSync`'s `errorOnExist` re-checks the same thing at the
+ * syscall, so a directory that appears between the check and the copy fails
+ * closed rather than merging into a half-vendor, half-naby skill.)
+ */
+export function materializeIntoNabyHome(args: {
+  fs: ImporterFs;
+  /** The vendor base the artifact was read from. */
+  vendorBase: string;
+  /** The naby base of the same scope — where the copy goes. */
+  nabyBase: string;
+  /** The artifact's file path under `vendorBase`. */
+  origin: string;
+}): MaterializeResult {
+  const { fs, vendorBase, nabyBase, origin } = args;
+  const rel = path.relative(vendorBase, origin);
+  // A path that does not sit under the base cannot be mapped into the naby home;
+  // refusing beats guessing at a destination (`..` segments would escape it).
+  if (rel.length === 0 || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { outcome: 'failed', reason: 'the artifact is not inside the base directory' };
+  }
+  const destFile = path.join(nabyBase, rel);
+
+  // A skill in the canonical layout is its DIRECTORY; anything else is its file.
+  const isSkillDoc = path.basename(origin).toLowerCase() === 'skill.md';
+  const src = isSkillDoc ? path.dirname(origin) : origin;
+  const dest = isSkillDoc ? path.dirname(destFile) : destFile;
+
+  if (fs.existsSync(dest)) {
+    return {
+      outcome: 'conflict',
+      origin: destFile,
+      reason: `already in the naby harness home: ${dest}`,
+    };
+  }
+  const { mkdirSync, cpSync, copyFileSync } = fs;
+  const copy = isSkillDoc
+    ? () => cpSync?.(src, dest, { recursive: true, errorOnExist: true, force: false })
+    : () => copyFileSync?.(src, dest);
+  if (!mkdirSync || (isSkillDoc ? !cpSync : !copyFileSync)) {
+    return { outcome: 'failed', reason: 'this filesystem cannot write (read-only importer fs)' };
+  }
+  try {
+    mkdirSync(path.dirname(dest), { recursive: true });
+    copy();
+  } catch (e) {
+    // The row is NOT written on a failed copy. A row whose origin names a file
+    // that was never created is worse than a missing row: it looks imported,
+    // enables like anything else, and its source can never be re-read or deleted.
+    return { outcome: 'failed', reason: e instanceof Error ? e.message : String(e) };
+  }
+  return { outcome: 'copied', origin: destFile };
+}
+
+/**
+ * Walk a scope's harness bases and import every command/skill/subagent through
+ * the gate (a new row lands disabled). Hooks are counted and dropped. Returns a
+ * full summary for the review UI.
+ *
+ * WHICH BASES depends on `mode` and on nothing else: a scan reads the naby home,
+ * an explicit import reads the naby home and then the vendor tree it copies out
+ * of. See the module header.
+ *
+ * The format tag stays `claude-*-md` for every base on purpose: it names the FILE
+ * FORMAT being parsed (Claude Code's frontmatter markdown), not the directory it
+ * was found in. Which directory is the `provenance.origin`, which is the field
+ * everything else — display, revert, delete-tier — actually keys on.
+ */
+export function importHarness(args: ImportHarnessArgs): HarnessImportSummary {
+  const fs = args.fs ?? (nodeFs as unknown as ImporterFs);
+  const mode: HarnessWalkMode = args.mode ?? 'scan';
+  const nabyBases = resolveBaseDirs({ scope: args.scope, homeDir: args.homeDir, cwd: args.cwd });
+  // ONE call site for the vendor bases, and it is gated on the explicit mode.
+  const vendorBases =
+    mode === 'import' && nabyBases
+      ? resolveVendorBases({ scope: args.scope, homeDir: args.homeDir, cwd: args.cwd })
+      : [];
+  const baseDirs = nabyBases ? [...nabyBases, ...vendorBases] : null;
+
+  const summary: HarnessImportSummary = {
+    scope: args.scope,
+    scopeKey: args.scopeKey,
+    baseDir: baseDirs?.[0] ?? '',
+    baseDirs: baseDirs ?? [],
+    baseExists: false,
+    imported: { command: 0, skill: 0, subagent: 0 },
+    unchanged: 0,
+    copied: 0,
+    skippedHooks: 0,
+    skipped: [],
+    failed: [],
+    items: [],
+  };
+
+  // The naby base the copies land in. There is one per scope (user => `~/.naby`,
+  // project => `<cwd>/.naby`), so the first is the answer.
+  const nabyBase = nabyBases?.[0];
+
+  const presentBases = (baseDirs ?? []).filter((dir) => fs.existsSync(dir));
+  const [firstPresent] = presentBases;
+  if (!firstPresent) return summary;
+  summary.baseExists = true;
+  // What the UI prints: the first base that is actually there.
+  summary.baseDir = firstPresent;
+
+  // Hooks: count, then drop. Never read a hook body into the store. Counted
+  // across every base, because "3 hooks skipped" is a statement about what this
+  // walk saw, not about one directory.
+  for (const dir of presentBases) summary.skippedHooks += countHooks(fs, dir);
+
+  // What is already stored for this scope — read ONCE, before the walk, so an
+  // artifact that has not changed can be recognized and left alone.
+  const existingRows = readExistingRows(args.store, args.scope, args.scopeKey);
+
+  const importedAt = Date.now();
+
+  // FIRST BASE TO CLAIM A (kind, name) KEEPS IT — see the module header. Tracked
+  // across the whole scan, so a later base's same-named file is skipped rather
+  // than pushed through the gate as a takeover of the earlier one.
+  const claimed = new Set<string>();
+
+  // Each job remembers WHICH base it came from, because that is what decides
+  // whether its artifacts must be copied before they can be rows.
+  const jobs = presentBases.flatMap((dir) =>
+    jobsForBase(fs, dir).map((job) => ({ ...job, baseDir: dir, vendor: vendorBases.includes(dir) })),
+  );
 
   for (const job of jobs) {
     for (const raw of job.raws) {
@@ -590,6 +866,60 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
       // (scope,scopeKey,kind,name) identity.
       const itemName = qualify(raw.namePrefix, parsed.name);
 
+      // ALREADY CLAIMED BY AN EARLIER BASE? Then this file is the vendor copy of
+      // something the owner keeps in their own harness home — skip it whole.
+      // Importing it would be a takeover of a row this same scan just wrote: the
+      // gate would replace the body and force the status back to disabled, so a
+      // skill that exists in both places could never stay enabled.
+      const claimKey = identityKey(job.kind, itemName);
+      if (claimed.has(claimKey)) {
+        summary.skipped.push({
+          origin: raw.origin,
+          kind: job.kind,
+          reason: 'shadowed by the same name in an earlier harness base',
+        });
+        continue;
+      }
+      claimed.add(claimKey);
+
+      // MATERIALIZE, THEN RECORD (harness-standalone §2.1). For a vendor artifact
+      // the file is copied into the naby home FIRST and the row points at the
+      // COPY; the vendor path survives only as the inert `importedFrom`. A
+      // conflict or a failed copy skips the artifact entirely — no row is written
+      // for a file that was not created.
+      let origin = raw.origin;
+      let importedFrom: string | undefined;
+      if (job.vendor) {
+        if (!nabyBase) {
+          summary.skipped.push({
+            origin: raw.origin,
+            kind: job.kind,
+            reason: 'this scope has no naby harness home to copy into',
+          });
+          continue;
+        }
+        const res = materializeIntoNabyHome({
+          fs,
+          vendorBase: job.baseDir,
+          nabyBase,
+          origin: raw.origin,
+        });
+        if (res.outcome !== 'copied') {
+          summary.skipped.push({
+            origin: raw.origin,
+            kind: job.kind,
+            reason:
+              res.outcome === 'conflict'
+                ? `not copied — ${res.reason}`
+                : `copy failed — ${res.reason}`,
+          });
+          continue;
+        }
+        origin = res.origin;
+        importedFrom = raw.origin;
+        summary.copied += 1;
+      }
+
       // UNCHANGED? Then write NOTHING. Scan-on-list runs this walk before every
       // harness list, and the steady state is "nothing on disk moved" — a write
       // there would only bump updated_at and re-run the gate on a row the user
@@ -598,7 +928,7 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
       const stored = existingRows.get(identityKey(job.kind, itemName));
       if (
         stored &&
-        stored.provenance.origin === raw.origin &&
+        stored.provenance.origin === origin &&
         sameHarnessContent(stored, parsed)
       ) {
         summary.items.push(stored);
@@ -619,9 +949,13 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
           // and enabled. For an EXISTING row see `refresh` below.
           provenance: {
             source: 'external',
-            origin: raw.origin,
+            // ALWAYS A PATH NABY OWNS on a fresh import: either the file was
+            // already in the naby home, or it was just copied there.
+            origin,
             format: job.format,
             importedAt,
+            // Audit only, and only when this run copied the file in.
+            ...(importedFrom ? { importedFrom } : {}),
           },
           ...(parsed.command ? { command: parsed.command } : {}),
           ...(parsed.skill ? { skill: parsed.skill } : {}),
@@ -642,6 +976,10 @@ export function importClaudeHarness(args: ImportClaudeArgs): HarnessImportSummar
         summary.items.push(item);
         summary.imported[job.kind] += 1;
       } catch (e) {
+        // The gate refused the row (e.g. a lower-tier overwrite). A copy already
+        // made for it stays in the naby home — it is the owner's own directory,
+        // the failure is reported here, and deleting files to undo a rejected
+        // write is a bigger risk than leaving one visible file behind.
         summary.failed.push({ origin: raw.origin, error: e instanceof Error ? e.message : String(e) });
       }
     }

@@ -5,7 +5,7 @@
  * (Chat / ChatInput / TokenStatsModal / ProjectSessionsModal / MessageBubble).
  *
  * Complements scheduledTasksClient.ts: this file covers chat-adjacent IO for
- * session / skills / settings / file / claude-stats / naby-stats endpoints.
+ * session / skills / settings / file / naby-stats endpoints.
  */
 import { Effect } from "effect"
 import { AppError } from "@cockpit/effect-core"
@@ -193,21 +193,16 @@ export const restoreRecentSessions = (): Effect.Effect<RecentSessionsPayload, Ap
   )
 
 // ─────────────────────────────────────────────────────────
-// /api/claude-stats?engine= (token usage)
-// ─────────────────────────────────────────────────────────
-
-export const loadClaudeStats = <A = Record<string, unknown>>(
-  engine: string
-): Effect.Effect<A, AppError> =>
-  httpJson(`/api/claude-stats?engine=${encodeURIComponent(engine)}`)
-
-// ─────────────────────────────────────────────────────────
-// /api/naby/stats (Naby-store usage & cost — the re-backed source)
+// /api/naby/stats (Naby-store usage & cost)
 // ─────────────────────────────────────────────────────────
 //
-// Sources the token/usage modal from NABY'S OWN records (app.db `usage` table)
-// instead of the provider's ~/.claude transcripts. Same StatsData shape as the
-// old claude-stats endpoint, so the modal's charts are unchanged.
+// Sources the token/usage modal from NABY'S OWN records (app.db `usage` table).
+//
+// There WAS a second wrapper here — `loadClaudeStats`, for a route that scanned
+// `~/.claude/projects` and `~/.claude2/projects` for jsonl transcripts and
+// aggregated their token counts. Nothing had called it since the modal was
+// re-backed onto the store, and it was the last client-side reference to a
+// vendor directory, so both it and its route are gone (harness-standalone §2.5).
 
 export const loadNabyStats = <A = Record<string, unknown>>(): Effect.Effect<A, AppError> =>
   httpJson(`/api/naby/stats`)

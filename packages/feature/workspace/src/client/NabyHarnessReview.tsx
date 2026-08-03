@@ -12,8 +12,14 @@
  * inert until the owner reviews and ENABLES them here (contract §4 invariant 1).
  * The panel then lists every kind with kind/status filters, shows each item's
  * provenance (trust tier + origin), and offers enable/disable, per-item delete,
- * and a one-click "revert this import" that removes everything imported from that
- * `.claude` base by origin prefix (rollback of a bad set).
+ * and a one-click "revert this import" that removes everything imported from a
+ * base by origin prefix (rollback of a bad set).
+ *
+ * IMPORTING COPIES (harness-standalone §2.1), and the copy is the reason the
+ * button's words changed. Pressing Import does not point naby at `~/.claude`; it
+ * takes what is there INTO `~/.naby`, and the row records the copy. Nothing on
+ * this panel is a live view of a vendor directory afterwards — and the LIST, as
+ * distinct from the button, never reads one at all (§2.2).
  *
  * WHY SEPARATE FROM NabyCommandManager. The command manager (HP-02) is the CRUD
  * surface for a user's OWN commands; this is the review surface for IMPORTED
@@ -27,7 +33,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from '@cockpit/shared-ui';
+import { confirm, toast } from '@cockpit/shared-ui';
 // Shared with NabyCommandManager: both panels change what the "/" palette may
 // offer, and the palette lives in another frame.
 import { announceHarnessChanged } from './harnessChanged';
@@ -52,12 +58,20 @@ import type {
 interface ImportSummary {
   scope: HarnessScope;
   scopeKey: string;
+  /** The first base that existed — what the "nothing to import" line names. */
   baseDir: string;
+  /** Every base the run read, in order. A list scan reads the naby home alone;
+   *  an explicit import also reads `.claude`, to copy out of it. Optional: older
+   *  servers sent only `baseDir`. */
+  baseDirs?: string[];
   baseExists: boolean;
   imported: { command: number; skill: number; subagent: number };
   /** How many of `imported` were already stored unchanged, so the scan wrote
    *  nothing for them. Optional: older servers do not send it. */
   unchanged?: number;
+  /** How many artifacts were COPIED into the naby harness home by this import
+   *  (harness-standalone §2.1). Optional: older servers do not send it. */
+  copied?: number;
   skippedHooks: number;
   skipped: Array<{ origin: string; kind?: HarnessKind; reason: string }>;
   failed: Array<{ origin: string; error: string }>;
@@ -68,14 +82,25 @@ interface ImportSummary {
 // Wire helpers.
 // ---------------------------------------------------------------------------
 
-type HarnessListResponse = { scope: HarnessScope; scopeKey: string; items: HarnessItem[] };
+type HarnessListResponse = {
+  scope: HarnessScope;
+  scopeKey: string;
+  items: HarnessItem[];
+  /** The naby harness homes this scope owns. Used ONLY to word the delete
+   *  confirmation ("the file goes too" vs "the vendor file stays"); the server
+   *  re-decides the tier itself and never trusts the client about it. Optional
+   *  so an older server (which does not send it) degrades to the safe wording. */
+  nabyBases?: string[];
+};
 
 async function listAll(
   scope: HarnessScope,
   scopeKey: string | undefined,
 ): Promise<{ ok: true; data: HarnessListResponse } | { ok: false; error: string }> {
   try {
-    const params = new URLSearchParams({ scope, kind: 'all' });
+    // includeRemoved: the panel owns the "deleted" filter chip, so it fetches the
+    // tombstones once and filters client-side rather than re-querying per chip.
+    const params = new URLSearchParams({ scope, kind: 'all', includeRemoved: '1' });
     if (scopeKey) params.set('scopeKey', scopeKey);
     const res = await fetch(`/api/harness?${params.toString()}`);
     const json = (await res.json().catch(() => null)) as
@@ -187,6 +212,57 @@ const TRUST_LABEL: Record<HarnessTrust, string> = {
   external: 'harnessReview.trustExternal',
 };
 
+// ---------------------------------------------------------------------------
+// Which delete is this? (wording only — the server decides for real)
+// ---------------------------------------------------------------------------
+//
+// The two tiers the user must be told apart BEFORE they press OK:
+//
+//   'source'  the file is naby's own (`~/.naby/...`), so deleting the item
+//             deletes the file. The dialog names the exact path — for the
+//             canonical `skills/<name>/SKILL.md` layout that is the <name>
+//             DIRECTORY, because that is what actually gets removed.
+//   'vendor'  the file is outside every naby home — in practice a row imported
+//             BEFORE importing meant copying (harness-standalone §2.1). It stays
+//             where it is; only the row goes, and it can be restored.
+//   'row'     there is no file at all (a command the user typed here, a set
+//             import): nothing on disk is involved either way.
+//
+// This mirrors the server's planHarnessDelete on purpose and is DISPLAY ONLY:
+// `/api/harness` re-derives the tier from the row it holds, so a client that got
+// this wrong (an older list without `nabyBases`, a hand-edited request) changes
+// what the dialog SAYS, never what is deleted.
+
+type DeleteTier =
+  | { tier: 'source'; path: string }
+  | { tier: 'vendor'; path: string }
+  | { tier: 'row' };
+
+/** The separator this absolute path is written with (the app is cross-platform;
+ *  the server sends whatever `node:path` produced on that machine). */
+function sepOf(p: string): string {
+  return p.includes('\\') && !p.includes('/') ? '\\' : '/';
+}
+
+export function deleteTierOf(
+  origin: string | undefined,
+  nabyBases: string[] | undefined,
+): DeleteTier {
+  if (!origin) return { tier: 'row' };
+  const sep = sepOf(origin);
+  const under = (nabyBases ?? []).some((base) => {
+    const b = base.endsWith(sep) ? base.slice(0, -sep.length) : base;
+    return origin.startsWith(b + sep);
+  });
+  if (!under) return { tier: 'vendor', path: origin };
+  // The skill layout deletes the containing directory, so that is the path the
+  // dialog has to name — telling the user one file goes when a folder does is
+  // the kind of surprise a confirmation exists to prevent.
+  const parts = origin.split(sep);
+  const isSkillDoc = (parts[parts.length - 1] ?? '').toLowerCase() === 'skill.md';
+  return { tier: 'source', path: isSkillDoc ? parts.slice(0, -1).join(sep) : origin };
+}
+
 /** A tool-bearing SUBAGENT cannot be orchestrated until Phase 2.5 (M4) — surface
  *  that so enabling one is not mistaken for a fully working capability
  *  (strategy §6). Tool-bearing SKILLS are handled as of M3 (their instructions
@@ -203,18 +279,28 @@ const HarnessRow = memo(function HarnessRow({
   scope,
   cwd,
   busy,
+  nabyBases,
   onToggle,
   onDelete,
+  onRestore,
 }: {
   item: HarnessItem;
   scope: NabyScopeId;
   cwd?: string;
   busy: boolean;
+  /** For the delete confirmation's wording — see deleteTierOf. */
+  nabyBases?: string[];
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
+  onRestore: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const enabled = item.status === 'enabled';
+  // A TOMBSTONE: deleted by the user, kept only so the on-disk artifact is not
+  // re-imported as a new row. It is visible solely under the "deleted" filter,
+  // where the one thing to offer is putting it back.
+  const removed = item.status === 'removed';
+  const tier = deleteTierOf(item.provenance.origin, nabyBases);
   const body =
     item.kind === 'command'
       ? item.command?.template
@@ -267,32 +353,58 @@ const HarnessRow = memo(function HarnessRow({
           <ScopeBadge scope={scope} cwd={cwd} />
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-              enabled
-                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+              removed
+                ? 'bg-muted text-muted-foreground'
+                : enabled
+                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
             }`}
           >
-            {enabled ? t('harnessReview.badgeEnabled') : t('harnessReview.badgeDisabled')}
+            {removed
+              ? t('harnessReview.badgeRemoved')
+              : enabled
+                ? t('harnessReview.badgeEnabled')
+                : t('harnessReview.badgeDisabled')}
           </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <button
-          onClick={() => onToggle(item.id, !enabled)}
-          disabled={busy}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
-        >
-          {enabled ? t('harnessReview.disable') : t('harnessReview.enable')}
-        </button>
-        <button
-          onClick={() => onDelete(item.id)}
-          disabled={busy}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
-        >
-          {t('harnessReview.delete')}
-        </button>
-      </div>
+      {removed ? (
+        // A deleted row offers exactly one action, and says why it is still here
+        // at all: the source file naby was not allowed to delete is still on disk,
+        // so the row is what keeps the next scan from re-importing it.
+        <div className="space-y-1.5">
+          {tier.tier === 'vendor' ? (
+            <div className="text-[10px] text-muted-foreground break-all">
+              {t('harnessReview.removedVendorHint', { path: tier.path })}
+            </div>
+          ) : null}
+          <button
+            onClick={() => onRestore(item.id)}
+            disabled={busy}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+          >
+            {t('harnessReview.restore')}
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onToggle(item.id, !enabled)}
+            disabled={busy}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+          >
+            {enabled ? t('harnessReview.disable') : t('harnessReview.enable')}
+          </button>
+          <button
+            onClick={() => onDelete(item.id)}
+            disabled={busy}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+          >
+            {t('harnessReview.delete')}
+          </button>
+        </div>
+      )}
 
       {/* ON DEMAND — the full description, what the item actually instructs, and
           where it came from. The shared disclosure, so this card obeys the same
@@ -341,10 +453,14 @@ const KIND_FILTERS: { value: HarnessKind | 'all'; labelKey: string }[] = [
   { value: 'subagent', labelKey: 'harnessReview.kindSubagent' },
 ];
 
+// 'all' means all the LIVE ones. Tombstones are reachable only through their own
+// chip: a deleted item showing up under "all" is the reappearance this whole
+// change is about.
 const STATUS_FILTERS: { value: HarnessStatus | 'all'; labelKey: string }[] = [
   { value: 'all', labelKey: 'harnessReview.statusAll' },
   { value: 'enabled', labelKey: 'harnessReview.statusEnabled' },
   { value: 'disabled', labelKey: 'harnessReview.statusDisabled' },
+  { value: 'removed', labelKey: 'harnessReview.statusRemoved' },
 ];
 
 // The scopes a set can be exported FROM / imported INTO — same list (and same
@@ -745,6 +861,9 @@ export function NabyHarnessReview({
   const { t } = useTranslation();
   const [scope, setScope] = useState<HarnessScope>('user');
   const [items, setItems] = useState<HarnessItem[]>([]);
+  // The naby harness homes this scope owns — the delete dialog's wording depends
+  // on whether a row's origin sits under one of them.
+  const [nabyBases, setNabyBases] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -780,9 +899,12 @@ export function NabyHarnessReview({
     setLoading(true);
     setError(null);
     const res = await listAll(scope, scopeKey ?? undefined);
-    if (res.ok) setItems(res.data.items);
-    else {
+    if (res.ok) {
+      setItems(res.data.items);
+      setNabyBases(res.data.nabyBases ?? []);
+    } else {
       setItems([]);
+      setNabyBases([]);
       setError(res.error);
     }
     setLoading(false);
@@ -861,31 +983,100 @@ export function NabyHarnessReview({
     [runRowAction],
   );
 
+  // DELETE — two tiers, and the dialog has to say WHICH ONE before it happens.
+  //
+  // Under a naby harness home the file is ours and goes with the row, so the
+  // confirmation names the exact path (danger styling: this is not undoable).
+  // Under `.claude` — or with no file at all — nothing on disk is touched; the
+  // row is tombstoned, which is what stops the next list re-importing the file,
+  // and the dialog says where to find it again.
   const handleDelete = useCallback(
-    (id: string) => void runRowAction(id, { action: 'delete', id }, 'harnessReview.deleted'),
+    async (id: string) => {
+      const item = items.find((i) => i.id === id);
+      const tier = deleteTierOf(item?.provenance.origin, nabyBases);
+      const message =
+        tier.tier === 'source'
+          ? t('harnessReview.confirmDeleteSource', { path: tier.path })
+          : tier.tier === 'vendor'
+            ? t('harnessReview.confirmDeleteVendor', { path: tier.path })
+            : t('harnessReview.confirmDeleteRow');
+      const agreed = await confirm(message, {
+        title: t('harnessReview.confirmDeleteTitle'),
+        confirmText: t('harnessReview.delete'),
+        danger: true,
+      });
+      if (!agreed) return;
+
+      setBusyId(id);
+      try {
+        const res = await post<{ ok: boolean; deleted?: { tier: string; file?: string } }>({
+          action: 'delete',
+          id,
+        });
+        if (res.ok) {
+          // Report what the SERVER did, not what the dialog predicted: the tier is
+          // re-decided there, and a refused unlink falls back to a tombstone.
+          const done = res.data.deleted;
+          toast(
+            done?.tier === 'source'
+              ? t('harnessReview.deletedFile', { path: done.file ?? '' })
+              : t('harnessReview.deletedTombstone'),
+            'success',
+          );
+          announceHarnessChanged();
+          await reload();
+        } else {
+          toast(t('harnessReview.actionError', { error: res.error }), 'error');
+        }
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [items, nabyBases, reload, t],
+  );
+
+  // RESTORE — an explicit toggle, which is what leaves the removed state. It
+  // lands DISABLED: a row coming back from the dead has not been reviewed since,
+  // and re-enabling it is a separate decision the user makes in the list.
+  const handleRestore = useCallback(
+    (id: string) =>
+      void runRowAction(id, { action: 'setEnabled', id, enabled: false }, 'harnessReview.restored'),
     [runRowAction],
   );
 
   // "Revert this import": remove every external row sharing this import's base.
+  //
+  // ONE REQUEST PER BASE. An import reports two bases — the naby harness home and
+  // the vendor tree it copied out of — and `revertOrigin` matches ONE origin
+  // prefix. Rows written by this import all carry NABY origins now, so the naby
+  // base is the one that matches; the vendor prefix is still sent because rows
+  // imported before §2.1 carry vendor origins and a revert should reach those
+  // too. Removals are summed and any single failure is surfaced.
   const revertImport = useCallback(async () => {
-    if (!summary || !summary.baseDir) return;
+    if (!summary) return;
+    const bases = (summary.baseDirs?.length ? summary.baseDirs : [summary.baseDir]).filter(Boolean);
+    if (bases.length === 0) return;
     setBusyId('__revert__');
     try {
-      const res = await post<{ ok: boolean; removed?: number }>({
-        action: 'revertOrigin',
-        scope,
-        ...(scope === 'project' && cwd ? { scopeKey: cwd } : {}),
-        originPrefix: summary.baseDir,
-      });
-      if (res.ok) {
-        toast(t('harnessReview.reverted', { count: res.data.removed ?? 0 }), 'success');
-        // A revert can remove ENABLED items, so "/" must drop them too.
-        announceHarnessChanged();
-        setSummary(null);
-        await reload();
-      } else {
-        toast(t('harnessReview.actionError', { error: res.error }), 'error');
+      let removed = 0;
+      for (const base of bases) {
+        const res = await post<{ ok: boolean; removed?: number }>({
+          action: 'revertOrigin',
+          scope,
+          ...(scope === 'project' && cwd ? { scopeKey: cwd } : {}),
+          originPrefix: base,
+        });
+        if (!res.ok) {
+          toast(t('harnessReview.actionError', { error: res.error }), 'error');
+          return;
+        }
+        removed += res.data.removed ?? 0;
       }
+      toast(t('harnessReview.reverted', { count: removed }), 'success');
+      // A revert can remove ENABLED items, so "/" must drop them too.
+      announceHarnessChanged();
+      setSummary(null);
+      await reload();
     } finally {
       setBusyId(null);
     }
@@ -893,11 +1084,14 @@ export function NabyHarnessReview({
 
   const visible = useMemo(
     () =>
-      items.filter(
-        (i) =>
-          (kindFilter === 'all' || i.kind === kindFilter) &&
-          (statusFilter === 'all' || i.status === statusFilter),
-      ),
+      items.filter((i) => {
+        if (kindFilter !== 'all' && i.kind !== kindFilter) return false;
+        // TOMBSTONES ARE OPT-IN. Every other chip — including 'all' — shows the
+        // live list only; the "deleted" chip shows nothing but tombstones.
+        if (statusFilter === 'removed') return i.status === 'removed';
+        if (i.status === 'removed') return false;
+        return statusFilter === 'all' || i.status === statusFilter;
+      }),
     [items, kindFilter, statusFilter],
   );
 
@@ -915,10 +1109,12 @@ export function NabyHarnessReview({
       <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
         <p>{t('harnessReview.description')}</p>
         <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
-        {/* The list re-scans `~/.claude` (and the project `.claude`) on every
-            load, so a skill installed outside this panel appears without pressing
-            Import — but it appears DISABLED, and nothing about a greyed row says
-            why it is not in "/" yet. This line says it, in one sentence. */}
+        {/* The list re-scans the NABY HARNESS HOME on every load, so a skill
+            installed there outside this panel (by the model, through skill-hub)
+            appears without pressing Import — but it appears DISABLED, and nothing
+            about a greyed row says why it is not in "/" yet. This line says it,
+            in one sentence. A vendor directory is NOT scanned: it is read once,
+            by the Import button, which copies out of it (§2.2). */}
         <p className="text-muted-foreground/70">{t('harnessReview.autoScanHint')}</p>
       </div>
 
@@ -948,7 +1144,8 @@ export function NabyHarnessReview({
         </div>
       </details>
 
-      {/* Import from ~/.claude / .claude (HP-04). Filesystem import only makes
+      {/* Import from ~/.claude / .claude (HP-04) — a COPY into the naby harness
+          home, which is why the button says so. Filesystem import only makes
           sense for user/project — the org scope is populated by a set import. */}
       {available && scope !== 'org' ? (
         <div className="space-y-2">
@@ -985,6 +1182,12 @@ export function NabyHarnessReview({
                       subagent: summary.imported.subagent,
                     })}
                   </div>
+                  {summary.copied ? (
+                    // The materialization, stated. "Imported" alone would leave
+                    // the user unable to tell a pointer from a copy — which is
+                    // the whole difference this import makes.
+                    <div>{t('harnessImport.resultCopied', { count: summary.copied })}</div>
+                  ) : null}
                   {summary.skippedHooks > 0 ? (
                     <div>{t('harnessImport.resultHooks', { count: summary.skippedHooks })}</div>
                   ) : null}
@@ -1082,8 +1285,10 @@ export function NabyHarnessReview({
               scope={scope as NabyScopeId}
               cwd={cwd}
               busy={busy}
+              nabyBases={nabyBases}
               onToggle={handleToggle}
               onDelete={handleDelete}
+              onRestore={handleRestore}
             />
           ))}
         </div>

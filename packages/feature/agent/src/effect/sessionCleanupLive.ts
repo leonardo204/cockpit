@@ -1,13 +1,16 @@
 /**
  * SessionCleanupLive -- retention sweep for Ollama chat session transcripts.
  *
- * Scope: ONLY `<cockpitDir>/ollama-sessions/`. This is the sole session store
- * cockpit writes itself (via appendFileSync) with no cleanup. Every other
- * engine's sessions are cleaned by their own external CLI / Agent SDK:
- *   - claude / claude2 -> ~/.claude(2)/projects (Claude CLI cleanupPeriodDays)
- *   - deepseek         -> ~/.cockpit/deepseek/projects (Claude Agent SDK)
- *   - codex / kimi     -> ~/.codex, ~/.kimi (external CLI)
- * so this sweep deliberately never touches them.
+ * Scope: ONLY `<cockpitDir>/ollama-sessions/`, and that boundary is now a rule
+ * rather than a coincidence. This is the sole transcript directory the shell
+ * writes itself (via appendFileSync) with no cleanup of its own.
+ *
+ * IT MUST NEVER GROW A VENDOR DIRECTORY (harness-standalone §2.5). A retention
+ * sweep is the one piece of naby that DELETES files on a timer, so a vendor path
+ * added to `root` would make an unattended background pass the only thing in the
+ * product that writes to another product's directory — with no user action and
+ * no way to see it happen. `~/.claude`, `~/.claude2`, `~/.codex` and `~/.kimi`
+ * are cleaned by the tools that own them; naby neither helps nor interferes.
  *
  * On-disk layout (one dir per project cwd, one file per session):
  *   ollama-sessions/<encoded-cwd>/
