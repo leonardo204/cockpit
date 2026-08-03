@@ -181,6 +181,44 @@ export function classifyNumericReply(text: string | undefined, optionCount: numb
 
 const API_BASE = 'https://api.telegram.org';
 
+/**
+ * Turn a thrown fetch rejection into a message a HUMAN can act on.
+ *
+ * `fetch` reports EVERY transport failure as the same five words — `TypeError:
+ * fetch failed` — and hides what actually happened one level down in `cause`.
+ * Surfaced verbatim in the Settings dialog, those five words read as "naby is
+ * broken" or "my token is wrong", and that is exactly how a network fault
+ * (Happy Eyeballs abandoning a slow-but-live IPv4 attempt at its 250ms default;
+ * see the timeout raised in shell/server.mjs and electron/boot.ts) was
+ * misdiagnosed for a whole debugging session as a Telegram config error.
+ *
+ * So the code comes along: `fetch failed (ETIMEDOUT)`. ENOTFOUND is DNS,
+ * ECONNREFUSED is a blocked egress, ETIMEDOUT/EHOSTUNREACH is the network —
+ * none of them are a reason to go re-type a bot token.
+ *
+ * The cause chain is walked because Node wraps differently per failure mode: a
+ * single-address failure carries the coded error directly, while a multi-address
+ * one arrives as an AggregateError whose `errors[]` hold the codes.
+ */
+export function describeFetchError(e: unknown): string {
+  const base = e instanceof Error ? e.message : String(e);
+  const code = findErrorCode(e, 0);
+  return code ? `${base} (${code})` : base;
+}
+
+function findErrorCode(e: unknown, depth: number): string | undefined {
+  if (depth > 4 || e === null || typeof e !== 'object') return undefined;
+  const err = e as { code?: unknown; cause?: unknown; errors?: unknown };
+  if (typeof err.code === 'string' && err.code) return err.code;
+  if (Array.isArray(err.errors)) {
+    for (const inner of err.errors) {
+      const found = findErrorCode(inner, depth + 1);
+      if (found) return found;
+    }
+  }
+  return findErrorCode(err.cause, depth + 1);
+}
+
 /** Send a message to the configured chat, optionally with an inline keyboard.
  *  Returns the sent message_id on success, or an error string. Never throws. */
 export async function sendTelegramMessage(
@@ -207,18 +245,32 @@ export async function sendTelegramMessage(
     }
     return { ok: true, messageId: json.result?.message_id ?? 0 };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: describeFetchError(e) };
   }
 }
 
+/** The outcome of one getUpdates poll. `error` is present ONLY when the poll did
+ *  not complete — a transport failure or an API-level refusal. It is additive on
+ *  purpose: the listener loop can keep ignoring it and retry, while the callers
+ *  that must not report "nothing arrived" when the truth is "we never asked"
+ *  (detectChatId) can tell the two apart. */
+export type TelegramPollResult = {
+  updates: TelegramUpdate[];
+  nextOffset: number;
+  /** Set when the poll FAILED. Absent means "the poll ran"; `updates` being
+   *  empty then genuinely means no update was waiting. */
+  error?: string;
+};
+
 /** One long-poll of getUpdates from `offset`. Returns the raw updates and the
- *  next offset to pass. Never throws — a transient failure yields [] and the
- *  same offset so the caller simply retries. */
+ *  next offset to pass. Never throws — a failure yields [] and the SAME offset
+ *  so the caller simply retries, plus an `error` so a caller that cares can see
+ *  that the emptiness is a failure rather than an answer. */
 export async function pollTelegramUpdates(
   cfg: Pick<TelegramConfig, 'botToken'>,
   offset: number,
   opts?: { timeoutSec?: number; signal?: AbortSignal },
-): Promise<{ updates: TelegramUpdate[]; nextOffset: number }> {
+): Promise<TelegramPollResult> {
   try {
     const url = new URL(`${API_BASE}/bot${cfg.botToken}/getUpdates`);
     url.searchParams.set('offset', String(offset));
@@ -226,14 +278,20 @@ export async function pollTelegramUpdates(
     url.searchParams.set('allowed_updates', JSON.stringify(['message', 'callback_query']));
     const res = await fetch(url, opts?.signal ? { signal: opts.signal } : {});
     const json = (await res.json().catch(() => null)) as
-      | { ok: boolean; result?: TelegramUpdate[] }
+      | { ok: boolean; result?: TelegramUpdate[]; description?: string }
       | null;
-    if (!res.ok || !json?.ok || !json.result) return { updates: [], nextOffset: offset };
+    if (!res.ok || !json?.ok || !json.result) {
+      return {
+        updates: [],
+        nextOffset: offset,
+        error: json?.description ?? `telegram getUpdates failed (${res.status})`,
+      };
+    }
     const updates = json.result;
     const maxId = updates.reduce((mx, u) => Math.max(mx, u.update_id), offset - 1);
     return { updates, nextOffset: maxId + 1 };
-  } catch {
-    return { updates: [], nextOffset: offset };
+  } catch (e) {
+    return { updates: [], nextOffset: offset, error: describeFetchError(e) };
   }
 }
 
@@ -262,7 +320,14 @@ export async function detectChatId(
   cfg: Pick<TelegramConfig, 'botToken'>,
 ): Promise<{ ok: true; chatId: string } | { ok: false; error: string }> {
   if (!cfg.botToken) return { ok: false, error: 'Set the bot token first.' };
-  const { updates } = await pollTelegramUpdates(cfg, 0, { timeoutSec: 0 });
+  const { updates, error } = await pollTelegramUpdates(cfg, 0, { timeoutSec: 0 });
+  // A FAILED poll is not an empty inbox. Reporting "no message found" when the
+  // request never reached Telegram sends the user off to re-send a message they
+  // already sent — the one instruction guaranteed not to help — and hides the
+  // network fault that is the actual cause.
+  if (error) {
+    return { ok: false, error: `Could not reach Telegram: ${error}` };
+  }
   for (let i = updates.length - 1; i >= 0; i -= 1) {
     const u = updates[i]!;
     const id = u.message?.chat?.id ?? u.callback_query?.message?.chat?.id;

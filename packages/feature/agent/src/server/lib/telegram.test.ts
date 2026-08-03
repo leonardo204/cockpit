@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   buildCallbackData,
   parseCallbackData,
@@ -10,6 +10,10 @@ import {
   parseCheckinCallbackData,
   classifyNumericReply,
   CALLBACK_DATA_MAX_BYTES,
+  describeFetchError,
+  sendTelegramMessage,
+  pollTelegramUpdates,
+  detectChatId,
 } from './telegram';
 
 describe('telegram — approval callback data (P3-M3)', () => {
@@ -112,5 +116,189 @@ describe('telegram — config helpers', () => {
     expect(isTelegramReady({ enabled: false, botToken: 't', chatId: 'c' })).toBe(false);
     expect(isTelegramReady({ enabled: true, botToken: '', chatId: 'c' })).toBe(false);
     expect(isTelegramReady({ enabled: true, botToken: 't', chatId: '' })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Network failures must NAME themselves
+// ---------------------------------------------------------------------------
+//
+// The bug these guard against cost a whole debugging session. Telegram sends
+// began failing intermittently with `400 {"error":"fetch failed"}` — five words
+// that say nothing — and the config was read as the suspect, because that is
+// the only thing the message could plausibly be about. The real cause was the
+// transport: Node's Happy Eyeballs abandons an IPv4 attempt that has not
+// connected within 250ms (the default), and on the reporting network the
+// handshake to api.telegram.org measured ~250-280ms with IPv6 unreachable, so
+// `fetch` gave up on a connection that was about to succeed. The code was in
+// `e.cause.code` the whole time: ETIMEDOUT.
+//
+// Two rules come out of it, and these tests hold both:
+//   1. A transport failure must SHOW its code, so it cannot be mistaken for a
+//      configuration error.
+//   2. "The poll failed" must never be reported as "no message is waiting".
+
+/** Node's real shape for a failed fetch: TypeError('fetch failed') + a coded cause. */
+function fetchFailed(code: string): TypeError {
+  return new TypeError('fetch failed', { cause: Object.assign(new Error(code), { code }) });
+}
+
+const CFG = { botToken: 'bot-token', chatId: '4242' };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe('telegram — a network failure names itself (Happy Eyeballs regression)', () => {
+  it('describeFetchError appends the cause code', () => {
+    expect(describeFetchError(fetchFailed('ETIMEDOUT'))).toBe('fetch failed (ETIMEDOUT)');
+    expect(describeFetchError(fetchFailed('ENOTFOUND'))).toBe('fetch failed (ENOTFOUND)');
+    expect(describeFetchError(fetchFailed('ECONNREFUSED'))).toBe('fetch failed (ECONNREFUSED)');
+  });
+
+  it('describeFetchError digs a code out of an AggregateError cause', () => {
+    // The multi-address failure mode: Node wraps one error per address tried.
+    const agg = Object.assign(new AggregateError([], 'all attempts failed'), {
+      errors: [
+        Object.assign(new Error('unreachable'), { code: 'EHOSTUNREACH' }),
+        Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }),
+      ],
+    });
+    const err = new TypeError('fetch failed', { cause: agg });
+    expect(describeFetchError(err)).toBe('fetch failed (EHOSTUNREACH)');
+  });
+
+  it('describeFetchError leaves a codeless error alone (and never throws)', () => {
+    expect(describeFetchError(new Error('boom'))).toBe('boom');
+    expect(describeFetchError('plain string')).toBe('plain string');
+    expect(describeFetchError(undefined)).toBe('undefined');
+    // A self-referencing cause chain must not hang the error path.
+    const loop = new Error('loop') as Error & { cause?: unknown };
+    loop.cause = loop;
+    expect(describeFetchError(loop)).toBe('loop');
+  });
+
+  it('sendTelegramMessage reports the code, so a network fault is not read as a config error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(fetchFailed('ETIMEDOUT')));
+    const res = await sendTelegramMessage(CFG, 'hello');
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toContain('ETIMEDOUT');
+    // The bare five words alone were the whole problem — never ship them naked.
+    expect(res.error).not.toBe('fetch failed');
+  });
+
+  it('sendTelegramMessage still surfaces an API-level refusal verbatim', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ ok: false, description: 'Unauthorized' }),
+      }),
+    );
+    const res = await sendTelegramMessage(CFG, 'hello');
+    expect(res).toEqual({ ok: false, error: 'Unauthorized' });
+  });
+
+  it('pollTelegramUpdates turns a transport failure into a distinguishable error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(fetchFailed('ETIMEDOUT')));
+    const res = await pollTelegramUpdates(CFG, 17, { timeoutSec: 0 });
+    expect(res.updates).toEqual([]);
+    // The offset must NOT advance on a failed poll, or the listener would skip
+    // updates it never actually read.
+    expect(res.nextOffset).toBe(17);
+    expect(res.error).toContain('ETIMEDOUT');
+  });
+
+  it('pollTelegramUpdates reports an API refusal too, and leaves error absent on success', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ ok: false, description: 'Conflict: terminated by other getUpdates' }),
+      }),
+    );
+    expect((await pollTelegramUpdates(CFG, 0)).error).toContain('Conflict');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: [{ update_id: 8, message: { chat: { id: 5 } } }] }),
+      }),
+    );
+    const good = await pollTelegramUpdates(CFG, 0);
+    expect(good.error).toBeUndefined();
+    expect(good.nextOffset).toBe(9);
+    expect(good.updates).toHaveLength(1);
+  });
+});
+
+describe('telegram — detectChatId tells a network failure from an empty inbox', () => {
+  it('reports the network fault instead of "send a message"', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(fetchFailed('ETIMEDOUT')));
+    const res = await detectChatId({ botToken: 'bot-token' });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toContain('Could not reach Telegram');
+    expect(res.error).toContain('ETIMEDOUT');
+    // Sending the message AGAIN is the one instruction guaranteed not to help.
+    expect(res.error).not.toContain('No message found');
+  });
+
+  it('reports an API refusal (a wrong token) rather than an empty inbox', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ ok: false, description: 'Unauthorized' }),
+      }),
+    );
+    const res = await detectChatId({ botToken: 'bot-token' });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toContain('Unauthorized');
+    expect(res.error).not.toContain('No message found');
+  });
+
+  it('still says "no message" when the poll SUCCEEDED and nothing was waiting', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true, result: [] }) }),
+    );
+    const res = await detectChatId({ botToken: 'bot-token' });
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toContain('No message found');
+  });
+
+  it('returns the newest chat id when one is waiting', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          result: [
+            { update_id: 1, message: { chat: { id: 111 } } },
+            { update_id: 2, callback_query: { id: 'q', message: { chat: { id: 222 } } } },
+          ],
+        }),
+      }),
+    );
+    expect(await detectChatId({ botToken: 'bot-token' })).toEqual({ ok: true, chatId: '222' });
+  });
+
+  it('asks for the token first, without touching the network', async () => {
+    const spy = vi.fn();
+    vi.stubGlobal('fetch', spy);
+    const res = await detectChatId({ botToken: '' });
+    expect(res).toEqual({ ok: false, error: 'Set the bot token first.' });
+    expect(spy).not.toHaveBeenCalled();
   });
 });

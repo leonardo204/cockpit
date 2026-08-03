@@ -1,11 +1,44 @@
 import { createServer } from 'http';
 import { createGzip, constants as zlibConstants } from 'zlib';
 import { exec, execSync } from 'child_process';
+import * as net from 'net';
 import { homedir } from 'os';
 import { writeFileSync, mkdirSync, readFileSync, realpathSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import next from 'next';
+
+// ============================================
+// Outbound connect timeout — Happy Eyeballs (RFC 8305)
+//
+// Set HERE, at the very top of the standalone server entry, so it is in force
+// before Next is constructed and therefore before any route can `fetch`. It is
+// process-wide and read by net.connect at call time, so every outbound
+// connection (Telegram, provider APIs, skill hub) inherits it. The electron
+// main process sets the same value in electron/boot.ts — the two server
+// processes must agree, so both entries carry the call.
+//
+// Node's autoSelectFamily races A and AAAA addresses and moves to the next
+// address when the current attempt has not connected within
+// autoSelectFamilyAttemptTimeout — DEFAULT 250ms. Where the IPv4 handshake sits
+// right on that boundary (api.telegram.org measured ~250-280ms on the reporting
+// network) and IPv6 is EHOSTUNREACH, the address list is exhausted while the v4
+// attempt is still pending and about to succeed, so fetch rejects with
+// `TypeError: fetch failed` (cause ETIMEDOUT) — intermittently, which is what
+// made it read as a config error rather than a network one. curl on the same
+// box succeeds because it uses a head start, not a deadline.
+//
+// 5s is far above any plausible TCP handshake and far below a request timeout,
+// so a genuinely unreachable family still fails over fast. Happy Eyeballs stays
+// on; only "slow" stops being mistaken for "dead".
+// ============================================
+const HAPPY_EYEBALLS_ATTEMPT_TIMEOUT_MS = 5000;
+// Guarded: the API landed in Node 18.13/19.4. Node 20+ is required to run this
+// server at all, so this is belt-and-braces — a tuning knob must never be the
+// reason the server refuses to start.
+if (typeof net.setDefaultAutoSelectFamilyAttemptTimeout === 'function') {
+  net.setDefaultAutoSelectFamilyAttemptTimeout(HAPPY_EYEBALLS_ATTEMPT_TIMEOUT_MS);
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 process.env.COCKPIT_ROOT = __dirname;

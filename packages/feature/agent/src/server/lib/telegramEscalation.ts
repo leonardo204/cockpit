@@ -286,6 +286,12 @@ type BridgeState = {
   /** whether the loop already drained the pre-existing backlog this process. */
   drained: boolean;
   loopRunning: boolean;
+  /** The last poll failure LOGGED, so a network outage reports itself once on
+   *  the way down and once on the way back up instead of every iteration. A
+   *  silent listener spinning against a dead network is indistinguishable from
+   *  an idle one, which is precisely how a transport fault gets read as "the
+   *  user never answered". */
+  lastPollError?: string;
 };
 
 const g = globalThis as unknown as { __nabyTelegramBridge?: BridgeState };
@@ -544,9 +550,17 @@ async function runListener(store: Store): Promise<void> {
       return;
     }
     const started = Date.now();
-    const { updates, nextOffset } = await pollTelegramUpdates(live, state.offset, {
+    const { updates, nextOffset, error } = await pollTelegramUpdates(live, state.offset, {
       timeoutSec: POLL_TIMEOUT_SEC,
     });
+    // Report the TRANSITION only — first failure, and the recovery — so an
+    // outage is visible in the log without burying it under one line per poll.
+    if (error && error !== state.lastPollError) {
+      console.warn(`[telegram] poll failed: ${error} — retrying`);
+    } else if (!error && state.lastPollError) {
+      console.log('[telegram] poll recovered');
+    }
+    state.lastPollError = error;
     if (nextOffset !== state.offset) {
       state.offset = nextOffset;
       writeOffset(store, nextOffset);
