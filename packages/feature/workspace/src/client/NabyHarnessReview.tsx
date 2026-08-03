@@ -91,6 +91,11 @@ type HarnessListResponse = {
    *  re-decides the tier itself and never trusts the client about it. Optional
    *  so an older server (which does not send it) degrades to the safe wording. */
   nabyBases?: string[];
+  /** Whether a NEW skill found in the naby harness home arrives ENABLED (gate
+   *  invariant 7). Optional so an older server degrades to the shipped DEFAULT,
+   *  which is on — the switch would otherwise paint "off" against a server that
+   *  is auto-enabling, which is the one reading worse than not showing it. */
+  autoEnableNabyHome?: boolean;
 };
 
 async function listAll(
@@ -141,7 +146,8 @@ type ActionBody =
       scope: HarnessScope;
       scopeKey?: string;
       ids?: string[];
-    };
+    }
+  | { action: 'autoEnableNabyHome.set'; enabled: boolean };
 
 async function post<T = { ok: boolean }>(
   body: ActionBody,
@@ -864,6 +870,10 @@ export function NabyHarnessReview({
   // The naby harness homes this scope owns — the delete dialog's wording depends
   // on whether a row's origin sits under one of them.
   const [nabyBases, setNabyBases] = useState<string[]>([]);
+  // The naby-home auto-enable switch. Seeded to the shipped default (on) so the
+  // first paint matches what the server is actually doing; the list response
+  // reconciles it.
+  const [autoEnable, setAutoEnable] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -902,6 +912,8 @@ export function NabyHarnessReview({
     if (res.ok) {
       setItems(res.data.items);
       setNabyBases(res.data.nabyBases ?? []);
+      // Absent (older server) => the shipped default, which is on.
+      setAutoEnable(res.data.autoEnableNabyHome !== false);
     } else {
       setItems([]);
       setNabyBases([]);
@@ -915,6 +927,30 @@ export function NabyHarnessReview({
   useEffect(() => {
     if (isOpen) void reload();
   }, [isOpen, reload]);
+
+  // The kill switch for naby-home auto-enable. Optimistic, then reconciled by the
+  // reload — the checkbox has to answer the click, and the reload is what makes a
+  // failed write visible by putting the box back where the server says it is.
+  //
+  // It does NOT re-decide rows that already landed: turning it off stops FUTURE
+  // arrivals from being enabled and leaves everything currently enabled exactly as
+  // it is (a setting that silently disabled a working skill would be a worse
+  // surprise than the one this whole feature removes). The per-row switch is
+  // still the way to turn one off.
+  const handleAutoEnable = useCallback(
+    async (enabled: boolean) => {
+      setAutoEnable(enabled);
+      setBusyId('__setting__');
+      try {
+        const res = await post({ action: 'autoEnableNabyHome.set', enabled });
+        if (!res.ok) toast(t('harnessReview.actionError', { error: res.error ?? '' }), 'error');
+        await reload();
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [reload, t],
+  );
 
   // After a set import, switch the review to the landed scope and force a reload.
   const onSetImported = useCallback((landedScope: HarnessScope) => {
@@ -1111,11 +1147,34 @@ export function NabyHarnessReview({
         <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
         {/* The list re-scans the NABY HARNESS HOME on every load, so a skill
             installed there outside this panel (by the model, through skill-hub)
-            appears without pressing Import — but it appears DISABLED, and nothing
-            about a greyed row says why it is not in "/" yet. This line says it,
-            in one sentence. A vendor directory is NOT scanned: it is read once,
-            by the Import button, which copies out of it (§2.2). */}
+            appears without pressing Import — and, since v1.9.1, it appears ON:
+            the user asked for that install in chat, and a skill that silently
+            does nothing until a switch nobody mentioned is worse than no skill.
+            The sentence has to carry the OTHER half too, because the difference
+            is now the thing to know: a vendor folder's items still arrive off.
+            A vendor directory is NOT scanned either way — it is read once, by
+            the Import button, which copies out of it (§2.2). */}
         <p className="text-muted-foreground/70">{t('harnessReview.autoScanHint')}</p>
+      </div>
+
+      {/* The kill switch (harness-gate invariant 7). One checkbox and one muted
+          line, following the memory auto-confirm row: a default that makes things
+          live on their own has to be visible and reversible in the same place it
+          is explained. It governs FUTURE arrivals only — see handleAutoEnable. */}
+      <div className="pt-1 border-t border-border/60 space-y-1">
+        <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoEnable}
+            disabled={busy}
+            onChange={(e) => void handleAutoEnable(e.target.checked)}
+            className="mt-0.5 accent-brand disabled:opacity-50"
+          />
+          <span>{t('harnessReview.autoEnableLabel')}</span>
+        </label>
+        <p className="text-[10px] text-muted-foreground leading-relaxed pl-6">
+          {t('harnessReview.autoEnableHint')}
+        </p>
       </div>
 
       {/* Scope filter + banner: whether these harness items are global (every

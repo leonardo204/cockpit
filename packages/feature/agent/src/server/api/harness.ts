@@ -37,6 +37,8 @@ import {
 import { getStore } from '../engines/naby';
 import {
   importHarness,
+  readAutoEnableNabyHome,
+  writeAutoEnableNabyHome,
   type HarnessImportSummary,
   type HarnessWalkMode,
 } from '../lib/harnessImporter';
@@ -65,6 +67,12 @@ type HarnessStore = Pick<
   // HarnessSet, and merge an incoming set through the same gate (contract §5/§6).
   | 'exportHarnessSet'
   | 'importHarnessSet'
+  // The naby-home auto-enable switch (`harness.autoEnableNabyHome`). Read on the
+  // list (so the toggle paints in its true state) and written by its action; the
+  // SCAN reads it through this same store, which is why the route hands the store
+  // to the importer rather than passing a boolean down.
+  | 'getSetting'
+  | 'setSetting'
 >;
 
 // Injectable deps for the actions that reach beyond the store (the filesystem
@@ -116,11 +124,16 @@ function defaultDeps(store: HarnessStore): HarnessActionDeps {
 // `import` action below — and reading it COPIES it in, so what this scan finds
 // afterwards is naby's own file.
 //
-// THE TRUST GATE IS UNCHANGED. Everything the scan finds is `source:'external'`
-// and the store's gate lands it `status:'disabled'`. Scanning makes an item
-// VISIBLE and reviewable; only the explicit setEnabled action can ever make it
-// live. That invariant is the whole point of the import gate and this must not
-// weaken it.
+// THE TRUST GATE STILL DECIDES, AND THE SCAN STILL CANNOT MOVE A REVIEWED ROW.
+// Everything the scan finds is `source:'external'`. Since v1.9.1 a NEW row whose
+// file sits in the naby harness home arrives ENABLED (gate invariant 7): that file
+// got there through an install the user asked for in chat, and leaving it inert
+// behind an undiscoverable switch was the bug, not the safety. Everything else —
+// a vendor `.claude` import, a set import, an unknown origin — still lands
+// disabled (invariants 1/3), and NO scan can ever change an EXISTING row's status
+// (invariant 5), so a skill the user turned off stays off however many times the
+// tree is walked. The switch is `harness.autoEnableNabyHome`, read by the importer
+// (the gate itself stays pure).
 //
 // COST CONTROL. A scan walks a directory tree, so it is throttled per
 // scope+key: refetches inside the window skip it. It is deliberately NOT wired
@@ -295,6 +308,11 @@ export interface HarnessListResult {
    *  DISPLAY ONLY: the delete action re-decides the tier server-side, from the
    *  same function, and never trusts anything the client says about it. */
   nabyBases: string[];
+  /** Whether a NEW row found in the naby harness home arrives ENABLED
+   *  (harness-gate invariant 7, `harness.autoEnableNabyHome`; default on). Sent
+   *  with the list so the switch paints in its true state on first render rather
+   *  than flashing the default and correcting itself. */
+  autoEnableNabyHome: boolean;
 }
 
 export function listHarnessCommands(
@@ -337,9 +355,10 @@ export function listHarnessCommands(
   }
 
   // Reconcile the naby harness home into the store FIRST, so a skill installed to
-  // `~/.naby/skills/` since the last list shows up here (as a disabled,
-  // reviewable row) instead of being invisible until someone thinks to press
-  // Import. Throttled and non-throwing — see scanNabyHome.
+  // `~/.naby/skills/` since the last list shows up here — and, since v1.9.1,
+  // shows up ENABLED (gate invariant 7) rather than sitting inert until someone
+  // thinks to press Import and then a second switch. Throttled and non-throwing —
+  // see scanNabyHome.
   scanNabyHome(params.scope, scopeKey, deps);
 
   const rows = store.listHarness(params.scope, scopeKey, {
@@ -366,6 +385,7 @@ export function listHarnessCommands(
       scopeKey,
       items,
       nabyBases: nabyHarnessBases({ scope: params.scope, scopeKey }),
+      autoEnableNabyHome: readAutoEnableNabyHome(store),
     },
   };
 }
@@ -439,7 +459,13 @@ export type HarnessAction =
       scope: HarnessScope;
       scopeKey?: string;
       ids?: string[];
-    };
+    }
+  // The naby-home auto-enable switch (harness-gate invariant 7). Scope-free on
+  // purpose: it is a statement about how the OWNER wants their own harness home
+  // treated, not about one project. Off means naby-home arrivals behave as they
+  // did before v1.9.1 — visible, disabled, waiting for a click.
+  | { action: 'autoEnableNabyHome.get' }
+  | { action: 'autoEnableNabyHome.set'; enabled: boolean };
 
 // A conflict the merge resolved by landing an incoming item under a DISTINCT name
 // because a local ENABLED item already owns the original (scope,scopeKey,kind,name)
@@ -480,6 +506,8 @@ export type HarnessActionResult =
       set?: HarnessSet;
       landed?: HarnessItem[];
       conflicts?: HarnessImportSetConflict[];
+      /** The state of the naby-home auto-enable switch after a get/set. */
+      autoEnableNabyHome?: boolean;
     }
   | { ok: false; error: string };
 
@@ -803,6 +831,21 @@ export function runHarnessAction(
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
+    }
+
+    case 'autoEnableNabyHome.get':
+      return { ok: true, autoEnableNabyHome: readAutoEnableNabyHome(store) };
+
+    case 'autoEnableNabyHome.set': {
+      // Strictly boolean, like the memory opt-in: a missing or string-ish
+      // `enabled` must not decide a trust default by accident — in EITHER
+      // direction. (Silently turning it off would be as bad as silently turning
+      // it on: the user would install a skill and watch it do nothing.)
+      if (typeof body.enabled !== 'boolean') {
+        return { ok: false, error: 'enabled must be a boolean' };
+      }
+      writeAutoEnableNabyHome(store, body.enabled);
+      return { ok: true, autoEnableNabyHome: body.enabled };
     }
 
     default:

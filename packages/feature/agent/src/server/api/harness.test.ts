@@ -97,7 +97,7 @@ beforeEach(() => {
 // exercised without opening a real sqlite file. Only the five methods this route
 // touches are implemented; putHarnessItem mirrors the runtime gate just enough
 // (source:'user' honors requestedStatus) to assert the CRUD wiring.
-function fakeStore(seed: HarnessItem[] = []) {
+function fakeStore(seed: HarnessItem[] = [], settings: Record<string, string> = {}) {
   const rows = new Map<string, HarnessItem>();
   for (const r of seed) rows.set(r.id, r);
   let n = 0;
@@ -216,8 +216,17 @@ function fakeStore(seed: HarnessItem[] = []) {
       }
       return landed;
     },
+    // The settings slice the route reads/writes for the naby-home auto-enable
+    // switch. A plain object so a case can seed it ('0' = the kill switch thrown)
+    // and assert what the action wrote.
+    getSetting(key: string): string | undefined {
+      return settings[key];
+    },
+    setSetting(key: string, value: string): void {
+      settings[key] = value;
+    },
   };
-  return { store, calls, rows };
+  return { store, calls, rows, settings };
 }
 
 function makeCommand(over: Partial<HarnessItem> = {}): HarnessItem {
@@ -999,10 +1008,12 @@ describe('enable → list: the scan must not undo the review (v1.8.1 regression)
   it('an imported skill enabled in Settings is STILL enabled on the next list', () => {
     const { store, deps } = realWiring('do the review');
 
-    // 1) the panel opens: the scan discovers the skill, disabled and reviewable.
+    // 1) the panel opens: the scan discovers the skill. Since v1.9.1 a naby-home
+    //    skill arrives ENABLED (invariant 7) — this case is about what happens
+    //    AFTER a user decision, so it makes one: off, then on again.
     const discovered = listAll(store, deps);
     expect(discovered.map((i) => i.name)).toEqual(['review']);
-    expect(discovered[0].status).toBe('disabled');
+    runHarnessAction({ action: 'setEnabled', id: discovered[0].id, enabled: false }, store, deps);
 
     // 2) the user presses 활성화.
     const toggled = runHarnessAction(
@@ -1055,11 +1066,160 @@ describe('enable → list: the scan must not undo the review (v1.8.1 regression)
     expect(items[0].status).toBe('enabled');
   });
 
-  it('a NEVER-reviewed skill still arrives disabled (the gate is not weakened)', () => {
+  it('a user DISABLE also survives the scan (the same guarantee, other direction)', () => {
+    // The v1.9.1 direction of the same regression, and the one that matters now
+    // that arrivals are live: turning a skill OFF must not be undone by the next
+    // scan just because auto-enable is on.
     const { store, deps } = realWiring('do the review');
-    listAll(store, deps);
+    const id = listAll(store, deps)[0].id;
+    runHarnessAction({ action: 'setEnabled', id, enabled: false }, store, deps);
+
     resetHarnessScanThrottle();
     expect(listAll(store, deps)[0].status).toBe('disabled');
+    resetHarnessScanThrottle();
+    expect(listAll(store, deps)[0].status).toBe('disabled');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE INSTALL FLOW, end to end (v1.9.1, gate invariant 7).
+//
+// What the user actually does: asks for a skill in chat, skill-hub installs it
+// into `~/.naby/skills/<name>/SKILL.md`, and they go back to typing. Before this
+// change the skill was in the DB, visible in Settings, and DEAD — "/" never
+// offered it until they found a switch nothing had mentioned. These cases run the
+// REAL store (⇒ the real gate) and the REAL importer, and the assertion that
+// matters is that NO ACTION IS CALLED anywhere in them.
+// ---------------------------------------------------------------------------
+
+describe('install flow: a skill installed into the naby home is live without a click', () => {
+  function wiring(files: Record<string, string>, settings?: Record<string, string>) {
+    const store = new MemoryStore();
+    for (const [k, v] of Object.entries(settings ?? {})) store.setSetting(k, v);
+    const deps: HarnessActionDeps = {
+      importHarness: (args) =>
+        importHarness({ ...args, homeDir: '/home/me', store, fs: fakeTreeFs(files) }),
+      deleteSource: okDelete,
+      homeDir: '/home/me',
+    };
+    return { store, deps };
+  }
+
+  const installed = {
+    '/home/me/.naby/skills/hub-skill/SKILL.md':
+      '---\nname: hub-skill\ndescription: does the thing\n---\nDo the thing.',
+  };
+
+  it('the row the panel shows is ENABLED, and it is in the enabled-only list', () => {
+    const { store, deps } = wiring(installed);
+
+    const panel = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    expect(panel.ok).toBe(true);
+    if (!panel.ok) return;
+    expect(panel.data.items.map((i) => [i.name, i.status])).toEqual([['hub-skill', 'enabled']]);
+    // The switch's true state rides along so the checkbox paints correctly.
+    expect(panel.data.autoEnableNabyHome).toBe(true);
+
+    // What "/" and the per-turn skill injection read.
+    resetHarnessScanThrottle();
+    const live = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: 'enabled', kind: 'all' },
+      store,
+      deps,
+    );
+    expect(live.ok).toBe(true);
+    if (live.ok) expect(live.data.items.map((i) => i.name)).toEqual(['hub-skill']);
+  });
+
+  it('with the kill switch OFF it arrives disabled, exactly as before', () => {
+    const { store, deps } = wiring(installed, { 'harness.autoEnableNabyHome': '0' });
+    const panel = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    expect(panel.ok).toBe(true);
+    if (!panel.ok) return;
+    expect(panel.data.items[0].status).toBe('disabled');
+    expect(panel.data.autoEnableNabyHome).toBe(false);
+  });
+
+  it('a skill the user turned OFF stays off through every later scan', () => {
+    const { store, deps } = wiring(installed);
+    const id = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    if (!id.ok) throw new Error(id.error);
+    runHarnessAction({ action: 'setEnabled', id: id.data.items[0].id, enabled: false }, store, deps);
+
+    for (let i = 0; i < 3; i += 1) {
+      resetHarnessScanThrottle();
+      const again = listHarnessCommands(
+        { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+        store,
+        deps,
+      );
+      if (!again.ok) throw new Error(again.error);
+      expect(again.data.items[0].status).toBe('disabled');
+    }
+  });
+
+  it('the switch action writes the setting and reports the new state', () => {
+    const { store, deps } = wiring(installed);
+    const off = runHarnessAction({ action: 'autoEnableNabyHome.set', enabled: false }, store, deps);
+    expect(off).toMatchObject({ ok: true, autoEnableNabyHome: false });
+    expect(store.getSetting('harness.autoEnableNabyHome')).toBe('0');
+    expect(runHarnessAction({ action: 'autoEnableNabyHome.get' }, store, deps)).toMatchObject({
+      ok: true,
+      autoEnableNabyHome: false,
+    });
+
+    const on = runHarnessAction({ action: 'autoEnableNabyHome.set', enabled: true }, store, deps);
+    expect(on).toMatchObject({ ok: true, autoEnableNabyHome: true });
+    expect(store.getSetting('harness.autoEnableNabyHome')).toBe('1');
+  });
+
+  it('rejects a non-boolean enabled rather than guessing a trust default', () => {
+    const { store, deps } = wiring(installed);
+    const res = runHarnessAction(
+      { action: 'autoEnableNabyHome.set', enabled: 'yes' } as unknown as {
+        action: 'autoEnableNabyHome.set';
+        enabled: boolean;
+      },
+      store,
+      deps,
+    );
+    expect(res.ok).toBe(false);
+    expect(store.getSetting('harness.autoEnableNabyHome')).toBeUndefined();
+  });
+
+  it('turning the switch off does NOT disable skills that already landed', () => {
+    // A setting that silently killed a working skill would be a worse surprise
+    // than the one this feature removes. It governs future arrivals only.
+    const { store, deps } = wiring(installed);
+    const first = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    if (!first.ok) throw new Error(first.error);
+    expect(first.data.items[0].status).toBe('enabled');
+
+    runHarnessAction({ action: 'autoEnableNabyHome.set', enabled: false }, store, deps);
+    resetHarnessScanThrottle();
+    const after = listHarnessCommands(
+      { scope: 'user', scopeKey: null, status: null, kind: 'all' },
+      store,
+      deps,
+    );
+    if (!after.ok) throw new Error(after.error);
+    expect(after.data.items[0].status).toBe('enabled');
   });
 });
 
@@ -1231,9 +1391,14 @@ describe('delete must stick — a refused unlink tombstones (v1.8.2)', () => {
     runHarnessAction({ action: 'delete', id: alpha.id }, store, deps);
 
     resetHarnessScanThrottle();
-    // What "/" and the skill injection read.
-    expect(store.listHarness('user', DEFAULT_USER_ID, { status: 'enabled' })).toEqual([]);
-    expect(listPanel(store, deps, { status: 'enabled' }).items).toEqual([]);
+    // What "/" and the skill injection read. Its SIBLINGS are enabled too now
+    // (naby-home arrivals are live since v1.9.1), so the assertion is about the
+    // deleted one specifically: a tombstone is invisible to every enabled read.
+    const names = (rows: Array<{ name: string }>) => rows.map((r) => r.name);
+    expect(names(store.listHarness('user', DEFAULT_USER_ID, { status: 'enabled' }))).not.toContain(
+      'alpha',
+    );
+    expect(names(listPanel(store, deps, { status: 'enabled' }).items)).not.toContain('alpha');
   });
 
   it('export never serializes a tombstone', () => {

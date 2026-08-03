@@ -90,6 +90,30 @@
  * before this change — and set imports, which have no file at all — still need
  * one. It stays because those rows are on real disks.
  *
+ * A NABY-HOME ARRIVAL IS LIVE ON ARRIVAL (v1.9.1, harness-gate invariant 7).
+ * Everything above kept a NEW row disabled, which was right while "new row" meant
+ * "a file we found in somebody else's directory". It stopped being right when the
+ * skill-hub chat flow started installing INTO the naby harness home: the user asks
+ * for a skill in chat, the turn is gated and visible, the file lands in `~/.naby`
+ * — and then the skill does nothing until they find Settings and press a switch
+ * nothing told them about. So an artifact read from a NABY BASE is written with
+ * `autoEnable: true` and the gate grants the requested 'enabled' — for a NEW row
+ * only.
+ *   WHICH ARTIFACTS. Only ones read from a naby base (`job.vendor === false`)
+ *   whose origin is strictly inside one of `nabyHarnessBases(...)` — the same
+ *   function the delete tiers use to decide "is this file ours", so the two
+ *   answers cannot drift into a state where a row auto-enables but its file is
+ *   treated as a stranger's. A vendor artifact does NOT qualify even though the
+ *   copy lands in the naby home: what the flag records is that the ARRIVAL was
+ *   user-driven, and a `.claude` tree merely exists on disk.
+ *   WHAT IS UNAFFECTED. Existing rows — the flag is inert for them (invariant 7
+ *   checks `!existing`), so a skill the user disabled stays disabled through every
+ *   later scan, exactly as invariant 5 already promised. Tombstones, set imports
+ *   and unknown origins are untouched.
+ *   THE KILL SWITCH. `harness.autoEnableNabyHome` (default ON). Read HERE, once
+ *   per walk, and passed to the gate as a decided boolean — the gate is pure and
+ *   reads no settings.
+ *
  * INJECTABLE fs + store + homeDir. The filesystem, the store slice, and the home
  * directory are all parameters (defaulting to node `fs` / `getStore()` /
  * `os.homedir()`), so the whole walk+parse+gate flow is unit-testable against an
@@ -101,6 +125,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
 import { CLAUDE_HARNESS_DIR, NABY_HARNESS_DIR } from './harnessHome';
+// ONE definition of "this file is under a naby harness home", shared with the
+// delete tiers (harnessSource.ts). Auto-enable and tier-1 delete are the same
+// claim — "naby owns this file" — so they must not be two implementations.
+import { nabyHarnessBases, strictlyWithin } from './harnessSource';
 import type {
   HarnessImportRequest,
   HarnessItem,
@@ -155,6 +183,47 @@ export interface ImporterStore {
     scopeKey: string,
     opts?: { kind?: HarnessKind; status?: HarnessStatus },
   ): HarnessItem[];
+  /** The kill switch for naby-home auto-enable (`harness.autoEnableNabyHome`).
+   *  OPTIONAL like the read above: a store that cannot answer gets the documented
+   *  DEFAULT (on), because the default is a product decision and a fake store's
+   *  silence is not a user turning something off. */
+  getSetting?(key: string): string | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// The naby-home auto-enable switch (harness-gate invariant 7).
+// ---------------------------------------------------------------------------
+
+/** Settings key for "a skill installed into the naby harness home arrives ON".
+ *  Namespaced like the memory opt-in (`memory.autoConfirmCorroborated`). */
+export const HARNESS_AUTO_ENABLE_KEY = 'harness.autoEnableNabyHome';
+
+/**
+ * Is naby-home auto-enable on? DEFAULT ON — the whole point is that a skill the
+ * user asked for in chat works without a second, undiscoverable click.
+ *
+ * Stored as '1'/'0' and read as "anything that is not '0' is on", so an unset key
+ * (the overwhelming case) and a malformed value both fall to the default rather
+ * than silently disabling a feature the user never turned off. Turning it OFF is
+ * an explicit write of '0' from the settings toggle.
+ */
+export function readAutoEnableNabyHome(store: Pick<ImporterStore, 'getSetting'>): boolean {
+  if (!store.getSetting) return true;
+  try {
+    return (store.getSetting(HARNESS_AUTO_ENABLE_KEY) ?? '1') !== '0';
+  } catch {
+    // A settings read that throws must not change what lands; the default holds.
+    return true;
+  }
+}
+
+/** Write the switch. '1'/'0' rather than 'true'/'false' so an unset key and an
+ *  explicit off are distinguishable at a glance in the settings table. */
+export function writeAutoEnableNabyHome(
+  store: { setSetting(key: string, value: string): void },
+  enabled: boolean,
+): void {
+  store.setSetting(HARNESS_AUTO_ENABLE_KEY, enabled ? '1' : '0');
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +887,25 @@ export function importHarness(args: ImportHarnessArgs): HarnessImportSummary {
   // project => `<cwd>/.naby`), so the first is the answer.
   const nabyBase = nabyBases?.[0];
 
+  // AUTO-ENABLE ELIGIBILITY, resolved ONCE per walk (harness-gate invariant 7).
+  //
+  // Empty list => nothing auto-enables, which is the answer whenever the switch is
+  // off AND whenever the scope has no naby home this function can name.
+  //
+  // `nabyHarnessBases` is the DELETE TIER's function, used deliberately: "naby
+  // owns this file" must have one definition. It answers for `project` only when
+  // the scopeKey is the absolute project root — which is how the route addresses a
+  // project scope — so an exotic caller passing a cwd that is not its scopeKey
+  // simply gets no auto-enable rather than a row whose file the delete path would
+  // then decline to own.
+  const autoEnableBases = readAutoEnableNabyHome(args.store)
+    ? nabyHarnessBases({
+        scope: args.scope,
+        scopeKey: args.scopeKey,
+        ...(args.homeDir ? { homeDir: args.homeDir } : {}),
+      })
+    : [];
+
   const presentBases = (baseDirs ?? []).filter((dir) => fs.existsSync(dir));
   const [firstPresent] = presentBases;
   if (!firstPresent) return summary;
@@ -937,6 +1025,16 @@ export function importHarness(args: ImportHarnessArgs): HarnessImportSummary {
         continue;
       }
 
+      // A NEW row for a file the user had installed into their own naby harness
+      // home arrives LIVE (gate invariant 7). Vendor artifacts are excluded by
+      // `!job.vendor` even though their copy now sits in the naby home: the flag
+      // records that the ARRIVAL was user-driven, and reading `.claude` is
+      // "import everything that happens to be there", not a request for this
+      // skill. The containment check is belt-and-braces over `job.vendor` — the
+      // origin must actually be inside a base we would also delete files from.
+      const autoEnable =
+        !job.vendor && autoEnableBases.some((base) => strictlyWithin(base, origin));
+
       const req: HarnessImportRequest = {
         item: {
           scope: args.scope,
@@ -961,10 +1059,14 @@ export function importHarness(args: ImportHarnessArgs): HarnessImportSummary {
           ...(parsed.skill ? { skill: parsed.skill } : {}),
           ...(parsed.subagent ? { subagent: parsed.subagent } : {}),
         },
-        // Ask for enabled; for a new row the gate downgrades external to disabled
-        // regardless — asserting the import is genuinely inert, not merely
-        // defaulted.
+        // Ask for enabled. For a vendor-sourced new row the gate downgrades
+        // external to disabled regardless — asserting the import is genuinely
+        // inert, not merely defaulted. For a naby-home new row the `autoEnable`
+        // flag below is what lets the request through.
         requestedStatus: 'enabled',
+        // Invariant 7: NEW naby-home rows only, and only while the switch is on.
+        // An existing row is decided by `refresh` below, whatever this says.
+        ...(autoEnable ? { autoEnable: true } : {}),
         // This walk is a RE-READ of the local tree, so a row that already exists
         // at this same origin keeps the status the user gave it (harness-gate
         // invariant 5). Only this path sets the flag: an agent-driven write goes
