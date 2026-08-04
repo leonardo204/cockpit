@@ -25,7 +25,7 @@
  * form.
  */
 
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import type { Agent } from '../../../../../../dist/naby-runtime.mjs';
@@ -243,6 +243,7 @@ const AgentRow = memo(function AgentRow({
   cwd,
   onEdit,
   onRemove,
+  onLeaveSettings,
 }: {
   agent: Agent;
   busy: boolean;
@@ -250,12 +251,20 @@ const AgentRow = memo(function AgentRow({
   cwd?: string;
   onEdit: (a: Agent) => void;
   onRemove: (a: Agent) => void;
+  /** Passed straight through to the growth summary, whose fast-growth button
+   *  opens a session BEHIND this modal and therefore has to close it. */
+  onLeaveSettings?: () => void;
 }) {
   const { t } = useTranslation();
   const isPersona = agent.kind === 'persona';
-  // Collapsed by default, and MOUNTED ONLY WHEN OPEN: each panel is one
-  // `growth.get` that reads the agent's ledger, so an unopened row costs nothing.
-  const [showGrowth, setShowGrowth] = useState(false);
+  // THE GROWTH SUMMARY IS NO LONGER BEHIND A TOGGLE (settings-ia-reorg §3.1).
+  // What it renders is now three lines — stage, gauge, why it moved — and a row
+  // that hides its agent's stage behind a button makes the one number this
+  // product is about something you have to go looking for. The 35–60 line panel
+  // that justified the toggle is the REPORT, and that is still one click away
+  // (and still costs nothing until it is opened). The cost of the change is one
+  // `growth.get` per listed agent when Settings opens, which is the same request
+  // the row already made the moment anyone pressed the old button.
   return (
     <div className="rounded-lg border border-border p-2.5">
     <div className="flex items-start justify-between gap-2">
@@ -296,13 +305,6 @@ const AgentRow = memo(function AgentRow({
         ) : null}
       </div>
       <div className="flex gap-1.5 shrink-0">
-        <button
-          onClick={() => setShowGrowth((v) => !v)}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-brand/10 hover:border-brand/40 text-foreground"
-          aria-expanded={showGrowth}
-        >
-          {t('agentManager.growth', { defaultValue: 'Growth' })}
-        </button>
         {/* Both write actions are hidden for the built-in persona — the store
             refuses either one, so showing a button that can only fail would be a
             promise the product does not keep. */}
@@ -333,8 +335,13 @@ const AgentRow = memo(function AgentRow({
     {isPersona ? <PersonaDelegation /> : null}
     {/* `cwd` reaches the panel for the SAME reason the export button gets it
         (P3-M8c): it decides whether project-scope memory is counted in the
-        learning block. The trust reading itself ignores it. */}
-    {showGrowth ? <GrowthPanel agentId={agent.id} {...(cwd ? { cwd } : {})} /> : null}
+        learning block of the report. The trust reading itself ignores it. */}
+    <GrowthPanel
+      agentId={agent.id}
+      agentName={agent.name}
+      {...(cwd ? { cwd } : {})}
+      {...(onLeaveSettings ? { onLeaveSettings } : {})}
+    />
     {/* Its own line: the confirm step expands into a panel, which would break the
         header's flex row. */}
     <div className="mt-2">
@@ -344,12 +351,30 @@ const AgentRow = memo(function AgentRow({
   );
 });
 
-export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: string }) {
+export function NabyAgentManager({
+  isOpen,
+  cwd,
+  onLeaveSettings,
+}: {
+  isOpen: boolean;
+  cwd?: string;
+  /** Close the Settings modal — handed down to the growth summary, which opens a
+   *  fast-growth session in the workspace behind it. */
+  onLeaveSettings?: () => void;
+}) {
   const { t } = useTranslation();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<Form | null>(null);
+
+  // REF INDIRECTION (shell/CLAUDE.md's referential-stability rule). `AgentRow` is
+  // memo'd and this prop arrives from SettingsModal as its own `onClose`, which is
+  // an inline arrow in Workspace and therefore a new function on every render of
+  // the whole app shell. Held in a ref, the identity handed down never changes.
+  const leaveSettings = useRef(onLeaveSettings);
+  leaveSettings.current = onLeaveSettings;
+  const handleLeaveSettings = useCallback(() => leaveSettings.current?.(), []);
 
   // NOTE: there is deliberately no "editing the persona" state any more. The
   // editor only ever opens on a custom agent, because the persona row offers no
@@ -561,6 +586,7 @@ export function NabyAgentManager({ isOpen, cwd }: { isOpen: boolean; cwd?: strin
               {...(cwd ? { cwd } : {})}
               onEdit={(x) => setForm(toForm(x))}
               onRemove={(x) => void remove(x)}
+              onLeaveSettings={handleLeaveSettings}
             />
           ))}
         </div>

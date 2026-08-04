@@ -1,121 +1,47 @@
 'use client';
 
 /**
- * Phase 3 (P3-M5) — THE GROWTH PANEL: 알 → 애벌레 → 번데기 → 나비.
+ * Phase 3 (P3-M5) — THE GROWTH SUMMARY: 알 → 애벌레 → 번데기 → 나비.
  *
  * Reads `POST /api/naby {growth.get}` and shows how far an agent can be trusted,
  * with the one thing a meter like this owes its user: an honest reason when it
  * goes DOWN. A number that only ever rises is decoration; a number that falls
  * without explanation is worse than no number.
  *
- * WHAT THIS PANEL IS CAREFUL ABOUT
+ * WHAT IS LEFT HERE, AND WHAT MOVED (settings-ia-reorg §3.2). This file used to
+ * be the whole panel — gauge, axes, per-task-type breakdown, the decision list,
+ * the learning counts, three disclaimers — expanded inside the agent row. All of
+ * that is a READ-ONLY DASHBOARD sitting in the middle of a screen of switches, so
+ * it moved to `GrowthReportModal`. Three things stayed, because they are what a
+ * person reads at a glance and act on:
  *
- *  1. It says what does NOT move the meter. Users assume a "learning rate" counts
- *     conversations or stored memories. This one counts only whether naby's own
- *     recommendation matched what the user then chose, so the panel says so
- *     outright — otherwise the number looks arbitrary and gets ignored.
- *  2. The regression sentence is built from a REASON CODE plus real counts, never
+ *   1. the stage ladder and the gauge (or, in the egg, how far off measurement is),
+ *   2. ONE reason line — the sentence a falling meter owes its user,
+ *   3. two buttons: open the full report, and start a fast-growth session.
+ *
+ * WHAT THIS SUMMARY IS STILL CAREFUL ABOUT
+ *
+ *  1. The regression sentence is built from a REASON CODE plus real counts, never
  *     from prose the server wrote. `diagnoseChange` is deterministic, so the
  *     explanation is reproducible and cannot invent a cause; this file turns the
  *     code into the user's language.
- *  3. It never prints two numbers that disagree. In the egg stage the gauge is
- *     suppressed in favour of "how many more answers are needed", and a
- *     tripwire-blocked agent shows why the gauge stops just short.
- *  4. `boundDeltaPoints` is deliberately NOT rendered as a percentage — it is on
- *     the raw-bound scale, not the gauge's. The sentence leads with the counts a
- *     user can check against their own conversation instead.
- *  5. P3-M8c: the LEARNING block sits below a divider, in its own box, with its
- *     own heading and a closing line that says outright that none of it enters
- *     the butterfly judgement. It is the one place on this screen where counts
- *     appear, and rule 3 above is exactly why it has to disown the gauge: a user
- *     who reads "47 facts learned" next to "Egg — not measured yet" will believe
- *     the bigger number unless told, in that spot, which question each answers.
+ *  2. It never prints two numbers that disagree. In the egg stage the gauge is
+ *     suppressed in favour of "how many more answers are needed".
+ *  3. It fetches ONCE and hands the document to the report, so the overlay and
+ *     the row can never show two different readings of the same ledger.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SettingsDetails } from './SettingsDetails';
-
-/** The wire shape of `growth.get`. Declared locally, like the other naby action
- *  responses in this package: the panel is an HTTP client, not a server import. */
-type GrowthWire = {
-  stage: 'egg' | 'larva' | 'pupa' | 'butterfly';
-  percent: number;
-  addressable: boolean;
-  hits: number;
-  trials: number;
-  lifetimeHits: number;
-  lifetimeTrials: number;
-  needsMoreSamples: number;
-  coverage: number;
-  correctedAfter: number;
-  tripwires: number;
-  excluded: number;
-  /** P3-M8d — the implicit axis. RAW counts plus the weight they entered the
-   *  bound at; all three absent when nothing has been reviewed yet, which is
-   *  also when the sentence must not be rendered (it would read as "0 of 0"). */
-  implicitTrials?: number;
-  implicitHits?: number;
-  implicitWeight?: number;
-  blockedByTripwire?: boolean;
-  brier?: number;
-  brierSamples: number;
-  ask?: {
-    precision: number;
-    recall: number;
-    warrantedAsks: number;
-    unnecessaryAsks: number;
-    missedAsks: number;
-    correctSilences: number;
-    samples: number;
-  };
-  ledgerRows: number;
-  change: {
-    direction: 'up' | 'down' | 'flat';
-    code: 'not-measured' | 'new-pattern' | 'accuracy-drop' | 'accuracy-gain' | 'evidence-grew' | 'steady';
-    boundDeltaPoints: number;
-    taskType?: string;
-    recentMisses?: number;
-    recentTrials?: number;
-  };
-  byTaskType: Array<{
-    taskType: string;
-    stage: GrowthWire['stage'];
-    percent: number;
-    hits: number;
-    trials: number;
-  }>;
-  recentDecisions: Array<{
-    at: number;
-    question: string;
-    options: string[];
-    recommended: number;
-    chosen: number;
-    hit: boolean;
-    taskType?: string;
-    correction?: string;
-    excludedCode?: string;
-  }>;
-};
-
-/** The wire shape of the P3-M8c learning block. A SIBLING of `growth`, not a
- *  field inside it — see note 5 in the header. */
-type LearningWire = {
-  confirmedByScope: { session?: number; project?: number; user: number; org?: number };
-  confirmedTotal: number;
-  proposedCount: number;
-  corroborated2Plus: number;
-  distinctTaskTypes: number;
-  lastReflectionAt?: number;
-};
-
-const STAGES: Array<GrowthWire['stage']> = ['egg', 'larva', 'pupa', 'butterfly'];
-const GLYPH: Record<GrowthWire['stage'], string> = {
-  egg: '🥚',
-  larva: '🐛',
-  pupa: '🛡',
-  butterfly: '🦋',
-};
+import { publishTopic } from '@cockpit/effect-react';
+import { Topics } from '@cockpit/effect-services';
+import {
+  GrowthReportModal,
+  GLYPH,
+  STAGES,
+  type GrowthWire,
+  type LearningWire,
+} from './GrowthReportModal';
 
 type GrowthResponse = { growth: GrowthWire; learning: LearningWire | null };
 
@@ -133,19 +59,114 @@ async function fetchGrowth(agentId: string, cwd?: string): Promise<GrowthRespons
     // The learning block is OPTIONAL on the wire: an older server (or a store
     // that could not be read) simply omits it, and the section is not rendered.
     // The meter must never depend on it — that is the same separation the
-    // section's own copy states to the user.
+    // report's own copy states to the user.
     return { growth: json.growth, learning: json.learning ?? null };
   } catch {
     return null;
   }
 }
 
-export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string }) {
+export function GrowthPanel({
+  agentId,
+  agentName,
+  cwd,
+  onLeaveSettings,
+}: {
+  agentId: string;
+  /** The `@handle` this summary is about — passed through to the report, which
+   *  covers the row it was opened from and has to name it. */
+  agentName: string;
+  cwd?: string;
+  /** Close the Settings modal. Called ONLY after a fast-growth session has been
+   *  opened behind it — a modal that shut without putting anything in its place
+   *  would read as the button having dismissed Settings. Absent when this panel
+   *  is rendered somewhere that has no modal to close, in which case the button
+   *  falls back to telling the user where the session is. */
+  onLeaveSettings?: () => void;
+}) {
   const { t } = useTranslation();
   const [g, setG] = useState<GrowthWire | null>(null);
   const [learning, setLearning] = useState<LearningWire | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+
+  // P3-M12b — the fast-growth session. Four states rather than a boolean: the
+  // button has to say what happened, and "nothing visibly changed" is the one
+  // outcome a click must never produce. Declared with the other hooks, above the
+  // loading/failure early-returns, because hooks cannot live after a branch.
+  //
+  // `done` now means OPENED, not merely created — see `startFastGrowth`. It
+  // survives on screen for the moment before the modal closes, and is what the
+  // user reads in the fallback case where there is nothing to open into.
+  const [drillSession, setDrillSession] = useState<
+    'idle' | 'creating' | 'done' | 'created-not-opened' | 'failed'
+  >('idle');
+
+  const startFastGrowth = useCallback(async () => {
+    setDrillSession('creating');
+    try {
+      const res = await fetch('/api/naby', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'session.fastGrowth.create',
+          ...(cwd ? { cwd } : {}),
+          // THE NAME TRAVELS FROM HERE because the server has no locale. It is
+          // the same string the button carries, so the row that appears in the
+          // session list is recognisably the thing that was just pressed.
+          title: t('growth.fastSession.sessionTitle', { defaultValue: 'Fast-growth session' }),
+          // AND SO DO THE OPENING WORDS (fast-evolution §3.3b). The route fires
+          // one turn into the new session so naby is already asking when the tab
+          // opens; this is the sentence that turn is made of, and it is written
+          // in the user's language for the same reason the title is. It is a
+          // real message in a real transcript, so it says plainly what it is
+          // rather than pretending to be something the user typed.
+          kickoff: t('growth.fastSession.kickoff', {
+            defaultValue: 'Starting the fast-growth session.',
+          }),
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { ok?: boolean; sessionId?: string }
+        | null;
+      if (!res.ok || !json?.ok || !json.sessionId) {
+        setDrillSession('failed');
+        return;
+      }
+      // ---- GO THERE (the whole point of the button) -----------------------
+      //
+      // Two builds shipped with "it is at the top of your session list", and the
+      // user did not find it either time. A control that creates a conversation
+      // has to open the conversation; a sentence describing where it went is a
+      // treasure map, not navigation.
+      //
+      // NO NEW INFRASTRUCTURE. `Topics.OpenProject` is the existing "open this
+      // project at this session" message — the session-list rows in
+      // SessionBrowser and ProjectSessionsModal publish exactly this, and
+      // Workspace's window listener switches the project and posts SWITCH_SESSION
+      // into its iframe. Settings renders in that same top window, where
+      // `window.parent === window`, so `publishTopic` reaches the listener
+      // directly and no downward broadcast is needed (that half of
+      // `announceTopic` exists for subscribers INSIDE the iframes).
+      //
+      // IT NEEDS A PROJECT. `cwd` is the open project, and Workspace keys the
+      // whole open path on it; with no project on screen there is nowhere to
+      // navigate to, so the button degrades to the sentence it used to be —
+      // stated as a fallback rather than as the design.
+      if (cwd) {
+        publishTopic(Topics.OpenProject, { cwd, sessionId: json.sessionId });
+        setDrillSession('done');
+        // Closes AFTER the request to open has gone out, so the settings pane is
+        // never dismissed by a click that then failed to produce a session.
+        onLeaveSettings?.();
+      } else {
+        setDrillSession('created-not-opened');
+      }
+    } catch {
+      setDrillSession('failed');
+    }
+  }, [cwd, onLeaveSettings, t]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -225,11 +246,9 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
   const bar = 'h-1.5 rounded-full';
 
   return (
-    // Opens with a divider rather than a border: this panel expands INSIDE the
-    // agent row, which is already the one card the list is allowed. Everything
-    // below is separated by spacing and rules — see the reason line and the
-    // learning block, both of which used to be boxes of their own.
-    <div className="mt-2.5 space-y-2.5 border-t border-border pt-2.5" data-testid="growth-panel">
+    // Opens with a divider rather than a border: this summary sits INSIDE the
+    // agent row, which is already the one card the list is allowed.
+    <div className="mt-2.5 space-y-2 border-t border-border pt-2.5" data-testid="growth-panel">
       {/* stage ladder + gauge */}
       <div className="flex items-center gap-1.5">
         {STAGES.map((s, i) => {
@@ -254,11 +273,28 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
         // NO GAUGE IN THE EGG. A bound computed from three answers would paint a
         // confident-looking bar next to "not measured yet", and the user would
         // believe the bar. What is useful here is how far off measurement is.
+        //
+        // WHEN PRACTICE HAS HAPPENED, THE LINE SAYS SO — and still says the real
+        // check-ins are what is owed. Drills never satisfy the minimum sample
+        // (fast-evolution §3.4); that rule is not what changes here, the FEEDBACK
+        // is. A user who answered three practice questions and then read the same
+        // sentence as before their session has no way to tell the effort landed.
+        // Both facts, one line, from numbers the reading already carries — and
+        // deliberately NOT a second gauge: the egg gauge stays absent, so the
+        // numbers and the words keep saying the same thing.
         <div className="text-[11px] text-muted-foreground">
-          {t('growth.eggHint', {
-            defaultValue: 'Not measured yet — {{needed}} more answered check-in(s) to go.',
-            needed: Math.max(1, g.needsMoreSamples),
-          })}
+          {g.drillTrials !== undefined && g.drillTrials > 0
+            ? t('growth.eggHintWithDrills', {
+                defaultValue:
+                  'Not measured yet — {{needed}} more check-in(s) answered in real work to go · practice {{drills}} done ({{drillHits}} right).',
+                needed: Math.max(1, g.needsMoreSamples),
+                drills: g.drillTrials,
+                drillHits: g.drillHits ?? 0,
+              })
+            : t('growth.eggHint', {
+                defaultValue: 'Not measured yet — {{needed}} more answered check-in(s) to go.',
+                needed: Math.max(1, g.needsMoreSamples),
+              })}
         </div>
       ) : (
         <div>
@@ -276,11 +312,6 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
           </div>
         </div>
       )}
-
-      {/* what it means, and what it does NOT count */}
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        {t(`growth.meaning.${g.stage}`, { defaultValue: '' })}
-      </p>
 
       {/* the reason — the part the user reads when it went down.
           A LEFT ACCENT, not a box. This one line does need to stand apart from
@@ -300,325 +331,87 @@ export function GrowthPanel({ agentId, cwd }: { agentId: string; cwd?: string })
         {reason}
       </div>
 
-      {g.blockedByTripwire ? (
-        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
-          {t('growth.tripwireBlocked', {
+      {/* THE TWO BUTTONS. Everything the meter can say about itself is behind the
+          first; the one lever the user has over it is the second (P3-M12b) — it
+          sits here rather than in the report because the report is a reading, and
+          this is an action. Pressing it now OPENS the session (see
+          `startFastGrowth`) rather than leaving the user to find it. */}
+      <div className="flex flex-wrap items-center gap-1.5" data-testid="growth-fast-session">
+        <button
+          type="button"
+          onClick={() => setReportOpen(true)}
+          className="rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-accent"
+        >
+          {t('growth.report.open', { defaultValue: 'Growth report' })}
+        </button>
+        <button
+          type="button"
+          onClick={() => void startFastGrowth()}
+          disabled={drillSession === 'creating'}
+          // The SECOND-ORDER fact — that practice answers are discounted — stays
+          // on the control, because it is the kind of thing a person looks for
+          // once they already know what the button does. What the button IS is
+          // below, in the open, where hovering is not a prerequisite.
+          title={t('growth.fastSession.weight', {
             defaultValue:
-              'Accuracy has reached the line, but {{count}} action(s) were refused for safety recently. Until those fall out of the recent window it does not become a butterfly — a safety refusal is not averaged away.',
-            count: g.tripwires,
+              'Practice answers count for less than real check-ins, and they can never start the measurement.',
           })}
-        </p>
-      ) : null}
-
-      {/* the axes, stated plainly */}
-      <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-        <dt className="text-muted-foreground">{t('growth.axis.hitRate', { defaultValue: 'Guessed right' })}</dt>
-        <dd className="text-foreground text-right">
-          {t('growth.axis.hitRateValue', {
-            defaultValue: '{{hits}} of {{trials}}',
-            hits: g.hits,
-            trials: g.trials,
-          })}
-        </dd>
-        <dt className="text-muted-foreground">{t('growth.axis.coverage', { defaultValue: 'Handled without asking' })}</dt>
-        <dd className="text-foreground text-right">{Math.round(g.coverage * 100)}%</dd>
-        {g.excluded > 0 ? (
-          <>
-            <dt className="text-muted-foreground">{t('growth.axis.excluded', { defaultValue: 'Not counted' })}</dt>
-            <dd className="text-foreground text-right">
-              {t('growth.axis.excludedValue', { defaultValue: '{{count}} (padded or repeated)', count: g.excluded })}
-            </dd>
-          </>
-        ) : null}
-        {g.correctedAfter > 0 ? (
-          <>
-            <dt className="text-muted-foreground">{t('growth.axis.corrected', { defaultValue: 'Fixed afterwards' })}</dt>
-            <dd className="text-foreground text-right">{g.correctedAfter}</dd>
-          </>
-        ) : null}
-        <dt className="text-muted-foreground">{t('growth.axis.lifetime', { defaultValue: 'All time' })}</dt>
-        <dd className="text-foreground text-right">
-          {t('growth.axis.hitRateValue', {
-            defaultValue: '{{hits}} of {{trials}}',
-            hits: g.lifetimeHits,
-            trials: g.lifetimeTrials,
-          })}
-        </dd>
-      </dl>
-
-      {/* P3-M8d — THE IMPLICIT AXIS, as a sentence rather than a row in the
-          table above. It belongs here, next to the gauge, because unlike the
-          learning block at the bottom it DOES move the number — so the honest
-          thing is to say what it is (actions nobody objected to), what it is
-          worth (a fraction of an answered check-in, sent by the server so this
-          sentence cannot go stale if the constant is retuned) and why it is
-          worth less (silence is not agreement). Raw counts, never the weighted
-          product: "3.5 of 15" is a number no user can check against anything
-          they remember doing. */}
-      {g.implicitTrials !== undefined && g.implicitTrials > 0 ? (
-        <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="growth-implicit">
-          {t('growth.implicitAxis', {
-            defaultValue:
-              'It also acted on its own {{reviewed}} time(s) that were looked back over afterwards, and you left {{stood}} of them alone. Those count toward the gauge too, but each is worth {{weight}} of a check-in you actually answered — not objecting is weaker evidence than choosing.',
-            reviewed: g.implicitTrials,
-            stood: g.implicitHits ?? 0,
-            weight: g.implicitWeight ?? 0,
-          })}
-        </p>
-      ) : null}
-
-      {/* the second tier. Shown as SENTENCES, not scores: "Brier 0.09" means
-          nothing to a person deciding whether to delegate, while "it is right
-          about as often as it says it is" does. */}
-      {g.brier !== undefined || g.ask ? (
-        <div className="space-y-1 border-t border-border pt-2">
-          <div className="text-[10px] font-medium text-muted-foreground">
-            {t('growth.secondTier', { defaultValue: 'Two other things worth knowing' })}
-          </div>
-          {g.brier !== undefined ? (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              {/* 0.25 is what an agent scores by always saying "50% sure", so it is
-                  the line where stated confidence starts carrying information. */}
-              {g.brier < 0.25
-                ? t('growth.calibrationGood', {
-                    defaultValue:
-                      'When it says how sure it is, that number is worth reading — it has been about as right as it claimed, across {{count}} answer(s).',
-                    count: g.brierSamples,
-                  })
-                : t('growth.calibrationPoor', {
-                    defaultValue:
-                      'How sure it says it is does not track how often it is right yet ({{count}} answer(s)). Read the recommendation, not its confidence.',
-                    count: g.brierSamples,
-                  })}
-            </p>
-          ) : null}
-          {g.ask ? (
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              {/* The PAIR, never precision alone: a flawless agent scores 0
-                  precision because every ask turned out to be unnecessary, and
-                  showing that number by itself would read as a failing grade. */}
-              {t('growth.askQuality', {
-                defaultValue:
-                  'Of the times it asked, {{warranted}} of {{asked}} turned out to be worth asking. It acted alone {{silent}} time(s) without needing a fix, and {{missed}} time(s) you had to correct it.',
-                warranted: g.ask.warrantedAsks,
-                asked: g.ask.warrantedAsks + g.ask.unnecessaryAsks,
-                silent: g.ask.correctSilences,
-                missed: g.ask.missedAsks,
-              })}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {/* per-task-type: trust is graduated, not global */}
-      {g.byTaskType.length > 0 ? (
-        <div>
-          <div className="text-[10px] font-medium text-muted-foreground">
-            {t('growth.byTaskType', { defaultValue: 'By kind of work' })}
-          </div>
-          <div className="mt-1 space-y-0.5">
-            {g.byTaskType.map((tt) => (
-              <div key={tt.taskType} className="flex items-center justify-between text-[11px]">
-                <span className="font-mono text-foreground truncate">{tt.taskType}</span>
-                <span className="text-muted-foreground shrink-0">
-                  {GLYPH[tt.stage]} {stageName(tt.stage)} · {tt.hits}/{tt.trials}
-                </span>
-              </div>
-            ))}
-          </div>
-          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
-            {t('growth.byTaskTypeHint', {
-              defaultValue:
-                'A new kind of work starts in its own egg instead of dragging the overall number down.',
-            })}
-          </p>
-        </div>
-      ) : null}
-
-      {/* the decisions themselves, so the number is auditable */}
-      {g.recentDecisions.length > 0 ? (
-        <details>
-          <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
-            {t('growth.recent', { defaultValue: 'What it asked, and what you chose' })}
-          </summary>
-          {/* Inset dividers, not one box per decision: these are rows inside an
-              already-nested disclosure, and boxing each would put a rectangle
-              three levels deep. The rule between them does the separating. */}
-          <div className="mt-1 divide-y divide-border/60">
-            {g.recentDecisions.map((d, i) => (
-              <div key={`${d.at}:${i}`} className="py-1.5 first:pt-0 last:pb-0">
-                <div className="flex items-start gap-1.5">
-                  <span className="text-[11px] leading-4">{d.hit ? '🦋' : '🐛'}</span>
-                  <span className="flex-1 text-[11px] leading-4 text-foreground">{d.question}</span>
-                </div>
-                <div className="mt-0.5 pl-5 text-[10px] leading-4 text-muted-foreground">
-                  {d.chosen >= 0
-                    ? t('growth.recentChose', {
-                        defaultValue: 'you chose: {{option}}',
-                        option: d.options[d.chosen] ?? '',
-                      })
-                    : t('growth.recentCorrected', {
-                        defaultValue: 'you answered in your own words: {{text}}',
-                        text: d.correction ?? '',
-                      })}
-                  {!d.hit && d.options[d.recommended]
-                    ? ` · ${t('growth.recentRecommended', {
-                        defaultValue: 'it had recommended: {{option}}',
-                        option: d.options[d.recommended] ?? '',
-                      })}`
-                    : ''}
-                </div>
-                {d.excludedCode ? (
-                  <div className="mt-0.5 pl-5 text-[10px] text-amber-700 dark:text-amber-400">
-                    {t('growth.recentExcluded', {
-                      defaultValue: 'not counted — {{reason}}',
-                      // The server sends a CODE; anything unrecognised (a row from
-                      // before codes existed) falls back to showing it verbatim
-                      // rather than a blank line.
-                      reason: t(`growth.excluded.${d.excludedCode}`, { defaultValue: d.excludedCode }),
-                    })}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
-
-      {/* THE TRUST STATEMENT. Without this the number reads as arbitrary.
-          P3-M8d amended it rather than leaving it: "only when naby asks" stopped
-          being true the day reviewed actions started entering the bound, and a
-          disclaimer that is slightly false is worse than none — it is the
-          sentence a user checks the rest of the panel against. */}
-      <div className="border-t border-border pt-2">
-        <p className="text-[10px] leading-relaxed text-muted-foreground/80">
-          {t('growth.howItMoves', {
-            defaultValue:
-              'This moves when naby says how it would proceed and you pick the same thing — not with how much you talk to it.',
-          })}
-        </p>
-        {/* The claim above is the load-bearing one and stays visible; what it
-            said in its other two sentences — how a reviewed silent action is
-            weighted, and that the number can fall — is elaboration of the same
-            claim, so it moved one tap away rather than staying in the wall. */}
-        <SettingsDetails>
-          <p>
-            {t('growth.howItMovesMore', {
-              defaultValue:
-                'Something it did without asking, looked back over later and left alone, counts too but for much less. It can fall when your patterns change.',
-            })}
-          </p>
-        </SettingsDetails>
+          className="rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-accent disabled:opacity-50"
+        >
+          {t('growth.fastSession.button', { defaultValue: 'Fast-growth session' })}
+        </button>
       </div>
 
-      {/* ------------------------------------------------------------------
-          P3-M8c — WHAT IT HAS LEARNED. Below everything the meter said, because
-          these are counts and the paragraph directly above has just finished
-          explaining that counts do not move the gauge. Reading the two in that
-          order is the point: the disclaimer arrives before the numbers, and
-          again after them.
+      {/* WHAT THE BUTTON ABOVE IS, ALWAYS VISIBLE, IN ONE SENTENCE.
+          It used to live in a `title`, and a tooltip is not an explanation: the
+          user pressed this control twice, across two builds, and still could not
+          say what it was — which is what a hover-only affordance buys on a
+          surface nobody hovers over. One sentence is the pane's standing rule
+          (settingsLayout.test.ts), and one sentence is all this needs; the
+          discount caveat stayed on the button, where a second-order fact
+          belongs. */}
+      <p
+        className="text-[10px] leading-relaxed text-muted-foreground"
+        data-testid="growth-fast-session-hint"
+      >
+        {t('growth.fastSession.hint', {
+          defaultValue:
+            'A fast-growth session is a conversation of its own, where naby asks about you and sets practice decisions so it learns faster than ordinary work allows.',
+        })}
+      </p>
 
-          A DIVIDER AND A HEADING, not a box. The block used to be bordered and
-          tinted so it would read as a separate claim; the heading plus the rule
-          above it says that just as clearly, and the panel it sits in is already
-          inside a bordered row.
-          ------------------------------------------------------------------ */}
-      {learning ? (
-        <div
-          className="border-t border-border pt-2"
-          data-testid="growth-learning"
-        >
-          <div className="text-[10px] font-medium text-foreground/80">
-            {t('growth.learning.title', { defaultValue: 'What it has learned so far' })}
-          </div>
-          <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-            <dt className="text-muted-foreground">
-              {t('growth.learning.confirmed', { defaultValue: 'Facts in use' })}
-            </dt>
-            <dd className="text-foreground text-right">
-              {t('growth.learning.confirmedValue', {
-                defaultValue: '{{count}}',
-                count: learning.confirmedTotal,
-              })}
-            </dd>
-            {/* The per-scope split only when there IS a split to show. On a
-                machine with no project open, "user 4 / project 0" would invent a
-                distinction the user cannot act on. */}
-            {learning.confirmedByScope.project !== undefined ? (
-              <>
-                <dt className="text-muted-foreground">
-                  {t('growth.learning.byScope', { defaultValue: 'Of those, by where they apply' })}
-                </dt>
-                <dd className="text-foreground text-right">
-                  {t('growth.learning.byScopeValue', {
-                    defaultValue: '{{user}} everywhere · {{project}} in this project',
-                    user: learning.confirmedByScope.user,
-                    project: learning.confirmedByScope.project,
-                  })}
-                </dd>
-              </>
-            ) : null}
-            {learning.proposedCount > 0 ? (
-              <>
-                <dt className="text-muted-foreground">
-                  {t('growth.learning.proposed', { defaultValue: 'Waiting for your review' })}
-                </dt>
-                <dd className="text-foreground text-right">
-                  {t('growth.learning.proposedValue', {
-                    defaultValue: '{{count}}',
-                    count: learning.proposedCount,
-                  })}
-                </dd>
-              </>
-            ) : null}
-            {learning.corroborated2Plus > 0 ? (
-              <>
-                <dt className="text-muted-foreground">
-                  {t('growth.learning.corroborated', { defaultValue: 'Said in more than one chat' })}
-                </dt>
-                <dd className="text-foreground text-right">
-                  {t('growth.learning.corroboratedValue', {
-                    defaultValue: '{{count}}',
-                    count: learning.corroborated2Plus,
-                  })}
-                </dd>
-              </>
-            ) : null}
-            <dt className="text-muted-foreground">
-              {t('growth.learning.taskTypes', { defaultValue: 'Kinds of work seen' })}
-            </dt>
-            <dd className="text-foreground text-right">
-              {t('growth.learning.taskTypesValue', {
-                defaultValue: '{{count}}',
-                count: learning.distinctTaskTypes,
-              })}
-            </dd>
-          </dl>
-          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
-            {learning.lastReflectionAt
-              ? t('growth.learning.lastReflection', {
-                  defaultValue: 'It last looked back over a finished conversation on {{when}}.',
-                  when: new Date(learning.lastReflectionAt).toLocaleString(),
+      {/* The OUTCOME of that click, which is the one thing a button that opens
+          something elsewhere owes the person who pressed it. Three outcomes, not
+          two: opened, created-but-there-was-nowhere-to-open-it, and failed. The
+          middle one is the honest report of the fallback path — saying "opened"
+          when nothing moved is how the previous version misled. */}
+      {drillSession !== 'idle' ? (
+        <p className="text-[10px] leading-relaxed text-muted-foreground/80">
+          {drillSession === 'creating'
+            ? t('growth.fastSession.opening', { defaultValue: 'Opening…' })
+            : drillSession === 'done'
+            ? t('growth.fastSession.created', {
+                defaultValue:
+                  'The fast-growth session is open — say hello and naby will start asking.',
+              })
+            : drillSession === 'created-not-opened'
+              ? t('growth.fastSession.createdNoOpen', {
+                  defaultValue:
+                    'Created. Open "Fast-growth session" from the top of your session list.',
                 })
-              : t('growth.learning.neverReflected', {
-                  defaultValue: 'It has not looked back over a finished conversation yet.',
+              : t('growth.fastSession.failed', {
+                  defaultValue: 'The session could not be created.',
                 })}
-          </p>
-          {/* THE DISOWNING SENTENCE (spec §6.3, trust-meter §9.2 rule 2). Not
-              optional and not a tooltip: it is the only thing standing between
-              these counts and being read as the growth number. */}
-          <p className="mt-1 border-t border-border pt-1.5 text-[10px] leading-relaxed text-muted-foreground/80">
-            {t('growth.learning.notTheGauge', {
-              // Shortened to one sentence, but it still NAMES the butterfly
-              // judgement and still denies it — `growthCopy.test.ts` enforces
-              // both, because a disowning sentence that only gestures at "the
-              // score" leaves two numbers on one screen disagreeing.
-              defaultValue:
-                'These numbers do not enter the butterfly judgement — they show WHAT it has learned, not whether it can be trusted.',
-            })}
-          </p>
-        </div>
+        </p>
       ) : null}
+
+      <GrowthReportModal
+        isOpen={reportOpen}
+        onClose={() => setReportOpen(false)}
+        agentName={agentName}
+        growth={g}
+        learning={learning}
+      />
     </div>
   );
 }

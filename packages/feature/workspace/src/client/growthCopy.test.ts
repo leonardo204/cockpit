@@ -59,6 +59,11 @@ const DYNAMIC_KEYS = [
 
 const SOURCES = [
   'feature/workspace/src/client/GrowthPanel.tsx',
+  // settings-ia-reorg §3.2: most of the panel's copy moved into the report
+  // overlay. Same keys, same sentences, one file further out — so the scan has
+  // to follow them, or two thirds of this milestone's copy would stop being
+  // checked the moment it moved.
+  'feature/workspace/src/client/GrowthReportModal.tsx',
   'feature/agent/src/client/CheckinPrompt.tsx',
   // P3-M6: the export confirmation is the same kind of surface — it explains to
   // the user what is about to leave their machine, and an English fallback there
@@ -96,6 +101,12 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         ['growth.reason.accuracyDrop', ['{{misses}}', '{{trials}}']],
         ['growth.reason.accuracyGain', ['{{misses}}', '{{trials}}']],
         ['growth.eggHint', ['{{needed}}']],
+        // The egg line AFTER a fast-growth session. All three counts are the
+        // point of the sentence: a translation that dropped {{drills}} would tell
+        // a user who just answered three practice questions the same thing it told
+        // them before the session, which is the exact silence this key exists to
+        // end (fast-evolution §3.4).
+        ['growth.eggHintWithDrills', ['{{needed}}', '{{drills}}', '{{drillHits}}']],
         ['growth.tripwireBlocked', ['{{count}}']],
         ['growth.axis.hitRateValue', ['{{hits}}', '{{trials}}']],
         ['growth.calibrationGood', ['{{count}}']],
@@ -137,6 +148,13 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         // which is the same failure the corroboration threshold avoids by being
         // interpolated rather than typed into the sentence.
         ['growth.implicitAxis', ['{{reviewed}}', '{{stood}}', '{{weight}}']],
+        // WHERE THE PENDING COUNT IS SPOKEN, now that it is spoken in exactly one
+        // place. A bare "1" on the memory nav row was reported as unreadable
+        // ("'1'은 무슨 의미죠?"); the tooltip that was meant to answer it never
+        // rendered in Electron, so the badge went and the inbox heading kept the
+        // count. A translation that dropped the placeholder would leave "확인할
+        // 것" over a list with no number on the screen at all.
+        ['memoryReview.summaryPendingCount', ['{{count}}']],
       ];
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');

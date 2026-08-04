@@ -202,6 +202,64 @@ describe('growthRead — the implicit axis reaches the wire (P3-M8d)', () => {
   });
 });
 
+describe('growthRead — the drill axis reaches the wire (P3-M12c)', () => {
+  it('reports real and practice counts SEPARATELY, so the panel can print both', () => {
+    const rows = [
+      ...Array.from({ length: 5 }, () => row({ hit: true })),
+      ...Array.from({ length: 4 }, () => row({ drill: true, hit: true })),
+      row({ drill: true, hit: false }),
+    ];
+    const report = growthReport(fakeStore(rows), 'a1');
+    // The real record is exactly what it was — practice does not touch the
+    // numbers the panel prints as "guessed right, N of M".
+    expect(report.hits).toBe(5);
+    expect(report.trials).toBe(5);
+    expect(report.lifetimeTrials).toBe(5);
+    // …and the practice is reported raw, with the weight it entered at.
+    expect(report.drillTrials).toBe(5);
+    expect(report.drillHits).toBe(4);
+    expect(report.drillWeight).toBe(0.5);
+  });
+
+  it('marks a practice question in the decision list rather than hiding it', () => {
+    const rows = [
+      row({ question: 'real one?', options: ['a', 'b'], recommended: 0, chosen: 0, hit: true }),
+      row({
+        question: 'practice one?',
+        options: ['a', 'b'],
+        recommended: 0,
+        chosen: 1,
+        hit: false,
+        drill: true,
+      }),
+    ];
+    const decisions = growthReport(fakeStore(rows), 'a1').recentDecisions;
+    // Newest first. The list is what makes the gauge auditable, so an invented
+    // scenario sitting in it unlabelled would read as a real decision.
+    expect(decisions[0]).toMatchObject({ question: 'practice one?', drill: true });
+    expect(decisions[1]?.drill).toBeUndefined();
+  });
+
+  it('omits the drill fields entirely when nothing has been practised', () => {
+    const rows = Array.from({ length: 5 }, () => row({ hit: true }));
+    const report = growthReport(fakeStore(rows), 'a1');
+    expect(report.drillTrials).toBeUndefined();
+    expect(report.drillHits).toBeUndefined();
+    expect(report.drillWeight).toBeUndefined();
+  });
+
+  it('a practice question still counts as HAVING BEEN ASKED for the duplicate check', () => {
+    // `recentQuestions` filters by kind, not by the drill flag, which is what
+    // makes the degenerate defence cover practice with no extra code: naby cannot
+    // ask one easy question twenty ways and bank twenty answers.
+    const rows = [
+      row({ question: 'practice one?', drill: true, hit: true }),
+      row({ question: 'real one?', hit: true }),
+    ];
+    expect(recentQuestions(fakeStore(rows), 'a1')).toEqual(['real one?', 'practice one?']);
+  });
+});
+
 /**
  * THE `@` GATE (P3-M9, G2). One function, one read, two surfaces — the palette
  * (api/commands.ts) and engine routing both call `isAddressable`, so the menu can

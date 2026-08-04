@@ -1,4 +1,30 @@
 import { describe, it, expect, afterAll, afterEach, beforeAll, vi } from 'vitest';
+
+/**
+ * NO TEST IN THIS FILE MAY REACH AN ENGINE.
+ *
+ * `session.fastGrowth.create` fires the session's opening turn (fast-evolution
+ * §3.3b) through `dispatchChat`. Unmocked, that runs naby's preflight against
+ * whatever this machine has configured — which on a developer's laptop with a
+ * Claude sign-in is a REAL model turn, started by a test that is only asserting
+ * that a title was stored. The mock is the barrier; it also lets the assertions
+ * below count the kickoffs.
+ *
+ * The behaviour of the kickoff itself lives in `lib/fastGrowthKickoff.test.ts`.
+ */
+const engine = vi.hoisted(() => ({ dispatches: [] as { sessionId?: string; prompt?: unknown }[] }));
+
+vi.mock('../engines/orchestrator', () => ({
+  dispatchChat: async (_spec: unknown, body: Record<string, unknown>) => {
+    engine.dispatches.push({
+      sessionId: body.sessionId as string | undefined,
+      prompt: body.prompt,
+    });
+    // The shape preflight answers with when nothing is configured. Creation must
+    // survive it — that is the graceful-degradation half of §3.3b.
+    return { ok: false as const, status: 503, error: 'no engine configured in tests' };
+  },
+}));
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +41,10 @@ import {
   SYSTEM_MCP_PRESET_NAMES,
 } from '../lib/systemMcp';
 import { commandPathEnvVar } from '../lib/commandPath';
+// The rename key, imported rather than respelled: the assertions below are about
+// the fast-growth session landing in the SAME place a manual rename does, and a
+// literal here would keep passing if the route drifted onto a key of its own.
+import { customTitleKey } from '../state/recentSessions';
 import {
   BUILTIN_PERSONA_ID,
   DEFAULT_USER_ID,
@@ -991,6 +1021,195 @@ describe('POST /api/naby — session.noLearn (P3-M10 §3)', () => {
     expect(result.ok).toBe(true);
     const listed = await runNabyAction({ action: 'session.noLearn.list' });
     if (listed.ok) expect(listed.noLearnSessions).not.toContain('no-such-session-at-all');
+  });
+});
+
+/**
+ * P3-M12b — the fast-growth session (fast-evolution §3.3).
+ *
+ * The schema-v11 column round trip, through the ONE surface that may set it. The
+ * flag decides how the ledger weighs everything the session produces, so what is
+ * really being pinned here is that it comes from a USER ACTION on an HTTP action
+ * and is read back through `SessionRef.fastGrowth` — the exact field the engine
+ * stamps its drill rows from.
+ */
+describe('POST /api/naby — session.fastGrowth (P3-M12b §3.3)', () => {
+  it('creates a session that is ALREADY marked, so its first turn is a drill', async () => {
+    const created = await runNabyAction({ action: 'session.fastGrowth.create' });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.fastGrowth).toBe(true);
+    expect(typeof created.sessionId).toBe('string');
+
+    // Read back through the SAME field the engine reads at the top of a turn.
+    // Marking AFTER creation would leave a window in which the opening check-in —
+    // the one the user pressed the button for — was scored as real work.
+    const store = getStore();
+    expect(store.getSession(created.sessionId!)?.fastGrowth).toBe(true);
+  });
+
+  it('carries the cwd through, so the session belongs to the open project', async () => {
+    const created = await runNabyAction({
+      action: 'session.fastGrowth.create',
+      cwd: '/tmp/naby-fast-growth-project',
+    });
+    if (!created.ok) return;
+    expect(getStore().getSession(created.sessionId!)?.cwd).toBe('/tmp/naby-fast-growth-project');
+  });
+
+  /**
+   * THE SESSION HAS A NAME BEFORE IT HAS A MESSAGE.
+   *
+   * Reported twice by the same user: they pressed the button, were told the
+   * session was "at the top of your session list", and could not find it. It was
+   * there — untitled, deriving its name the ordinary way from a first message
+   * that did not exist yet, so it read as `Untitled Session` among the other
+   * sessions. The one conversation they had deliberately created was the one
+   * that looked like nothing.
+   *
+   * Both places a name can live are asserted, because the two session views read
+   * DIFFERENT fields: the per-project browser derives from `sessions.title`
+   * (`deriveTitle` prefers it over the first message) and the recent list reads
+   * the rename key. Writing only one of them fixes the list the developer
+   * happened to open.
+   */
+  it('names the session at creation, in both places a session name lives', async () => {
+    const created = await runNabyAction({
+      action: 'session.fastGrowth.create',
+      title: '빠른 성장 세션',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const store = getStore();
+    // The row the project session browser derives its title from.
+    expect(store.getSession(created.sessionId!)?.title).toBe('빠른 성장 세션');
+    // The rename key the RECENT list reads, and the one the v1.6.0 rename writes
+    // — which is what makes this survive auto-titling: a custom title outranks a
+    // derived one by construction, so the first user message cannot replace it.
+    expect(store.getSetting(customTitleKey(created.sessionId!))).toBe('빠른 성장 세션');
+    // Echoed back so the client renders what was STORED, not what it asked for.
+    expect(created.title).toBe('빠른 성장 세션');
+  });
+
+  it('still names an untitled request, rather than reopening the bug', async () => {
+    // The words come from the client because this server has no locale. A
+    // request without them must not fall back to the empty title that WAS the
+    // bug — an English name is worse than a Korean one and far better than none.
+    const created = await runNabyAction({ action: 'session.fastGrowth.create' });
+    if (!created.ok) return;
+    expect(getStore().getSession(created.sessionId!)?.title).toBe('Fast-growth session');
+  });
+
+  it('bounds the title — a name is a row in a list, not a paragraph', async () => {
+    const created = await runNabyAction({
+      action: 'session.fastGrowth.create',
+      title: `  ${'가'.repeat(200)}  `,
+    });
+    if (!created.ok) return;
+    const stored = getStore().getSession(created.sessionId!)?.title ?? '';
+    expect(stored.length).toBe(60);
+    // Trimmed before it was cut, so the bound is spent on the name.
+    expect(stored.startsWith('가')).toBe(true);
+  });
+
+  it('leaves the auto-title path alone for every other session', async () => {
+    // The custom-title key is per session. A fast-growth create that wrote a
+    // global default would rename the whole recent list to "Fast-growth session".
+    const store = getStore();
+    const ordinary = `ordinary-title-${Date.now()}`;
+    store.touchSession(ordinary, 'test-provider');
+    await runNabyAction({ action: 'session.fastGrowth.create', title: 'X' });
+    expect(store.getSetting(customTitleKey(ordinary))).toBeUndefined();
+    expect(store.getSession(ordinary)?.title).toBeUndefined();
+  });
+
+  it('marks and clears an existing session, and absent means off', async () => {
+    const store = getStore();
+    const sessionId = `fast-growth-${Date.now()}`;
+    store.touchSession(sessionId, 'test-provider');
+
+    const set = await runNabyAction({ action: 'session.fastGrowth.set', sessionId, fastGrowth: true });
+    expect(set).toMatchObject({ ok: true, fastGrowth: true });
+    expect(store.getSession(sessionId)?.fastGrowth).toBe(true);
+
+    const cleared = await runNabyAction({
+      action: 'session.fastGrowth.set',
+      sessionId,
+      fastGrowth: false,
+    });
+    expect(cleared).toMatchObject({ ok: true, fastGrowth: false });
+    // Absent rather than `false`, exactly like `noLearn`: every reader uses
+    // `=== true` and they all mean the same thing.
+    expect(store.getSession(sessionId)?.fastGrowth).toBeUndefined();
+  });
+
+  it('requires a sessionId and a boolean', async () => {
+    expect(
+      (await runNabyAction({ action: 'session.fastGrowth.set', sessionId: '', fastGrowth: true })).ok,
+    ).toBe(false);
+    const bad = await runNabyAction({
+      action: 'session.fastGrowth.set',
+      sessionId: 's1',
+      // @ts-expect-error — exercising the runtime guard.
+      fastGrowth: 'yes',
+    });
+    expect(bad.ok).toBe(false);
+  });
+
+  it('leaves every other session alone — the flag is per conversation', async () => {
+    const store = getStore();
+    const ordinary = `ordinary-${Date.now()}`;
+    store.touchSession(ordinary, 'test-provider');
+    await runNabyAction({ action: 'session.fastGrowth.create' });
+    expect(store.getSession(ordinary)?.fastGrowth).toBeUndefined();
+  });
+
+  /**
+   * §3.3b — THE ROUTE FIRES THE OPENING TURN, AND SURVIVES IT FAILING.
+   *
+   * The user pressed the button, arrived at an empty conversation and had to
+   * type "시작" before naby said anything. `create` now dispatches one turn into
+   * the session it minted. What is asserted HERE is the route's half: that the
+   * turn is attempted on create and on nothing else, and — the part that
+   * decides whether a machine with no engine can use this feature at all — that
+   * a refused dispatch still returns a created session.
+   */
+  it('fires the opening turn on create, and answers ok even when it is refused', async () => {
+    engine.dispatches.length = 0;
+    const created = await runNabyAction({
+      action: 'session.fastGrowth.create',
+      kickoff: '빠른 성장 세션을 시작합니다.',
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    // The mocked engine refuses every dispatch, and the response is still a
+    // created, marked, named session. A kickoff that could fail the creation
+    // would mean no engine, no fast-growth session.
+    expect(created.sessionId).toBeTruthy();
+    expect(created.fastGrowth).toBe(true);
+    expect(getStore().getSession(created.sessionId!)?.fastGrowth).toBe(true);
+
+    // The dispatch is not awaited by the route, so it may land a tick later.
+    const t0 = Date.now();
+    while (engine.dispatches.length === 0 && Date.now() - t0 < 2000) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(engine.dispatches).toHaveLength(1);
+    expect(engine.dispatches[0]!.sessionId).toBe(created.sessionId);
+    expect(engine.dispatches[0]!.prompt).toBe('빠른 성장 세션을 시작합니다.');
+  });
+
+  it('fires nothing when an existing session is merely marked', async () => {
+    // `set` is for a conversation that already exists and may be mid-thread. An
+    // opening question dropped into it would interrupt, not greet.
+    engine.dispatches.length = 0;
+    const store = getStore();
+    const sessionId = `mark-only-${Date.now()}`;
+    store.touchSession(sessionId, 'test-provider');
+    await runNabyAction({ action: 'session.fastGrowth.set', sessionId, fastGrowth: true });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(engine.dispatches).toHaveLength(0);
   });
 });
 

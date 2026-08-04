@@ -364,13 +364,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     return paletteRows(commands.filter(match), '/');
   }, [commandQuery, mentionQuery, commands, dirEntries]);
 
-  /** A row the user may actually pick. A non-butterfly agent is listed but not
-   *  selectable — the same gate the engine applies, so the palette never offers
-   *  something routing would refuse. */
-  const isSelectable = useCallback(
-    (cmd: PaletteEntry) => !cmd.agent || cmd.agent.addressable,
-    [],
-  );
+  // P3-M12a: `isSelectable` used to live here and answered `agent.addressable`.
+  // EVERY row is selectable now — the stage narrows what an agent may do, not
+  // whether it may be named — so the predicate would only ever return true.
 
   const showCommands =
     !commandsDismissed && !!(commandQuery || mentionQuery) && filteredCommands.length > 0;
@@ -413,10 +409,14 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   }, [input, images, disabled, onSend]);
 
   const handleSelectCommand = useCallback((command: PaletteEntry) => {
-    // An agent that has not reached the butterfly stage cannot be addressed yet.
-    // Blocked HERE, the one place both the click and the Enter path go through, so
-    // there is no second gate to keep in sync.
-    if (command.agent && !command.agent.addressable) return;
+    // P3-M12a: THE BLOCK THAT USED TO BE HERE IS GONE. Until M12 a non-butterfly
+    // agent could not be picked at all, which meant a new install had an `@naby`
+    // row that did nothing — and an agent nobody can call never gets the
+    // conversations it would grow from. `addressable` now means "can be trusted
+    // with autonomous multi-step delegation", not "may be named": the engine
+    // routes at every stage and narrows what the agent may DO by its stage
+    // (fast-evolution §3.1). The badge below still shows the stage, so the row
+    // says what it will get.
     // A FILE MENTION replaces only its own `@…` span. Replacing the line (what a
     // command does) would delete the sentence around it, and mentions are normally
     // written mid-sentence. A folder inserts a trailing `/` and no space so the
@@ -665,7 +665,17 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                     ? t('chatInput.filesGroup', { defaultValue: 'Files & folders' })
                     : t('chatInput.commandsGroup', { defaultValue: 'Commands' })
                 : null;
-            const locked = !!cmd.agent && !cmd.agent.addressable;
+            // P3-M12a: what the stage tells the user is now its SCOPE, not a
+            // refusal. Every agent row is pickable; the tooltip says how far this
+            // one can be trusted to act, in the same words the engine enforces.
+            const scopeHint = cmd.agent
+              ? t(`chatInput.agentScope.${cmd.agent.stage}`, {
+                  defaultValue:
+                    cmd.agent.stage === 'butterfly'
+                      ? 'Can take multi-step work on its own.'
+                      : 'Still growing — it can read, draft and propose, and its actions are limited until it has been measured on more of your work.',
+                })
+              : undefined;
             return (
               <div key={cmd.name}>
                 {groupHeader && (
@@ -675,22 +685,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                 )}
                 <div
                   onClick={() => handleSelectCommand(cmd)}
-                  title={
-                    locked
-                      ? t('chatInput.agentLocked', {
-                          defaultValue:
-                            'Still growing — naby can be addressed directly once it reaches the butterfly stage.',
-                        })
-                      : undefined
-                  }
+                  title={scopeHint}
                   className={`px-4 py-2 ${
-                    // A locked agent is shown, not hidden: the user should see it
-                    // exists and that it is still growing.
-                    locked
-                      ? 'opacity-40 cursor-not-allowed'
-                      : index === selectedIndex
-                        ? 'bg-brand/10 cursor-pointer'
-                        : 'hover:bg-accent cursor-pointer'
+                    index === selectedIndex ? 'bg-brand/10 cursor-pointer' : 'hover:bg-accent cursor-pointer'
                   }`}
                 >
                   <div className="flex items-center gap-3">

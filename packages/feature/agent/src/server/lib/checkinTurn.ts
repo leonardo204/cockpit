@@ -22,6 +22,12 @@
 // the grade — safe questions, padded options, the whole Goodhart catalogue. It is
 // told to ask well and to commit to its real best guess, which is what produces
 // an honest label as a side effect.
+//
+// IT IS STILL STAGE-AWARE (P3-M12e). `checkinInstruction` takes the subject's
+// stage and leans harder on asking while that agent's record is short, because
+// the alternative is what real usage produced: hundreds of autonomous actions,
+// zero real check-ins, and a meter with no way to start. The stage picks the
+// WORDING; the wording still never mentions a stage.
 
 import {
   CHECKIN_TOOL_NAME,
@@ -36,6 +42,7 @@ import {
   type CheckinQuestion,
   type CheckinSink,
   type EvalEventInput,
+  type GrowthStage,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { registerCheckin, unregisterCheckin } from './checkinRegistry';
 import { recentQuestions, type GrowthLedgerStore } from './growthRead';
@@ -56,8 +63,35 @@ export function canCheckIn(agent: Agent | undefined): boolean {
  * The system-prompt block that turns the tool into a habit. Short on purpose — it
  * shares the turn's system field with the persona, the memory block, the skills,
  * the learning instruction and (when autonomous) the step protocol.
+ *
+ * WHY IT TAKES A STAGE, AND WHY THE PROSE NEVER NAMES ONE. Real usage produced a
+ * ledger that could not move: ~197 autonomous rows against zero real check-ins in
+ * a lifetime of ordinary work, while the only way out of the first stage is real
+ * check-ins. The machinery was fine (the sink is live on every persona turn, and
+ * the fast-growth drills went through it); what was missing was any pressure to
+ * ASK during ordinary work. The wording below supplies it while an agent's record
+ * is still short, and relaxes once it is established.
+ *
+ * The parameter is a stage, but nothing in the text says so — same rule as
+ * `stageTurn.ts`: an agent told what it is being measured on optimizes that. The
+ * caller picks the wording; the model reads a few sentences about when asking is
+ * worth it and never learns that anything downstream is counting.
+ *
+ * THE BALANCE, at the top stage: over-asking is not free there. `coverage` (the
+ * share of decisions made without asking) and the ask-quality axes score exactly
+ * the "asked when it did not need to" failure, so a permanently eager agent pays
+ * for it in the very meter this clause exists to unstick. Which is why the eager
+ * clause is dropped at butterfly rather than being softened everywhere — and why
+ * none of that arithmetic is stated to the model.
+ *
+ * UNDEFINED READS AS "NOT MEASURED YET" — the eager wording. It is the same
+ * fail-direction as `readGrowth` (an unreadable ledger is an egg): an agent whose
+ * record cannot be established should be asking, not deciding alone.
  */
-export function checkinInstruction(): string {
+export function checkinInstruction(stage?: GrowthStage): string {
+  // Everything below the top stage: the record is short, so the user's answers
+  // are the only thing that can lengthen it.
+  const eager = stage !== 'butterfly';
   return [
     `CHECKING IN: right before you do something this user cannot easily undo — writing or editing a`,
     `file, running a command, sending anything outward — if there is a real choice about HOW to do it,`,
@@ -68,6 +102,20 @@ export function checkinInstruction(): string {
     `- Their answer overrides your recommendation. Do it their way and do not ask that question again.`,
     `- Do not check in for read-only steps, when there is only one sensible way, or when they already`,
     `  told you how. An unnecessary interruption is worse than none.`,
+    ...(eager
+      ? [
+          '',
+          `YOU DO NOT KNOW THIS USER WELL YET. You have not been told how they like these choices made,`,
+          `and guessing silently is how you stay wrong about them. So while that is still true:`,
+          `- When a decision in the work is genuinely consequential, or turns on their preference rather`,
+          `  than on fact, PREFER asking over deciding on your own — one short question with real`,
+          `  options, and your recommendation among them — even if you could defend a choice yourself.`,
+          `- This is not a licence to interrupt. Trivial steps, obvious defaults and questions you have`,
+          `  effectively asked before (in any wording) are still not worth their attention; asking those`,
+          `  wastes the one thing this buys you, which is knowing what they actually want.`,
+          `- One or two such questions in a turn is the most a piece of work should need.`,
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -91,6 +139,23 @@ export interface CheckinTurnDeps {
   signal: AbortSignal;
   /** How long an unanswered prompt waits before it expires. */
   ttlMs: number;
+  /**
+   * IS THIS A DRILL? (P3-M12c, fast-evolution §3.4.)
+   *
+   * Resolved ONCE, HERE, from `SessionRef.fastGrowth` — the flag a human set by
+   * opening a fast-growth session — and stamped on every row this sink records.
+   *
+   * IT IS NEVER READ FROM TOOL INPUT, and that is the invariant the whole
+   * discount rests on (checkin-contracts §4, invariant 9). A model able to label
+   * its own rows could file the questions it got wrong as practice and the ones
+   * it got right as real work, and the ledger would then measure nothing but its
+   * bookkeeping. The session decides; the model is not consulted.
+   *
+   * Absent = a real session, which is the direction that costs the agent
+   * nothing it did not earn: an unmarked row counts at full weight only when the
+   * user was making a real decision.
+   */
+  drill?: boolean;
   /** Injected so this module needs no clock of its own (and a test can pin it). */
   now: () => number;
   /** P3-M3b's channel, for a check-in: send the question to Telegram too, and
@@ -193,6 +258,12 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
         ...(row.confidence !== undefined ? { confidence: row.confidence } : {}),
         ...(row.correction ? { correction: row.correction } : {}),
         ...(row.taskType ? { taskType: row.taskType } : {}),
+        // THE DRILL STAMP, from the SESSION and never from `row` (P3-M12c). Note
+        // what is NOT spread here: `row` is what the runtime's check-in executor
+        // built out of the model's tool input, so taking the flag from it would be
+        // taking it from the model. Set only when true, so a real session's rows
+        // are byte-for-byte what they were before this existed.
+        ...(deps.drill ? { drill: true } : {}),
         ...(row.excludedFromScoring ? { excludedFromScoring: true, reason: row.reason } : {}),
       });
     },

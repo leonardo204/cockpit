@@ -112,6 +112,17 @@ export function BootstrapCard({ isOpen, onSaved }: { isOpen: boolean; onSaved?: 
             'Every field is optional, and you can change any of it later in this list. Blank answers are not stored.',
         })}
       </p>
+      {/* WHERE THIS ENDS (settings-ia-reorg §3.3). Four questions is the whole of
+          the cold start, and when they are answered the card disappears — which
+          leaves "so how do I teach it more?" unanswered on the one screen where
+          it is being asked. The fast-growth session is that answer, and it lives
+          on the naby tab, so the card names it rather than pretending the
+          interview was everything. */}
+      <p className="text-[11px] leading-relaxed text-muted-foreground">
+        {t('bootstrap.fastGrowth', {
+          defaultValue: 'To teach it more, open a fast-growth session from the Naby tab.',
+        })}
+      </p>
 
       {state.questions.map((q) => (
         <label key={q.id} className="flex flex-col gap-0.5">

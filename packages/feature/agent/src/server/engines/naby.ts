@@ -79,6 +79,7 @@ import {
   OBSERVATION_BUILTINS,
   loadMcpToolset,
   makeGate,
+  isBuiltinPersona,
   normalizeToolName,
   parseAgentAddress,
   phase1HarnessFloor,
@@ -88,13 +89,19 @@ import {
   makeModelResolver,
   Outbox,
   preflightEngine,
+  parseStyleFingerprint,
   readLearningEnabled,
+  renderStyleFingerprintLine,
+  STYLE_FINGERPRINT_KEY,
   readSettings,
   resolveProviderCredential,
   runTurn,
   seedBuiltinPersona,
   selectEngine,
   SqliteStore,
+  stageContract,
+  stageProgressSummary,
+  stageRefusalReason,
   toSelectOptions,
   apiKeyCredential,
   type Engine,
@@ -155,8 +162,10 @@ import {
   verificationNudgePrompt,
   type AutonomyDecision,
 } from '../lib/autonomy';
-import { isAddressable } from '../lib/growthRead';
+import { isAddressable, readGrowth } from '../lib/growthRead';
 import { readPersonaAutonomy } from '../lib/personaAutonomy';
+import { stageInstruction } from '../lib/stageTurn';
+import { fastGrowthInstruction } from '../lib/fastGrowth';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -456,7 +465,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // memory keeps shaping the turn in both states (§3). That asymmetry is the
         // whole reason the flag is not simply "memory off".
         const learningEnabled = readLearningEnabled(store);
-        const sessionNoLearn = store.getSession(sessionId)?.noLearn === true;
+        const sessionRef = store.getSession(sessionId);
+        const sessionNoLearn = sessionRef?.noLearn === true;
+        // ---- is this a FAST-GROWTH session? (P3-M12b, §3.3) ----------------
+        //
+        // Read from the SESSION ROW and from nowhere else. The user set it by
+        // opening the session from the growth panel; no tool, no prompt and no
+        // turn can change it. That is what lets the ledger trust the `drill` stamp
+        // it derives from this flag (checkin-contracts §4, invariant 9).
+        const sessionFastGrowth = sessionRef?.fastGrowth === true;
         const capturesMemory = canCaptureMemory({ learningEnabled, sessionNoLearn });
         if (!capturesMemory) {
           console.log(
@@ -661,23 +678,41 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ? store.getAgentByName(addressed.name)
           : undefined;
 
-        // ---- ONE `@` GATE (Phase 3, P3-M9 — G2) ---------------------------
+        // ---- ONE `@` GATE (P3-M9 G2), REDEFINED (P3-M12a) ------------------
         //
-        // The `@` palette has always greyed out an agent that is not yet a
-        // butterfly (api/commands.ts, `canBeAddressed`), but ROUTING never
-        // checked — so typing the name by hand delegated to an agent the product
-        // had just said could not be delegated to. Two surfaces, two answers, and
-        // the one that mattered was the permissive one.
+        // WHAT THE GATE MEANS NOW. Through M9 this was a MENTION gate: an agent
+        // that was not a butterfly was not routed to at all, and the turn ran
+        // unrouted. That was one surface's answer to a real problem (the palette
+        // and routing must agree), but it made a young agent useless — and an
+        // agent nobody may call never gets the conversations it would grow from.
         //
-        // Now both read `isAddressable` — the same call over the same `readGrowth`
-        // result, not the same rule written twice — so they cannot drift. It is
-        // fail-closed (an unreadable ledger is an egg), exactly as the palette is.
+        // So the line MOVED rather than loosened (trust-meter §4.9 0.7.0,
+        // fast-evolution §3.1): `@name` routes at ANY stage, and the stage decides
+        // the ACTION RANGE. `canBeAddressed` still means exactly what it did —
+        // only a butterfly is true — but what it now gates is AUTONOMOUS
+        // DELEGATION, not the mention. The palette sends the same flag and the
+        // same read (`isAddressable` over `readGrowth`), so the two surfaces still
+        // cannot drift; they just agree about a different thing.
         const addressable = addressedAgent ? isAddressable(store, addressedAgent.id) : false;
-        // A REFUSED ADDRESS DOES NOT ADOPT AN IDENTITY — no system prompt, no
-        // model, no toolRefs, no autonomy. `routedAgent` staying undefined is what
-        // makes that true everywhere below, in one place, rather than in the five
-        // places that read it.
-        const routedAgent: Agent | undefined = addressable ? addressedAgent : undefined;
+        // THE ADDRESS IS HONOURED. Identity, model, toolRefs and memory scope all
+        // follow the named agent whatever its stage; what a sub-butterfly does NOT
+        // get is free rein, and that is enforced below in two places — the step
+        // budget and the tool gate.
+        const routedAgent: Agent | undefined = addressedAgent;
+        // The stage this turn is bound by, and the contract that follows from it.
+        // Read ONCE (a ledger read per tool call would re-query the same rows) and
+        // only for a routed agent: an ordinary, unaddressed turn is untouched by
+        // all of this, byte for byte.
+        //
+        // FAIL-CLOSED by construction: `readGrowth` turns an unreadable ledger into
+        // an egg, so an agent whose record cannot be established gets the narrowest
+        // contract rather than the widest.
+        const routedGrowth = routedAgent ? readGrowth(store, routedAgent.id) : undefined;
+        const routedStage = routedGrowth?.stage;
+        // Undefined for a butterfly (and for an unrouted turn): there is nothing to
+        // enforce, so nothing below runs and no instruction is injected.
+        const contract =
+          routedStage && !addressable ? stageContract(routedStage) : undefined;
 
         // ---- WHOSE AGENT THIS TURN BELONGS TO (Phase 3, P3-M5) ------------
         //
@@ -746,6 +781,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 signal: ctx.signal,
                 ttlMs: APPROVAL_TTL_MS,
                 now: () => Date.now(),
+                // P3-M12c: EVERY row this sink writes in a fast-growth session is
+                // a drill. Resolved here, from the session, once per turn — the
+                // model is never asked and its tool input is never consulted.
+                ...(sessionFastGrowth ? { drill: true } : {}),
                 // P3-M3b's channel, for check-ins too: an agent set to escalate
                 // sends its question to the phone as numbered buttons. `escalation`
                 // is resolved below, so it is read through a getter-free closure
@@ -919,26 +958,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // (it may be prose, or a harness `@verb` the expander already handled).
           console.log(`[engine:naby] @${addressed.name}: no such agent — not routed`);
         }
-        if (addressedAgent && !addressable) {
-          // THE REFUSED ADDRESS IS NOT A DEAD TURN (spec §3). The user asked for
-          // something; the only thing we decline is the delegation, so the work
-          // still runs — as an ordinary turn, on the task text they typed.
+        if (addressedAgent && contract && routedStage) {
+          // A SUB-BUTTERFLY ADDRESS IS ROUTED, NOT REFUSED (P3-M12a). The agent
+          // answers as itself; what it may DO is narrowed by its stage.
           //
-          // And they are TOLD, on a muted harness pill, because a turn that
-          // silently ignored the `@` would look like the agent answered while
-          // behaving nothing like it. The pill carries CODES, not sentences: the
-          // server has no locale (the same reason `growthReport.change` is a
-          // code), so the client renders these in the user's language.
+          // The user is still TOLD, on the same muted harness pill, because the
+          // turn behaves differently from a butterfly's and a silent narrowing
+          // would read as the agent being oddly unhelpful. The pill carries a
+          // CODE, not a sentence — the server has no locale (the same reason
+          // `growthReport.change` is a code) — and the code now names the STAGE,
+          // since "not a butterfly" is no longer the whole story.
           console.log(
-            `[engine:naby] @${addressedAgent.name}: not addressable yet (not a butterfly)` +
-              ` — running unrouted`,
+            `[engine:naby] @${addressedAgent.name}: routed at the ${routedStage} stage` +
+              ` (consequential=${contract.allowConsequential}, irreversible=${contract.allowIrreversible},` +
+              ` maxSteps<=${String(contract.maxSteps)})`,
           );
           ctx.emit({
             type: 'system',
             subtype: 'harness',
             session_id: sessionId,
             harness_subtype: 'routing-gate',
-            harness_detail: `not-butterfly:${addressedAgent.name}`,
+            harness_detail: `stage-limited:${routedStage}:${addressedAgent.name}`,
           } satisfies RunEvent);
         }
         if (routedAgent) {
@@ -999,9 +1039,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // the way out of the store, so what Settings shows is what runs; passing it
         // through `resolveMaxSteps` again is idempotent and keeps ONE clamp in the
         // codebase rather than two that could disagree.
-        const maxSteps = resolveMaxSteps(
+        const configuredMaxSteps = resolveMaxSteps(
           personaDelegation ? personaDelegation.maxSteps : routedAgent?.autonomy.maxSteps,
         );
+        // P3-M12a: THE STAGE CEILING. A sub-butterfly agent takes the SMALLER of
+        // its stage's ceiling and what the user configured — the contract can only
+        // ever narrow, never widen, so nothing here can hand an agent more
+        // autonomy than its settings already allowed. A butterfly's contract has
+        // no number (`maxSteps: undefined`) precisely so that this line is a no-op
+        // for it and the persona setting stays the single source of truth.
+        const maxSteps =
+          contract?.maxSteps !== undefined
+            ? Math.min(contract.maxSteps, configuredMaxSteps)
+            : configuredMaxSteps;
+        if (contract && maxSteps !== configuredMaxSteps) {
+          console.log(
+            `[engine:naby] stage contract: steps ${configuredMaxSteps} → ${maxSteps} (${routedStage})`,
+          );
+        }
         const autonomous = isAutonomous(maxSteps);
         if (autonomous) {
           console.log(`[engine:naby] autonomy: up to ${maxSteps} steps (@${routedAgent?.name})`);
@@ -1028,8 +1083,32 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // Phase 3 P3-M5: TELL THE AGENT TO CHECK IN. Same condition as the sink
         // above, so the words are only ever present alongside the tool.
         const checksIn = checkinSink !== undefined;
+        // P3-M12e: WHOSE RECORD THE CHECK-IN WORDING FOLLOWS. The instruction leans
+        // harder on asking while the subject's record is still short — that is the
+        // fix for a ledger real usage could not move (hundreds of autonomous rows,
+        // zero real check-ins), and it needs the subject's stage to know when to
+        // stop leaning.
+        //
+        // ONE READ, AT MOST, AND ONLY WHEN THE TOOL IS THERE. A routed turn already
+        // read exactly this ledger (`routedGrowth`, and the routed agent IS the
+        // subject then), so it is reused; an ordinary persona turn pays for one
+        // ledger read, the same one the fast-growth block below now shares instead
+        // of repeating. A turn without a check-in tool reads nothing at all.
+        //
+        // FAILS TOWARD ASKING: `readGrowth` turns an unreadable ledger into an egg,
+        // and undefined reads as "not measured yet" in the instruction — an agent
+        // whose record cannot be established should be asking.
+        const subjectGrowth =
+          checksIn && growthSubject
+            ? routedGrowth && routedAgent?.id === growthSubject.id
+              ? routedGrowth
+              : readGrowth(store, growthSubject.id)
+            : undefined;
         if (checksIn) {
-          console.log(`[engine:naby] check-ins: on (@${growthSubject?.name})`);
+          console.log(
+            `[engine:naby] check-ins: on (@${growthSubject?.name}, record: ` +
+              `${subjectGrowth?.stage ?? 'unreadable'})`,
+          );
         }
         // skill-hub-builtin §2.5: TELL THE AGENT WHERE INSTALLS GO. A hub's own
         // install instructions name `~/.claude` (they are written for another
@@ -1041,14 +1120,154 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         if (steersInstalls) {
           console.log('[engine:naby] install steering: on (naby harness home)');
         }
+        // Phase 3 P3-M12a: TELL THE AGENT ITS OWN CONTRACT, and the real numbers
+        // behind it. Injected only when a contract is actually in force (a routed
+        // sub-butterfly), so a butterfly's turn and every ordinary turn are
+        // untouched. Paired with the gate below exactly as the check-in
+        // instruction is paired with its tool: the words and the enforcement are
+        // built from the SAME `contract`, so they cannot promise different things.
+        const stageLimited = contract !== undefined && routedStage !== undefined;
+        // Phase 3 P3-M12b: THE FAST-GROWTH SESSION'S JOB. Only for the PERSONA —
+        // this session exists to teach naby about its user, and pointing a
+        // specialist agent at the user's private life is neither what the button
+        // said nor what the memory scope is for.
+        //
+        // P3-M10 still wins: a temporary session learns nothing AND writes no
+        // ledger row, so neither half of the sitting would leave anything behind
+        // and the block is not injected.
+        //
+        // P3-M12b-5: ONE flag for the WHOLE sitting, not just its interview half.
+        // The block it gates now carries both parts — get your bearings, then
+        // practise predicting them — because a fast-growth session that only
+        // interviewed produced a growth report reading 0/0 (fast-evolution §3.3d).
+        const runsFastGrowthSitting =
+          sessionFastGrowth && !sessionNoLearn && growthSubject?.id === BUILTIN_PERSONA_ID;
+        // Phase 3 P3-M13c (§3.3): THE STYLE FINGERPRINT, as one compact line.
+        //
+        // PERSONA ONLY, like the fast-growth block. The fingerprint describes how
+        // the USER writes, and asking a specialist sub-agent to imitate it would
+        // apply a personal voice to work that was routed away from the persona
+        // precisely because it is not personal.
+        //
+        // IT IS NOT GATED ON `capturesMemory`, and that asymmetry is deliberate:
+        // the gates decide whether naby LEARNS, never whether it uses what it has
+        // already learned — the same rule that keeps confirmed memory injecting
+        // with learning off (§3, and the note above). The gate applies to the
+        // sweep that WRITES the fingerprint.
+        //
+        // Below `STYLE_FINGERPRINT_MIN_SAMPLES` the renderer returns undefined and
+        // this contributes nothing at all, so a fresh install's turn is
+        // byte-for-byte what it was.
+        const styleLine =
+          growthSubject?.id === BUILTIN_PERSONA_ID
+            ? (() => {
+                try {
+                  return renderStyleFingerprintLine(
+                    parseStyleFingerprint(store.getSetting(STYLE_FINGERPRINT_KEY)),
+                  );
+                } catch {
+                  // An unreadable setting is not a reason to fail a turn; it is a
+                  // reason to send the turn naby would have sent last month.
+                  return undefined;
+                }
+              })()
+            : undefined;
+        if (styleLine) console.log('[engine:naby] style fingerprint: injected');
+        // ---- the fast-growth session's THREE REAL NUMBERS (P3-M12b-5) --------
+        //
+        // Computed HERE and handed to the pure text builder, for the reason the
+        // stage instruction's numbers are (`stageProgressSummary` two blocks up):
+        // a model asked how far along it is writes an encouraging sentence, and an
+        // encouraging sentence about a number the user can read off the growth
+        // panel is how the meter loses its credibility.
+        //
+        // EVERY READ IS BEST-EFFORT AND FAILS TOWARD THE HARMLESS ANSWER. An
+        // unreadable memory store reads as sparse (naby asks a question instead of
+        // inventing a scenario about someone it does not know); an unreadable
+        // ledger reads as "nothing practised yet, minimum sample still to go",
+        // which is what an agent with no measured history actually has.
+        //
+        // Skipped entirely on every other turn — an ordinary conversation must not
+        // pay for three extra queries it will not use.
+        const fastGrowthCounts =
+          runsFastGrowthSitting && growthSubject
+            ? {
+                // WHAT IS CONFIRMED, not what is proposed: proposals are guesses
+                // nobody has checked, and practising against them would practise
+                // naby's own inventions.
+                confirmedUserMemories: (() => {
+                  try {
+                    return store.countScopedMemory('user', DEFAULT_USER_ID, {
+                      status: 'confirmed',
+                    });
+                  } catch {
+                    return 0;
+                  }
+                })(),
+                // HOW MANY PRACTICE CHECK-INS THIS SESSION HAS ALREADY RECORDED.
+                // Counted off the ledger rows themselves rather than tracked in
+                // memory: those rows are what the growth panel shows, so the
+                // sentence naby closes the sitting with and the number the user can
+                // go and check come from one place. `drill === true` and not merely
+                // "a check-in in this session" — the stamp is the sink's, taken from
+                // the session flag, and a row without it was real work.
+                practiceThisSession: (() => {
+                  try {
+                    return store
+                      .listEvalEvents(growthSubject.id, { kind: 'checkin', sessionId })
+                      .filter((row) => row.drill === true).length;
+                  } catch {
+                    return 0;
+                  }
+                })(),
+                // HOW MANY REAL CHECK-INS ARE STILL OWED before the stage can be
+                // read at all. The SAME source `stageProgressSummary` uses for the
+                // honest refusal, so the two instructions cannot quote different
+                // numbers at the same user on the same day. `kind: 'samples'` is the
+                // only case with a count; once the sample is in, nothing is owed.
+                realCheckinsRemaining: (() => {
+                  try {
+                    // The reading the check-in wording already took this turn
+                    // (`subjectGrowth`), so the sitting's closing sentence and the
+                    // instruction above it cannot be computed from two different
+                    // reads of the same ledger. The fallback covers the one case
+                    // that has no check-in tool and therefore no reading.
+                    const progress = stageProgressSummary(
+                      subjectGrowth ?? readGrowth(store, growthSubject.id),
+                    );
+                    return progress.kind === 'samples' ? progress.remaining : 0;
+                  } catch {
+                    return 0;
+                  }
+                })(),
+              }
+            : undefined;
+        if (fastGrowthCounts) {
+          console.log(
+            `[engine:naby] fast-growth session: on (confirmed user memories: ` +
+              `${fastGrowthCounts.confirmedUserMemories}, practice check-ins this session: ` +
+              `${fastGrowthCounts.practiceThisSession}, real check-ins still needed: ` +
+              `${fastGrowthCounts.realCheckinsRemaining})`,
+          );
+        }
         const turnSystem =
           [
             routedAgent?.systemPrompt,
             shellNote,
+            stageLimited
+              ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
+              : undefined,
             autonomous ? autonomyInstruction(maxSteps) : undefined,
             learns && growthSubject ? learningInstruction(growthSubject) : undefined,
-            checksIn ? checkinInstruction() : undefined,
+            // The stage picks the WORDING only (checkinTurn.ts): the block never
+            // names a stage, a number or anything that is counted.
+            checksIn ? checkinInstruction(subjectGrowth?.stage) : undefined,
+            fastGrowthCounts ? fastGrowthInstruction(fastGrowthCounts) : undefined,
             steersInstalls ? harnessHomeInstruction(projectCwd) : undefined,
+            // LAST of the instruction blocks. Style is the weakest claim in the
+            // prompt — it says how to phrase whatever the rest of it decided —
+            // so it sits after everything it must not override.
+            styleLine,
           ]
             .filter(Boolean)
             .join('\n\n') || undefined;
@@ -1261,6 +1480,44 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             observeForGrowth(call, false, reason);
             return { behavior: 'deny', reason };
           }
+          // ---- THE STAGE CONTRACT (Phase 3, P3-M12a) ---------------------
+          //
+          // Second only to the agent's own toolRefs, and above the policy engine,
+          // because this is not a preference the user can override per tool: it is
+          // what "@ing an agent that has not been measured yet" MEANS. The
+          // classification is the ledger's own (`stageRefusalReason` calls
+          // `classifyToolConsequence`), fed the same declared signals the
+          // observation path reads, so the gate and the meter can never disagree
+          // about which calls are consequential.
+          //
+          // NO LEDGER ROW IS WRITTEN — deliberately, and this is the subtle part.
+          // A refusal here is the contract working, not a safety incident, and
+          // `observeForGrowth` would file it as a `tripwire`: the meter's HARD
+          // block on butterfly (trust-meter §4.8). A larva that dutifully declined
+          // to edit a file would thereby stamp its own record with a safety
+          // violation, and the stage it needs in order to be allowed to edit files
+          // would become unreachable by obeying the rule. Nor is it an
+          // `autonomous` row: nothing ran.
+          if (contract && routedStage) {
+            const bare = normalizeToolName(call.toolName);
+            const effect = resolvePolicyEffect(policyRules, bare);
+            const readOnlyHint = mcpAnnotations[bare]?.readOnlyHint;
+            const refusal = stageRefusalReason({
+              toolName: bare,
+              stage: routedStage,
+              contract,
+              signals: {
+                ...(readOnlyHint !== undefined ? { readOnlyHint } : {}),
+                policyForcesConsequential: effect === 'ask' || effect === 'deny',
+              },
+            });
+            if (refusal) {
+              console.log(
+                `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (stage contract: ${routedStage})`,
+              );
+              return { behavior: 'deny', reason: refusal };
+            }
+          }
           const decision = await gated.gate(call);
           const entry = gated.log[gated.log.length - 1];
           console.log(
@@ -1282,6 +1539,31 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           subtype: 'init',
           session_id: sessionId,
           model: modelLabel,
+          // WHO IS ANSWERING (2026-08-04). The loading bubble used to name the
+          // ENGINE ("Claude is thinking"), which is the one thing about a turn the
+          // user did not ask about: whichever model answers, it is still naby, and
+          // the engine brand is already on the toolbar. So the turn reports its
+          // ACTING AGENT, which is what the bubble names.
+          //
+          // It rides `system/init` rather than a channel of its own because the
+          // client already reads this event for the same kind of fact (the resolved
+          // model label) — routing is resolved far above, so it is known here.
+          //
+          // `growthSubject` IS the acting agent by construction: `routedAgent ??
+          // persona`. `persona` says whether to use the localized product name
+          // ("나비") or the agent's own handle — the persona's stored name is `naby`,
+          // but an install that hit the name collision keeps `@persona`, and a
+          // Korean user should read 나비 either way. Absent when there is no agent
+          // at all (no persona row), which is the only case that still falls back to
+          // the engine brand.
+          ...(growthSubject
+            ? {
+                acting_agent: {
+                  name: growthSubject.name,
+                  persona: isBuiltinPersona(growthSubject),
+                },
+              }
+            : {}),
           cwd: ctx.cwd,
           tools: toolSchemas.map((t) => t.name),
           // F1-08. What actually connected — a server that failed to start is

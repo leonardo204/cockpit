@@ -56,7 +56,11 @@ import {
   BOOTSTRAP_DONE_KEY,
   BOOTSTRAP_QUESTIONS,
   answersToMemory,
+  parseStyleFingerprint,
   readLearningEnabled,
+  STYLE_FINGERPRINT_KEY,
+  STYLE_FINGERPRINT_MIN_SAMPLES,
+  type StyleFingerprint,
   shouldOfferBootstrap,
   writeLearningEnabled,
   type ClaudeLoginAccount,
@@ -118,6 +122,19 @@ import {
   type SystemMcpStatus,
 } from '../lib/systemMcp';
 import { resolveCommandPath } from '../lib/commandPath';
+// The key a user-supplied session rename lives under. IMPORTED rather than
+// respelled here: it is what the recent-session list reads and what the v1.6.0
+// rename writes, and a second copy of the string would be a second source of
+// truth for what a session is called — the exact failure `recentSessions` was
+// written to end.
+import { customTitleKey } from '../state/recentSessions';
+// The opening turn of a fast-growth session (§3.3b). It loads the engine lazily
+// inside itself, so importing it here costs this route nothing at request time.
+import { startFastGrowthKickoff } from '../lib/fastGrowthKickoff';
+
+/** How much of a client-supplied session title is kept. A name is a row in a
+ *  list, not a description; anything past this is a paragraph in a sidebar. */
+const FAST_GROWTH_TITLE_MAX = 60;
 
 // The store is opened on demand and the MCP test path spawns child processes,
 // so this must run on the node runtime and must never be statically rendered.
@@ -546,11 +563,30 @@ export type NabyAction =
   // that decides whether rows are ever written is a different kind of thing.
   | { action: 'learning.get' }
   | { action: 'learning.set'; enabled: boolean }
+  // P3-M13c (§3.3): READ-ONLY. The style fingerprint is counted from the user's
+  // own messages by the reflection sweep and has no setter at all — there is
+  // nothing here for a person to configure, only something for them to SEE. It
+  // rides /api/naby rather than /api/memory for the same reason the learning
+  // switch does: it is a setting, and /api/memory is the surface for memory ROWS.
+  | { action: 'style.get' }
   // The per-session temporary flag, toggled from the tab context menu. `list`
   // exists so the tab bar can mark every affected tab from ONE request rather
   // than asking per tab as tabs open.
   | { action: 'session.noLearn.list' }
-  | { action: 'session.noLearn.set'; sessionId: string; noLearn: boolean };
+  | { action: 'session.noLearn.set'; sessionId: string; noLearn: boolean }
+  // -- P3-M12b (fast-evolution §3.3) — the fast-growth session ---------------
+  //
+  // `create` is what the growth panel's button calls: it mints a session that is
+  // ALREADY marked, so the flag is never absent for the session's first turn (a
+  // create-then-toggle round trip would leave a window in which the opening
+  // check-in was scored as real work). `set` exists for the same reason
+  // `session.noLearn.set` does — a session that already exists can be marked.
+  //
+  // NOTHING THE MODEL CAN REACH. Both are HTTP actions the UI calls on a click;
+  // no tool exposes them. That is the invariant the drill discount rests on
+  // (checkin-contracts §4, invariant 9).
+  | { action: 'session.fastGrowth.create'; cwd?: string; title?: string; kickoff?: string }
+  | { action: 'session.fastGrowth.set'; sessionId: string; fastGrowth: boolean };
 
 export type NabyActionResult =
   | {
@@ -616,11 +652,28 @@ export type NabyActionResult =
       /** `learning.get`/`set` (P3-M10): whether new memory may be captured at all.
        *  Injection is unaffected either way — see memory-hygiene §3. */
       learningEnabled?: boolean;
+      /** `style.get` (P3-M13c): the counted writing profile, or null when there
+       *  is not one yet. */
+      style?: StyleFingerprint | null;
+      /** How many user messages a fingerprint needs before it shapes a turn —
+       *  sent rather than duplicated client-side, for the same reason
+       *  `corroborationThreshold` is (a hardcoded number in a sentence goes wrong
+       *  silently the day the constant is tuned). */
+      styleMinSamples?: number;
       /** `session.noLearn.set`: the flag as it now stands. */
       noLearn?: boolean;
       /** `session.noLearn.list`: every session currently marked temporary, so the
        *  tab bar can badge them in one pass. */
       noLearnSessions?: string[];
+      /** `session.fastGrowth.set`/`create`: the flag as it now stands. */
+      fastGrowth?: boolean;
+      /** `session.fastGrowth.create`: the session that was minted, so the client
+       *  can open it (or tell the user where to find it). */
+      sessionId?: string;
+      /** `session.fastGrowth.create`: the name the session was given, echoed back
+       *  so the client renders what was actually stored rather than what it asked
+       *  for (they differ when the request carried no title, or an over-long one). */
+      title?: string;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
       /** `models.list`: the live model catalog for the Claude sign-in. */
@@ -744,6 +797,18 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'learning.get':
       return { ok: true, learningEnabled: readLearningEnabled(store) };
 
+    case 'style.get': {
+      // An absent or unreadable fingerprint answers `null`, not an error: "naby
+      // has not worked out how you write yet" is a normal state on every fresh
+      // install, and the panel renders it as a sentence rather than a failure.
+      const fingerprint = parseStyleFingerprint(store.getSetting(STYLE_FINGERPRINT_KEY));
+      return {
+        ok: true,
+        style: fingerprint ?? null,
+        styleMinSamples: STYLE_FINGERPRINT_MIN_SAMPLES,
+      };
+    }
+
     case 'learning.set': {
       // STRICTLY boolean, like `autoConfirm.set` and for the mirror reason: a
       // malformed request must not be able to silently turn learning OFF, which
@@ -773,6 +838,86 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       store.setSessionNoLearn(body.sessionId, body.noLearn);
       return { ok: true, noLearn: body.noLearn };
+    }
+
+    // -- P3-M12b: the fast-growth session ---------------------------------
+
+    case 'session.fastGrowth.create': {
+      // Minted ALREADY MARKED, not marked afterwards: the engine reads the flag
+      // once at the top of a turn, so a session created plain and flagged a
+      // moment later could run its first turn as ordinary work — and that turn is
+      // exactly the one the button was pressed for.
+      //
+      // The provider is left empty, as everywhere else a session is minted: the
+      // turn that answers records who actually did (it is a hint, not a key).
+      const cwd = typeof body.cwd === 'string' && body.cwd ? body.cwd : undefined;
+      // IT IS NAMED AT BIRTH, in BOTH places a name can live.
+      //
+      // The session used to be minted untitled, so the session list derived its
+      // title the ordinary way — from the first user message — and the one
+      // conversation the user had just deliberately created looked exactly like
+      // every other one in the list. They could not find it, twice.
+      //
+      // `title` on the row is what the project session browser reads
+      // (`deriveTitle`, which prefers it over the first message), and
+      // `session.customTitle.*` is what the RECENT list reads and what the v1.6.0
+      // rename writes. Auto-titling never overwrites either — nothing updates
+      // `sessions.title` after insert, and the custom title wins over a derived
+      // one by construction — so this survives the first turn rather than being
+      // replaced by it.
+      //
+      // THE WORDS COME FROM THE CLIENT because this server has no locale (the
+      // same reason harness pills carry codes and not sentences). A request
+      // without one still gets a name, in English, rather than an empty title
+      // that would put the bug straight back.
+      const title =
+        typeof body.title === 'string' && body.title.trim()
+          ? body.title.trim().slice(0, FAST_GROWTH_TITLE_MAX)
+          : 'Fast-growth session';
+      const ref = store.createSession('', title, cwd);
+      store.setSessionFastGrowth(ref.sessionId, true);
+      store.setSetting(customTitleKey(ref.sessionId), title);
+      // ---- AND NABY OPENS ITS MOUTH (§3.3b) ------------------------------
+      //
+      // The user pressed a button whose whole promise is that naby asks the
+      // questions, arrived at an EMPTY conversation, and had to type "시작"
+      // to find out what was expected of them. So one ordinary turn is fired
+      // into the session it just minted, through the same orchestrator every
+      // other turn uses — the greeting is in the transcript (or streaming into
+      // it) by the time the tab opens.
+      //
+      // NOT AWAITED, ON PURPOSE. This response is what the client navigates on;
+      // blocking it on a model call would trade an empty tab for a frozen
+      // button. The run is detached anyway, and the tab tails it live. Every
+      // failure inside is logged and swallowed — a kickoff that could fail the
+      // creation would mean a machine with no engine configured cannot make a
+      // fast-growth session at all.
+      //
+      // ONLY HERE. `session.fastGrowth.set` marks a conversation that already
+      // exists and may already be mid-thread; an opening question dropped into
+      // it would interrupt the user rather than greet them.
+      void startFastGrowthKickoff({
+        store,
+        sessionId: ref.sessionId,
+        ...(cwd ? { cwd } : {}),
+        // The words travel from the client for the same reason the title does:
+        // this server has no locale. Absent = the English default.
+        ...(typeof body.kickoff === 'string' && body.kickoff.trim()
+          ? { text: body.kickoff }
+          : {}),
+      });
+      return { ok: true, sessionId: ref.sessionId, fastGrowth: true, title };
+    }
+
+    case 'session.fastGrowth.set': {
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId is required' };
+      }
+      if (typeof body.fastGrowth !== 'boolean') {
+        return { ok: false, error: 'fastGrowth must be a boolean' };
+      }
+      store.setSessionFastGrowth(body.sessionId, body.fastGrowth);
+      return { ok: true, fastGrowth: body.fastGrowth };
     }
 
     case 'policy.list': {

@@ -48,6 +48,38 @@ describe('harnessPill — codes become sentences, in the user’s language', () 
     expect(renderHarnessPill(undefined, undefined)).toEqual({ label: 'harness event' });
   });
 
+  // -- P3-M12a: the address is honoured, the ACTIONS are narrowed ------------
+
+  it('says the agent answered within its stage, naming both the agent and the stage', async () => {
+    const { label, detail } = renderHarnessPill('routing-gate', 'stage-limited:larva:scout');
+    expect(label).toBe('acting within its stage');
+    expect(detail).toContain('@scout');
+    expect(detail).toMatch(/larva/i);
+    // The M9 pill said the turn ran as a NORMAL one because the address was
+    // refused. It no longer is, so the sentence must not still say that.
+    expect(detail).not.toMatch(/normal turn/i);
+  });
+
+  it('has real Korean copy for the stage pill too, with the stage name localised', async () => {
+    await i18n.changeLanguage('ko');
+    const { label, detail } = renderHarnessPill('routing-gate', 'stage-limited:larva:scout');
+    expect(label).toBe('단계 범위 안에서 처리함');
+    expect(detail).toContain('@scout');
+    expect(detail).toContain('애벌레');
+    expect(detail).not.toMatch(/larva/i);
+  });
+
+  it('keeps an agent name containing a colon intact', () => {
+    // Split ONCE: `stage-limited:<stage>:<name>` where the name is the rest.
+    const { detail } = renderHarnessPill('routing-gate', 'stage-limited:pupa:a:b');
+    expect(detail).toContain('@a:b');
+  });
+
+  it('still renders the PRE-M12 code — old transcripts are still scrollable', () => {
+    // No longer emitted, but sitting in every transcript recorded before M12a.
+    expect(renderHarnessPill('routing-gate', 'not-butterfly:scout').detail).toMatch(/butterfly/i);
+  });
+
   it('leaves an unrecognised routing-gate detail alone rather than guessing', () => {
     expect(renderHarnessPill('routing-gate', 'some-future-code')).toEqual({
       label: 'routing-gate',

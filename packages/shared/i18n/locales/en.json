@@ -367,7 +367,9 @@
   },
   "harnessPill": {
     "routingGate": "not delegated",
-    "notButterfly": "@{{agent}} is not a butterfly yet, so it cannot take delegated work — this ran as a normal turn."
+    "notButterfly": "@{{agent}} is not a butterfly yet, so it cannot take delegated work — this ran as a normal turn.",
+    "stageScope": "acting within its stage",
+    "stageLimited": "@{{agent}} answered as itself, at the {{stage}} stage — it can read, draft and propose, and the actions it has not been measured on yet are held back."
   },
   "agentExport": {
     "button": "Export",
@@ -564,7 +566,9 @@
     "startConversation": "Start a conversation",
     "loadMoreHistory": "Load more...",
     "scrollUpForMore": "↑ Scroll up to load more history",
-    "thinking": "{{name}} is thinking...",
+    "thinking": "{{name}} is thinking…",
+    "personaName": "naby",
+    "typing": "naby is typing…",
     "jumpToStart": "Jump to start",
     "jumpToLatest": "Jump to latest",
     "copyMessage": "Copy message",
@@ -944,7 +948,10 @@
     "languageAuto": "System",
     "switchDark": "Switch to dark",
     "switchLight": "Switch to light",
-    "aiProvider": "AI provider"
+    "aiProvider": "AI provider",
+    "general": "General",
+    "connections": "Connections",
+    "mcpServers": "MCP server connections"
   },
   "providerSetup": {
     "apiKey": "API key",
@@ -1143,7 +1150,7 @@
     "summaryProposed": "{{count}} waiting",
     "summaryStale": "{{count}} unused",
     "summaryEmpty": "Naby has not remembered anything yet.",
-    "summaryPending": "Waiting for your decision",
+    "summaryPendingCount": "{{count}} waiting for you",
     "openBrowser": "View all",
     "browserTitle": "Memory",
     "browserClose": "Close",
@@ -1171,7 +1178,45 @@
     "staleBadge": "unused",
     "learningLabel": "Learn from my conversations",
     "learningHint": "Off stops Naby recording anything new; what it already knows keeps being used.",
-    "learningOff": "Learning is off."
+    "learningOff": "Learning is off.",
+    "supersededBadge": "replaced",
+    "supersededBy": "replaced by \"{{key}}\"",
+    "supersededByGone": "replaced by a memory that has since been deleted",
+    "filterSuperseded": "Replaced",
+    "filterSupersededTitle": "Memories a newer one replaced. They are kept, not deleted, and are not used in replies.",
+    "revert": "Bring back",
+    "revertTitle": "Undo the replacement and use this memory again.",
+    "reverted": "Memory brought back.",
+    "summaryReplaced": "{{count}} replaced",
+    "styleTitle": "How you write",
+    "styleEmpty": "Naby has not worked out how you write yet.",
+    "styleLearning": "Still reading — {{count}} of {{needed}} messages.",
+    "styleSentence": "~{{chars}} characters per sentence",
+    "styleEndings": "{{formal}}% ~다 · {{polite}}% ~요",
+    "styleQuestions": "{{pct}}% questions",
+    "styleLists": "{{pct}}% of messages use lists",
+    "styleSamples": "from {{count}} messages",
+    "styleHint": "Counted from your own messages, never from Naby's. It nudges Naby's phrasing; what you ask for always wins. Turning learning off stops it updating.",
+    "inboxStyle": "Style proposals",
+    "inboxSuperseded": "Replaced memories",
+    "manualApproval": "Needs approval",
+    "manualApprovalTitle": "A proposal that changes how naby writes everywhere is never confirmed on its own — only a person can approve it.",
+    "supersessionLine": "\"{{key}}\" → replaced",
+    "supersessionOld": "was: {{value}}",
+    "supersessionNew": "now: {{value}}",
+    "learningMethodTitle": "How it learns",
+    "channelProposal": "Anything picked up mid-conversation waits as a proposal until you confirm it.",
+    "channelCorroboration": "When separate sessions keep saying the same thing, the switch above is what lets it confirm on its own.",
+    "channelReflection": "Looking back over a finished conversation happens by itself, but replacing an existing memory only takes effect once the new one is confirmed.",
+    "channelStyle": "Style rules confirm on their own per kind of work, while a rule that applies everywhere always waits for you.",
+    "reflectionNever": "It has not looked back over a finished conversation yet.",
+    "reflectionRecent": "Last looked back: within the hour",
+    "reflectionHoursAgo": "Last looked back: {{count}}h ago",
+    "reflectionDaysAgo": "Last looked back: {{count}}d ago",
+    "openStyleBrowser": "See style memories",
+    "filterStyle": "Style",
+    "filterStyleTitle": "Only the style rules — the memories whose key starts with style/.",
+    "inboxMemory": "Memory proposals"
   },
   "bootstrap": {
     "title": "Tell naby four things and it starts out knowing you",
@@ -1190,7 +1235,8 @@
       "styleHint": "e.g. conclusion first, then the reasoning",
       "rule": "Anything it should never do?",
       "ruleHint": "e.g. never touch files outside the project"
-    }
+    },
+    "fastGrowth": "To teach it more, open a fast-growth session from the Naby tab."
   },
   "commandManager": {
     "title": "Commands",
@@ -1742,7 +1788,12 @@
   "chatInput": {
     "agentsGroup": "Agents",
     "commandsGroup": "Commands",
-    "agentLocked": "Still growing — this agent can be addressed directly once it reaches the butterfly stage.",
+    "agentScope": {
+      "egg": "Still growing — it can read, ask and draft. It will not change files or run commands yet.",
+      "larva": "Still growing — it can propose and draft from what it knows. It will not change files or run commands yet.",
+      "pupa": "It can take on work that can be undone. Anything irreversible is still held back.",
+      "butterfly": "It can take multi-step work on its own."
+    },
     "filesGroup": "Files & folders",
     "file": "file",
     "folder": "folder"
@@ -1757,6 +1808,7 @@
     "loading": "Reading the record…",
     "unavailable": "The growth record could not be read.",
     "eggHint": "Not measured yet — {{needed}} more answered check-in(s) to go.",
+    "eggHintWithDrills": "Not measured yet — {{needed}} more check-in(s) answered in real work to go · practice {{drills}} done ({{drillHits}} right).",
     "ofButterfly": "of the butterfly threshold",
     "tripwireBlocked": "Accuracy has reached the line, but {{count}} action(s) were refused for safety recently. Until those fall out of the recent window it does not become a butterfly — a safety refusal is not averaged away.",
     "byTaskType": "By kind of work",
@@ -1800,6 +1852,19 @@
       "lifetime": "All time"
     },
     "implicitAxis": "It also acted on its own {{reviewed}} time(s) that were looked back over afterwards, and you left {{stood}} of them alone. Those count toward the gauge too, but each is worth {{weight}} of a check-in you actually answered — not objecting is weaker evidence than choosing.",
+    "drillAxis": "Real {{real}} · practice {{drill}} — of the practice questions it guessed {{drillHits}} right. Practice counts toward the gauge at {{weight}} of a real check-in, and it can never START the measurement: the minimum sample has to come from real work.",
+    "drillTag": "practice",
+    "fastSession": {
+      "button": "Fast-growth session",
+      "hint": "A fast-growth session is a conversation of its own, where naby asks about you and sets practice decisions so it learns faster than ordinary work allows.",
+      "weight": "Practice answers count for less than real check-ins, and they can never start the measurement.",
+      "sessionTitle": "Fast-growth session",
+      "opening": "Opening\u2026",
+      "kickoff": "Starting the fast-growth session.",
+      "created": "The fast-growth session is open \u2014 naby asks the first question itself.",
+      "createdNoOpen": "Created. Open \"Fast-growth session\" from the top of your session list.",
+      "failed": "The session could not be created."
+    },
     "learning": {
       "title": "What it has learned so far",
       "confirmed": "Facts in use",
@@ -1815,6 +1880,11 @@
       "lastReflection": "It last looked back over a finished conversation on {{when}}.",
       "neverReflected": "It has not looked back over a finished conversation yet.",
       "notTheGauge": "These numbers do not enter the butterfly judgement — they show WHAT it has learned, not whether it can be trusted."
+    },
+    "report": {
+      "title": "Growth report",
+      "open": "Growth report",
+      "close": "Close"
     }
   },
   "updates": {

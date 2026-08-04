@@ -16,10 +16,17 @@ import i18n from '@cockpit/shared-i18n';
  * a pill this table has never heard of renders precisely as it did before.
  */
 
-/** The routing gate's refusal (spec §3). `detail` is `not-butterfly:<agentName>` —
- *  the code and the agent it is about, since the sentence names the agent. */
+/** The routing gate's pill. TWO codes, one for each era of the gate:
+ *
+ *   `not-butterfly:<agentName>`        — pre-M12: the address was REFUSED and the
+ *                                        turn ran unrouted. No longer emitted;
+ *                                        still rendered, because it sits in
+ *                                        transcripts users can still scroll back to.
+ *   `stage-limited:<stage>:<agentName>` — P3-M12a: the address was HONOURED and the
+ *                                        agent's actions were narrowed to its stage. */
 const ROUTING_GATE = 'routing-gate';
 const NOT_BUTTERFLY = 'not-butterfly:';
+const STAGE_LIMITED = 'stage-limited:';
 
 /** Render one harness pill. Returns the label and the detail as the transcript
  *  should show them; `detail` undefined means the pill is label-only.
@@ -31,6 +38,24 @@ export function renderHarnessPill(
   detail: string | undefined,
 ): { label: string; detail?: string } {
   const label = subtype || 'harness event';
+
+  if (label === ROUTING_GATE && detail?.startsWith(STAGE_LIMITED)) {
+    // `stage-limited:<stage>:<agentName>` — split once, so an agent name with a
+    // colon in it (nothing forbids one) keeps its colons instead of truncating.
+    const rest = detail.slice(STAGE_LIMITED.length);
+    const sep = rest.indexOf(':');
+    const stage = sep >= 0 ? rest.slice(0, sep) : rest;
+    const agentName = sep >= 0 ? rest.slice(sep + 1) : '';
+    return {
+      label: i18n.t('harnessPill.stageScope', { defaultValue: 'acting within its stage' }),
+      detail: i18n.t('harnessPill.stageLimited', {
+        agent: agentName,
+        stage: i18n.t(`growth.stage.${stage}`, { defaultValue: stage }),
+        defaultValue:
+          '@{{agent}} answered as itself, at the {{stage}} stage — it can read, draft and propose, and the actions it has not been measured on yet are held back.',
+      }),
+    };
+  }
 
   if (label === ROUTING_GATE && detail?.startsWith(NOT_BUTTERFLY)) {
     const agentName = detail.slice(NOT_BUTTERFLY.length);
