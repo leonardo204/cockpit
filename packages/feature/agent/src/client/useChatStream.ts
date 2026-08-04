@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { applyStreamEvent, type StreamEvent } from './applyStreamEvent';
+import { actingAgentFromInit, type ActingAgent } from './actingAgent';
 import type {
   ChatMessage,
   ImageInfo,
@@ -55,6 +56,14 @@ interface UseChatStreamOptions {
    */
   onEngineModel?: (model: string) => void;
   /**
+   * WHO is answering this turn — the agent, not the engine — as the naby engine
+   * reports it on the same `system/init` event (`acting_agent`). `null` when the
+   * event carries none: a legacy engine, or a turn with no agent identity at all.
+   * The loading bubble names it; see actingAgent.ts for why it is the agent and
+   * not the brand.
+   */
+  onActingAgent?: (agent: ActingAgent | null) => void;
+  /**
    * The model the user picked in the bottom-bar ModelSwitcher for the active
    * engine, read fresh at send time. Returns '' (or undefined) when no override
    * is chosen → the turn omits `model` and the engine's own default answers.
@@ -85,7 +94,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, getModel }: UseChatStreamOptions
+  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, onActingAgent, getModel }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -111,6 +120,9 @@ export function useChatStream(
   // the whole stream handler every render.
   const onEngineModelRef = useRef(onEngineModel);
   onEngineModelRef.current = onEngineModel;
+  // The acting agent rides the same event and the same indirection.
+  const onActingAgentRef = useRef(onActingAgent);
+  onActingAgentRef.current = onActingAgent;
   // Same indirection for the model getter: read the CURRENT pick at send time
   // without listing it in handleSend's deps (a switch mid-session must not
   // re-create the send closure, and the ModelSwitcher may hand a fresh getter).
@@ -258,6 +270,11 @@ export function useChatStream(
       // the status indicator can show the actual model answering this turn.
       const initModel = event.model;
       if (typeof initModel === 'string' && initModel) onEngineModelRef.current?.(initModel);
+      // WHO is answering, from the same event. Reported on EVERY init, including
+      // when it is absent (→ null): a turn that switched to an engine with no agent
+      // identity must fall back to the engine brand rather than keep naming the
+      // agent from the previous turn.
+      onActingAgentRef.current?.(actingAgentFromInit(event));
       setApiRetryInfo(null); // successful init means any prior retry chain resolved
       // #bg: a turn that starts AFTER this run already produced a result is a follow-up (e.g. the
       // auto-run when a background task reports back) → give it its own assistant bubble instead

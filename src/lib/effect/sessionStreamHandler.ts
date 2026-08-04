@@ -12,7 +12,7 @@ import { ValidationError, WSError } from "@cockpit/effect-core"
 import type { WSConnection } from "@cockpit/effect-services"
 import { fromWebSocket } from "@cockpit/effect-runtime/server"
 import {
-  getRunSnapshot,
+  getAttachAnnouncement,
   addRunListener,
   type RunEvent,
 } from "@cockpit/feature-agent/server/sessionRunHub"
@@ -43,22 +43,16 @@ export const handleSessionStream = (
       (unsub) => Effect.sync(unsub)
     )
 
-    // 2. Snapshot of the in-flight turn (consistent backlog), or idle.
-    const snap = getRunSnapshot(sessionId)
-    const snapshotSeq = snap ? snap.seq : -1
-    if (snap) {
-      yield* conn.send({
-        type: "run-snapshot",
-        status: snap.status,
-        seq: snap.seq,
-        // Turn time-boundary: lets clients cut the in-flight turn's disk image by
-        // message timestamp instead of by prompt text (see useLiveStream).
-        startedAt: snap.startedAt,
-        events: snap.events,
-      })
-    } else {
-      yield* conn.send({ type: "run-idle" })
-    }
+    // 2. What is going on for this session, decided in ONE place (the hub):
+    //    a live turn (`run-snapshot`, a consistent backlog whose `startedAt`
+    //    lets clients cut the in-flight turn's disk image by timestamp instead
+    //    of by prompt text — see useLiveStream), a turn that has been reserved
+    //    but has not started yet (`run-pending`, which is what a tab opened by
+    //    the fast-growth button attaches into), or nothing (`run-idle`).
+    const announcement = getAttachAnnouncement(sessionId)
+    const snapshotSeq =
+      announcement.type === "run-snapshot" ? announcement.seq : -1
+    yield* conn.send(announcement)
 
     // 3. Heartbeat.
     yield* Effect.forkScoped(

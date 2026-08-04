@@ -29,6 +29,7 @@ import { ModelSwitcher } from './ModelSwitcher';
 import { modelScopeFor, modelLabel } from './modelCatalog';
 import { AllowChangesToggle } from './AllowChangesToggle';
 import { deriveEngineName, accountChipForEngine } from './engineName';
+import { ASSUMED_ACTING_AGENT, thinkingDisplayName, type ActingAgent } from './actingAgent';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/Chat.tsx.
@@ -87,13 +88,20 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // session arrives; until then <EngineSwitcher/> shows the SELECTED engine's
   // label instead. Passed to the switcher, which prefers this once present.
   const [liveModel, setLiveModel] = useState<string | null>(null);
-  // Short name of the engine that answers (Claude / GPT / Gemini / ChatGPT / AI),
-  // shown in the MessageList "… is thinking" bubble instead of a hardcoded
-  // "Claude". <EngineSwitcher/> is the single owner of the /api/naby engine read,
-  // so it reports the provider-kind-precise name here; when the switcher is not
+  // Short name of the engine that answers (Claude / GPT / Gemini / ChatGPT / AI).
+  // It labels the ENGINE — the toolbar chip — and is now only the FALLBACK for the
+  // "… is thinking" bubble, which names the acting agent (see `actingAgent` just
+  // below). <EngineSwitcher/> is the single owner of the /api/naby engine read, so
+  // it reports the provider-kind-precise name here; when the switcher is not
   // mounted (header hidden / non-claude engine) we fall back to sniffing the
   // live-resolved model, and finally to a generic "AI".
   const [reportedEngineName, setReportedEngineName] = useState<string | null>(null);
+  // WHO is answering this turn. Starts as the persona because an unaddressed turn
+  // IS the persona's turn (the engine's `growthSubject` falls back to it), so the
+  // bubble does not flip name a second into every send; each turn's `system/init`
+  // then reports the truth, which differs only for an `@other-agent` turn.
+  const [actingAgent, setActingAgent] = useState<ActingAgent | null>(ASSUMED_ACTING_AGENT);
+  const handleActingAgent = useCallback((agent: ActingAgent | null) => setActingAgent(agent), []);
   // Stable identity: <EngineSwitcher/> reports on every engine-name change, and a
   // fresh callback each render would re-fire its report effect needlessly.
   const handleEngineName = useCallback((name: string) => setReportedEngineName(name), []);
@@ -167,9 +175,23 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   const accountChip = accountChipForEngine(
     activeEngine ?? { engineId: null, selectedProvider: null },
   );
-  const thinkingName = useMemo(
+  // The engine brand, kept as what it is: the FALLBACK for the thinking bubble,
+  // and the only thing shown when a turn has no agent identity at all.
+  const engineBrand = useMemo(
     () => reportedEngineName ?? deriveEngineName({ liveModel }),
     [reportedEngineName, liveModel],
+  );
+  // What the loading bubble says is thinking. The AGENT — ko 나비 / en naby for the
+  // built-in persona, an imported agent's own handle when the turn was addressed to
+  // one — because the engine brand answers a question the user did not ask and is
+  // already on the toolbar. The rule itself lives in actingAgent.ts.
+  const thinkingName = useMemo(
+    () => thinkingDisplayName({
+      acting: actingAgent,
+      personaLabel: t('chat.personaName', { defaultValue: 'naby' }),
+      engineName: engineBrand,
+    }),
+    [actingAgent, engineBrand, t],
   );
   // Plan mode (per-tab): controlled by TabInfo.planMode (persisted); falls back to
   // local state when no prop (standalone use). Read-only exploration that produces a
@@ -254,6 +276,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onFetchTitle: fetchSessionTitle,
     onRunComplete: () => reconcileFromDiskRef.current?.(),
     onEngineModel: setLiveModel,
+    onActingAgent: handleActingAgent,
     getModel,
   });
 
@@ -601,6 +624,11 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             isActive={isActive}
             onApprovePlan={handleApprovePlan}
             thinkingName={thinkingName}
+            // A turn this tab did NOT send: the fast-growth session's opening
+            // question, a Telegram message, a scheduled task — anything the live
+            // stream reports (including a turn merely RESERVED and not yet
+            // started) while this tab is not the originator.
+            viewerRun={liveRunning && !isLoading}
             onStop={handleStop}
           />
         )}

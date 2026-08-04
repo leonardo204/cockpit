@@ -10,6 +10,13 @@ import { useChatStream } from '../useChatStream';
 import { useLiveStream } from '../useLiveStream';
 import { MessageList, type MessageListHandle } from '../MessageList';
 import { MobileChatInput } from './MobileChatInput';
+import {
+  ASSUMED_ACTING_AGENT,
+  thinkingDisplayName,
+  type ActingAgent,
+} from '../actingAgent';
+import { GENERIC_ENGINE_NAME } from '../engineName';
+import i18n from '@cockpit/shared-i18n';
 import type { ChatMessage, ChatEngine } from '../types';
 
 // Per-session engine, persisted by the desktop tab system. Naby is single-engine
@@ -43,6 +50,19 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
   const [title, setTitle] = useState<string>(initialTitle ?? '');
   const [resolved, setResolved] = useState<ResolvedRun>({});
   const messageListRef = useRef<MessageListHandle>(null);
+  // WHO the loading bubble names on the phone. The same rule as desktop (see
+  // actingAgent.ts): the acting AGENT, defaulting to the persona because an
+  // unaddressed turn is the persona's, and never the engine brand unless the turn
+  // reports no agent at all. Without this the phone said "AI is thinking" — the
+  // generic fallback — which is the same mistake in a duller costume.
+  const [actingAgent, setActingAgent] = useState<ActingAgent | null>(ASSUMED_ACTING_AGENT);
+  const thinkingName = thinkingDisplayName({
+    acting: actingAgent,
+    personaLabel: i18n.t('chat.personaName', { defaultValue: 'naby' }),
+    // No <EngineSwitcher/> on mobile to report a brand, so the fallback is the
+    // generic label this screen already used.
+    engineName: GENERIC_ENGINE_NAME,
+  });
 
   // Resolve this session's persisted engine + model from session.json (same as
   // the desktop tab system). Runs once; failures are non-fatal (we fall back to
@@ -116,6 +136,7 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
     // temp live bubbles converge to canonical uuids — without this the next snapshot /
     // incremental load can double-render the turn on mobile.
     onRunComplete: () => reconcileFromDiskRef.current?.(),
+    onActingAgent: setActingAgent,
   });
 
   // Live viewer: tail the active run whenever we're viewing this session and not
@@ -181,6 +202,7 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
           isLoadingMore={isLoadingMore}
           onLoadMore={loadMoreHistory}
           isActive={isActive}
+          thinkingName={thinkingName}
         />
       )}
 

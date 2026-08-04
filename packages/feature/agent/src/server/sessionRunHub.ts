@@ -53,6 +53,7 @@ const g = globalThis as unknown as {
   __cockpitRunRegistry?: Map<string, RunState>;
   __cockpitRunListeners?: Map<string, Set<RunListener>>;
   __cockpitRunSeqByKey?: Map<string, number>;
+  __cockpitRunPending?: Map<string, PendingRun>;
 };
 const registry: Map<string, RunState> =
   g.__cockpitRunRegistry ?? (g.__cockpitRunRegistry = new Map());
@@ -74,12 +75,120 @@ function bumpSeq(state: RunState): number {
   return state.seq;
 }
 
+/** Fan an event out to the listeners of ONE key. */
+function fanoutKey(key: string, ev: RunEvent): void {
+  const ls = listeners.get(key);
+  if (ls) for (const cb of ls) { try { cb(ev); } catch { /* ignore */ } }
+}
+
 /** Fan an event out to the union of listeners across all of a run's alias keys. */
 function fanout(state: RunState, ev: RunEvent): void {
-  for (const k of state.keys) {
-    const ls = listeners.get(k);
-    if (ls) for (const cb of ls) { try { cb(ev); } catch { /* ignore */ } }
-  }
+  for (const k of state.keys) fanoutKey(k, ev);
+}
+
+// -- A RUN THAT IS COMING BUT HAS NOT STARTED YET ---------------------------
+//
+// THE REPORT. The fast-growth button mints a session and OPENS it, and the
+// route fires that session's opening turn headlessly on the way out
+// (`lib/fastGrowthKickoff.ts`). The tab therefore attaches to /ws/session-stream
+// in the same instant the turn is being started — and it wins that race often,
+// because the kickoff's own path still has a dynamic import of the engine
+// composition root and an async preflight ahead of it before `startRun` runs.
+// The attach found no run, was told `run-idle`, and the user sat in front of an
+// empty conversation with NOTHING on screen while naby was in fact already
+// working. The transcript only appeared when the turn landed.
+//
+// A run that has started announces itself perfectly well (the attach gets a
+// `run-snapshot` with `status: 'running'` and the buffered events). The hole is
+// only the window BEFORE `startRun`, so this is what fills it: a reservation
+// under the same key, made by whoever is about to dispatch, read by the attach
+// handler, and converted or dropped in one place.
+//
+//   reserveRun(key)  — "a turn for this session is on its way".
+//   startRun(key)    — CONVERTS it silently: the run's own events take over.
+//   releaseRun(key)  — drops it and tells attached viewers, so a dispatch that
+//                      never started (no engine configured, a refused preflight)
+//                      cannot leave a spinner running forever.
+//
+// A reservation is NOT a run: `isRunActive` still means "a turn is writing", so
+// the 409 one-active guard and the scheduled-task status polling are untouched.
+
+interface PendingRun {
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** How long a reservation may stand unconverted. The explicit `releaseRun` calls
+ *  are what normally clear it; this is the backstop for a caller that dies
+ *  between reserving and dispatching, because the failure it prevents — an
+ *  indicator that never stops — is one the user cannot clear either. */
+export const PENDING_TTL_MS = 30_000;
+
+const pending: Map<string, PendingRun> =
+  g.__cockpitRunPending ?? (g.__cockpitRunPending = new Map());
+
+/** Drop a reservation without telling anyone. Used when a real run takes over:
+ *  its own events are the announcement. */
+function clearPending(key: string): void {
+  const p = pending.get(key);
+  if (!p) return;
+  clearTimeout(p.timer);
+  pending.delete(key);
+}
+
+/**
+ * Announce that a turn for `key` is about to start. Idempotent (a second reserve
+ * just restarts the deadline), and a no-op while a run is already live under the
+ * key — that run is already announcing itself.
+ */
+export function reserveRun(key: string, ttlMs: number = PENDING_TTL_MS): void {
+  if (!key) return;
+  if (registry.get(key)?.status === 'running') return;
+  clearPending(key);
+  const timer = setTimeout(() => releaseRun(key), ttlMs);
+  // Never let a forgotten reservation hold the process open (electron main and
+  // the test workers both notice).
+  (timer as unknown as { unref?: () => void }).unref?.();
+  pending.set(key, { timer });
+}
+
+/**
+ * The reserved turn is not coming (refused preflight, a throw, the deadline).
+ * Fans out the SAME `run-ended` every real turn ends with, so every attached
+ * client clears its indicator through the path it already has, and reconciles
+ * from disk exactly as it would after a genuine turn.
+ *
+ * No-op when there was no reservation, and silent when a run took over in the
+ * meantime — a stray release must never end a live turn early.
+ */
+export function releaseRun(key: string): void {
+  if (!pending.has(key)) return;
+  clearPending(key);
+  if (registry.get(key)?.status === 'running') return;
+  const seq = (seqByKey.get(key) ?? 0) + 1;
+  seqByKey.set(key, seq);
+  fanoutKey(key, { seq, message: { type: 'run-ended', status: 'idle' } });
+}
+
+/** True while a turn has been reserved for `key` but has not started yet. */
+export function isRunPending(key: string): boolean {
+  return pending.has(key);
+}
+
+/** What a freshly attached client is told about `key`, in one decision so the
+ *  WS handler holds no policy: a live turn, a turn on its way, or nothing.
+ *  A reservation outranks a FINISHED run still sitting in the grace window —
+ *  the finished one has nothing left to say, the coming one does. */
+export type AttachAnnouncement =
+  | { type: 'run-snapshot'; status: RunStatus; seq: number; startedAt: number; events: unknown[] }
+  | { type: 'run-pending' }
+  | { type: 'run-idle' };
+
+export function getAttachAnnouncement(key: string): AttachAnnouncement {
+  const snap = getRunSnapshot(key);
+  if (snap && snap.status === 'running') return { type: 'run-snapshot', ...snap };
+  if (isRunPending(key)) return { type: 'run-pending' };
+  if (snap) return { type: 'run-snapshot', ...snap };
+  return { type: 'run-idle' };
 }
 
 /**
@@ -102,6 +211,10 @@ export function startRun(key: string, cwd: string, promptText?: string, runId?: 
   // concurrent dispatches for the same session/runId can't both pass — the second gets false.
   // Returning false (vs clobbering) prevents two writers from interleaving the same jsonl.
   if (prev?.status === 'running') return false;
+  // The reserved turn is the turn that just started: convert the reservation
+  // silently. From here on the run's own events (starting with the seeded
+  // `_human` prompt) are what tells attached clients it is alive.
+  clearPending(key);
   // seq is monotonic across turns (never resets) so a viewer that stays connected over
   // consecutive turns keeps filtering new events by `seq > snapshotSeq`. Fall back to the
   // retained per-key seq when the prior turn has already been evicted from the registry.

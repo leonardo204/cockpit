@@ -187,11 +187,22 @@ export function useChatHistory(
             setMessages((prevMessages) =>
               mergeIncrementalMessages(prevMessages, data.messages as ChatMessage[])
             );
-          } else if (!liveRunningRef?.current) {
+          } else {
             // #10: full (initial) load — but if the live stream is already rendering this
             // run (viewer joined mid-run), don't overwrite its bubbles. loadedSessionId is
             // still set below so liveSessionId resolves; live + onComplete reconcile own it.
-            setMessages(data.messages);
+            //
+            // WHAT IS PROTECTED IS THE BUBBLES, NOT THE FLAG. The live flag now also goes
+            // up for a turn that has been RESERVED and has not started (§3.3c) — there is
+            // nothing on screen to protect in that window, and skipping the load there
+            // would leave a session's whole history blank behind the typing indicator
+            // until the turn ended. Checked against the rendered messages instead.
+            setMessages((prevMessages) =>
+              liveRunningRef?.current &&
+              prevMessages.some((m) => typeof m.id === 'string' && m.id.startsWith('live-'))
+                ? prevMessages
+                : (data.messages as ChatMessage[])
+            );
           }
           // Track which file the rendered messages came from. Use the sid
           // we actually requested (data.sessionId echoes the request and

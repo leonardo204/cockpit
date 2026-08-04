@@ -39,11 +39,18 @@ interface MessageListProps {
   isActive?: boolean; // Whether the tab is active (handles scroll issues for hidden tabs)
   /** Plan mode: approve the presented plan → turn off plan mode and resend to execute */
   onApprovePlan?: () => void;
-  /** Short name of the engine answering this turn (e.g. "Claude" / "GPT" /
-   *  "Gemini" / "ChatGPT"), shown in the "… is thinking" bubble. A plain string,
-   *  so it never threatens the memoized rows below. Falls back to a generic
-   *  label when absent. */
+  /** WHO the "… is thinking" bubble names: the AGENT answering this turn — ko 나비
+   *  / en naby for the built-in persona, an imported agent's own handle for a turn
+   *  addressed to one — falling back to the engine brand ("Claude" / "GPT" /
+   *  "Gemini") only where no agent identity exists. Chat resolves it (actingAgent.ts)
+   *  and passes a plain string, so it never threatens the memoized rows below. */
   thinkingName?: string | null;
+  /** True when the turn on screen was started SOMEWHERE ELSE and this tab is only
+   *  watching it: the fast-growth session's opening turn, a Telegram message, a
+   *  scheduled task. The user did not press send, so "naby is thinking" — the
+   *  label for a turn they just asked for — reads as an answer to a question they
+   *  never asked. They are being spoken TO, and the bubble says so. */
+  viewerRun?: boolean;
   /** Stops the running turn. The machinery already existed (ESC over the chat
    *  area, `/api/chat/stop`) but had no visible control, so a long turn looked
    *  indistinguishable from a hung one. */
@@ -56,7 +63,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, onStop },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop },
   ref
 ) {
   const { t } = useTranslation();
@@ -433,7 +440,17 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 <div className="bg-accent rounded-2xl rounded-bl-md px-4 py-3 max-w-[90%]">
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <span className="inline-block w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
-                    <span className="text-sm">{t('chat.thinking', { name: thinkingName || GENERIC_ENGINE_NAME })}</span>
+                    {/* Same bubble, same spinner, same clock, same Stop — only the
+                        sentence changes, because a turn nobody on this screen asked
+                        for is naby speaking first, not an engine answering. Both
+                        sentences name the AGENT: `thinkingName` is resolved from the
+                        turn's acting agent, and only an engine-brand fallback (no
+                        agent identity at all) puts a vendor name in this bubble. */}
+                    <span className="text-sm">
+                      {viewerRun
+                        ? t('chat.typing', { defaultValue: 'naby is typing…' })
+                        : t('chat.thinking', { name: thinkingName || GENERIC_ENGINE_NAME })}
+                    </span>
                     <span className="text-xs tabular-nums text-muted-foreground/70" data-testid="thinking-elapsed">
                       {formatElapsed(elapsedSec)}
                     </span>

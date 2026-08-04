@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { dispatchChat } from './orchestrator';
-import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from '../sessionRunHub';
+import {
+  isRunActive,
+  getRunSnapshot,
+  getRunSessionId,
+  requestStop,
+  isRunPending,
+  getAttachAnnouncement,
+  addRunListener,
+} from '../sessionRunHub';
 import type { EngineSpec, RunCtx, RunEvent } from './types';
 
 // ── Contract suite for the shared run-lifecycle skeleton (orchestrator) ──
@@ -142,5 +150,75 @@ describe('orchestrator dispatch contract', () => {
     requestStop(out.runKey);
     await waitUntil(() => !isRunActive(out.runKey));
     expect(getRunSnapshot(out.runKey)?.status).toBe('idle');
+  });
+});
+
+/**
+ * A TURN IS COMING, SAID BEFORE THE TURN CAN START.
+ *
+ * Every headless caller reaches a user's screen through this one function — the
+ * fast-growth kickoff, the Telegram bridge, a scheduled task — and all of them
+ * have the same problem: a tab can attach to the session while the dispatch is
+ * still in its preflight, find no run, be told the session is idle, and render
+ * an empty conversation over a turn that is on its way. The announcement is made
+ * HERE, before the preflight await, so it covers all of them at once.
+ */
+describe('orchestrator: the session is marked as expecting a turn', () => {
+  it('a tab attaching during preflight is told a turn is coming', async () => {
+    const sessionId = freshRunId();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow: EngineSpec = {
+      name: 'fake',
+      preflight: async () => {
+        await gate;
+        return { ok: true as const };
+      },
+      runner: { run: async () => {} },
+    };
+    const dispatched = dispatchChat(slow, { prompt: 'x', sessionId });
+    // The window the fast-growth tab opens in: no run exists yet.
+    expect(getRunSnapshot(sessionId)).toBeNull();
+    expect(getAttachAnnouncement(sessionId)).toEqual({ type: 'run-pending' });
+    release();
+    const out = await dispatched;
+    expect(out.ok).toBe(true);
+    // The turn took the announcement over.
+    expect(isRunPending(sessionId)).toBe(false);
+    await waitUntil(() => !isRunActive(sessionId));
+  });
+
+  it('a refused preflight ends the waiting instead of leaving it on', async () => {
+    const sessionId = freshRunId();
+    const seen: Array<{ message: unknown }> = [];
+    const off = addRunListener(sessionId, (ev) => seen.push(ev));
+    const refusing: EngineSpec = {
+      name: 'fake',
+      preflight: async () => ({ ok: false as const, status: 503, error: 'no engine configured' }),
+      runner: { run: async () => {} },
+    };
+    const out = await dispatchChat(refusing, { prompt: 'x', sessionId });
+    expect(out.ok).toBe(false);
+    // No run will ever start for this session, and the tab is told so with the
+    // same end-of-turn signal a real turn sends.
+    expect(isRunPending(sessionId)).toBe(false);
+    expect(getAttachAnnouncement(sessionId)).toEqual({ type: 'run-idle' });
+    expect(seen.map((e) => (e.message as { type?: string }).type)).toEqual(['run-ended']);
+    off();
+  });
+
+  it('the loser of a concurrent dispatch does not end the winner\'s turn', async () => {
+    const sessionId = freshRunId();
+    const first = await dispatchChat(spec(blockingRun), { prompt: 'x', sessionId });
+    expect(first.ok).toBe(true);
+    const seen: Array<{ message: unknown }> = [];
+    const off = addRunListener(sessionId, (ev) => seen.push(ev));
+    const second = await dispatchChat(spec(async () => {}), { prompt: 'y', sessionId });
+    expect(second).toEqual({ ok: false, status: 409, error: 'session is already running' });
+    expect(isRunActive(sessionId)).toBe(true);
+    expect(seen).toHaveLength(0);
+    requestStop(sessionId);
+    await waitUntil(() => !isRunActive(sessionId));
+    off();
   });
 });

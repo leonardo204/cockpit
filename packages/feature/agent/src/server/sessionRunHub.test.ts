@@ -13,6 +13,11 @@ import {
   isRunActive,
   getRunSnapshot,
   addRunListener,
+  reserveRun,
+  releaseRun,
+  isRunPending,
+  getAttachAnnouncement,
+  PENDING_TTL_MS,
 } from './sessionRunHub';
 
 describe('sessionRunHub (#10 run registry)', () => {
@@ -166,5 +171,132 @@ describe('sessionRunHub (#10 run registry)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * A TURN THAT IS COMING, BUT HAS NOT STARTED YET.
+ *
+ * THE REPORT. The fast-growth button mints a session, opens it, and fires that
+ * session's opening turn headlessly on the way out. The tab therefore attaches
+ * to /ws/session-stream while the turn is still being started — and won that
+ * race, because a dynamic import and a preflight sit between the HTTP response
+ * and `startRun`. The attach found no run, was told `run-idle`, and the user
+ * stared at an empty conversation while naby was already working.
+ *
+ * Each case below is one way the fill for that window could go wrong in a user's
+ * hands: no indicator, an indicator that never stops, or an indicator that ends
+ * a live turn.
+ */
+describe('a reserved run (the attach-before-the-turn-starts window)', () => {
+  it('an attach during the window is told a turn is coming, not that the session is idle', () => {
+    expect(getAttachAnnouncement('R1')).toEqual({ type: 'run-idle' });
+    reserveRun('R1');
+    expect(isRunPending('R1')).toBe(true);
+    expect(getAttachAnnouncement('R1')).toEqual({ type: 'run-pending' });
+  });
+
+  it('startRun converts the reservation SILENTLY — the run itself takes over', () => {
+    const evs: Array<{ seq: number; message: unknown }> = [];
+    const off = addRunListener('R1', (ev) => evs.push(ev));
+    startRun('R1', '/cwd', 'hello');
+    expect(isRunPending('R1')).toBe(false);
+    // No end signal was fanned out by the conversion: the only event is the
+    // turn's own seeded prompt. A `run-ended` here would take the indicator down
+    // in the same instant the turn actually began.
+    expect(evs.map((e) => (e.message as { type?: string }).type)).toEqual(['user']);
+    const announced = getAttachAnnouncement('R1');
+    expect(announced.type).toBe('run-snapshot');
+    expect(announced.type === 'run-snapshot' && announced.status).toBe('running');
+    off();
+    markRunIdle('R1', 'idle');
+  });
+
+  it('a dispatch that never starts drops the reservation and ENDS the wait', () => {
+    // The ordinary shape of "this machine has no engine configured": preflight
+    // refuses, so no run is ever created. Without the release, the tab would spin
+    // forever with nothing on the way.
+    const evs: Array<{ seq: number; message: unknown }> = [];
+    const off = addRunListener('R2', (ev) => evs.push(ev));
+    reserveRun('R2');
+    releaseRun('R2');
+    expect(isRunPending('R2')).toBe(false);
+    expect(getAttachAnnouncement('R2')).toEqual({ type: 'run-idle' });
+    // The SAME `run-ended` a real turn finishes with, so every client clears the
+    // indicator through the path it already has.
+    expect(evs).toHaveLength(1);
+    expect((evs[0]!.message as { type?: string }).type).toBe('run-ended');
+    expect(evs[0]!.seq).toBeGreaterThan(0);
+    off();
+  });
+
+  it('release is silent while a run is live: it can never end a real turn early', () => {
+    const evs: Array<{ seq: number; message: unknown }> = [];
+    reserveRun('R3');
+    startRun('R3', '/cwd');
+    const off = addRunListener('R3', (ev) => evs.push(ev));
+    // The loser of a concurrent dispatch releases after the winner started.
+    reserveRun('R3'); // no-op: a run is live under this key
+    releaseRun('R3');
+    expect(isRunActive('R3')).toBe(true);
+    expect(evs).toHaveLength(0);
+    off();
+    markRunIdle('R3', 'idle');
+  });
+
+  it('releasing what was never reserved says nothing at all', () => {
+    const evs: Array<{ seq: number; message: unknown }> = [];
+    const off = addRunListener('R4', (ev) => evs.push(ev));
+    releaseRun('R4');
+    expect(evs).toHaveLength(0);
+    off();
+  });
+
+  it('a reservation nobody converts or drops expires on its own', () => {
+    // The backstop for a caller that dies between reserving and dispatching. The
+    // failure it prevents — an indicator that never stops — is one the user
+    // cannot clear either.
+    vi.useFakeTimers();
+    try {
+      const evs: Array<{ seq: number; message: unknown }> = [];
+      const off = addRunListener('R5', (ev) => evs.push(ev));
+      reserveRun('R5');
+      expect(isRunPending('R5')).toBe(true);
+      vi.advanceTimersByTime(PENDING_TTL_MS + 1);
+      expect(isRunPending('R5')).toBe(false);
+      expect((evs[0]?.message as { type?: string })?.type).toBe('run-ended');
+      off();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a COMING turn outranks a FINISHED one still inside the grace window', () => {
+    // The Telegram / scheduled-task shape: the session answered a minute ago (so
+    // an idle snapshot is still in the registry) and is about to answer again. An
+    // idle snapshot would tell the tab there is nothing to wait for.
+    startRun('R6', '/cwd');
+    markRunIdle('R6', 'idle');
+    expect(getAttachAnnouncement('R6').type).toBe('run-snapshot');
+    reserveRun('R6');
+    expect(getAttachAnnouncement('R6')).toEqual({ type: 'run-pending' });
+    releaseRun('R6');
+  });
+
+  it('the release event keeps seq monotonic, so the server-side filter cannot swallow it', () => {
+    // A viewer that connected during an earlier turn holds that turn's seq and
+    // only accepts strictly greater ones. A release stamped below it would be
+    // filtered out — and the indicator would never come down for that tab.
+    startRun('R7', '/cwd');
+    appendRun('R7', { type: 'assistant', uuid: 'x' });
+    markRunIdle('R7', 'idle');
+    const seqAtIdle = getRunSnapshot('R7')!.seq;
+    const evs: Array<{ seq: number; message: unknown }> = [];
+    const off = addRunListener('R7', (ev) => evs.push(ev));
+    reserveRun('R7');
+    releaseRun('R7');
+    expect(evs).toHaveLength(1);
+    expect(evs[0]!.seq).toBeGreaterThan(seqAtIdle);
+    off();
   });
 });

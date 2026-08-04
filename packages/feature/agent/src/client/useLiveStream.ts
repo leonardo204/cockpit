@@ -5,6 +5,7 @@ import { useRef } from 'react';
 import { useWebSocket } from '@cockpit/shared-ui';
 import type { ChatMessage, ChatEngine } from './types';
 import { applyStreamEvent, type StreamEvent } from './applyStreamEvent';
+import { runSignalFor } from './runSignal';
 
 // #10 viewer hook: tail /ws/session-stream for `sessionId` and render live through the
 // SAME reducer the originator uses (applyStreamEvent) → engine-agnostic, zero per-engine
@@ -16,9 +17,11 @@ import { applyStreamEvent, type StreamEvent } from './applyStreamEvent';
 // global-state broadcast (which races a freshly-loaded tab and is delivered once over a
 // shared connection): connect whenever this tab is viewing the session, and let the
 // snapshot's `status` decide. An idle snapshot → render nothing (disk history is
-// authoritative); a running snapshot → replay + tail. opts.onRunningChange drives the
-// "thinking" indicator / input lock; opts.onComplete fires on the turn's result so the
-// caller can reconcile from disk.
+// authoritative); a running snapshot → replay + tail; a `run-pending` announcement → a
+// turn has been reserved for this session but has not started (the fast-growth kickoff
+// opens its tab inside exactly that window), so show the indicator and wait.
+// opts.onRunningChange drives the "typing"/"thinking" indicator + input lock;
+// opts.onComplete fires when the turn ends so the caller can reconcile from disk.
 export function useLiveStream(
   sessionId: string | null,
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
@@ -140,14 +143,14 @@ export function useLiveStream(
         status?: string;
         startedAt?: number;
         events?: unknown[];
-        message?: Record<string, unknown>;
+        message?: { type?: string } & Record<string, unknown>;
       };
-      if (msg.type === 'run-snapshot' && Array.isArray(msg.events)) {
-        // Idle run → nothing to stream; the disk history already loaded is authoritative.
-        if (msg.status !== 'running') {
-          opts?.onRunningChange?.(false);
-          return;
-        }
+      // TWO SEPARATE QUESTIONS, in this order:
+      //   1. does this message change the TRANSCRIPT? (stateful, below)
+      //   2. does it change whether a turn is RUNNING? (pure, in runSignal.ts)
+      // They used to be one branch chain, which is how `run-pending` — the
+      // attach-before-the-turn-starts case — had nowhere to live.
+      if (msg.type === 'run-snapshot' && Array.isArray(msg.events) && msg.status === 'running') {
         // Authoritative replay of the in-flight turn. The snapshot owns this turn, so drop:
         //   • any prior temp live bubbles (handles reconnect), and
         //   • the in-flight turn's DISK version when a viewer joined mid-run and the initial
@@ -236,21 +239,19 @@ export function useLiveStream(
         seq.current = 0;
         turnActive.current = false;
         for (const ev of msg.events) apply(ev as StreamEvent);
-        opts?.onRunningChange?.(true);
-      } else if (msg.type === 'run-event' && msg.message) {
-        // 'run-ended' is the single definitive end signal — engines may emit several
-        // intermediate 'result's (codex = one per turn), so end only on run-ended.
-        if (msg.message.type === 'run-ended') {
-          opts?.onRunningChange?.(false);
-          opts?.onComplete?.();
-          return;
-        }
+      } else if (msg.type === 'run-event' && msg.message && msg.message.type !== 'run-ended') {
         apply(msg.message as StreamEvent);
-        opts?.onRunningChange?.(true);
-      } else if (msg.type === 'run-idle') {
-        opts?.onRunningChange?.(false);
       }
-      // ping: nothing to do
+
+      // The indicator side. `run-ended` arrives both from a real turn ending and
+      // from a reserved turn that never started, and both mean the same thing
+      // here: stop waiting, and re-read the transcript from disk (which is also
+      // the race guard — if the run finished between the attach and the first
+      // event, this is what takes the spinner down).
+      const signal = runSignalFor(msg);
+      if (!signal) return; // ping / anything unrecognised: nothing to do
+      opts?.onRunningChange?.(signal.running);
+      if (signal.complete) opts?.onComplete?.();
     },
   });
 }

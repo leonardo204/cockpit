@@ -1,5 +1,14 @@
 import { updateGlobalState, getSessionTitle } from '../state/globalState';
-import { startRun, appendRun, rekeyRun, markRunIdle, isRunActive, setRunAbort } from '../sessionRunHub';
+import {
+  startRun,
+  appendRun,
+  rekeyRun,
+  markRunIdle,
+  isRunActive,
+  setRunAbort,
+  reserveRun,
+  releaseRun,
+} from '../sessionRunHub';
 import { snapshotOnRunStart, snapshotOnRunEvent } from '../snapshot/hook';
 import { resolveCommandPrompt } from '../lib/slashCommands';
 import { createTranscriptRecorder } from '../state/transcriptRecorder';
@@ -48,10 +57,23 @@ export async function dispatchChat(
     return { ok: false, status: 400, error: 'Missing prompt or images' };
   }
 
+  // A turn for this session is now COMING. Said out loud here, before the
+  // preflight await, because everything below this line can take a visible
+  // amount of time (preflight may resolve a model or talk to the network) and a
+  // tab that attaches during it would otherwise be told the session is idle and
+  // show an empty conversation. Every headless caller — the fast-growth kickoff,
+  // the Telegram bridge, a scheduled task — reaches the user's screen through
+  // this one function, so the announcement is theirs too, for free.
+  // Converted by startRun below; released on every path that returns without one.
+  if (sessionId) reserveRun(sessionId);
+
   // Engine-specific pre-check BEFORE startRun (may resolve model / validate api key).
   if (spec.preflight) {
     const pre = await spec.preflight(body);
-    if (!pre.ok) return pre;
+    if (!pre.ok) {
+      if (sessionId) releaseRun(sessionId);
+      return pre;
+    }
   }
 
   const promptText = typeof prompt === 'string' ? prompt : undefined;
@@ -74,6 +96,10 @@ export async function dispatchChat(
   // runId doubles as the turn's identity marker on the seeded _human event (`_turnId`),
   // letting clients dedup the live user bubble without comparing prompt text.
   if (!startRun(currentKey, cwd || '', promptText, runId)) {
+    // No turn is coming from THIS call. Releasing is safe even when the loser of
+    // the race is this one: releaseRun stays silent while a run is live under the
+    // key, so the winner's turn is never ended early.
+    if (sessionId) releaseRun(sessionId);
     return { ok: false, status: 409, error: 'run already active' };
   }
   setRunAbort(currentKey, () => {
