@@ -233,15 +233,18 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   // Load command list: in-process builtins merged with Naby-owned enabled
   // commands (Phase 1.6 HP-02). Passing `cwd` includes this project's
   // project-scope owned commands.
-  const reloadCommands = useCallback(() => {
-    BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>(cwd)).then((exit) => {
-      if (exit._tag === 'Success') {
-        setCommands(exit.value as CommandInfo[]);
-      } else {
-        console.error('Failed to load commands:', exit.cause);
-      }
-    });
-  }, [cwd]);
+  const reloadCommands = useCallback(
+    (fresh = false) => {
+      BrowserRuntime.runPromiseExit(loadSlashCommands<CommandInfo>(cwd, { fresh })).then((exit) => {
+        if (exit._tag === 'Success') {
+          setCommands(exit.value as CommandInfo[]);
+        } else {
+          console.error('Failed to load commands:', exit.cause);
+        }
+      });
+    },
+    [cwd],
+  );
 
   // Reload when the active project changes, so a project-scope command shows
   // without reopening the tab.
@@ -296,6 +299,20 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     const m = activeLine.text.match(/^\s*(\/)([a-zA-Z0-9-]*)$/);
     return m ? { marker: m[1], verb: m[2].toLowerCase() } : null;
   }, [activeLine.text]);
+
+  // Reload WHEN THE PALETTE OPENS, and with `fresh` (server bypasses its scan
+  // throttle). The mount/focus/HarnessChanged reloads above miss exactly one
+  // path: a skill installed by the model mid-chat, followed by "/" typed into a
+  // window that never lost focus — no signal fires, and the server-side scan
+  // throttle can still be inside its window from the previous read. Keyed on the
+  // open TRANSITION (null → non-null), not on commandQuery itself, so typing the
+  // verb does not refetch per keystroke.
+  const paletteWasOpen = useRef(false);
+  useEffect(() => {
+    const open = commandQuery !== null;
+    if (open && !paletteWasOpen.current) reloadCommands(true);
+    paletteWasOpen.current = open;
+  }, [commandQuery, reloadCommands]);
 
   // The `@…` mention being typed, anywhere in the input (see findMentionQuery for
   // why it may sit mid-sentence and why `foo@bar.com` does not match).

@@ -166,12 +166,13 @@ function scanNabyHome(
   scope: HarnessScope,
   scopeKey: string,
   deps: HarnessActionDeps,
+  force = false,
 ): void {
   if (scope === 'org') return;
   const key = `${scope}:${scopeKey}`;
   const now = Date.now();
   const last = lastScanAt.get(key);
-  if (last !== undefined && now - last < SCAN_THROTTLE_MS) return;
+  if (!force && last !== undefined && now - last < SCAN_THROTTLE_MS) return;
   // Stamped BEFORE the walk so a tree that consistently throws is retried on the
   // same schedule as a healthy one, not on every single refetch.
   lastScanAt.set(key, now);
@@ -201,10 +202,20 @@ function scanNabyHome(
  * cost nothing between scans. Non-throwing for the same reason scanNabyHome is:
  * a broken harness tree must never empty the palette.
  */
-export function reconcileNabyHome(store: HarnessStore, cwd?: string | null): void {
+export function reconcileNabyHome(
+  store: HarnessStore,
+  cwd?: string | null,
+  opts?: {
+    /** Bypass the scan throttle. The palette-OPEN read sets this: an install
+     *  that finished seconds ago sits exactly inside the throttle window, and
+     *  "the user just opened the palette" is a deliberate gesture, not a
+     *  keystroke-rate refetch. */
+    force?: boolean;
+  },
+): void {
   const deps = defaultDeps(store);
-  scanNabyHome('user', DEFAULT_USER_ID, deps);
-  if (cwd) scanNabyHome('project', cwd, deps);
+  scanNabyHome('user', DEFAULT_USER_ID, deps, opts?.force);
+  if (cwd) scanNabyHome('project', cwd, deps, opts?.force);
 }
 
 // The store is opened on demand, so this must run on the node runtime and must

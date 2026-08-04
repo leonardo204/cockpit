@@ -148,7 +148,7 @@ describe('the composer acts on the signal', () => {
     // nothing else could trigger it. A named callback is what makes a second
     // trigger possible at all.
     expect(CHAT_INPUT).toMatch(/const reloadCommands = useCallback\(/);
-    expect(CHAT_INPUT).toContain('loadSlashCommands<CommandInfo>(cwd)');
+    expect(CHAT_INPUT).toContain('loadSlashCommands<CommandInfo>(cwd, { fresh })');
   });
 
   it('still reloads when the active project changes', () => {
@@ -187,5 +187,29 @@ describe('the refetch is not served from cache', () => {
     const body = call.slice(0, call.indexOf('export const', 1));
     expect(body).toContain('/api/commands');
     expect(body).toContain('cache: "no-store"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Palette-open fresh reload — the fourth trigger, and the only one that can
+// catch a MID-CHAT install: model writes the skill, user types "/" without the
+// window ever losing focus. Mount/focus/HarnessChanged all stay silent there,
+// and the server's scan throttle may still be inside its window — so the open
+// transition reloads with `fresh` and the server force-scans.
+// ---------------------------------------------------------------------------
+describe('palette-open fresh reload', () => {
+  it('ChatInput reloads with fresh=true on the open transition, not per keystroke', () => {
+    const src = read('ChatInput.tsx');
+    expect(src).toContain('reloadCommands(true)');
+    // Transition-keyed: a ref guards null -> non-null, so typing the verb does
+    // not refetch on every character.
+    expect(src).toMatch(/paletteWasOpen/);
+  });
+
+  it('loadSlashCommands forwards fresh as a query param', () => {
+    const client = read(join('effect', 'agentClient.ts'));
+    const call = client.slice(client.indexOf('export const loadSlashCommands'));
+    const body = call.slice(0, call.indexOf('export const', 1));
+    expect(body).toContain('fresh=1');
   });
 });

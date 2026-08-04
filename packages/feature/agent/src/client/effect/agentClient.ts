@@ -72,10 +72,23 @@ export const saveAgentSettings = (
 // ─────────────────────────────────────────────────────────
 
 export const loadSlashCommands = <T = unknown>(
-  cwd?: string
+  cwd?: string,
+  opts?: {
+    /** Ask the server to bypass its harness-scan throttle. Sent by the
+     *  palette-OPEN reload only: a skill installed mid-chat seconds ago must
+     *  show the moment "/" is typed, and the 10s scan throttle would otherwise
+     *  hide it precisely in that window. Routine reloads (mount, focus,
+     *  HarnessChanged) stay throttled. */
+    fresh?: boolean
+  }
 ): Effect.Effect<ReadonlyArray<T>, AppError> =>
   httpJson<ReadonlyArray<T>>(
-    cwd ? `/api/commands?cwd=${encodeURIComponent(cwd)}` : "/api/commands",
+    `/api/commands?${[
+      cwd ? `cwd=${encodeURIComponent(cwd)}` : "",
+      opts?.fresh ? "fresh=1" : "",
+    ]
+      .filter(Boolean)
+      .join("&")}`,
     // `no-store` because this URL is now REFETCHED, not fetched once. The
     // composer re-reads it whenever a harness item is enabled or the window
     // regains focus, and the request is byte-identical to the previous one — a

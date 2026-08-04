@@ -191,13 +191,19 @@ export function loadAgentEntries(store: AgentPaletteStore): CommandInfo[] {
   })
 }
 
-export function listCommands(cwd: string | null, store: CommandStore = getStore()): CommandInfo[] {
+export function listCommands(
+  cwd: string | null,
+  store: CommandStore = getStore(),
+  fresh = false,
+): CommandInfo[] {
   // Reconcile the naby harness home BEFORE reading, exactly as the Settings list
   // does — a skill installed mid-chat must reach "/" without a trip through
-  // Settings. Throttled inside; guarded because test fakes implement only the
-  // narrow CommandStore and the reconcile needs the real importer surface.
+  // Settings. Throttled inside unless the palette-open read asks for `fresh`
+  // (the install may have finished inside the throttle window). Guarded because
+  // test fakes implement only the narrow CommandStore and the reconcile needs
+  // the real importer surface.
   try {
-    reconcileNabyHome(store as Parameters<typeof reconcileNabyHome>[0], cwd)
+    reconcileNabyHome(store as Parameters<typeof reconcileNabyHome>[0], cwd, { force: fresh })
   } catch {
     /* an unscannable home must never empty the palette */
   }
@@ -211,8 +217,10 @@ export function listCommands(cwd: string | null, store: CommandStore = getStore(
 
 export const GET = handler((request) =>
   Effect.sync(() => {
-    const cwd = new URL(request.url).searchParams.get("cwd")
-    return new Response(JSON.stringify(listCommands(cwd)), {
+    const params = new URL(request.url).searchParams
+    const cwd = params.get("cwd")
+    const fresh = params.get("fresh") === "1"
+    return new Response(JSON.stringify(listCommands(cwd, getStore(), fresh)), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })

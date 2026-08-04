@@ -207,3 +207,20 @@ describe('palette scan-on-read wiring', () => {
     expect(source).toMatch(/try\s*\{\s*\n?\s*reconcileNabyHome\(/);
   });
 });
+
+describe('palette fresh scan wiring', () => {
+  const source = readFileSync(join(__dirname, 'commands.ts'), 'utf8');
+  const harnessSource = readFileSync(join(__dirname, 'harness.ts'), 'utf8');
+
+  it('GET forwards fresh=1 into listCommands and the reconcile force flag', () => {
+    expect(source).toMatch(/params\.get\("fresh"\) === "1"/);
+    expect(source).toMatch(/reconcileNabyHome\([^)]*\{ force: fresh \}/);
+  });
+
+  it('force bypasses the scan throttle but still stamps it', () => {
+    // The throttle guard must consult force…
+    expect(harnessSource).toMatch(/!force && last !== undefined/);
+    // …and the stamp line survives unconditionally after it.
+    expect(harnessSource).toContain('lastScanAt.set(key, now)');
+  });
+});
