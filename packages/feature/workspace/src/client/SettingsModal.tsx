@@ -15,11 +15,17 @@ import {
 // F1-04. Provider keys are a desktop-app concern (safeStorage lives in the
 // Electron main process), so the section renders itself as unavailable when
 // `window.naby` is absent — i.e. in the plain browser dev server.
-import { NabyProviderSettings } from './NabyProviderSetup';
+// `NabyMcpServers` is the same component it always was; it simply mounts under
+// Connections now rather than at the foot of the provider section
+// (settings-ia-reorg §3.4).
+import { NabyProviderSettings, NabyMcpServers } from './NabyProviderSetup';
 import { UpdatePanel } from './UpdatePanel';
 import { DevModePanel } from './DevModePanel';
 // P15-06. The scoped-memory review + delete panel. Given the active session/cwd
 // so its `session`/`project` scopes are addressable; `user` scope needs neither.
+// It reads its own summary (`fetchMemorySummary`, exported from that file) and
+// states the pending count on its inbox heading — this modal no longer reads it,
+// see the nav below.
 import { NabyMemoryReview } from './NabyMemoryReview';
 // HP-02. The Naby-owned command CRUD panel. Given the active cwd so its
 // `project` scope is addressable; `user` scope needs no key.
@@ -54,24 +60,43 @@ interface SettingsModalProps {
 }
 
 type SettingsSectionId =
-  | 'theme'
-  | 'language'
+  | 'general'
   | 'provider'
+  | 'connections'
   | 'agents'
+  | 'memory'
   | 'harness'
   | 'permissions'
   | 'about';
 
-// Left-nav sections. Each `labelKey` reuses an existing i18n string, so no new
-// nav copy is introduced. `icon` is decorative only.
+// Left-nav sections, GROUPED BY INTENT (settings-ia-reorg §3.1). `icon` is
+// decorative only.
 //
-// Phase 3 (P3-M1) reorg: `agents` is the naby agent layer (the naby agent itself
-// + memory); 2026-08-03 the section is LABELLED for that agent ("Naby" / "나비")
-// rather than "Agents" — there is one, and calling the row a roster invited the
-// question of how to add another;
-// `harness` now owns command/skill/subagent (the old standalone `memory` and
-// `commands` sections were folded in — memory under Agents, commands under
-// Harness) so the two-layer model (`@` agents / `/` harness) shows in Settings.
+// WHAT MOVED, AND WHY THE ROWS ARE THESE EIGHT. Settings grew by accretion: each
+// new feature landed on the nearest existing tab, so "AI provider" ended up
+// holding an engine choice, five key accordions, two in-house MCP presets and an
+// unbounded server list, while Telegram — a connection setting — sat under the
+// agent tab and memory was a third section under it.
+//
+//   theme + language → GENERAL. Two one-control tabs, merged: each was a single
+//     row of three tiles, and a nav entry per control is a menu that describes
+//     itself rather than the work.
+//   AI PROVIDER keeps what the name promises — which model answers, and with
+//     whose key. Every MCP surface left it.
+//   CONNECTIONS (new) is what this machine is wired to: the System MCP presets
+//     and the user-added servers (one component, unchanged), plus Telegram.
+//   NABY is the agent itself — its list, its delegation settings, its growth
+//     summary. The growth REPORT is an overlay off that summary, not a section.
+//   MEMORY (new) is what the agent has learned, including the decisions waiting
+//     on the user. It was the third section of the agent tab, where the one
+//     thing on this screen that needs answering was also the least visible. It
+//     carried a count on its nav row for one build; the count lives on the tab's
+//     own inbox heading now (§3.3a).
+//   HARNESS / PERMISSIONS / ABOUT are unchanged.
+//
+// NO "ADVANCED" AND NO "OTHER". A label has to predict what is behind it
+// (NN/g information scent); a bucket named for its own vagueness predicts
+// nothing and becomes wherever the next feature goes.
 //
 // SINGLE-CODEPOINT ICONS ONLY. `agents` used 🧑‍🚀 (person + ZWJ + rocket), the
 // one ZWJ sequence in the codebase: Windows does not compose it and renders TWO
@@ -79,10 +104,11 @@ type SettingsSectionId =
 // codepoint everywhere — and on-theme, since the butterfly is the agent's own
 // growth/trust symbol.
 const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] = [
-  { id: 'theme', labelKey: 'settings.theme', icon: '🎨' },
-  { id: 'language', labelKey: 'settings.language', icon: '🌐' },
+  { id: 'general', labelKey: 'settings.general', icon: '🎨' },
   { id: 'provider', labelKey: 'settings.aiProvider', icon: '🤖' },
+  { id: 'connections', labelKey: 'settings.connections', icon: '🔌' },
   { id: 'agents', labelKey: 'agentManager.title', icon: '🦋' },
+  { id: 'memory', labelKey: 'memoryReview.title', icon: '🧠' },
   { id: 'harness', labelKey: 'harnessReview.title', icon: '🧩' },
   { id: 'permissions', labelKey: 'policyManager.title', icon: '🛡️' },
   { id: 'about', labelKey: 'settings.about', icon: 'ℹ️' },
@@ -112,7 +138,10 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
 
   // Which section the left nav has selected — replaces the old single long
   // scroll. Kept across opens so returning to Settings lands where you left.
-  const [section, setSection] = useState<SettingsSectionId>('theme');
+  // The ids were RENAMED by the reorg (theme+language → general, memory split
+  // out); this state is per-mount rather than persisted, so a rename simply
+  // starts at the first tab instead of restoring an id nothing renders.
+  const [section, setSection] = useState<SettingsSectionId>('general');
 
   const handleLanguageChange = useCallback((lang: string) => {
     setLanguageState(lang);
@@ -218,6 +247,21 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                   >
                     <span aria-hidden>{s.icon}</span>
                     <span>{t(s.labelKey)}</span>
+                    {/* NO BADGE ON ANY ROW, and the memory row least of all
+                        (settings-ia-reorg §3.3a).
+
+                        It shipped as a bare count beside the 기억 label and the
+                        first thing the user asked was what the "1" meant. The
+                        answer was in `title`/`aria-label` — and Electron never
+                        showed the tooltip, so the one surface that explained it
+                        was unreachable on the platform this app actually runs
+                        on. A number nobody can resolve is not a notification.
+
+                        The count did not go away; the SECOND place it was shown
+                        became the only one. The memory tab's inbox heading
+                        states "확인할 것 N건" over the very rows it counts, which
+                        is a number with its noun, its list and its actions on one
+                        screen — everything the badge was missing. */}
                   </button>
                 </li>
               ))}
@@ -235,7 +279,11 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
               branch renders its sections as direct children (a fragment, never a
               wrapper div) so the rule reaches both edges of the pane. */}
           <div className="flex-1 min-w-0 overflow-y-auto p-5 divide-y divide-border">
-            {section === 'theme' ? (
+            {/* GENERAL — the two one-control tabs, merged (§3.1). Two sections
+                rather than one with two grids: they are separate settings, and
+                the pane's rule between them is what says so. */}
+            {section === 'general' ? (
+              <>
               <SettingsSection title={t('settings.theme')}>
                 {/* The button grid keeps its own max-width: three tiles stretched
                     across a 1600px pane would read as three billboards. The
@@ -257,9 +305,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                   ))}
                 </div>
               </SettingsSection>
-            ) : null}
 
-            {section === 'language' ? (
               <SettingsSection title={t('settings.language')}>
                 <div className="grid grid-cols-3 gap-2 max-w-md">
                   {[
@@ -282,18 +328,29 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                   ))}
                 </div>
               </SettingsSection>
+              </>
             ) : null}
 
+            {/* AI PROVIDER — which model answers, and with whose key. The MCP
+                halves of this panel moved to Connections (§3.4). */}
             {section === 'provider' ? (
               <SettingsSection title={t('settings.aiProvider')}>
                 <NabyProviderSettings isOpen={isOpen} />
               </SettingsSection>
             ) : null}
 
-            {section === 'agents' ? (
+            {/* CONNECTIONS — what this machine is wired to. The MCP component is
+                the one that used to sit under the provider keys, mounted here
+                unchanged; Telegram came from the agent tab, where "how naby
+                reaches me" was filed under "who naby is". */}
+            {section === 'connections' ? (
               <>
-                <SettingsSection title={t('agentManager.title', { defaultValue: 'Naby' })}>
-                  <NabyAgentManager isOpen={isOpen} cwd={cwd} />
+                {/* Its own title rather than `providerSetup.mcpServers`: the
+                    component renders THAT heading itself, over the user-added
+                    list, below the in-house presets. Two identical headings one
+                    level apart would read as a rendering bug. */}
+                <SettingsSection title={t('settings.mcpServers')}>
+                  <NabyMcpServers isOpen={isOpen} />
                 </SettingsSection>
                 {/* Telegram escalation — how an agent reaches you (P3-M3). */}
                 <SettingsSection
@@ -301,11 +358,31 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                 >
                   <NabyTelegramSettings isOpen={isOpen} />
                 </SettingsSection>
-                {/* Memory lives with the agents (their learned memory), P3-M1 reorg. */}
-                <SettingsSection title={t('memoryReview.title')}>
-                  <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
-                </SettingsSection>
               </>
+            ) : null}
+
+            {/* NABY — the agent itself. One section now: memory became its own
+                tab (it is what the agent LEARNED, not what it IS) and Telegram
+                went to Connections. */}
+            {section === 'agents' ? (
+              <SettingsSection title={t('agentManager.title', { defaultValue: 'Naby' })}>
+                {/* `onLeaveSettings` is this modal's own close, handed down for
+                    ONE caller: the fast-growth button, which opens a session in
+                    the workspace BEHIND this modal. A control that navigates
+                    somewhere else has to get out of the way, or the user is left
+                    looking at Settings and told the thing they asked for is
+                    somewhere they cannot see. */}
+                <NabyAgentManager isOpen={isOpen} cwd={cwd} onLeaveSettings={onClose} />
+              </SettingsSection>
+            ) : null}
+
+            {/* MEMORY — the decisions inbox, the switches, the browser. It
+                counts its own pending decisions on the inbox heading, which is
+                where the count lives now that the nav badge is gone. */}
+            {section === 'memory' ? (
+              <SettingsSection title={t('memoryReview.title')}>
+                <NabyMemoryReview isOpen={isOpen} sessionId={sessionId} cwd={cwd} />
+              </SettingsSection>
             ) : null}
 
             {section === 'harness' ? (

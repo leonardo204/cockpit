@@ -77,10 +77,14 @@ const lookup = (d: Record<string, unknown>, path: string): unknown =>
  */
 const sentences = (s: string): number => (s.match(/[.!?](?=\s|$)/g) ?? []).length;
 
-/** Every panel rendered inside a settings section. */
+/** Every panel rendered inside a settings section, plus the two overlays those
+ *  panels open (the memory browser has its own file; the growth REPORT is new in
+ *  settings-ia-reorg §3.2 and inherits the same no-box rules — it is read-only,
+ *  which is a reason to have fewer frames, not more). */
 const PANELS = [
   'NabyAgentManager.tsx',
   'GrowthPanel.tsx',
+  'GrowthReportModal.tsx',
   'NabyTelegramSettings.tsx',
   'NabyMemoryReview.tsx',
   'NabyHarnessReview.tsx',
@@ -148,11 +152,30 @@ describe('the content pane owns the separator between sections', () => {
 
 describe('every settings block is a section', () => {
   // section id → how many sections it should render.
+  //
+  // THE 2026-08-04 REGROUP (settings-ia-reorg §3.1). Every change below is a MOVE
+  // — the same components, mounted under a different nav row — so the totals
+  // still add up to what they were plus nothing:
+  //
+  //   theme(1) + language(1)  →  general(2)     two one-control tabs merged.
+  //   provider(1)             →  provider(1)    unchanged in COUNT, but the MCP
+  //                                             halves left `NabyProviderSettings`
+  //                                             for the tab below.
+  //   —                       →  connections(2) MCP servers (the component that
+  //                                             was inside provider) + Telegram
+  //                                             (which was inside agents).
+  //   agents(3)               →  agents(1)      telegram and memory moved out.
+  //   —                       →  memory(1)      its own tab. (It carried a count
+  //                                             on its nav row for one build; see
+  //                                             the IA-3 block below.)
+  //
+  // Anything that is NOT a move would show up here as a total that grew.
   const EXPECTED: Record<string, number> = {
-    theme: 1,
-    language: 1,
-    provider: 1,
-    agents: 3, // agents / telegram escalation / memory
+    general: 2, // theme + language, merged
+    provider: 1, // engine choice + API keys; MCP moved to connections
+    connections: 2, // MCP servers (system presets + user-added) / telegram
+    agents: 1, // the naby agent list; its memory and telegram moved out
+    memory: 1, // the memory tab (decisions inbox, switches, browser)
     harness: 2, // harness review / commands
     permissions: 1,
     about: 2, // version + updates; dev mode brings its own (see below)
@@ -207,6 +230,7 @@ describe('nothing draws a card inside the agent row', () => {
   // one level deep and must separate itself with a rule or a left accent.
   const AGENTS = read('NabyAgentManager.tsx');
   const GROWTH = read('GrowthPanel.tsx');
+  const REPORT = read('GrowthReportModal.tsx');
   const EXPORT = read('AgentExportButton.tsx');
   const IMPORT = read('AgentImportButton.tsx');
 
@@ -234,9 +258,17 @@ describe('nothing draws a card inside the agent row', () => {
   });
 
   it('the learning block is a heading under a rule, not a panel', () => {
-    const learning = attrsOf(GROWTH, 'growth-learning');
+    // IT LIVES IN THE REPORT NOW (settings-ia-reorg §3.2), not in the row — the
+    // rule is unchanged and follows the block, because the reason for it is
+    // unchanged too: a bordered, tinted box would make these counts read as a
+    // second scoreboard beside the gauge.
+    const learning = attrsOf(REPORT, 'growth-learning');
+    expect(learning, 'growth-learning testid not found in the report').toBeTruthy();
     expect(learning).toContain('border-t border-border');
     expect(learning).not.toMatch(/rounded-(?:md|lg)/);
+    // And it is NOT left behind in the row as well: two copies of a disowning
+    // sentence is how the two stop agreeing.
+    expect(GROWTH).not.toContain('data-testid="growth-learning"');
   });
 
   it('the export and import confirmations use the same left accent', () => {
@@ -249,6 +281,262 @@ describe('nothing draws a card inside the agent row', () => {
     for (const root of [exportRoot, importRoot]) {
       expect(root).not.toMatch(/rounded-lg/);
     }
+  });
+});
+
+/**
+ * IA-2 — THE GROWTH REPORT LEFT THE SETTINGS PANE (settings-ia-reorg §3.2).
+ *
+ * The panel that expanded inside the agent row was a read-only dashboard 35–60
+ * lines long with two unbounded lists in it, sitting in the middle of a screen of
+ * switches. It is now an overlay, and the row keeps the three things a person
+ * reads at a glance. These assertions defend BOTH halves: that the row really is
+ * three lines and two buttons, and that everything taken out of it still exists
+ * somewhere the user can reach.
+ */
+describe('the growth report is an overlay, and the row is a summary', () => {
+  const GROWTH = read('GrowthPanel.tsx');
+  const REPORT = read('GrowthReportModal.tsx');
+  const AGENTS = read('NabyAgentManager.tsx');
+
+  it('stacks where the memory browser stacks', () => {
+    // Above SettingsModal (z-50, which contains the row it was opened from) and
+    // below the z-[200] toast/context-menu layer. Two overlays opened from the
+    // same pane behaving differently would be worse than either choice.
+    expect(REPORT).toContain('fixed inset-0 z-[100]');
+    expect(REPORT).toContain('h-[85vh]');
+    expect(REPORT).toContain('overflow-y-auto');
+  });
+
+  it('closes on Escape and on a backdrop click', () => {
+    expect(REPORT).toContain("e.key === 'Escape'");
+    expect(REPORT).toMatch(/absolute inset-0 bg-black\/50[^]*onClick=\{onClose\}/);
+  });
+
+  it('keeps the row to the stage, the gauge, the reason and two buttons', () => {
+    // The exact list from §3.2. Anything else creeping back onto the row is the
+    // regression this file exists to catch — the panel got long one honest
+    // addition at a time.
+    expect(GROWTH).toContain('data-testid="growth-panel"');
+    expect(GROWTH).toContain("t('growth.eggHint'"); // the gauge's egg-stage half
+    expect(GROWTH).toContain('data-testid="growth-reason"');
+    expect(GROWTH).toContain("t('growth.report.open'");
+    expect(GROWTH).toContain("t('growth.fastSession.button'");
+    // The moved blocks are NOT rendered twice.
+    for (const gone of [
+      "t('growth.axis.hitRate'",
+      "t('growth.byTaskType'",
+      "t('growth.recent'",
+      "t('growth.howItMoves'",
+      "t('growth.secondTier'",
+    ]) {
+      expect(GROWTH, `${gone} should have moved to the report`).not.toContain(gone);
+      expect(REPORT, `${gone} missing from the report`).toContain(gone);
+    }
+  });
+
+  it('opens from the row button and closes back to it', () => {
+    // The whole state machine, since there is no DOM in these tests: the button
+    // sets it, the modal is handed it, the modal's own close resets it, and a
+    // closed modal renders nothing at all (rather than an invisible overlay
+    // swallowing clicks on the settings pane behind it).
+    expect(GROWTH).toContain('setReportOpen(true)');
+    expect(GROWTH).toContain('isOpen={reportOpen}');
+    expect(GROWTH).toContain('onClose={() => setReportOpen(false)}');
+    expect(REPORT).toContain('if (!isOpen) return null;');
+  });
+
+  it('reads the record ONCE and hands it to the report', () => {
+    // Two fetches of the same document would put two answers of the same
+    // question on one screen for as long as the second one took to arrive.
+    expect(GROWTH).toContain("action: 'growth.get'");
+    expect(REPORT).not.toContain("action: 'growth.get'");
+    expect(GROWTH).toContain('<GrowthReportModal');
+  });
+
+  it('shows the summary without a toggle, and drops the old Growth button', () => {
+    // The 35–60 line panel is what justified hiding it behind a button; three
+    // lines that say which stage the agent is at do not, and an agent whose
+    // stage is behind a click is the one number this product is about, hidden.
+    // Matched loosely across newlines: the element grew a prop (`onLeaveSettings`,
+    // for the fast-growth navigation) and had to be broken over several lines.
+    // What matters is that the row still mounts the summary unconditionally.
+    expect(AGENTS).toMatch(/<GrowthPanel\s+agentId=\{agent\.id\}/);
+    expect(AGENTS).not.toContain('setShowGrowth');
+    expect(AGENTS).not.toContain("t('agentManager.growth'");
+  });
+});
+
+/**
+ * IA-3 — THE NAV CARRIES NO BADGE, AND THE COUNT LIVES ON THE INBOX
+ * (settings-ia-reorg §3.3a).
+ *
+ * WHAT WAS TRIED AND WITHDRAWN. The memory row carried a count of the decisions
+ * waiting for the user. It was reported as unreadable the day it shipped —
+ * "'1'은 무슨 의미죠?" — because a bare number beside a label is a number with no
+ * noun. The repair was a `title`/`aria-label` sentence on the badge, and it
+ * failed for a reason no source assertion could have caught: the app runs in
+ * Electron, where that tooltip never appeared. So the explanation existed only
+ * on a surface the user could not reach, and the badge went.
+ *
+ * THE COUNT DID NOT GO WITH IT. The second half of that fix — the inbox heading
+ * inside the memory tab, which states the same number over the very rows it
+ * counts — is now the only place it is spoken, and it is the half that always
+ * worked: a number with its noun, its list and its actions on one screen.
+ *
+ * Both halves are asserted here, because either one alone regresses the user's
+ * report: a badge coming back, or the heading quietly going away.
+ */
+describe('the nav shows no count, and the memory tab states it instead', () => {
+  const CARD = read('NabyMemoryReview.tsx');
+
+  it('draws no badge on any nav row', () => {
+    // The element, its testid and the state that fed it — all three, so a partial
+    // revert (the span without the testid, say) is still a failure.
+    expect(MODAL).not.toContain('settings-memory-badge');
+    expect(MODAL).not.toMatch(/pending > 0/);
+    expect(MODAL).not.toMatch(/\bsetPending\b/);
+  });
+
+  it('says nothing about a pending count in a tooltip, in the modal or in a locale', () => {
+    // The tooltip was the part that could not work in Electron. The key is gone
+    // from both dictionaries so nothing can quietly render it again.
+    expect(MODAL).not.toContain('pendingBadgeTitle');
+    for (const locale of LOCALES) {
+      expect(
+        lookup(dict(locale), 'memoryReview.pendingBadgeTitle'),
+        `pendingBadgeTitle should be gone from ${locale}.json`,
+      ).toBeUndefined();
+    }
+  });
+
+  it('opens no read of its own for a number it no longer shows', () => {
+    // The modal used to fetch the summary on open purely to feed the badge (the
+    // panel mounts only while its own tab is selected, so it could not supply
+    // it). With nothing to feed, that request is not made — and no timer replaced
+    // it either.
+    expect(MODAL).not.toContain('fetchMemorySummary');
+    expect(MODAL).not.toMatch(/setInterval/);
+    // The panel's own read is untouched: it is what the heading below counts on.
+    expect(CARD).toContain('export async function fetchMemorySummary');
+  });
+
+  it('states the count on the inbox heading, from the pendingCount field', () => {
+    // THE SURVIVING HALF. Read from `pendingCount` and NOT from the lengths of
+    // the three lists, which are capped for size: a heading saying 3 over 12
+    // waiting decisions would be the badge's problem in a longer sentence.
+    expect(CARD).toContain('data-testid="memory-inbox-heading"');
+    expect(CARD).toContain(
+      "t('memoryReview.summaryPendingCount', { count: summary?.pendingCount ?? 0 })",
+    );
+    for (const locale of LOCALES) {
+      expect(String(lookup(dict(locale), 'memoryReview.summaryPendingCount') ?? '')).toContain(
+        '{{count}}',
+      );
+    }
+  });
+
+  it('keeps the heading absent when the inbox is empty', () => {
+    // A "0 waiting for you" heading over no rows is a permanent ornament — the
+    // same thing hiding the badge at zero was avoiding.
+    expect(CARD).toMatch(/\{hasInbox \? \(/);
+    const inbox = CARD.slice(CARD.indexOf('{hasInbox ? ('));
+    expect(inbox.indexOf('memory-inbox-heading')).toBeGreaterThan(-1);
+  });
+});
+
+/**
+ * IA-4 — THE FAST-GROWTH BUTTON GOES SOMEWHERE (fast-evolution §3.3).
+ *
+ * THE REPORT THIS IS WRITTEN AGAINST. The user pressed "빠른 성장 세션" in two
+ * successive builds and, both times, could not say what it was or what had
+ * happened. Three separate failures produced that, and this block pins the fix
+ * for each one so they cannot come back independently:
+ *
+ *   a. NOTHING SAID WHAT IT WAS before the click. The explanation lived in a
+ *      `title`, i.e. behind a hover on a control nobody hovers over.
+ *   b. NOTHING TOOK THEM THERE. The button created a session and printed
+ *      "it is at the top of your session list", which is a treasure map.
+ *   c. THE SESSION LOOKED LIKE EVERY OTHER SESSION — untitled, named later from
+ *      its first message (covered in `naby.test.ts`, at the route that mints it).
+ */
+describe('the fast-growth button explains itself and opens what it creates', () => {
+  const GROWTH = read('GrowthPanel.tsx');
+  const AGENTS = read('NabyAgentManager.tsx');
+
+  it('states what it is in the open, not in a tooltip', () => {
+    // The hint is RENDERED, and the `title` that remains carries the weighting
+    // caveat instead — a different string, deliberately, so "it is explained"
+    // cannot be satisfied by moving the same sentence back into the attribute.
+    expect(GROWTH).toContain('data-testid="growth-fast-session-hint"');
+    const hintAt = GROWTH.indexOf('data-testid="growth-fast-session-hint"');
+    expect(GROWTH.slice(hintAt, hintAt + 400)).toContain("t('growth.fastSession.hint'");
+    expect(GROWTH).toContain("title={t('growth.fastSession.weight'");
+    expect(GROWTH).not.toContain("title={t('growth.fastSession.hint'");
+  });
+
+  it('opens the session it just created, over the existing bus', () => {
+    // NO NEW NAVIGATION INFRASTRUCTURE: `Topics.OpenProject` is what the session
+    // rows in SessionBrowser and ProjectSessionsModal already publish, and
+    // Workspace's listener is what switches the project and posts SWITCH_SESSION
+    // into its iframe. Settings renders in that same top window, so a plain
+    // `publishTopic` reaches it.
+    expect(GROWTH).toContain("import { publishTopic } from '@cockpit/effect-react'");
+    expect(GROWTH).toContain('publishTopic(Topics.OpenProject, { cwd, sessionId: json.sessionId })');
+    // …and gets out of the way afterwards. A modal left open over the session it
+    // just opened is the same "nothing visibly happened" the button already had.
+    expect(GROWTH).toContain('onLeaveSettings?.()');
+  });
+
+  it('closes Settings only AFTER the open request went out', () => {
+    // Order matters: dismissing the pane first would leave a user staring at the
+    // workspace with no session if the create failed.
+    const body = GROWTH.slice(GROWTH.indexOf('const startFastGrowth'));
+    const publishAt = body.indexOf('publishTopic(Topics.OpenProject');
+    const closeAt = body.indexOf('onLeaveSettings?.()');
+    expect(publishAt).toBeGreaterThan(-1);
+    expect(closeAt).toBeGreaterThan(publishAt);
+    // And never on the failure path.
+    expect(body.indexOf("setDrillSession('failed')")).toBeGreaterThan(-1);
+  });
+
+  it('degrades honestly when there is no project to open into', () => {
+    // `cwd` is the open project and Workspace keys the whole open path on it.
+    // With none there is nowhere to navigate, so the button says CREATED rather
+    // than claiming it opened something — the previous version's exact mistake,
+    // one branch further along.
+    expect(GROWTH).toContain("setDrillSession('created-not-opened')");
+    expect(GROWTH).toContain("t('growth.fastSession.createdNoOpen'");
+    for (const locale of LOCALES) {
+      for (const key of ['growth.fastSession.createdNoOpen', 'growth.fastSession.weight']) {
+        expect(String(lookup(dict(locale), key) ?? ''), `${key} missing from ${locale}.json`).not.toBe('');
+      }
+    }
+  });
+
+  it('names the session it creates, in the user language', () => {
+    // The server has no locale (the same reason harness pills carry codes), so
+    // the title travels from here. The route's half — that it lands on the row
+    // AND on the rename key, so auto-titling cannot overwrite it — is asserted in
+    // `api/naby.test.ts`.
+    expect(GROWTH).toContain("title: t('growth.fastSession.sessionTitle'");
+    for (const locale of LOCALES) {
+      expect(
+        String(lookup(dict(locale), 'growth.fastSession.sessionTitle') ?? ''),
+        `sessionTitle missing from ${locale}.json`,
+      ).not.toBe('');
+    }
+  });
+
+  it('is handed the modal close through a STABLE identity', () => {
+    // `AgentRow` is memo'd and this prop originates as an inline arrow in
+    // Workspace, so passing it straight down would make every agent row re-render
+    // on every render of the app shell (shell/CLAUDE.md's referential-stability
+    // rule). The ref indirection is the same one NabyMemoryReview uses.
+    expect(AGENTS).toContain('const leaveSettings = useRef(onLeaveSettings)');
+    expect(AGENTS).toContain('useCallback(() => leaveSettings.current?.(), [])');
+    expect(AGENTS).toContain('onLeaveSettings={handleLeaveSettings}');
+    expect(MODAL).toContain('onLeaveSettings={onClose}');
   });
 });
 
@@ -359,6 +647,24 @@ describe('a panel introduces itself in one sentence', () => {
     'systemMcp.description',
     'growth.howItMoves',
     'growth.learning.notTheGauge',
+    // settings-ia-reorg §3.3 — the four ways a memory comes to exist, one
+    // sentence each. They are the standing hint of the "how it learns" group,
+    // and four of them is exactly why each one has to stay a single sentence:
+    // the group is four lines, or it is the wall this rule removed.
+    'memoryReview.channelProposal',
+    'memoryReview.channelCorroboration',
+    'memoryReview.channelReflection',
+    'memoryReview.channelStyle',
+    // The sentence the cold-start card ends on, pointing at the fast-growth
+    // session — a standing hint under the same rule.
+    'bootstrap.fastGrowth',
+    // WHAT THE FAST-GROWTH BUTTON IS. It used to be a `title`, and a tooltip is
+    // not an explanation — the user pressed the button twice, across two builds,
+    // and still could not say what it did. It is standing prose in the row now,
+    // so it falls under the one-sentence rule like every other intro; the
+    // discount caveat that shared the old string stayed on the control as
+    // `growth.fastSession.weight`, which is where a second-order fact belongs.
+    'growth.fastSession.hint',
   ] as const;
 
   for (const locale of LOCALES) {
@@ -437,7 +743,9 @@ describe('the shared disclosure is flat, and is the only one panels roll', () =>
       'NabyAgentManager.tsx',
       'NabyCommandManager.tsx',
       'NabyProviderSetup.tsx',
-      'GrowthPanel.tsx',
+      // The growth panel's supplemental prose (`howItMovesMore`) travelled with
+      // the rest of the report, so the disclosure it uses travelled too.
+      'GrowthReportModal.tsx',
     ]) {
       const src = read(file);
       expect(src, `${file} does not use the shared disclosure`).toContain('<SettingsDetails>');
@@ -485,9 +793,10 @@ describe('a harness card shows a name and a state, not a document', () => {
   });
 });
 
-/** Everything from the first section branch to the end of the content pane. */
+/** Everything from the first section branch to the end of the content pane.
+ *  `general` is the first branch since the regroup (it holds theme + language). */
 function contentPane(): string {
-  return MODAL.slice(MODAL.indexOf("{section === 'theme'"));
+  return MODAL.slice(MODAL.indexOf("{section === 'general'"));
 }
 
 /** The JSX for one `{section === '<id>' ? ( … ) : null}` branch. */

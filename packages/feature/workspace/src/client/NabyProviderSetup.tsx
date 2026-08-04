@@ -372,8 +372,16 @@ function SecurityBanner({ security }: { security: Security }) {
 }
 
 // ---------------------------------------------------------------------------
-// Settings section
+// Settings section — "AI provider": WHICH MODEL ANSWERS, AND WITH WHOSE KEY.
 // ---------------------------------------------------------------------------
+//
+// THE MCP HALF LEFT THIS SECTION (settings-ia-reorg §3.4). It used to render the
+// System MCP presets and the general MCP list below the key accordion, which put
+// four unrelated decisions — engine, keys, in-house servers, arbitrary servers —
+// behind one nav row. `NabyMcpServers` is unchanged and now renders under the
+// Connections tab instead; nothing about either was rewritten, only where they
+// are mounted. The onboarding wizard below is untouched: it still reaches
+// `SystemMcpForm` / `SecurityBanner` directly, because it is not a settings tab.
 
 export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
   const { t } = useTranslation();
@@ -386,10 +394,9 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
         <p className="text-xs text-muted-foreground">
           {t('providerSetup.browserManaged')}
         </p>
-        {/* Engine choice and MCP servers are runtime state, not keychain state,
-            so they work here even without the desktop bridge. */}
+        {/* Engine choice is runtime state, not keychain state, so it works here
+            even without the desktop bridge. */}
         <NabyEngineSelector isOpen={isOpen} />
-        <NabyMcpServers isOpen={isOpen} />
       </div>
     );
   }
@@ -428,7 +435,6 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
           )}
         </div>
       ))}
-      <NabyMcpServers isOpen={isOpen} />
     </div>
   );
 }
@@ -841,9 +847,11 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
 // F1-08 — MCP server CRUD
 // ---------------------------------------------------------------------------
 //
-// The registry is PROVIDER-INDEPENDENT (contract §5): these servers are the
-// same whichever model was chosen above, which is why this section sits beside
-// the provider choice rather than inside it.
+// The registry is PROVIDER-INDEPENDENT (contract §5): these servers are the same
+// whichever model was chosen. That independence is why they now live under
+// CONNECTIONS rather than under AI provider (settings-ia-reorg §3.4) — an MCP
+// server is a thing this machine is connected to, not a property of the model.
+// The component itself is unchanged by the move.
 //
 // SECRETS: `env` / `headers` values are never sent back by the API — only their
 // KEY NAMES (see redactEntry in api/naby.ts). So this form can add them but
