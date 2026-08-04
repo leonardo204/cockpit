@@ -73,13 +73,24 @@ describe('harnessHomeInstruction', () => {
     expect(text).toContain('agents/<name>.md');
   });
 
-  it('says an install arrives disabled — the trust rule the gate enforces', () => {
+  it('with auto-enable on (the default) says the install arrives ENABLED', () => {
     const text = harnessHomeInstruction(undefined, HOME).toLowerCase();
-    expect(text).toContain('disabled');
+    // The user-facing bug this fixes: the model told users to enable a skill
+    // that invariant 7 had already switched on.
+    expect(text).toContain('enabled');
+    // The vendor-import exception is still stated — those DO arrive off.
+    expect(text).toMatch(/another product's folder still arrive disabled/);
+  });
+
+  it('with auto-enable off says the install arrives DISABLED', () => {
+    const text = harnessHomeInstruction(undefined, HOME, false).toLowerCase();
+    expect(text).toContain('arrives disabled');
+    expect(text).not.toContain('arrives enabled');
   });
 
   it('stays short enough to share a system prompt (a handful of lines)', () => {
     expect(harnessHomeInstruction('/proj', HOME).split('\n').length).toBeLessThanOrEqual(8);
+    expect(harnessHomeInstruction('/proj', HOME, false).split('\n').length).toBeLessThanOrEqual(8);
   });
 });
 
@@ -141,5 +152,12 @@ describe('naby engine wiring', () => {
     expect(line).toBeDefined();
     // Conditional — same shape as the learning / check-in instructions beside it.
     expect(line).toMatch(/\?\s*harnessHomeInstruction\(/);
+  });
+
+  it('passes the LIVE auto-enable setting, never a literal', () => {
+    // The arrival-state sentence must track the kill switch; hardcoding either
+    // boolean would re-create the stale "arrives DISABLED" bug in one direction
+    // or the other.
+    expect(source).toMatch(/harnessHomeInstruction\([^)]*readAutoEnableNabyHome\(store\)/);
   });
 });

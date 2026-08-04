@@ -191,6 +191,22 @@ function scanNabyHome(
   }
 }
 
+/**
+ * The palette-side entry to the same throttled scan. The "/" palette reads
+ * enabled harness rows directly (api/commands.ts), so without this a skill
+ * installed mid-chat into `~/.naby/skills/` exists on disk — enabled-on-arrival
+ * per invariant 7 — but is invisible to "/" until someone happens to open the
+ * Settings harness tab, whose list action is the only other scan trigger.
+ * Shares scanNabyHome's throttle map, so palette refetches (focus, keystroke)
+ * cost nothing between scans. Non-throwing for the same reason scanNabyHome is:
+ * a broken harness tree must never empty the palette.
+ */
+export function reconcileNabyHome(store: HarnessStore, cwd?: string | null): void {
+  const deps = defaultDeps(store);
+  scanNabyHome('user', DEFAULT_USER_ID, deps);
+  if (cwd) scanNabyHome('project', cwd, deps);
+}
+
 // The store is opened on demand, so this must run on the node runtime and must
 // never be statically rendered.
 export const runtime = 'nodejs';

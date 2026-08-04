@@ -29,6 +29,7 @@ import {
   type Store,
 } from "../../../../../../../dist/naby-runtime.mjs"
 import { getStore } from "../engines/naby"
+import { reconcileNabyHome } from "./harness"
 import { readGrowth } from "../lib/growthRead"
 
 export const runtime = "nodejs"
@@ -191,6 +192,15 @@ export function loadAgentEntries(store: AgentPaletteStore): CommandInfo[] {
 }
 
 export function listCommands(cwd: string | null, store: CommandStore = getStore()): CommandInfo[] {
+  // Reconcile the naby harness home BEFORE reading, exactly as the Settings list
+  // does — a skill installed mid-chat must reach "/" without a trip through
+  // Settings. Throttled inside; guarded because test fakes implement only the
+  // narrow CommandStore and the reconcile needs the real importer surface.
+  try {
+    reconcileNabyHome(store as Parameters<typeof reconcileNabyHome>[0], cwd)
+  } catch {
+    /* an unscannable home must never empty the palette */
+  }
   // Agents FIRST: `@` is how the product's headline feature is invoked, and the
   // client filters them out for `/`.
   return [

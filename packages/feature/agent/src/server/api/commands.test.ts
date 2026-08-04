@@ -181,3 +181,29 @@ describe('listCommands (store-backed)', () => {
     expect(listCommands('/proj', store).some((c) => c.name === '/deploy')).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scan-before-read (source assertion, the repo's pattern for wiring facts).
+// The palette must reconcile the naby harness home before listing, or a skill
+// installed mid-chat stays invisible to "/" until the Settings harness tab —
+// the only other scan trigger — happens to be opened.
+// ---------------------------------------------------------------------------
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+describe('palette scan-on-read wiring', () => {
+  const source = readFileSync(join(__dirname, 'commands.ts'), 'utf8');
+
+  it('listCommands reconciles the naby home before reading harness rows', () => {
+    const body = source.slice(source.indexOf('export function listCommands'));
+    const reconcileAt = body.indexOf('reconcileNabyHome(');
+    const readAt = body.indexOf('loadOwnedCommands(');
+    expect(reconcileAt).toBeGreaterThan(-1);
+    expect(readAt).toBeGreaterThan(-1);
+    expect(reconcileAt).toBeLessThan(readAt);
+  });
+
+  it('the reconcile is guarded so a fake or broken store cannot empty the palette', () => {
+    expect(source).toMatch(/try\s*\{\s*\n?\s*reconcileNabyHome\(/);
+  });
+});

@@ -143,6 +143,7 @@ import {
 } from '../lib/telegramEscalation';
 import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
+import { readAutoEnableNabyHome } from '../lib/harnessImporter';
 import { kickReflectionSweep } from '../lib/reflection';
 import { runNestedTurn } from '../lib/delegation';
 import { planTextRender } from './textRender';
@@ -1263,7 +1264,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // names a stage, a number or anything that is counted.
             checksIn ? checkinInstruction(subjectGrowth?.stage) : undefined,
             fastGrowthCounts ? fastGrowthInstruction(fastGrowthCounts) : undefined,
-            steersInstalls ? harnessHomeInstruction(projectCwd) : undefined,
+            // The arrival-state sentence follows the auto-enable kill switch
+            // (invariant 7): the model states what actually happens, not a
+            // wording frozen before the switch existed.
+            steersInstalls
+              ? harnessHomeInstruction(projectCwd, undefined, readAutoEnableNabyHome(store))
+              : undefined,
             // LAST of the instruction blocks. Style is the weakest claim in the
             // prompt — it says how to phrase whatever the rest of it decided —
             // so it sits after everything it must not override.

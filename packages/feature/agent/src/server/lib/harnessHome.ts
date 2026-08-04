@@ -97,21 +97,31 @@ export function canSteerInstalls(store: Pick<Store, 'listMcpEntries'>): boolean 
  *
  * It says three things, in this order, because that is the order the model needs
  * them: where the home IS, that a vendor path in someone else's instructions is
- * to be SUBSTITUTED rather than obeyed, and that the result arrives switched off
- * so it must not be announced as ready.
+ * to be SUBSTITUTED rather than obeyed, and what enable state the result arrives
+ * in — which depends on the auto-enable kill switch (gate invariant 7), so the
+ * caller passes the CURRENT setting and the model never guesses. Before the
+ * switch existed this block hardcoded "arrives DISABLED", and the model kept
+ * telling users to go flip a toggle that was already on.
  */
-export function harnessHomeInstruction(cwd?: string, homeDir?: string): string {
+export function harnessHomeInstruction(
+  cwd?: string,
+  homeDir?: string,
+  autoEnable: boolean = true,
+): string {
   const user = userHarnessHome(homeDir);
   const project = projectHarnessHome(cwd);
   const where = project
     ? `\`${user}/{skills,commands,agents}\` for anywhere, or \`${project}/{skills,commands,agents}\` for this project only`
     : `\`${user}/{skills,commands,agents}\``;
+  const arrival = autoEnable
+    ? `A skill you install here at the user's request arrives ENABLED and works after the next harness scan; items copied in from another product's folder still arrive disabled. Say what you installed and that it is on —`
+    : `Anything installed this way arrives DISABLED and the user turns it on in Settings — say you installed it, never that it is now in effect;`;
   return [
     `HARNESS HOME: naby keeps its skills, commands and subagents in its own home — ${where}.`,
     `When you install one, write it there: install instructions from a skill hub or a README will name`,
     `\`~/.claude\` because they are written for another product, so substitute the base directory and`,
     `keep everything below it (\`skills/<name>/SKILL.md\`, \`commands/<name>.md\`, \`agents/<name>.md\`) exactly as given.`,
-    `Anything installed this way arrives DISABLED and the user turns it on in Settings — say you installed it,`,
-    `never that it is now in effect.`,
+    arrival,
+    `the Settings harness tab shows the final state.`,
   ].join('\n');
 }
