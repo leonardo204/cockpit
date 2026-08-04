@@ -32,6 +32,13 @@ import {
   CORROBORATION_THRESHOLD,
   DEFAULT_USER_ID,
   MEMORY_DECAY_REVIEW_MS,
+  // settings-ia-reorg §3.3: the decisions inbox splits STYLE proposals out of the
+  // ordinary ones, because they are the only class with a different confirmation
+  // rule (`style/global/*` can never be auto-confirmed, P3-M13c §3.3). The two
+  // predicates are the runtime's own — re-deriving "does this key start with
+  // style/" here would be a second spelling of a namespace the runtime mints.
+  isGlobalStyleMemoryKey,
+  isStyleMemoryKey,
   staleReviewCutoff,
   type MemoryItem,
   type MemoryScope,
@@ -45,7 +52,14 @@ import { getStore } from '../engines/naby';
 // The auto-confirm opt-in belongs to the consolidation step (which is the only
 // thing that acts on it), so the key and its spelling live there and this route
 // reads/writes it through the same two functions rather than re-deriving them.
-import { readAutoConfirmSetting, writeAutoConfirmSetting } from '../lib/reflection';
+// `activateSupersession` lives with the sweep for the same reason: confirmation
+// is the ONLY moment a reservation becomes a supersession, and both confirmation
+// paths (a person here, corroboration there) must run the identical rule.
+import {
+  activateSupersession,
+  readAutoConfirmSetting,
+  writeAutoConfirmSetting,
+} from '../lib/reflection';
 
 // The slice of the store this route touches. Named so the handlers depend on an
 // injectable seam (default `getStore()`), which keeps the list/action logic unit-
@@ -67,6 +81,17 @@ type MemoryStore = Pick<
   | 'countScopedMemory'
   | 'updateMemoryValue'
   | 'markMemoriesInjected'
+  // P3-M13a (§3.1): the supersession chain. `getMemoryById` resolves the
+  // "replaced by" row so the browser can name it; `supersedeMemory` is reached
+  // through `activateSupersession` when a confirm lands on a row that reserved
+  // one; `revertSupersession` is the user's undo.
+  | 'getMemoryById'
+  | 'supersedeMemory'
+  | 'revertSupersession'
+  // settings-ia-reorg §3.3: "last looked back N hours ago" on the memory tab's
+  // summary line. The SAME read the growth report's learning block makes
+  // (`learningRead.ts`), so the two surfaces cannot report different times.
+  | 'getLatestReflectionAt'
 >;
 
 // The store is opened on demand, so this must run on the node runtime and must
@@ -176,6 +201,16 @@ export interface MemoryListResult {
    *  hardcoding "90 days" beside a constant it cannot see (§2.2 lists that
    *  constant as a tunable). */
   staleBefore: number | null;
+  /**
+   * P3-M13a §3.1 — the SUPERSESSION CHAIN for the listed rows: for each replaced
+   * row's id, the key of the memory that replaced it.
+   *
+   * KEYS, NOT IDS, because the client renders it ("replaced by …") and an id
+   * means nothing to a person. Resolved server-side because the replacement may
+   * sit on a different page, or in a different scope, than the row that names
+   * it — a client could not look it up from what it was sent.
+   */
+  supersededBy: Record<string, string>;
 }
 
 export function listScopedMemory(
@@ -188,8 +223,14 @@ export function listScopedMemory(
     // byte-for-byte the request it always was.
     type?: string | null;
     search?: string | null;
+    /** A KEY NAMESPACE to narrow to — `style/` is the one the memory tab deep
+     *  links with (settings-ia-reorg §3.4). Absent/blank = no filter. */
+    keyPrefix?: string | null;
     /** '1'/'true' turns on the derived stale filter (confirmed + unused). */
     stale?: string | null;
+    /** '1'/'true' shows ONLY replaced rows; '0'/'false' shows only current ones;
+     *  absent shows both, which is what every pre-M13 request gets. */
+    superseded?: string | null;
     limit?: number | undefined;
     offset?: number | undefined;
   },
@@ -224,11 +265,28 @@ export function listScopedMemory(
   // mean different windows.
   const staleBefore = stale ? staleReviewCutoff(now, MEMORY_DECAY_REVIEW_MS) : null;
 
+  const superseded =
+    params.superseded === '1' || params.superseded === 'true'
+      ? true
+      : params.superseded === '0' || params.superseded === 'false'
+        ? false
+        : undefined;
+
   const filter: ScopedMemoryQuery = {
     ...(params.status ? { status: params.status } : {}),
     ...(params.type ? { type: params.type as MemoryType } : {}),
     ...(params.search && params.search.trim() ? { search: params.search.trim() } : {}),
-    ...(staleBefore !== null ? { staleBefore } : {}),
+    // The namespace filter travels to the STORE like every other chip: filtering
+    // a fetched page here would search 50 rows out of possibly thousands, and the
+    // total beside it would then describe a different set than the list.
+    ...(params.keyPrefix && params.keyPrefix.trim()
+      ? { keyPrefix: params.keyPrefix.trim() }
+      : {}),
+    // The window travels with the cutoff so the store applies the SAME
+    // strength-scaled rule `isStaleForReview` does (P3-M13b §3.2) — otherwise
+    // the "unused" chip would list rows the runtime does not think are unused.
+    ...(staleBefore !== null ? { staleBefore, staleWindowMs: MEMORY_DECAY_REVIEW_MS } : {}),
+    ...(superseded !== undefined ? { superseded } : {}),
   };
 
   const items = store.getScopedMemory(params.scope, scopeKey, { ...filter, limit, offset });
@@ -239,6 +297,18 @@ export function listScopedMemory(
   // ONE extra store call for the ids just listed — the store answers them in a
   // single grouped query, so this stays three statements however long the list is.
   const corroboration = store.getMemoryCorroboration(items.map((item) => item.id));
+  // The chain, resolved only for the rows that actually name a replacement — on
+  // a page of current memory this loop does nothing at all.
+  const supersededBy: Record<string, string> = {};
+  for (const item of items) {
+    if (!item.supersededBy) continue;
+    const replacement = store.getMemoryById(item.supersededBy);
+    // A replacement the user has since DELETED leaves the stamp pointing at
+    // nothing. Reported as absent rather than as a broken id: the row is still
+    // legitimately superseded (the belief was replaced), and the browser says so
+    // without naming a memory that no longer exists.
+    if (replacement) supersededBy[item.id] = replacement.key;
+  }
   return {
     ok: true,
     data: {
@@ -246,6 +316,7 @@ export function listScopedMemory(
       scopeKey,
       items,
       corroboration,
+      supersededBy,
       autoConfirm: readAutoConfirmSetting(store),
       corroborationThreshold: CORROBORATION_THRESHOLD,
       total,
@@ -268,22 +339,89 @@ export interface MemoryScopeSummary {
   proposed: number;
   /** Confirmed rows nobody has used inside the review window (§2.2). */
   stale: number;
+  /** Rows a newer memory has REPLACED (P3-M13a §3.1). Kept, not deleted, and
+   *  excluded from the two counts above — a replaced belief is not one of the
+   *  things naby currently thinks, and counting it as confirmed would make the
+   *  card overstate what the agent knows. */
+  replaced: number;
+}
+
+/**
+ * ONE REPLACED MEMORY, as the decisions inbox shows it (settings-ia-reorg §3.3).
+ *
+ * WHY THE VALUES AND NOT THE IDS. This is a NOTICE — "naby decided one of the
+ * things you told it is no longer true" — and the only way a person can judge
+ * that is by reading both claims. An id says nothing; the browser already exists
+ * for the id-shaped view.
+ */
+export interface MemorySupersessionNotice {
+  /** The replaced row — the id `revertSupersession` takes. */
+  oldId: string;
+  oldKey: string;
+  oldValue: string;
+  /** The replacement's key/value, or empty strings when the user has since
+   *  DELETED the replacement: the stamp then points at nothing, and the notice
+   *  still has to render (the belief really was retired). */
+  newKey: string;
+  newValue: string;
+  /** epoch ms the replacement was activated. */
+  at: number;
+}
+
+/** A pending STYLE proposal, with the one fact that changes what the user must
+ *  do about it. */
+export interface MemoryStyleProposal {
+  item: MemoryItem;
+  /** `style/global/*` — the class corroboration may NEVER auto-confirm (P3-M13c
+   *  §3.3), so a person is the only way it ever takes effect. The inbox badges
+   *  exactly these, because that badge carries a fact rather than a decoration. */
+  isGlobal: boolean;
 }
 
 export interface MemorySummaryResult {
   scopes: MemoryScopeSummary[];
-  /** The newest few `proposed` rows across every reachable scope — the ones the
-   *  card offers inline confirm/delete for. Newest first. */
+  /**
+   * The newest few ORDINARY `proposed` rows across every reachable scope — the
+   * ones the card offers inline confirm/delete for. Newest first.
+   *
+   * STYLE PROPOSALS ARE NOT IN HERE ANY MORE (settings-ia-reorg §3.3). They are
+   * still shown, in their own group directly below, because they answer a
+   * different question ("should naby write like this?" rather than "is this true
+   * about me?") and because the global ones carry a rule no other proposal has.
+   * Nothing was hidden by the split — the two lists together are what this one
+   * list used to be.
+   */
   recentProposed: MemoryItem[];
+  /** The pending `style/*` proposals, newest first (§3.3 group b). */
+  pendingStyleProposals: MemoryStyleProposal[];
+  /** The newest replaced-memory notices (§3.3 group c). */
+  recentSupersessions: MemorySupersessionNotice[];
+  /**
+   * WHAT THE NAV BADGE COUNTS: every decision waiting for this user — proposals
+   * (ordinary and style) plus the replacement notices.
+   *
+   * COUNTS, NOT THE LENGTHS OF THE LISTS ABOVE. Those lists are capped so the
+   * card stays a fixed size; a badge that showed "3" while thirty proposals
+   * waited would be worse than no badge. One badge, one meaning (§3.3).
+   */
+  pendingCount: number;
   corroboration: Record<string, number>;
   autoConfirm: boolean;
   corroborationThreshold: number;
+  /** When the reflection pass last read a finished conversation; absent before
+   *  the first one. The summary line's "automatic learning is running" evidence. */
+  lastReflectionAt?: number;
 }
 
 /** How many proposals the summary card shows inline (§4). Three, because the
  *  card's job is to say "there are decisions waiting" and offer the nearest ones
  *  — the rest belong in the browser, which is the whole point of splitting them. */
 export const SUMMARY_PROPOSED_LIMIT = 3;
+
+/** How many replaced-memory notices the inbox shows (settings-ia-reorg §3.3).
+ *  Five rather than three: a notice is READ, not decided — it costs one line and
+ *  the undo beside it is only reachable while the notice is on screen. */
+export const SUMMARY_SUPERSESSION_LIMIT = 5;
 
 /**
  * Counts per scope plus the newest proposals — everything the settings summary
@@ -298,6 +436,12 @@ export const SUMMARY_PROPOSED_LIMIT = 3;
  * simply OMITTED rather than reported as zero — "you have no project memory" and
  * "there is no project open" are different statements, and only one of them is
  * true here.
+ *
+ * IT NOW ALSO ANSWERS THE DECISIONS INBOX (settings-ia-reorg §3.3/§3.5): the
+ * ordinary proposals, the style proposals, the replacement notices, and the one
+ * number the nav badge shows. STILL ONE REQUEST — a second action for the badge
+ * would mean a second polling path for a screen that already reloads this on
+ * every memory action, and two answers to "is there anything waiting?".
  */
 export function summarizeMemory(
   params: { sessionId?: string | null; cwd?: string | null },
@@ -313,35 +457,113 @@ export function summarizeMemory(
 
   const scopes: MemoryScopeSummary[] = [];
   const proposals: MemoryItem[] = [];
+  const styleProposals: MemoryItem[] = [];
+  const supersessions: MemorySupersessionNotice[] = [];
   for (const target of targets) {
     scopes.push({
       ...target,
       confirmed: store.countScopedMemory(target.scope, target.scopeKey, {
         status: 'confirmed',
+        superseded: false,
       }),
       proposed: store.countScopedMemory(target.scope, target.scopeKey, {
         status: 'proposed',
+        superseded: false,
       }),
-      stale: store.countScopedMemory(target.scope, target.scopeKey, { staleBefore }),
+      stale: store.countScopedMemory(target.scope, target.scopeKey, {
+        staleBefore,
+        staleWindowMs: MEMORY_DECAY_REVIEW_MS,
+        superseded: false,
+      }),
+      replaced: store.countScopedMemory(target.scope, target.scopeKey, { superseded: true }),
     });
     // The proposals themselves, capped per scope BEFORE the merge: the store
     // orders by createdAt asc, so the newest are at the END — hence the window is
     // taken from the tail rather than the head.
+    //
+    // THE SPLIT (settings-ia-reorg §3.3). Style proposals are separated here
+    // rather than in the client, because the rule that makes them different —
+    // `isGlobalStyleMemoryKey` — is the runtime's, and a second spelling of it in
+    // a React component is how the badge and the auto-confirm gate come to
+    // disagree about which rows a person must approve. The two windows are taken
+    // independently so a burst of style proposals cannot push every ordinary one
+    // off the card, and vice versa.
     const pending = store.getScopedMemory(target.scope, target.scopeKey, {
       status: 'proposed',
+      superseded: false,
     });
-    proposals.push(...pending.slice(-SUMMARY_PROPOSED_LIMIT));
+    proposals.push(...pending.filter((item) => !isStyleMemoryKey(item.key)).slice(-SUMMARY_PROPOSED_LIMIT));
+    styleProposals.push(
+      ...pending.filter((item) => isStyleMemoryKey(item.key)).slice(-SUMMARY_PROPOSED_LIMIT),
+    );
+
+    // THE REPLACEMENT NOTICES. `superseded: true` is the store's own filter, so
+    // no row is read twice and nothing is scanned client-side; `confirmed` is
+    // part of the question rather than a nicety — a replaced PROPOSAL was never a
+    // belief naby held, so announcing its retirement would be a notice about
+    // nothing.
+    const replaced = store.getScopedMemory(target.scope, target.scopeKey, {
+      status: 'confirmed',
+      superseded: true,
+    });
+    for (const item of replaced) {
+      // The replacement's own words. Resolved server-side for the same reason
+      // the browser's chain is: it may live in another scope entirely.
+      const replacement = item.supersededBy ? store.getMemoryById(item.supersededBy) : undefined;
+      supersessions.push({
+        oldId: item.id,
+        oldKey: item.key,
+        oldValue: item.value,
+        newKey: replacement?.key ?? '',
+        newValue: replacement?.value ?? '',
+        // A pre-M13 row could carry the stamp without the timestamp; `updatedAt`
+        // is the honest fallback rather than 0, which would sort it to the end of
+        // time and hide it forever.
+        at: item.supersededAt ?? item.updatedAt,
+      });
+    }
   }
 
   const recentProposed = proposals
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, SUMMARY_PROPOSED_LIMIT);
+  const pendingStyleProposals = styleProposals
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, SUMMARY_PROPOSED_LIMIT)
+    .map((item) => ({ item, isGlobal: isGlobalStyleMemoryKey(item.key) }));
+  const recentSupersessions = supersessions
+    .sort((a, b) => b.at - a.at)
+    .slice(0, SUMMARY_SUPERSESSION_LIMIT);
+
+  // The badge's number. Read from the COUNTS (which are unbounded) rather than
+  // from the capped lists above — see `pendingCount`. `scopes[].proposed` already
+  // spans both kinds of proposal, so ordinary + style is exactly that sum.
+  const pendingCount =
+    scopes.reduce((n, s) => n + s.proposed, 0) + recentSupersessions.length;
+
+  // Best-effort, like every other read the learning block makes: a store that
+  // cannot answer "when did reflection last run" must not cost the user their
+  // proposal queue.
+  let lastReflectionAt: number | undefined;
+  try {
+    lastReflectionAt = store.getLatestReflectionAt();
+  } catch {
+    /* never reflected, or unreadable — both render as "not yet" */
+  }
+
   return {
     scopes,
     recentProposed,
-    corroboration: store.getMemoryCorroboration(recentProposed.map((item) => item.id)),
+    pendingStyleProposals,
+    recentSupersessions,
+    pendingCount,
+    corroboration: store.getMemoryCorroboration([
+      ...recentProposed.map((item) => item.id),
+      ...pendingStyleProposals.map(({ item }) => item.id),
+    ]),
     autoConfirm: readAutoConfirmSetting(store),
     corroborationThreshold: CORROBORATION_THRESHOLD,
+    ...(typeof lastReflectionAt === 'number' ? { lastReflectionAt } : {}),
   };
 }
 
@@ -370,7 +592,13 @@ export type MemoryAction =
   // "KEEP THIS" from the stale-review filter (§2.2). Stamps access, which is the
   // same thing the injection step does when it selects a row — a person saying
   // "still relevant" is at least as good a signal as a retrieval saying it.
-  | { action: 'keepAlive'; id: string };
+  | { action: 'keepAlive'; id: string }
+  // -- P3-M13a (§3.1) — UNDO a supersession -------------------------------
+  // The sovereignty half of automatic replacement, and the reason replacement is
+  // allowed to be automatic at all: the machine decided which of two beliefs is
+  // current, and the person whose beliefs they are can say otherwise. The
+  // replaced row was never deleted, so this is a stamp being cleared.
+  | { action: 'revertSupersession'; id: string };
 
 export type MemoryActionResult =
   | { ok: true; autoConfirm?: boolean; item?: MemoryItem }
@@ -388,6 +616,12 @@ export function runMemoryAction(
         return { ok: false, error: 'id is required' };
       }
       store.confirmMemory(body.id);
+      // P3-M13a §3.1: THIS is the moment a reservation may act. Until the click
+      // above, a proposal that contradicted an existing memory had changed
+      // nothing — the old fact kept living and kept injecting. Confirming is the
+      // user agreeing to the new one, so now (and only now) the old row is
+      // stamped. It is not deleted, and the browser offers the undo.
+      activateSupersession(store, body.id);
       return { ok: true };
     }
 
@@ -468,6 +702,19 @@ export function runMemoryAction(
       return { ok: true };
     }
 
+    case 'revertSupersession': {
+      if (typeof body.id !== 'string' || !body.id) {
+        return { ok: false, error: 'id is required' };
+      }
+      // A row that was not superseded reports the failure rather than pretending
+      // — unlike `keepAlive`, the outcome here is NOT already true: the user
+      // asked to bring a memory back, and silence would look like it worked.
+      if (!store.revertSupersession(body.id)) {
+        return { ok: false, error: 'that memory is not superseded' };
+      }
+      return { ok: true, item: store.getMemoryById(body.id) };
+    }
+
     default:
       return { ok: false, error: 'unknown action' };
   }
@@ -500,7 +747,9 @@ export const GET = handler((request) =>
         status: params.get('status'),
         type: params.get('type'),
         search: params.get('search'),
+        keyPrefix: params.get('keyPrefix'),
         stale: params.get('stale'),
+        superseded: params.get('superseded'),
         limit: parseCount(params.get('limit')),
         offset: parseCount(params.get('offset')),
       }),

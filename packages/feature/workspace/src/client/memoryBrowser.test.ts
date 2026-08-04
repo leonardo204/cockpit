@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildMemoryQuery, PAGE_SIZE, type MemoryFilters } from './MemoryBrowserModal';
+import {
+  buildMemoryQuery,
+  PAGE_SIZE,
+  STYLE_KEY_PREFIX,
+  type MemoryFilters,
+} from './MemoryBrowserModal';
+import { reflectionAgeCopy } from './NabyMemoryReview';
 
 /**
  * P3-M10 (specs/phase-3-memory-hygiene.md §4) — the memory browser and the
@@ -42,6 +48,8 @@ const base: MemoryFilters = {
   status: 'all',
   type: 'all',
   stale: false,
+  superseded: false,
+  keyPrefix: '',
   search: '',
 };
 const params = (over: Partial<MemoryFilters> = {}, offset = 0) =>
@@ -178,7 +186,232 @@ describe('the browser carries the sovereignty actions (§3)', () => {
   it('does not offer "keep" on a proposal', () => {
     // A proposal is not in the decay queue — the answer for it is confirm or
     // delete, and a third verb would only be a way to leave it undecided.
-    expect(BROWSER).toMatch(/!isProposed \? \([^]*memoryReview\.keepAlive/);
+    expect(BROWSER).toMatch(/!isProposed && !isSuperseded \? \([^]*memoryReview\.keepAlive/);
+  });
+});
+
+describe('supersession is visible and reversible (P3-M13a §3.1)', () => {
+  it('sends the replaced filter as a server-side parameter', () => {
+    expect(params({ superseded: true }).get('superseded')).toBe('1');
+    // OFF means "no filter", not "current only": a replaced memory is still the
+    // user's, so it stays in the ordinary list rather than being hidden until a
+    // chip is found.
+    expect(params().has('superseded')).toBe(false);
+  });
+
+  it('badges a replaced row and names what replaced it', () => {
+    expect(BROWSER).toContain("t('memoryReview.supersededBadge')");
+    expect(BROWSER).toContain("t('memoryReview.supersededBy'");
+    // A replacement the user has since deleted still has to read as something.
+    expect(BROWSER).toContain("t('memoryReview.supersededByGone')");
+  });
+
+  it('offers the undo, because supersession is automatic', () => {
+    expect(BROWSER).toContain("action: 'revertSupersession'");
+    expect(BROWSER).toContain("t('memoryReview.revert')");
+  });
+
+  it('hides confirm and keep on a replaced row', () => {
+    // Both would appear to do nothing: a replaced row is not injected, so
+    // confirming it or marking it fresh changes nothing the user can see.
+    expect(BROWSER).toMatch(/isProposed && !isSuperseded \? \([^]*memoryReview\.confirm/);
+  });
+});
+
+/**
+ * IA-3 — THE KEY-NAMESPACE FILTER (settings-ia-reorg §3.4).
+ *
+ * The style group on the memory tab deep links into the browser narrowed to
+ * `style/*`. That narrowing is a SERVER-SIDE parameter for the same two reasons
+ * every other chip is (the page is 50 rows of possibly thousands; the total
+ * beside it must describe the same set), and it is deliberately not the search
+ * box — see `MemoryFilters.keyPrefix`.
+ */
+describe('the browser can be narrowed to a key namespace', () => {
+  it('sends the prefix as its own parameter, not as a search term', () => {
+    const q = params({ keyPrefix: STYLE_KEY_PREFIX });
+    expect(q.get('keyPrefix')).toBe('style/');
+    // If this were folded into `search` it would also match a memory whose TEXT
+    // mentions style/, which is not a style preference.
+    expect(q.has('search')).toBe(false);
+  });
+
+  it('omits it when there is none, and trims a padded one', () => {
+    expect(params().has('keyPrefix')).toBe(false);
+    expect(params({ keyPrefix: '  style/  ' }).get('keyPrefix')).toBe('style/');
+    expect(params({ keyPrefix: '   ' }).has('keyPrefix')).toBe(false);
+  });
+
+  it('combines with the other chips rather than replacing them', () => {
+    const q = params({ keyPrefix: STYLE_KEY_PREFIX, status: 'confirmed' });
+    expect(q.get('keyPrefix')).toBe('style/');
+    expect(q.get('status')).toBe('confirmed');
+  });
+
+  it('offers a chip so an arriving deep link can be widened again', () => {
+    // A view the user cannot get out of is a dead end, which is the one thing a
+    // browser must not be.
+    expect(BROWSER).toContain('data-testid="memory-style-chip"');
+    expect(BROWSER).toContain("t('memoryReview.filterStyle')");
+    expect(BROWSER).toMatch(/keyPrefix: filters\.keyPrefix === STYLE_KEY_PREFIX \? '' : STYLE_KEY_PREFIX/);
+  });
+
+  it('applies a deep link on OPEN, and only when there is one', () => {
+    // Applied once at mount it would never arrive (the browser is mounted,
+    // closed, for the life of the card that owns it); applied unconditionally on
+    // every open it would throw away the chips the user set last time.
+    expect(BROWSER).toMatch(/if \(!isOpen \|\| !seed \|\| Object\.keys\(seed\)\.length === 0\) return;/);
+    expect(CARD).toContain("setBrowserOpen('style')");
+    expect(CARD).toMatch(/keyPrefix: STYLE_KEY_PREFIX/);
+    expect(CARD).toContain("t('memoryReview.openStyleBrowser')");
+  });
+});
+
+/**
+ * IA-3 — THE DECISIONS INBOX (settings-ia-reorg §3.3).
+ *
+ * The tab's first block, and the only one that is waiting for the user. Three
+ * groups, each rendered only when it has something in it, and the whole block
+ * absent when none of them do.
+ */
+describe('the memory tab opens with what needs deciding', () => {
+  it('renders three groups, each only when non-empty', () => {
+    expect(CARD).toContain('data-testid="memory-inbox"');
+    expect(CARD).toMatch(/hasInbox =\s*proposals\.length > 0 \|\| styleProposals\.length > 0 \|\| supersessions\.length > 0/);
+    expect(CARD).toMatch(/\{hasInbox \? \(/);
+    expect(CARD).toMatch(/\{proposals\.length > 0 \? \(/);
+    // Each group says which KIND of decision it holds.
+    for (const key of [
+      'memoryReview.inboxMemory',
+      'memoryReview.inboxStyle',
+      'memoryReview.inboxSuperseded',
+    ]) {
+      expect(CARD, `${key} missing from the inbox`).toContain(key);
+    }
+    expect(CARD).toMatch(/\{styleProposals\.length > 0 \? \(/);
+    expect(CARD).toMatch(/\{supersessions\.length > 0 \? \(/);
+  });
+
+  it('badges the style proposals a person MUST approve, and only those', () => {
+    // `style/global/*` is the one class corroboration may never confirm (P3-M13c
+    // §3.3), so the badge carries a fact about what has to happen next — which
+    // is the only reason this pane allows a badge at all.
+    expect(CARD).toContain('manualOnly={isGlobal}');
+    expect(CARD).toContain("t('memoryReview.manualApproval')");
+    expect(CARD).toContain('data-testid="memory-manual-approval"');
+    // The flag comes from the SERVER, not from a second spelling of the rule.
+    expect(CARD).toContain('pendingStyleProposals');
+  });
+
+  it('states a replacement in both claims, with the undo on it', () => {
+    // Supersession is the one thing here a machine does to a user's own words
+    // without being asked; a reversible act nobody is told about is an
+    // irreversible one in practice.
+    expect(CARD).toContain('data-testid="memory-supersession"');
+    expect(CARD).toContain("t('memoryReview.supersessionLine'");
+    expect(CARD).toContain("t('memoryReview.supersessionOld'");
+    expect(CARD).toContain("t('memoryReview.supersessionNew'");
+    // A replacement the user has since deleted still has to read as something.
+    expect(CARD).toContain("t('memoryReview.supersededByGone')");
+    expect(CARD).toContain("action: 'revertSupersession'");
+    expect(CARD).toContain('data-testid="memory-supersession-revert"');
+  });
+
+  it('hands the badge count back rather than being polled for it', () => {
+    expect(CARD).toContain('notifyPending.current?.(res.data.pendingCount ?? 0)');
+    // Held in a ref: an inline callback from SettingsModal as a dependency of
+    // `reload` would refetch on every parent render.
+    expect(CARD).toMatch(/const notifyPending = useRef\(onPendingChange\)/);
+  });
+
+  it('names the four learning channels, one line each', () => {
+    // The group's whole job: two switches do not answer "so what gets
+    // remembered, and when am I asked?".
+    expect(CARD).toContain('data-testid="memory-channels"');
+    for (const key of [
+      'memoryReview.channelProposal',
+      'memoryReview.channelCorroboration',
+      'memoryReview.channelReflection',
+      'memoryReview.channelStyle',
+    ]) {
+      expect(CARD, `${key} missing from the learning-method group`).toContain(key);
+    }
+    // Both switches in ONE group, which is the point of the regroup.
+    expect(CARD).toContain('data-testid="memory-learning-method"');
+    expect(CARD).toContain("t('memoryReview.learningMethodTitle')");
+  });
+
+  it('keeps the browser button visible and puts the rollback one tap away', () => {
+    // The bulk delete answers "something has gone wrong"; standing open at the
+    // foot of the tab it competed with the decisions that DO need answering.
+    expect(CARD).toContain('data-testid="memory-open-browser"');
+    const details = CARD.slice(CARD.indexOf('<SettingsDetails>'));
+    expect(details).toContain("t('memoryReview.bulkTitle')");
+    expect(details).toContain("action: 'deleteBySource'");
+  });
+});
+
+describe('reflectionAgeCopy — "when did it last look back"', () => {
+  const HOUR = 3_600_000;
+
+  it('says "not yet" when it never has', () => {
+    expect(reflectionAgeCopy(undefined, 1_000).key).toBe('memoryReview.reflectionNever');
+  });
+
+  it('does not say "0 hours ago"', () => {
+    // Which reads as broken. Under an hour is its own sentence.
+    expect(reflectionAgeCopy(1_000_000 - 40 * 60_000, 1_000_000)).toEqual({
+      key: 'memoryReview.reflectionRecent',
+      count: 0,
+    });
+  });
+
+  it('counts hours below a day and days above it', () => {
+    const now = 100 * HOUR;
+    expect(reflectionAgeCopy(now - 5 * HOUR, now)).toEqual({
+      key: 'memoryReview.reflectionHoursAgo',
+      count: 5,
+    });
+    expect(reflectionAgeCopy(now - 23 * HOUR, now).key).toBe('memoryReview.reflectionHoursAgo');
+    expect(reflectionAgeCopy(now - 24 * HOUR, now)).toEqual({
+      key: 'memoryReview.reflectionDaysAgo',
+      count: 1,
+    });
+    expect(reflectionAgeCopy(now - 72 * HOUR, now).count).toBe(3);
+  });
+
+  it('never reports a negative age', () => {
+    // A clock that moved backwards (or a stamp from a machine ahead of this one)
+    // must not render "last looked back -3 hours ago".
+    expect(reflectionAgeCopy(2_000, 1_000).key).toBe('memoryReview.reflectionRecent');
+  });
+});
+
+describe('the style fingerprint is shown, read-only (P3-M13c §3.3)', () => {
+  it('lives on the settings card next to the memory review', () => {
+    expect(CARD).toContain("t('memoryReview.styleTitle')");
+    expect(CARD).toContain("action: 'style.get'");
+  });
+
+  it('says so before it has enough evidence, rather than showing a profile', () => {
+    expect(CARD).toContain("t('memoryReview.styleEmpty')");
+    expect(CARD).toContain("t('memoryReview.styleLearning'");
+    expect(CARD).toContain('styleMinSamples');
+  });
+
+  it('offers no control over it', () => {
+    // §3.3 and §4: there is no style toggle. The learning switch and the
+    // temporary-session flag already answer "should naby learn this", and a
+    // third switch for one half of it would be a setting nobody can reason about.
+    // The section runs from its heading to its own closing note, so the slice
+    // cannot accidentally swallow the next section's checkbox.
+    const from = CARD.indexOf("memoryReview.styleTitle");
+    const to = CARD.indexOf("memoryReview.styleHint");
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    const section = CARD.slice(from, to);
+    expect(section).not.toContain('<input');
+    expect(section).not.toContain('onChange');
   });
 });
 
@@ -313,6 +546,33 @@ describe('the new copy exists in both locales', () => {
     'memoryReview.staleBadge',
     'memoryReview.learningLabel',
     'memoryReview.learningHint',
+    // settings-ia-reorg §3.3/§3.4 — the inbox, the badge and the deep link.
+    'memoryReview.inboxMemory',
+    'memoryReview.inboxStyle',
+    'memoryReview.inboxSuperseded',
+    'memoryReview.manualApproval',
+    'memoryReview.manualApprovalTitle',
+    'memoryReview.supersessionLine',
+    'memoryReview.supersessionOld',
+    'memoryReview.supersessionNew',
+    // The inbox heading that states how many decisions are waiting. It used to
+    // be the second of two places the number was spoken (the nav badge was the
+    // first); the badge is gone, so this is the only one.
+    'memoryReview.summaryPendingCount',
+    'memoryReview.learningMethodTitle',
+    'memoryReview.reflectionNever',
+    'memoryReview.reflectionRecent',
+    'memoryReview.reflectionHoursAgo',
+    'memoryReview.reflectionDaysAgo',
+    'memoryReview.openStyleBrowser',
+    'memoryReview.filterStyle',
+    'memoryReview.filterStyleTitle',
+    'settings.general',
+    'settings.connections',
+    'settings.mcpServers',
+    'growth.report.title',
+    'growth.report.open',
+    'growth.report.close',
     'tabBar.noLearn',
     'tabBar.noLearnOff',
     'tabBar.noLearnBadge',
@@ -337,10 +597,72 @@ describe('the new copy exists in both locales', () => {
     }
   }
 
-  it('ko uses the ~한다 declarative the project writes Korean in', () => {
-    // The house style (CLAUDE.md): UI prose is plain declarative, not honorific.
-    const ko = dict('ko') as { memoryReview: Record<string, string> };
-    expect(ko.memoryReview.learningHint).toMatch(/다\.$/);
-    expect(ko.memoryReview.summaryEmpty).toMatch(/다\.$/);
+  /**
+   * KOREAN UI COPY IS POLITE ~합니다체, AND THE WHOLE TAB HAS TO AGREE.
+   *
+   * THIS ASSERTION USED TO SAY THE OPPOSITE, and it was reading the wrong rule.
+   * CLAUDE.md's "~한다 평서형" applies to the SPEC TREES (`specs/`,
+   * `ref-docs/specs/`) — documents naby's authors read. It was applied to UI
+   * strings as well, so the memory tab drifted into plain declarative while every
+   * other settings panel stayed polite, and a user reported the seam directly:
+   * "위에는 ~합니다 하다가 밑은 ~한다로 바뀜. 다른 설정 모두 ~합니다로 일관."
+   *
+   * The old check could not have caught that: `/다\.$/` matches "쓴다." and
+   * "씁니다." equally, so it passed either way. It asserts the ENDING now, over
+   * every sentence on the tab rather than two sampled keys — the failure was
+   * cumulative, and a two-key sample is how half a panel converts.
+   *
+   * Second-person is part of the same convention: this product's Korean says
+   * 나/내 ("naby가 대화에서 나에 대해 기억해 둔 내용…"), never 당신.
+   */
+  it('ko settings copy is polite ~합니다체 throughout, with no 당신', () => {
+    const ko = dict('ko') as { memoryReview: Record<string, string>; bootstrap: Record<string, unknown> };
+
+    // Every sentence-ending across the whole memoryReview namespace. Labels and
+    // fragments (no terminal stop) are skipped — the rule is about SENTENCES.
+    const offenders: string[] = [];
+    for (const [key, value] of Object.entries(ko.memoryReview)) {
+      if (typeof value !== 'string') continue;
+      for (const sentence of value.match(/[^.!?]+[.!?]/g) ?? []) {
+        const s = sentence.trim();
+        // A Korean sentence ending in 다 must end in 니다 — the polite form.
+        if (/다[.!?]$/.test(s) && !/니다[.!?]$/.test(s)) offenders.push(`${key}: ${s}`);
+      }
+      if (value.includes('당신')) offenders.push(`${key}: 당신 → 나/내`);
+    }
+    expect(offenders, `plain-style or 당신 copy on the memory tab:\n  ${offenders.join('\n  ')}`)
+      .toEqual([]);
+
+    // The two the user named in the report, pinned individually so a regression
+    // names the string rather than only the rule.
+    expect(ko.memoryReview.learningHint).toMatch(/니다\.$/);
+    expect(ko.memoryReview.summaryEmpty).toMatch(/니다\.$/);
+    expect(ko.memoryReview.styleEmpty).toMatch(/니다\.$/);
+    expect(String(ko.bootstrap.fastGrowth)).toMatch(/니다\.$/);
+  });
+
+  it('ko copy outside the memory tab did not drift back', () => {
+    // The sweep left ko.json with NO plain-declarative UI sentence anywhere, and
+    // that is the state worth defending: the seam the user saw was one panel
+    // written to a different rule from its neighbours, which is a thing that only
+    // ever happens one honest addition at a time.
+    const ko = dict('ko');
+    const offenders: string[] = [];
+    const walk = (node: unknown, path: string): void => {
+      if (typeof node === 'string') {
+        for (const sentence of node.match(/[^.!?]+[.!?]/g) ?? []) {
+          const s = sentence.trim();
+          if (/다[.!?]$/.test(s) && !/니다[.!?]$/.test(s)) offenders.push(`${path}: ${s}`);
+        }
+        return;
+      }
+      if (node && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+          walk(v, path ? `${path}.${k}` : k);
+        }
+      }
+    };
+    walk(ko, '');
+    expect(offenders, `plain-style Korean UI copy:\n  ${offenders.join('\n  ')}`).toEqual([]);
   });
 });

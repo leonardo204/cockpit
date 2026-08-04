@@ -133,6 +133,11 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
   const confirmed: string[] = [];
   const memory = [...(options.memory ?? [])];
   const corroboration = { ...(options.corroboration ?? {}) };
+  /** P3-M13a: NOOP operations (an equivalent restatement) and activated
+   *  supersessions, recorded so a test can assert the operation rather than
+   *  merely the absence of a write. */
+  const corroborated: Array<{ id: string; sessionId: string }> = [];
+  const superseded: Array<{ oldId: string; newId: string }> = [];
   const settings = new Map(Object.entries(options.settings ?? {}));
 
   const store: ReflectionStore = {
@@ -184,6 +189,39 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
       return typeof opts?.limit === 'number' ? rows.slice(0, opts.limit) : rows;
     },
     getSetting: (key) => settings.get(key),
+    setSetting: (key, value) => {
+      settings.set(key, value);
+    },
+    // P3-M13a §3.1: what MATCHING reads, plus the three by-id supersession ops.
+    // Mirrors the real drivers on the one filter the sweep uses (`superseded`).
+    getScopedMemory: (scope, scopeKey, opts) =>
+      memory.filter(
+        (m) =>
+          m.scope === scope &&
+          m.scopeKey === scopeKey &&
+          (opts?.status === undefined || m.status === opts.status) &&
+          (opts?.superseded === undefined ||
+            (m.supersededAt !== undefined) === opts.superseded),
+      ),
+    getMemoryById: (id) => memory.find((m) => m.id === id),
+    corroborateMemory: (id, sessionId) => {
+      const row = memory.find((m) => m.id === id);
+      if (!row || row.supersededAt !== undefined) return false;
+      corroborated.push({ id, sessionId });
+      corroboration[id] = (corroboration[id] ?? 0) + 1;
+      return true;
+    },
+    supersedeMemory: (oldId, newId, at) => {
+      const older = memory.find((m) => m.id === oldId);
+      const newer = memory.find((m) => m.id === newId);
+      if (!older || !newer || older.supersededAt !== undefined) return false;
+      // The volatility guard, as both real drivers apply it.
+      if (newer.volatility === 'transient' && older.volatility !== 'transient') return false;
+      older.supersededAt = at ?? NOW;
+      older.supersededBy = newId;
+      superseded.push({ oldId, newId });
+      return true;
+    },
     getMessages: (sessionId) => messages.get(sessionId) ?? [],
     listAgents: () =>
       [
@@ -228,7 +266,20 @@ function fakeStore(specs: FakeSessionSpec[], options: FakeStoreOptions = {}) {
     },
   };
 
-  return { store, marked, reviewed, cursorWrites, cursors, events, writes, confirmed, memory };
+  return {
+    store,
+    marked,
+    reviewed,
+    cursorWrites,
+    cursors,
+    events,
+    writes,
+    confirmed,
+    memory,
+    settings,
+    corroborated,
+    superseded,
+  };
 }
 
 /** The counts a sweep that touched no memory returns — spelled out once so the
@@ -243,6 +294,15 @@ const NO_MEMORY = {
   autoConfirmed: 0,
   staleForReview: 0,
   skippedNoLearn: 0,
+  // P3-M13: a sweep that touched no memory also ran no consolidation operation,
+  // reserved and activated no supersession, and banked no style samples.
+  consolidatedNoops: 0,
+  consolidatedUpdates: 0,
+  supersessionsReserved: 0,
+  supersessionsActivated: 0,
+  droppedRelations: 0,
+  proposedStyles: 0,
+  fingerprintSamples: 0,
 } as const;
 
 /** A judge that quotes the user's own words when they pushed back. */
@@ -331,6 +391,11 @@ describe('runReflectionSweep — what it writes', () => {
       reviewedEvents: 1,
       droppedVerdicts: 0,
       ...NO_MEMORY,
+      // P3-M13c: the session's own user messages were counted into the style
+      // fingerprint even though the judge proposed no memory. The two are
+      // independent halves of §3.3 — one needs a model, this one needs a
+      // divider — and both obey the same learning gate.
+      fingerprintSamples: 2,
     });
     // transcript() is 5 messages ⇒ the highest seq is 4.
     expect(cursorWrites).toEqual([{ sessionId: 's1', lastSeq: 4, reflectedAt: NOW }]);

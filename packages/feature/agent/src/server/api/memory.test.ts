@@ -11,12 +11,17 @@ import {
   runMemoryAction,
   summarizeMemory,
   SUMMARY_PROPOSED_LIMIT,
+  SUMMARY_SUPERSESSION_LIMIT,
 } from './memory';
 
 // A fake store recording every scoped-memory call, so the list/action logic is
 // exercised without opening a real sqlite file. Only the methods the route
 // touches are implemented.
-function fakeStore(items: MemoryItem[] = [], corroboration: Record<string, number> = {}) {
+function fakeStore(
+  items: MemoryItem[] = [],
+  corroboration: Record<string, number> = {},
+  reflectedAt?: number,
+) {
   const calls = {
     getScopedMemory: [] as { scope: string; scopeKey: string; opts?: ScopedMemoryQuery }[],
     countScopedMemory: [] as { scope: string; scopeKey: string; opts?: ScopedMemoryQuery }[],
@@ -26,12 +31,28 @@ function fakeStore(items: MemoryItem[] = [], corroboration: Record<string, numbe
     // P3-M10 §3/§4.
     updateMemoryValue: [] as { id: string; value: string }[],
     markMemoriesInjected: [] as string[][],
+    // P3-M13a §3.1: supersession — the chain read, its activation, and the undo.
+    supersedeMemory: [] as { oldId: string; newId: string }[],
+    revertSupersession: [] as string[],
   };
   const settings = new Map<string, string>();
   const store = {
     getScopedMemory(scope: string, scopeKey: string, opts?: ScopedMemoryQuery) {
       calls.getScopedMemory.push({ scope, scopeKey, ...(opts ? { opts } : {}) });
-      return items;
+      // FILTERED, on the three predicates the summary now reads with
+      // (settings-ia-reorg §3.3): it makes two calls per scope — the proposals
+      // and the replaced rows — and a fake that answered both with every row
+      // would let a bug that ignores the filter pass. The remaining filters stay
+      // unapplied on purpose: the tests below assert that they are PASSED to the
+      // store, which is where they are actually implemented.
+      return items.filter((item) => {
+        if (opts?.status && item.status !== opts.status) return false;
+        if (typeof opts?.superseded === 'boolean') {
+          if ((item.supersededAt !== undefined) !== opts.superseded) return false;
+        }
+        if (opts?.keyPrefix && !item.key.startsWith(opts.keyPrefix)) return false;
+        return true;
+      });
     },
     countScopedMemory(scope: string, scopeKey: string, opts?: ScopedMemoryQuery) {
       calls.countScopedMemory.push({ scope, scopeKey, ...(opts ? { opts } : {}) });
@@ -60,8 +81,28 @@ function fakeStore(items: MemoryItem[] = [], corroboration: Record<string, numbe
     markMemoriesInjected(ids: readonly string[]) {
       calls.markMemoriesInjected.push([...ids]);
     },
+    getMemoryById(id: string) {
+      return items.find((i) => i.id === id);
+    },
+    supersedeMemory(oldId: string, newId: string) {
+      calls.supersedeMemory.push({ oldId, newId });
+      return true;
+    },
+    revertSupersession(id: string) {
+      calls.revertSupersession.push(id);
+      const found = items.find((i) => i.id === id);
+      if (!found || found.supersededAt === undefined) return false;
+      delete found.supersededAt;
+      delete found.supersededBy;
+      return true;
+    },
     getSetting(key: string) {
       return settings.get(key);
+    },
+    // settings-ia-reorg §3.3: the memory tab's "last looked back" line reads the
+    // same cursor the growth report's learning block does.
+    getLatestReflectionAt() {
+      return reflectedAt;
     },
     setSetting(key: string, value: string) {
       settings.set(key, value);
@@ -404,12 +445,20 @@ describe('summarizeMemory — the settings card (P3-M10 §4)', () => {
     const { store, calls } = fakeStore([makeItem()]);
     const out = summarizeMemory({}, store, 1_800_000_000_000);
     expect(out.scopes[0]).toMatchObject({ scope: 'user', confirmed: 1, proposed: 1, stale: 1 });
-    // Three counts, each with its own filter — the stale one carries the cutoff
-    // rather than a status the caller had to remember to add.
+    // FOUR counts, each with its own filter. The stale one carries the cutoff
+    // AND (P3-M13b) the window it was derived from, so the store applies the
+    // same strength-scaled rule `isStaleForReview` does. Every count of a
+    // CURRENT belief excludes replaced rows (P3-M13a), and the fourth is those
+    // replaced rows on their own.
     expect(calls.countScopedMemory.map((c) => c.opts)).toEqual([
-      { status: 'confirmed' },
-      { status: 'proposed' },
-      { staleBefore: 1_800_000_000_000 - MEMORY_DECAY_REVIEW_MS },
+      { status: 'confirmed', superseded: false },
+      { status: 'proposed', superseded: false },
+      {
+        staleBefore: 1_800_000_000_000 - MEMORY_DECAY_REVIEW_MS,
+        staleWindowMs: MEMORY_DECAY_REVIEW_MS,
+        superseded: false,
+      },
+      { superseded: true },
     ]);
   });
 
@@ -431,6 +480,140 @@ describe('summarizeMemory — the settings card (P3-M10 §4)', () => {
     summarizeMemory({}, store);
     const asked = calls.getMemoryCorroboration.at(-1) ?? [];
     expect(asked).toHaveLength(SUMMARY_PROPOSED_LIMIT);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// settings-ia-reorg §3.3/§3.5 — the decisions inbox and the badge
+// ---------------------------------------------------------------------------
+
+describe('summarizeMemory — the decisions inbox', () => {
+  const styleItem = (over: Partial<MemoryItem> = {}) =>
+    makeItem({ status: 'proposed', type: 'procedural', ...over });
+
+  it('splits style proposals out of the ordinary ones, keeping both', () => {
+    // The split is PLACEMENT, not filtering: the two lists together are what the
+    // one list used to be. A style proposal that fell off both would be a
+    // decision the user is never offered.
+    const { store } = fakeStore([
+      makeItem({ id: 'm1', key: 'tone', status: 'proposed', updatedAt: 1 }),
+      styleItem({ id: 's1', key: 'style/code-review/no-preamble', updatedAt: 2 }),
+      styleItem({ id: 's2', key: 'style/global/conclusion-first', updatedAt: 3 }),
+    ]);
+    const out = summarizeMemory({}, store);
+    expect(out.recentProposed.map((i) => i.id)).toEqual(['m1']);
+    expect(out.pendingStyleProposals.map((p) => p.item.id)).toEqual(['s2', 's1']);
+  });
+
+  it('marks only the GLOBAL style rows as needing a person', () => {
+    // `style/global/*` is the one class corroboration may never confirm (P3-M13c
+    // §3.3). The flag is computed with the runtime's own predicate, so the badge
+    // and the auto-confirm gate cannot disagree about which rows those are.
+    const { store } = fakeStore([
+      styleItem({ id: 's1', key: 'style/code-review/no-preamble' }),
+      styleItem({ id: 's2', key: 'style/global/conclusion-first' }),
+    ]);
+    const out = summarizeMemory({}, store);
+    expect(
+      Object.fromEntries(out.pendingStyleProposals.map((p) => [p.item.id, p.isGlobal])),
+    ).toEqual({ s1: false, s2: true });
+  });
+
+  it('reports the newest replacements with both claims and the undo handle', () => {
+    const { store } = fakeStore([
+      makeItem({
+        id: 'old1',
+        key: 'lunch',
+        value: 'ramen',
+        supersededAt: 10,
+        supersededBy: 'new1',
+      }),
+      makeItem({ id: 'new1', key: 'lunch', value: 'salad' }),
+    ]);
+    const out = summarizeMemory({}, store);
+    expect(out.recentSupersessions).toEqual([
+      { oldId: 'old1', oldKey: 'lunch', oldValue: 'ramen', newKey: 'lunch', newValue: 'salad', at: 10 },
+    ]);
+  });
+
+  it('still renders a notice when the replacement has since been deleted', () => {
+    // The stamp points at nothing, but the belief really was retired — reporting
+    // it as absent is honest; dropping the notice would hide the retirement.
+    const { store } = fakeStore([
+      makeItem({ id: 'old1', key: 'lunch', value: 'ramen', supersededAt: 9, supersededBy: 'gone' }),
+    ]);
+    const out = summarizeMemory({}, store);
+    expect(out.recentSupersessions[0]).toMatchObject({ newKey: '', newValue: '' });
+  });
+
+  it('caps the notices at five, newest first', () => {
+    const many = [1, 2, 3, 4, 5, 6, 7].map((n) =>
+      makeItem({ id: `o${n}`, key: `k${n}`, supersededAt: n }),
+    );
+    const { store } = fakeStore(many);
+    const out = summarizeMemory({}, store);
+    expect(out.recentSupersessions).toHaveLength(SUMMARY_SUPERSESSION_LIMIT);
+    expect(out.recentSupersessions.map((s) => s.oldId)).toEqual(['o7', 'o6', 'o5', 'o4', 'o3']);
+  });
+
+  it('counts the badge from the COUNTS, not from the capped lists', () => {
+    // A badge that said "3" while thirty proposals waited would be worse than no
+    // badge. The fake counts every row it holds per scope, so five proposals plus
+    // one notice is six waiting decisions even though only three rows are shown.
+    const many = [1, 2, 3, 4, 5].map((n) =>
+      makeItem({ id: `p${n}`, status: 'proposed', updatedAt: n }),
+    );
+    const { store } = fakeStore(many);
+    const out = summarizeMemory({}, store);
+    expect(out.recentProposed).toHaveLength(SUMMARY_PROPOSED_LIMIT);
+    // countScopedMemory in the fake answers `items.length` for every filter, so
+    // the proposal count is 5 and there are no notices.
+    expect(out.pendingCount).toBe(5);
+  });
+
+  it('adds the replacement notices to the badge', () => {
+    const { store } = fakeStore([
+      makeItem({ id: 'o1', supersededAt: 3, supersededBy: 'x' }),
+    ]);
+    const out = summarizeMemory({}, store);
+    // One row in the fake → the proposed count is 1, plus the one notice.
+    expect(out.pendingCount).toBe(2);
+  });
+
+  it('reports when reflection last ran, and says nothing when it never has', () => {
+    const withRun = summarizeMemory({}, fakeStore([], {}, 4_242).store);
+    expect(withRun.lastReflectionAt).toBe(4_242);
+    expect(summarizeMemory({}, fakeStore().store).lastReflectionAt).toBeUndefined();
+  });
+
+  it('asks for corroboration for both proposal lists', () => {
+    const { store, calls } = fakeStore([
+      makeItem({ id: 'm1', key: 'tone', status: 'proposed' }),
+      makeItem({ id: 's1', key: 'style/global/x', status: 'proposed' }),
+    ]);
+    summarizeMemory({}, store);
+    expect(calls.getMemoryCorroboration.at(-1)).toEqual(['m1', 's1']);
+  });
+});
+
+describe('listScopedMemory — the key-namespace filter (settings-ia-reorg §3.4)', () => {
+  it('passes the prefix to the store, on the LIST and the COUNT alike', () => {
+    // One builder, both queries: a page and its total that filtered differently
+    // is the "showing 12 of 40" bug the store's shared filter exists to prevent.
+    const { store, calls } = fakeStore([makeItem({ key: 'style/global/x' })]);
+    const res = listScopedMemory(
+      { scope: 'user', scopeKey: null, status: null, keyPrefix: 'style/' },
+      store,
+    );
+    expect(res.ok).toBe(true);
+    expect(calls.getScopedMemory[0]?.opts).toMatchObject({ keyPrefix: 'style/' });
+    expect(calls.countScopedMemory[0]?.opts).toMatchObject({ keyPrefix: 'style/' });
+  });
+
+  it('treats a blank prefix as no filter', () => {
+    const { store, calls } = fakeStore([makeItem()]);
+    listScopedMemory({ scope: 'user', scopeKey: null, status: null, keyPrefix: '   ' }, store);
+    expect(calls.getScopedMemory[0]?.opts).not.toHaveProperty('keyPrefix');
   });
 });
 

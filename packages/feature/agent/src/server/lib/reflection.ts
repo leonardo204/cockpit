@@ -58,45 +58,60 @@
 import {
   AiSdkEngine,
   apiKeyCredential,
+  applyConsolidation,
   buildReflectionCases,
   buildReflectionPrompt,
   BUILTIN_PERSONA_ID,
   ClaudeAgentSdkEngine,
   collectReflectionUserMessages,
+  computeStyleFingerprint,
   CORROBORATION_THRESHOLD,
   DEFAULT_USER_ID,
   isClaudeAgentSdkAvailable,
   isSessionDueForReflection,
   makeModelResolver,
+  matchCandidates,
+  memoryHandle,
   MEMORY_DECAY_REVIEW_MS,
+  mergeStyleFingerprint,
   normalizeReflectionAnswer,
+  pairKey,
   parseReflectionAnswer,
+  parseStyleFingerprint,
   readLearningEnabled,
+  REFLECTION_EXISTING_CAP,
   REFLECTION_IDLE_MS,
   REFLECTION_SWEEP_CAP,
   resolveMemoryScopeKey,
   resolveProviderCredential,
+  serializeStyleFingerprint,
   shouldAutoConfirmMemory,
   staleReviewCutoff,
   shouldExtractMemoryOnly,
+  STYLE_FINGERPRINT_KEY,
   validateMemoryCandidates,
+  validatePairRelations,
   validateReflectionVerdicts,
+  validateStyleCandidates,
   type Agent,
+  type ConsolidationOp,
   type Engine,
   type EvalEvent,
   type EvalEventKind,
   type MemoryItem,
   type ModelSelection,
   type MemoryWriteRequest,
+  type PairRelationLookup,
   type ReflectionCase,
   type ReflectionCursor,
   type ReflectionJudge,
-  type ReflectionMemoryCandidate,
   type ReflectionSessionContext,
   type ReflectionUserMessage,
   type ReflectionVerdict,
   type RuntimeMessage,
   type SessionRef,
+  type StyleFingerprint,
+  type ValidatedMemoryCandidate,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
 /** The narrow slice of the store the sweep needs. Same trick as
@@ -123,7 +138,31 @@ export interface ReflectionStore {
   getMemoryCorroboration(memoryIds: readonly string[]): Record<string, number>;
   getSetting(key: string): string | undefined;
   // -- P3-M10: the stale-review derivation the consolidation step reports ----
-  listStaleConfirmedMemory(before: number, opts?: { limit?: number }): MemoryItem[];
+  listStaleConfirmedMemory(
+    before: number,
+    opts?: { limit?: number; windowMs?: number },
+  ): MemoryItem[];
+  // -- P3-M13a: the four-op update, its reservation, and its activation -----
+  //
+  // `getScopedMemory` is what MATCHING reads (step 1 is code, and code needs the
+  // rows). `corroborateMemory` is the NOOP operation — see the Store interface
+  // for why an equivalent restatement must not go through `putMemory`.
+  // `supersedeMemory` + `getMemoryById` are the activation: a reservation
+  // becomes two stamps only at the moment its owner is confirmed.
+  getScopedMemory(
+    scope: MemoryItem['scope'],
+    scopeKey: string,
+    opts?: { status?: MemoryItem['status']; superseded?: boolean; limit?: number },
+  ): MemoryItem[];
+  getMemoryById(id: string): MemoryItem | undefined;
+  corroborateMemory(
+    id: string,
+    sessionId: string,
+    opts?: { createdFrom?: string; at?: number },
+  ): boolean;
+  supersedeMemory(oldId: string, newId: string, at?: number): boolean;
+  // -- P3-M13c: the style fingerprint's single settings key -----------------
+  setSetting(key: string, value: string): void;
 }
 
 /** The opt-in that lets consolidation confirm a corroborated proposal without a
@@ -196,6 +235,30 @@ export type ReflectionSweepResult = {
    * rather than merely that nothing was written.
    */
   skippedNoLearn: number;
+  // -- P3-M13a (§3.1): what the four-op update actually did ------------------
+  /** `equivalent` verdicts: an existing memory was corroborated and NOT
+   *  rewritten. The operation that changes the least, counted so it is visible
+   *  that the sweep decided to change nothing rather than failing to. */
+  consolidatedNoops: number;
+  /** `refines` verdicts: an existing key was written with a better value. */
+  consolidatedUpdates: number;
+  /** `contradicts` verdicts that produced a live RESERVATION — a new proposal
+   *  that will retire an existing row if it is ever confirmed. Not the number of
+   *  rows retired: a proposal supersedes nothing (§3.1). */
+  supersessionsReserved: number;
+  /** Reservations ACTIVATED during this sweep's consolidation — i.e. rows
+   *  actually stamped `superseded_at`, each one behind a confirmation. */
+  supersessionsActivated: number;
+  /** Pair labels the validator threw out (an ungrounded quote, a pair the code's
+   *  matcher never produced). Separate from `droppedCandidates` so "the model
+   *  claimed a contradiction it could not evidence" is legible on its own. */
+  droppedRelations: number;
+  // -- P3-M13c (§3.3): the style half ---------------------------------------
+  /** Style preferences written as `proposed` memory rows. */
+  proposedStyles: number;
+  /** User messages that went into this sweep's style-fingerprint batch. 0 when
+   *  learning is off, which is the same thing as "no fingerprint was updated". */
+  fingerprintSamples: number;
 };
 
 /** Every agent whose ledger might hold rows for these sessions. Best-effort: with
@@ -248,8 +311,24 @@ export async function runReflectionSweep(
     autoConfirmed: 0,
     staleForReview: 0,
     skippedNoLearn: 0,
+    consolidatedNoops: 0,
+    consolidatedUpdates: 0,
+    supersessionsReserved: 0,
+    supersessionsActivated: 0,
+    droppedRelations: 0,
+    proposedStyles: 0,
+    fingerprintSamples: 0,
   };
   if (cap === 0) return result;
+
+  // P3-M13c (§3.3): the style-fingerprint batch, accumulated across every
+  // session this sweep reads and folded into the stored profile ONCE at the end.
+  //
+  // ONE WRITE PER SWEEP, not one per session, for the same reason consolidation
+  // runs once: the profile is a property of the person, not of a conversation,
+  // and rewriting a settings row three times to land on the same value is three
+  // chances for two of them to be observed half-applied.
+  const styleTexts: string[] = [];
 
   // P3-M10 (§3): the app-wide learning switch, read ONCE for the whole sweep.
   // Per-session would let a user flipping the setting mid-sweep get half a pass
@@ -358,10 +437,20 @@ export async function runReflectionSweep(
         result.sweptSessions += 1;
         continue;
       }
+      // P3-M13a (§3.1 step 1): what naby ALREADY remembers in the scopes this
+      // session may propose into. Read here rather than inside the prompt
+      // builder because only this layer has a store — the runtime stays pure.
+      // A read failure is not fatal: with no existing rows the relation task is
+      // simply dropped and every proposal is an ADD, which is exactly the
+      // pre-M13a behaviour.
+      const existingMemories = learningEnabled
+        ? readExistingMemories(store, session.sessionId, session.cwd)
+        : [];
       const context: ReflectionSessionContext = {
         sessionId: session.sessionId,
         ...(session.cwd ? { cwd: session.cwd } : {}),
         userMessages,
+        ...(existingMemories.length > 0 ? { existingMemories } : {}),
       };
 
       // ONE model call per session (§6), answering BOTH tasks. A throw here
@@ -407,7 +496,32 @@ export async function runReflectionSweep(
       // proposed things the guards rejected" indistinguishable from "the user
       // turned learning off".
       if (learningEnabled) {
-        proposeMemories(store, answer.memories, context, userMessages, result);
+        // The PAIR LABELS, validated once for the whole session: a relation is
+        // admissible only when the model quoted the user's own words for it, and
+        // an `unrelated` (or missing) label is the ADD that M8b always did.
+        const relations = validatePairRelations(answer.relations, userMessages);
+        result.droppedRelations += relations.dropped;
+
+        const { kept, dropped } = validateMemoryCandidates(answer.memories, userMessages, {
+          hasCwd: Boolean(context.cwd),
+        });
+        result.droppedCandidates += dropped;
+        proposeMemories(store, kept, context, relations, result);
+
+        // P3-M13c (§3.3): style preferences travel the SAME path — they are
+        // ordinary `procedural`/`user` memory with a namespaced key, so they go
+        // through the same consolidation, the same gate and the same review
+        // queue. Counted separately only so the log can say what kind of thing
+        // the sweep learned.
+        const styles = validateStyleCandidates(answer.styles ?? [], userMessages);
+        result.droppedCandidates += styles.dropped;
+        const beforeStyles = result.proposedMemories;
+        proposeMemories(store, styles.kept, context, relations, result);
+        result.proposedStyles += result.proposedMemories - beforeStyles;
+
+        // And the deterministic half: the user's own words, banked for the one
+        // fingerprint recomputation at the end of the sweep.
+        for (const message of userMessages) styleTexts.push(message.text);
       }
 
       store.setReflectionCursor(session.sessionId, latestSeq, now);
@@ -441,12 +555,21 @@ export async function runReflectionSweep(
   // waiting for the next one.
   consolidateMemory(store, result, now);
 
+  // THE STYLE FINGERPRINT, once, at the very end (P3-M13c §3.3). After
+  // consolidation because it depends on nothing consolidation does, and after
+  // the loop because it is one profile folded from every session read.
+  updateStyleFingerprint(store, styleTexts, result, now);
+
   if (result.sweptSessions > 0 || result.markedEvents > 0 || result.proposedMemories > 0) {
     console.log(
       `[reflection] swept ${result.sweptSessions} session(s), reviewed ${result.reviewedEvents} action(s), ` +
         `marked ${result.markedEvents} corrected, ` +
-        `dropped ${result.droppedVerdicts} verdict(s), proposed ${result.proposedMemories} memory row(s), ` +
+        `dropped ${result.droppedVerdicts} verdict(s), proposed ${result.proposedMemories} memory row(s) ` +
+        `(${result.proposedStyles} style), ` +
         `dropped ${result.droppedCandidates} candidate(s), auto-confirmed ${result.autoConfirmed}, ` +
+        `consolidated ${result.consolidatedNoops} noop / ${result.consolidatedUpdates} update, ` +
+        `supersession ${result.supersessionsReserved} reserved / ${result.supersessionsActivated} activated, ` +
+        `dropped ${result.droppedRelations} relation(s), fingerprint samples ${result.fingerprintSamples}, ` +
         `stale-for-review ${result.staleForReview}, skipped-no-learn ${result.skippedNoLearn}`,
     );
   }
@@ -480,16 +603,11 @@ const REFLECTION_CONFIDENCE = 0.5;
  */
 function proposeMemories(
   store: ReflectionStore,
-  candidates: readonly ReflectionMemoryCandidate[],
+  kept: readonly ValidatedMemoryCandidate[],
   context: ReflectionSessionContext,
-  userMessages: readonly ReflectionUserMessage[],
+  relations: PairRelationLookup,
   result: ReflectionSweepResult,
 ): void {
-  const { kept, dropped } = validateMemoryCandidates(candidates, userMessages, {
-    hasCwd: Boolean(context.cwd),
-  });
-  result.droppedCandidates += dropped;
-
   for (const candidate of kept) {
     // Scope → key is a runtime contract fact, so it is resolved by the runtime's
     // own resolver — the same one `naby_remember` uses — rather than by a second
@@ -503,13 +621,32 @@ function proposeMemories(
       result.droppedCandidates += 1;
       continue;
     }
+
+    const op = decideOperation(store, candidate, scopeKey, relations);
+    const createdFrom = `${context.sessionId}:${candidate.evidenceSeq}`;
+
+    // NOOP: the judge said this proposal is the SAME CLAIM as something already
+    // remembered. Nothing is written; this session is recorded as agreeing with
+    // the existing row, which is precisely the cross-session corroboration
+    // signal §5.3 was built to accumulate. Deliberately NOT through `putMemory`
+    // — see the Store interface for the two side effects that would cause.
+    if (op.op === 'noop') {
+      if (store.corroborateMemory(op.targetId, context.sessionId, { createdFrom })) {
+        result.consolidatedNoops += 1;
+      }
+      continue;
+    }
+
     try {
       store.putMemory({
         scope: candidate.scope,
         scopeKey,
         type: candidate.type,
-        key: candidate.key,
-        value: candidate.value,
+        // UPDATE writes the EXISTING key (the upsert identity, so it lands on
+        // that row); ADD writes the candidate's own.
+        key: op.key,
+        value: op.value,
+        volatility: candidate.volatility,
         provenance: {
           // ARTIFACT, not 'user'. The model reading a preference out of a
           // conversation is not the user stating it, and the trust ordering has
@@ -519,12 +656,19 @@ function proposeMemories(
           basis: 'observed in session reflection',
           // The exact message the quote came from (§5.2) — what makes this row
           // auditable later instead of merely attributed.
-          createdFrom: `${context.sessionId}:${candidate.evidenceSeq}`,
+          createdFrom,
+          // THE RESERVATION (§3.1), and note what it is not: nothing is retired
+          // here. The row lands `proposed`, and `activateSupersession` turns this
+          // field into two stamps only if and when a person — or the opt-in
+          // corroboration path — confirms it.
+          ...(op.op === 'add' && op.supersedes ? { supersedes: op.supersedes } : {}),
         },
         confidence: REFLECTION_CONFIDENCE,
         requestedStatus: 'proposed',
       });
       result.proposedMemories += 1;
+      if (op.op === 'update') result.consolidatedUpdates += 1;
+      if (op.op === 'add' && op.supersedes) result.supersessionsReserved += 1;
     } catch (e) {
       // A memory-gate deny. Counted, logged, and stepped over.
       result.droppedCandidates += 1;
@@ -532,6 +676,159 @@ function proposeMemories(
         `[reflection] proposal "${candidate.key}" refused: ${e instanceof Error ? e.message : String(e)}`,
       );
     }
+  }
+}
+
+/**
+ * Steps 1 and 3 of §3.1 around the model's step 2: match in CODE, look up the
+ * label the model gave that pair, decide the operation in CODE.
+ *
+ * THE MATCHER IS THE GATE ON THE MODEL. A relation naming an existing row that
+ * `matchCandidates` did not produce simply never gets looked up, so the judge
+ * cannot invent a pairing — it can only label one the code already found. That
+ * is what keeps "matching is code" true even though both happen in one call.
+ *
+ * The BEST match wins. Matches come back best-first, and the first one carrying a
+ * non-`unrelated` label is the one acted on: a candidate relates to at most one
+ * existing memory, because a proposal that contradicted three different rows at
+ * once would need a policy for which to retire, and no such policy would be
+ * better than "ask a person", which is what proposing already does.
+ */
+function decideOperation(
+  store: ReflectionStore,
+  candidate: ValidatedMemoryCandidate,
+  scopeKey: string,
+  relations: PairRelationLookup,
+): ConsolidationOp {
+  let existing: MemoryItem[] = [];
+  try {
+    existing = store.getScopedMemory(candidate.scope, scopeKey);
+  } catch {
+    // No rows readable ⇒ nothing to relate to ⇒ a plain ADD, which is the
+    // pre-M13a behaviour. A background pass must not fail over a read.
+    return applyConsolidation('unrelated', candidate);
+  }
+
+  for (const match of matchCandidates(candidate, existing)) {
+    const verdict = relations.verdicts.get(pairKey(candidate.key, memoryHandle(match.item)));
+    if (!verdict) continue;
+    return applyConsolidation(verdict, candidate, match.item);
+  }
+  return applyConsolidation('unrelated', candidate);
+}
+
+/**
+ * The memories the relation task is shown: everything naby holds in the scopes
+ * this session could propose into, newest first, capped.
+ *
+ * BOTH STATUSES. A `proposed` row is still something the agent has written down,
+ * and a second proposal that merely restates it should corroborate it rather
+ * than create a near-duplicate — which is exactly the accumulation §1 describes.
+ * Superseded rows are excluded by the matcher itself.
+ *
+ * NEVER THROWS: an unreadable scope contributes nothing and the sweep carries on.
+ */
+function readExistingMemories(
+  store: ReflectionStore,
+  sessionId: string,
+  cwd?: string,
+): MemoryItem[] {
+  const targets: { scope: MemoryItem['scope']; scopeKey: string }[] = [
+    { scope: 'user', scopeKey: DEFAULT_USER_ID },
+  ];
+  if (cwd) targets.push({ scope: 'project', scopeKey: cwd });
+  const rows: MemoryItem[] = [];
+  for (const target of targets) {
+    try {
+      rows.push(...store.getScopedMemory(target.scope, target.scopeKey, { superseded: false }));
+    } catch {
+      /* one unreadable scope must not cost the other its relations */
+    }
+  }
+  // Newest first, then capped: the row a proposal is really about is
+  // overwhelmingly one that was touched recently.
+  rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  return rows.slice(0, REFLECTION_EXISTING_CAP);
+}
+
+/**
+ * TURN A RESERVATION INTO A SUPERSESSION — the one moment an old memory is
+ * actually retired (P3-M13a §3.1).
+ *
+ * CALLED FROM EXACTLY THE TWO PLACES A ROW BECOMES CONFIRMED: the consolidation
+ * step below (corroboration promotion) and the `/api/memory` confirm action (a
+ * person clicking yes). Exported for the second of those, because the rule
+ * "supersession requires confirmation" is only true if every confirmation path
+ * runs it — and a rule enforced at one of two call sites is a rule that holds
+ * until somebody uses the other one.
+ *
+ * IT REFUSES AN UNCONFIRMED ROW ITSELF rather than trusting the caller. The
+ * whole guarantee of §3.1 is that a `proposed` candidate supersedes nothing, and
+ * a guarantee that depends on the caller checking first is not one.
+ *
+ * The store applies the volatility rule and the already-superseded rule, so this
+ * can return false for reasons that are not failures: a transient fact declining
+ * to retire a stable one is the system working.
+ */
+export function activateSupersession(
+  store: Pick<ReflectionStore, 'getMemoryById' | 'supersedeMemory'>,
+  memoryId: string,
+  at: number = Date.now(),
+): boolean {
+  let item: MemoryItem | undefined;
+  try {
+    item = store.getMemoryById(memoryId);
+  } catch {
+    return false;
+  }
+  if (!item || item.status !== 'confirmed') return false;
+  const target = item.provenance.supersedes;
+  if (!target) return false;
+  try {
+    const stamped = store.supersedeMemory(target, item.id, at);
+    if (stamped) {
+      console.log(
+        `[reflection] memory "${item.key}" superseded "${target}" — the older row is kept, not deleted`,
+      );
+    }
+    return stamped;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Recompute the STYLE FINGERPRINT from the user messages this sweep read and
+ * fold it into the stored profile (P3-M13c §3.3).
+ *
+ * NOTHING HERE IS A MODEL. It counts sentences. The gate it obeys is the same
+ * `learningEnabled`/`noLearn` pair the LLM half obeys — the caller only ever
+ * fills `texts` for sessions that passed both, so an empty batch IS the gate
+ * having refused, and this returns having written nothing.
+ *
+ * NEVER THROWS, like every other end-of-sweep tidy-up: a settings write that
+ * fails must not turn a successful sweep into a failed one.
+ */
+function updateStyleFingerprint(
+  store: Pick<ReflectionStore, 'getSetting' | 'setSetting'>,
+  texts: readonly string[],
+  result: ReflectionSweepResult,
+  now: number,
+): void {
+  if (texts.length === 0) return;
+  try {
+    const batch = computeStyleFingerprint(texts, now);
+    if (batch.sampleCount === 0) return;
+    const previous: StyleFingerprint | undefined = parseStyleFingerprint(
+      store.getSetting(STYLE_FINGERPRINT_KEY),
+    );
+    const merged = mergeStyleFingerprint(previous, batch);
+    store.setSetting(STYLE_FINGERPRINT_KEY, serializeStyleFingerprint(merged));
+    result.fingerprintSamples = batch.sampleCount;
+  } catch (e) {
+    console.warn(
+      `[reflection] style fingerprint skipped: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
@@ -564,7 +861,13 @@ function consolidateMemory(
   // Wrapped separately from the consolidation below so a store that cannot answer
   // this read still gets its proposals promoted, and vice versa.
   try {
-    const stale = store.listStaleConfirmedMemory(staleReviewCutoff(now, MEMORY_DECAY_REVIEW_MS));
+    // `windowMs` is what makes the queue STRENGTH-AWARE (P3-M13b §3.2): without
+    // it the store would answer the fixed 90-day question while
+    // `isStaleForReview` answers the strength-scaled one, and the browser's
+    // "unused" chip would list rows the runtime does not consider unused.
+    const stale = store.listStaleConfirmedMemory(staleReviewCutoff(now, MEMORY_DECAY_REVIEW_MS), {
+      windowMs: MEMORY_DECAY_REVIEW_MS,
+    });
     result.staleForReview = stale.length;
     if (stale.length > 0) {
       console.log(
@@ -590,9 +893,17 @@ function consolidateMemory(
 
     for (const item of candidates) {
       const corroboration = counts[item.id] ?? 0;
+      // `shouldAutoConfirmMemory` is where ALL the conditions live, including
+      // P3-M13c's: a `style/global/*` row is never promoted by corroboration
+      // however many sessions agree, because a change to the agent's global tone
+      // is the adaptation a user is least likely to notice happening.
       if (!shouldAutoConfirmMemory(item, corroboration, { enabled })) continue;
       store.confirmMemory(item.id);
       result.autoConfirmed += 1;
+      // AND ONLY NOW may this row retire the one it contradicted (§3.1). The
+      // reservation has been sitting on it since it was proposed and has changed
+      // nothing; confirmation is what activates it.
+      if (activateSupersession(store, item.id, now)) result.supersessionsActivated += 1;
       // Logged per promotion, by name and by evidence: a row that starts shaping
       // answers without anyone clicking anything has to be findable afterwards.
       console.log(
