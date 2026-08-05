@@ -9,12 +9,22 @@
  * also be unit-tested without dragging in the store.
  */
 import type { RuntimeMessage } from '../../engines/naby';
+import {
+  appendTextSegment,
+  appendToolCallSegment,
+  type TurnSegment,
+} from '../../../shared/turnSegments';
 
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: string;
+  /** WHAT HAPPENED IN WHAT ORDER — text runs and tool-call runs, in the order
+   *  the rows were written. Built with the SAME pure helpers the live reducer
+   *  uses (`shared/turnSegments.ts`), so a reloaded turn renders as the
+   *  sequence it did while it was streaming. */
+  segments?: TurnSegment[];
   toolCalls?: Array<{
     id: string;
     name: string;
@@ -22,6 +32,14 @@ export interface ChatMessage {
     result?: string;
     isLoading: boolean;
     skillContent?: string;
+    // Which SUBAGENT made the call, as the backend attributed it when the call
+    // ran. Persisted WITH the call, so a reloaded transcript can still show a
+    // delegated run as its own block — the events that describe a subagent's
+    // life are observational and never stored, so the call is the only witness
+    // left. (What a reload cannot show is the run's outcome; see subagentGroups.)
+    agentId?: string;
+    agentType?: string;
+    parentToolCallId?: string;
   }>;
 }
 
@@ -53,6 +71,15 @@ export interface ChatMessage {
  *
  * Ids stay deterministic: a merged group keeps the id of the row that opened it,
  * so the same stored transcript always reloads with the same message ids.
+ *
+ * ORDER SURVIVES, AND IS RECORDED. The runtime writes each text run and each
+ * tool call as its own row, in the order they happened (`src/runtime/session.ts`
+ * — `text` → an assistant row, `tool_request` → an assistant row with one
+ * call), so a reloaded turn knows exactly where the model stopped talking and
+ * started working. That order is written onto each bubble as `segments`, using
+ * the same helpers the live reducer uses, so the reload renders the turn as the
+ * same sequence of bubbles and tool batches the user watched. Nothing is
+ * inferred: the split points are read off the rows, never guessed at.
  */
 export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
   // First pass: collect every tool output keyed by the call it answers.
@@ -75,19 +102,36 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         input: (tc.input as Record<string, unknown>) ?? {},
         result: toolResults.get(tc.toolCallId),
         isLoading: false,
+        ...(tc.subagent
+          ? {
+              agentId: tc.subagent.agentId,
+              ...(tc.subagent.agentType ? { agentType: tc.subagent.agentType } : {}),
+              ...(tc.subagent.parentToolCallId
+                ? { parentToolCallId: tc.subagent.parentToolCallId }
+                : {}),
+            }
+          : {}),
       }));
-      // A tool-call-only row folds into the assistant bubble it continues.
+      // A tool-call-only row folds into the assistant bubble it continues —
+      // appending its calls at the END of that bubble's order, which is where
+      // they happened relative to whatever the bubble already holds.
       const previous = out[out.length - 1];
       const isToolCallOnly = m.content.trim() === '' && toolCalls.length > 0;
       if (isToolCallOnly && previous && previous.role === 'assistant') {
         previous.toolCalls = [...(previous.toolCalls ?? []), ...toolCalls];
+        let segments = previous.segments;
+        for (const tc of toolCalls) segments = appendToolCallSegment(segments, tc.id);
+        previous.segments = segments;
         return;
       }
+      let segments = appendTextSegment(undefined, m.content);
+      for (const tc of toolCalls) segments = appendToolCallSegment(segments, tc.id);
       out.push({
         id: `assistant-${i}`,
         role: 'assistant',
         content: m.content,
         ...(toolCalls.length ? { toolCalls } : {}),
+        ...(segments.length ? { segments } : {}),
       });
     }
     // role === 'tool' is consumed above (folded into its assistant call).

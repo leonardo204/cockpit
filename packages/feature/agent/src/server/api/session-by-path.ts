@@ -13,6 +13,15 @@ import { generateTitle } from '../sessionTitle';
 import { getStore } from '../engines/naby';
 import type { RuntimeMessage } from '../engines/naby';
 import { deriveTitle, userTexts } from './sessions/nabyBrowse';
+// ONE MAPPER, NOT TWO. This route used to carry its own copy of
+// RuntimeMessage → ChatMessage, and the copy had fallen behind the original:
+// it never folded a tool-call-only row into the bubble it continues (so a
+// reloaded turn that ran eight tools came back as eight bubbles each saying "1
+// tool call"), it dropped every call's subagent attribution (so delegated runs
+// lost their blocks), and it recorded no order. Since this is the route the
+// chat panel actually reloads through, the transcript the user saw live and the
+// transcript they got back were two different documents. The copy is gone.
+import { toChatMessages, type ChatMessage as StoreChatMessage } from './session/toChatMessages';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,6 +86,9 @@ interface ChatMessage {
   // Set on role:'system' rows — a harness event rendered as a muted one-line bar
   // (not a conversation bubble). `task-notification` shows the <summary> line.
   systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
+  /** WHAT HAPPENED IN WHAT ORDER — text runs and tool-call runs, as the store
+   *  recorded them. Built by the shared mapper; see `session/toChatMessages`. */
+  segments?: StoreChatMessage['segments'];
   toolCalls?: Array<{
     id: string;
     name: string;
@@ -85,6 +97,12 @@ interface ChatMessage {
     isLoading: boolean;
     // Skill body loaded by this call (folded here instead of shown as a user bubble).
     skillContent?: string;
+    // Which SUBAGENT made the call, when the backend attributed it. Carried on
+    // the wire so a reloaded transcript can still draw a delegated run as its
+    // own block.
+    agentId?: string;
+    agentType?: string;
+    parentToolCallId?: string;
   }>;
 }
 
@@ -418,50 +436,6 @@ function storeFingerprint(messages: RuntimeMessage[]): string {
   const last = messages[n - 1];
   const tail = last ? (last.role === 'tool' ? last.output?.content ?? '' : last.content) : '';
   return `${n}-${tail.length}`;
-}
-
-/**
- * Map the store's RuntimeMessage stream into the client's ChatMessage list —
- * the SAME folding the store-backed `/api/session/[sessionId]/history` route
- * does (RuntimeMessage → ChatMessage, `tool` rows folded into the calling
- * assistant message's `toolCalls[].result` by toolCallId), mirroring the old
- * jsonl tool_use/tool_result pairing. Ids are keyed to the absolute index in the
- * full message array so they stay stable between a full load and a windowed
- * (limit=N turns) page — that is what lets the client's mergeIncrementalMessages
- * realign a suffix window without truncating pre-window history.
- */
-function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
-  // First pass: collect every tool output keyed by the call it answers.
-  const toolResults = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role === 'tool') {
-      toolResults.set(m.toolCallId, m.output?.content ?? '');
-    }
-  }
-
-  // Second pass: build user/assistant bubbles in order.
-  const out: ChatMessage[] = [];
-  messages.forEach((m, i) => {
-    if (m.role === 'user') {
-      out.push({ id: `user-${i}`, role: 'user', content: m.content });
-    } else if (m.role === 'assistant') {
-      const toolCalls = (m.toolCalls ?? []).map((tc) => ({
-        id: tc.toolCallId,
-        name: tc.toolName,
-        input: (tc.input as Record<string, unknown>) ?? {},
-        result: toolResults.get(tc.toolCallId),
-        isLoading: false,
-      }));
-      out.push({
-        id: `assistant-${i}`,
-        role: 'assistant',
-        content: m.content,
-        ...(toolCalls.length ? { toolCalls } : {}),
-      });
-    }
-    // role === 'tool' is consumed above (folded into its assistant call).
-  });
-  return out;
 }
 
 /**

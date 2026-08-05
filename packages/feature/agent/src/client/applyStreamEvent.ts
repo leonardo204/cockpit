@@ -1,5 +1,25 @@
 import type { ChatMessage, ToolCallInfo } from './types';
 import { renderHarnessPill } from './harnessPill';
+import { applySubagentTaskEvent, type SubagentTaskPhase } from './subagentGroups';
+import { appendTextSegment, appendToolCallSegment } from './turnSegments';
+
+/**
+ * Add a run of assistant text to the turn — to `content` (the whole answer, one
+ * string, as every other reader of a message still expects) AND to `segments`
+ * (where the answer's parts sit relative to the tools).
+ *
+ * The split rule lives in `appendTextSegment`: text that arrives after tool
+ * activity opens a NEW bubble rather than growing the one from before the
+ * tools. Both fields are updated here and nowhere else, so they cannot drift.
+ */
+export function withAssistantText(m: ChatMessage, text: string): ChatMessage {
+  if (!text) return m;
+  return {
+    ...m,
+    content: (m.content || '') + text,
+    segments: appendTextSegment(m.segments, text),
+  };
+}
 
 // Single engine-agnostic stream→messages reducer (#10 line 1).
 //
@@ -18,6 +38,11 @@ interface Block {
   name?: string;
   id?: string;
   input?: Record<string, unknown>;
+  // Subagent attribution the naby engine puts on a tool_use block when the
+  // BACKEND ran the call inside a delegated agent (see subagentGroups.ts).
+  agent_id?: string;
+  agent_type?: string;
+  parent_tool_use_id?: string;
 }
 interface ToolResultBlock {
   tool_use_id?: string;
@@ -44,6 +69,16 @@ export interface StreamEvent {
   // runtime, never raw message bodies.
   harness_subtype?: string;
   harness_detail?: string;
+  // system/harness lifecycle of ONE delegated run (naby engine). Present only on
+  // subagent / background-task edges; when it is, the event builds a subagent
+  // BLOCK instead of a standalone pill — four parallel agents used to emit four
+  // interchangeable `task_started · agent=general-purpose` bars that said
+  // nothing about which run was which.
+  harness_task_id?: string;
+  harness_task_phase?: SubagentTaskPhase;
+  harness_task_agent?: string;
+  harness_task_tool_use_id?: string;
+  harness_task_status?: 'completed' | 'failed' | 'stopped';
 }
 
 export function applyStreamEvent(
@@ -60,7 +95,7 @@ export function applyStreamEvent(
     const e = ev.event;
     if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta' && e.delta.text) {
       const txt = e.delta.text;
-      return messages.map((m) => (m.id === assistantId ? { ...m, content: (m.content || '') + txt } : m));
+      return messages.map((m) => (m.id === assistantId ? withAssistantText(m, txt) : m));
     }
     return messages;
   }
@@ -77,7 +112,7 @@ export function applyStreamEvent(
     const isSynthetic = ev.message?.model === '<synthetic>';
     if (isSynthetic) {
       const newText = blocks.filter((b) => b.type === 'text' && b.text).map((b) => b.text).join('');
-      if (newText) out = out.map((m) => (m.id === assistantId ? { ...m, content: (m.content || '') + newText } : m));
+      if (newText) out = out.map((m) => (m.id === assistantId ? withAssistantText(m, newText) : m));
     }
 
     for (const b of blocks) {
@@ -87,11 +122,24 @@ export function applyStreamEvent(
           name: b.name,
           input: b.input || {},
           isLoading: true,
+          // Attribution rides the block through unchanged. Absent (every engine
+          // but naby's, and every main-thread call) leaves the row exactly as it
+          // was, so nothing about the ordinary batch changes.
+          ...(b.agent_id ? { agentId: b.agent_id } : {}),
+          ...(b.agent_type ? { agentType: b.agent_type } : {}),
+          ...(b.parent_tool_use_id ? { parentToolCallId: b.parent_tool_use_id } : {}),
         };
         out = out.map((m) => {
           if (m.id !== assistantId) return m;
           if (m.toolCalls?.some((x) => x.id === tc.id)) return m;
-          return { ...m, toolCalls: [...(m.toolCalls || []), tc] };
+          // The call lands in the turn's call list AND at this point in the
+          // turn's order — which is what stops the next thing the model says
+          // from being glued onto what it said before this call ran.
+          return {
+            ...m,
+            toolCalls: [...(m.toolCalls || []), tc],
+            segments: appendToolCallSegment(m.segments, tc.id),
+          };
         });
       }
     }
@@ -132,6 +180,41 @@ export function applyStreamEvent(
   // below makes the reducer idempotent, so a replayed/duplicated event cannot stack up
   // repeated bars (the viewer re-runs this reducer over reconnect snapshots).
   if (ev.type === 'system' && ev.subtype === 'harness') {
+    // A SUBAGENT'S LIFECYCLE IS NOT A PILL — it is the state of a block.
+    //
+    // These events (`task_started` / `task_progress` / `task_updated` /
+    // `task_notification`) used to render as one muted bar each, and a turn that
+    // delegated four times produced a column of near-identical bars while the
+    // agents' actual work sat anonymously inside the turn's "N tool calls"
+    // batch. Folded onto the assistant bubble instead, they become that bubble's
+    // subagent blocks: started opens one, ended closes it, and the calls the
+    // backend attributed to that agent render underneath it.
+    //
+    // Idempotent by construction (applySubagentTaskEvent), which the viewer
+    // needs: a reconnect replays the entire turn through this reducer.
+    if (ev.harness_task_id && ev.harness_task_phase) {
+      const taskId = ev.harness_task_id;
+      const phase = ev.harness_task_phase;
+      const idx = messages.findIndex((m) => m.id === assistantId);
+      // No bubble yet ⇒ nothing to attach to. Dropped rather than conjuring a
+      // bubble: a block with no turn around it would sit above the answer it
+      // belongs to. (The bubble is created on send / on system.init, i.e. before
+      // any tool can run, so this is the pathological case, not the normal one.)
+      if (idx < 0) return messages;
+      const target = messages[idx]!;
+      const nextTasks = applySubagentTaskEvent(target.subagents, {
+        id: taskId,
+        phase,
+        ...(ev.harness_task_agent ? { agentType: ev.harness_task_agent } : {}),
+        ...(ev.harness_task_tool_use_id ? { toolCallId: ev.harness_task_tool_use_id } : {}),
+        ...(ev.harness_task_status ? { status: ev.harness_task_status } : {}),
+      });
+      if (nextTasks === target.subagents) return messages;
+      const out = [...messages];
+      out[idx] = { ...target, subagents: nextTasks };
+      return out;
+    }
+
     // The ROW IDENTITY is keyed on the raw codes, not on the rendered text: the
     // reducer's idempotence must not depend on the UI language, or switching
     // locale mid-stream would re-add rows it had already collapsed.
@@ -170,8 +253,11 @@ export function applyStreamEvent(
     return messages.map((m) =>
       m.id === assistantId
         ? {
-            ...m,
-            content: m.content ? `${m.content}\n\n⚠️ ${errText}` : `⚠️ ${errText}`,
+            // The failure is the last thing this turn said, so it goes through
+            // the same door as everything else it said: after a tool batch it
+            // gets its own bubble rather than being appended to prose the model
+            // produced before the tools ran.
+            ...withAssistantText(m, m.content ? `\n\n⚠️ ${errText}` : `⚠️ ${errText}`),
             isStreaming: false,
           }
         : m
@@ -181,16 +267,19 @@ export function applyStreamEvent(
   // turn end: finalize the assistant bubble
   if (ev.type === 'result') {
     const resultText = typeof ev.result === 'string' ? ev.result.trim() : '';
-    return messages.map((m) =>
-      m.id === assistantId
-        ? {
-            ...m,
-            content: !m.content && resultText ? resultText : m.content,
-            isStreaming: false,
-            toolCalls: m.toolCalls?.map((tc) => ({ ...tc, isLoading: false })),
-          }
-        : m
-    );
+    return messages.map((m) => {
+      if (m.id !== assistantId) return m;
+      // The fallback text (a turn that produced no prose of its own) is text the
+      // turn now says, so it becomes a segment too — otherwise the bubble would
+      // hold it while the segment list, which is what gets rendered, stayed
+      // empty and showed nothing.
+      const base = !m.content && resultText ? withAssistantText(m, resultText) : m;
+      return {
+        ...base,
+        isStreaming: false,
+        toolCalls: base.toolCalls?.map((tc) => ({ ...tc, isLoading: false })),
+      };
+    });
   }
 
   return messages;

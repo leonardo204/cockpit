@@ -1,12 +1,15 @@
 'use client';
 
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, memo, useCallback, type ReactNode } from 'react';
 import { Portal, toast } from '@cockpit/shared-ui';
 import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ToolCallModal } from './ToolCallModal';
+import { SubagentBlock } from './SubagentBlock';
+import { groupSubagentCalls } from './subagentGroups';
+import { buildRenderSegments, lastTextSegmentId } from './turnSegments';
 import { filterDisplayToolCalls, shouldGroupUnderHeader } from './toolCallDisplay';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
-import type { ChatMessage, MessageImage } from './types';
+import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
 import { MarkdownRenderer } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
 
@@ -48,6 +51,163 @@ function ImageModal({ image, onClose }: ImageModalProps) {
   return <Portal>{modalContent}</Portal>;
 }
 
+/** The hover copy control. Same markup wherever it appears. */
+function CopyButton({ onCopy, title }: { onCopy: () => void; title: string }) {
+  return (
+    <button
+      onClick={onCopy}
+      className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
+      title={title}
+    >
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+      </svg>
+    </button>
+  );
+}
+
+interface MessageBalloonProps {
+  text: string;
+  isUser: boolean;
+  /** Draw the caret and hand `isStreaming` to the markdown renderer. Only ever
+   *  true for the turn's FINAL segment while it is still running — a caret on a
+   *  bubble that tools have already been run after it would claim the model is
+   *  still writing there. */
+  isStreaming?: boolean;
+  /** Copies the WHOLE turn (see the note on `handleCopy`). Given only to the
+   *  bubble the turn ends on, and to a user message. */
+  onCopy?: () => void;
+  copyTitle?: string;
+  /** Attachments, drawn ABOVE the text as they always were. Given to the FIRST
+   *  bubble of a turn — they arrived with the message, not with its ending. */
+  leading?: ReactNode;
+  /** The tool-derived panels (todo list, plan card, thought table), which belong
+   *  to the turn rather than to one of its sentences and so hang off its last
+   *  bubble. */
+  extras?: ReactNode;
+}
+
+/**
+ * ONE THING THE ASSISTANT SAID, as one balloon.
+ *
+ * `memo`'d and fed only strings, booleans and stable callbacks: a turn that is
+ * still streaming re-renders its LAST bubble on every delta, and the ones above
+ * it — which are finished and will never change again — must not come with it.
+ */
+const MessageBalloon = memo(function MessageBalloon({
+  text,
+  isUser,
+  isStreaming,
+  onCopy,
+  copyTitle,
+  leading,
+  extras,
+}: MessageBalloonProps) {
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
+      {/* Action buttons for user messages — on the left */}
+      {isUser && onCopy && (
+        <div className="self-start mt-2 mr-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <CopyButton onCopy={onCopy} title={copyTitle ?? ''} />
+        </div>
+      )}
+      <div
+        className={`max-w-[80%] ${
+          isUser
+            ? 'bg-accent text-foreground border border-brand rounded-2xl rounded-br-md'
+            : 'bg-accent text-foreground dark:text-slate-11 rounded-2xl rounded-bl-md'
+        } px-4 py-2`}
+      >
+        {leading}
+        {text && (
+          <div className="break-words">
+            <MarkdownRenderer content={text} isUser={isUser} isStreaming={isStreaming} enableMath={false} />
+            {isStreaming && <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse" />}
+          </div>
+        )}
+        {extras}
+      </div>
+      {/* Action buttons for AI messages — on the right */}
+      {!isUser && onCopy && (
+        <div className="self-start mt-2 ml-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <CopyButton onCopy={onCopy} title={copyTitle ?? ''} />
+        </div>
+      )}
+    </div>
+  );
+});
+
+interface ToolSegmentRowProps {
+  calls: ToolCallInfo[];
+  cwd?: string;
+  sessionId?: string | null;
+}
+
+/**
+ * ONE CONTIGUOUS RUN OF TOOL CALLS, at the point in the turn it happened.
+ *
+ * The batch UI is the old one, unchanged — muted rows, folded behind a header
+ * once there is a wall of them. What changed is the SCOPE: the count is this
+ * run's, not the whole turn's, because a turn that read three files, said
+ * something, and then edited two did not make one batch of five.
+ *
+ * Each row owns its own expand/collapse, so opening the batch under the first
+ * paragraph does not also open the one under the third.
+ */
+const ToolSegmentRow = memo(
+  function ToolSegmentRow({ calls, cwd, sessionId }: ToolSegmentRowProps) {
+    const { t } = useTranslation();
+    // A long run of calls starts folded; a short one has no header to fold at all
+    // (see toolCallDisplay).
+    const [expanded, setExpanded] = useState(false);
+    const useHeader = shouldGroupUnderHeader(calls.length);
+    return (
+      <div className="w-full max-w-[90%] mt-1" data-testid="tool-call-group">
+        {useHeader ? (
+          <>
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              aria-expanded={expanded}
+              data-testid="tool-calls-toggle"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+            >
+              {expanded ? (
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              ) : (
+                <ChevronRight className="w-3 h-3 opacity-60" />
+              )}
+              <span>{t('chat.toolCalls', { count: calls.length })}</span>
+            </button>
+            {expanded && (
+              <div className="mt-0.5">
+                {calls.map((toolCall, index) => (
+                  <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          calls.map((toolCall, index) => (
+            <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
+          ))
+        )}
+      </div>
+    );
+  },
+  // The `calls` array is rebuilt every time the turn's segment list is resolved
+  // (i.e. on every text delta), but the CALLS in it keep their identity until
+  // one of them actually changes — a result arriving, a call finishing. Comparing
+  // element by element is what makes the memo above hold during streaming;
+  // React's default shallow compare would see a new array and re-render every
+  // batch in the turn on every token.
+  (prev, next) =>
+    prev.cwd === next.cwd &&
+    prev.sessionId === next.sessionId &&
+    prev.calls.length === next.calls.length &&
+    prev.calls.every((c, i) => c === next.calls[i])
+);
+
 interface MessageBubbleProps {
   message: ChatMessage;
   cwd?: string;
@@ -62,11 +222,6 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
-  // A long run of calls starts folded; a short one has no header to fold at all
-  // (see toolCallDisplay). There is no longer an "expanded because there is
-  // exactly one" case — that rule existed to keep a lone call visible inside a
-  // header that should never have been drawn for a lone call.
-  const [toolCallsExpanded, setToolCallsExpanded] = useState(false);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
   const [showEventDetail, setShowEventDetail] = useState(false);
   const isUser = message.role === 'user';
@@ -107,9 +262,38 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     () => filterDisplayToolCalls(message.toolCalls),
     [message.toolCalls]
   );
-  // Only a WALL of calls gets a header. One to three render bare: the old
-  // "1 tool call" header announced nothing the row below it did not say.
-  const useToolCallsHeader = shouldGroupUnderHeader(displayToolCalls.length);
+  // A DELEGATED RUN LEAVES THE BATCH. Calls the backend attributed to a subagent
+  // are pulled out into their own blocks (subagentGroups.ts) — otherwise a turn
+  // that ran four agents showed one anonymous "133 tool calls" line and no way
+  // to tell whose work was whose. The main thread's calls keep the batch exactly
+  // as it was, which is why the header threshold now counts `topLevel`.
+  const partition = useMemo(
+    () => groupSubagentCalls(displayToolCalls, message.subagents),
+    [displayToolCalls, message.subagents]
+  );
+  // THE TURN, IN THE ORDER IT HAPPENED. Text runs, tool batches and delegated
+  // runs as one ordered list, so what the model said after a tool ran is drawn
+  // after that tool and not merged into the sentence before it. Turns recorded
+  // before segments existed have none, and `buildRenderSegments` renders those
+  // exactly as it always did — one bubble, one batch, the blocks.
+  //
+  // Kept in a SECOND memo, downstream of the partition: text deltas change
+  // `content` but not the calls, so the partition (and with it every subagent
+  // group's identity) survives a token, and only the list around it is rebuilt.
+  const renderSegments = useMemo(
+    () => buildRenderSegments(message.segments, message.content, partition),
+    [message.segments, message.content, partition]
+  );
+  // Where the turn ENDS talking — the bubble that carries the turn's actions and
+  // the only one that may show a streaming caret.
+  const lastTextId = useMemo(() => lastTextSegmentId(renderSegments), [renderSegments]);
+  const lastSegmentId = renderSegments[renderSegments.length - 1]?.id ?? null;
+  // Where it STARTS talking — attachments belong at the top of the turn, since
+  // that is when they arrived, and the first thing drawn need not be a bubble.
+  const firstTextId = useMemo(
+    () => renderSegments.find((s) => s.kind === 'text')?.id ?? null,
+    [renderSegments]
+  );
 
   // Extract and parse thoughts from tool call inputs
   const thoughts = useMemo(() => {
@@ -140,14 +324,23 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     !!planCard ||
     thoughts.length > 0;
   const showBubble = isUser || hasBubbleContent;
+  // The one balloon a turn with NO text still needs: a tool-only turn that
+  // nevertheless produced a todo list, a plan card or a thought table. When the
+  // turn did speak, those panels ride its last text bubble instead.
+  const showLegacyBubble = showBubble && (isUser || lastTextId === null);
 
-  // Copy message content
-  const handleCopy = () => {
+  // COPY IS PER-TURN, and copies the turn — `message.content`, every bubble's
+  // text joined, exactly what it always copied. The turn is now drawn as several
+  // balloons, so the button has to pick one: it sits on the LAST text bubble,
+  // where the turn finishes and where the eye already is. Putting a copy control
+  // on every bubble would offer three ways to copy a third of an answer and no
+  // way to copy the answer.
+  const handleCopy = useCallback(() => {
     if (message.content) {
       navigator.clipboard.writeText(message.content);
       toast(t('toast.copiedMessage'));
     }
-  };
+  }, [message.content, t]);
 
   // NO FORK BUTTON. Cockpit upstream puts a branch-from-here button next to Copy,
   // and it CANNOT work in naby: /api/session/[id]/fork forks by copying the Claude
@@ -175,150 +368,34 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
 
   const timeStr = formatTime(message.timestamp);
 
-  // System-event row (task-notification / meta): a muted one-line bar, not a
-  // conversation bubble. Kept after all hooks so hook order stays stable.
-  if (message.role === 'system') {
-    const ev = message.systemEvent;
-    const icon =
-      ev?.kind === 'task-notification'
-        ? ev.status === 'failed'
-          ? '⚠️'
-          : ev.status === 'stopped'
-            ? '⏹️'
-            : '🔔'
-        : 'ℹ️';
-    // Full text for the detail modal — the raw <task-notification> block, or the
-    // message content itself (image annotation / compact-summary notice).
-    const detail = ev?.detail || message.content;
-    return (
-      <>
-        <div className="flex justify-center my-2 px-2" data-role="system">
-          <button
-            type="button"
-            onClick={() => setShowEventDetail(true)}
-            className="flex items-center gap-1.5 max-w-[85%] text-[11px] text-muted-foreground bg-secondary/40 border border-border/50 rounded-full px-3 py-1 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
-            title={t('chat.viewDetails', { defaultValue: 'Click for details' })}
-          >
-            <span className="flex-shrink-0">{icon}</span>
-            <span className="truncate">{message.content}</span>
-          </button>
-        </div>
-        {showEventDetail && (
-          <Portal>
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-              onClick={() => setShowEventDetail(false)}
-            >
-              <div
-                className="bg-card shadow-xl w-full max-w-4xl max-h-[80vh] rounded-lg flex flex-col overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
-                  <span className="text-sm text-foreground flex items-center gap-1.5">
-                    <span>{icon}</span>
-                    {ev?.kind === 'task-notification'
-                      ? t('chat.taskNotification', { defaultValue: 'Task notification' })
-                      : t('chat.systemNotice', { defaultValue: 'Notice' })}
-                  </span>
-                  <button
-                    onClick={() => setShowEventDetail(false)}
-                    className="text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <pre className="flex-1 overflow-auto px-4 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
-                  {detail}
-                </pre>
-              </div>
-            </div>
-          </Portal>
-        )}
-      </>
-    );
-  }
-
-  return (
-    <>
-      <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} mb-4 group`} data-role={message.role}>
-        {/* Message timestamp — shown on hover */}
-        {timeStr && (
-          <span className="text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mb-0.5 px-1">
-            {timeStr}
-          </span>
-        )}
-        {/* THE MODEL'S REASONING, collapsed.
-            Above the answer because that is the order it happened in, and closed by
-            default because it is working-out: available when you want to know why,
-            never in the way when you do not. It is not part of `content`, so
-            copying the message copies the reply alone. */}
-        {!isUser && message.thinking && (
-          <details className="mb-1 w-full max-w-[90%]" data-testid="thinking-block">
-            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
-              {t('chat.thinkingBlock', { defaultValue: 'Reasoning' })}
-              <span className="ml-1 opacity-60">
-                {t('chat.thinkingChars', { defaultValue: '({{count}} chars)', count: message.thinking.length })}
-              </span>
-            </summary>
-            <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-              {message.thinking}
-            </div>
-          </details>
-        )}
-        {showBubble && (
-        <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
-        {/* Action buttons for user messages — on the left */}
-        {isUser && (
-          <div className="self-start mt-2 mr-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            {message.content && (
-              <button
-                onClick={handleCopy}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-                title={t('chat.copyMessage')}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            )}
-          </div>
-        )}
+  // Attachments. Drawn at the TOP of the turn's first balloon, where they always
+  // were — they came with the message, not with whatever it ended on.
+  const imagesBlock = hasImages ? (
+    <div className={`flex flex-wrap gap-2 ${message.content ? 'mb-2' : ''}`}>
+      {message.images!.map((image, index) => (
         <div
-          className={`max-w-[80%] ${
-            isUser
-              ? 'bg-accent text-foreground border border-brand rounded-2xl rounded-br-md'
-              : 'bg-accent text-foreground dark:text-slate-11 rounded-2xl rounded-bl-md'
-          } px-4 py-2`}
+          key={index}
+          className="relative w-16 h-16 rounded-lg overflow-hidden border border-white/20 cursor-pointer hover:opacity-90 transition-opacity"
+          onClick={() => setPreviewImage(image)}
         >
-          {/* Image content */}
-          {hasImages && (
-            <div className={`flex flex-wrap gap-2 ${message.content ? 'mb-2' : ''}`}>
-              {message.images!.map((image, index) => (
-                <div
-                  key={index}
-                  className="relative w-16 h-16 rounded-lg overflow-hidden border border-white/20 cursor-pointer hover:opacity-90 transition-opacity"
-                  onClick={() => setPreviewImage(image)}
-                >
-                  <img
-                    src={`data:${image.media_type};base64,${image.data}`}
-                    alt={t('chat.imageN', { index: index + 1 })}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              ))}
-            </div>
-          )}
+          <img
+            src={`data:${image.media_type};base64,${image.data}`}
+            alt={t('chat.imageN', { index: index + 1 })}
+            className="w-full h-full object-cover"
+          />
+        </div>
+      ))}
+    </div>
+  ) : undefined;
 
-          {/* Text content — rendered as Markdown */}
-          {message.content && (
-            <div className="break-words">
-              <MarkdownRenderer content={message.content} isUser={isUser} isStreaming={message.isStreaming} enableMath={false} />
-              {message.isStreaming && (
-                <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse" />
-              )}
-            </div>
-          )}
-
+  // THE PANELS A TURN LEAVES BEHIND: the todo list as it now stands, the plan
+  // awaiting review, the thought table. Each is a summary of the WHOLE turn
+  // (the last TodoWrite, the last ExitPlanMode), not of one of its sentences,
+  // so they hang off the bubble the turn ends on rather than being interleaved.
+  // A turn that never spoke gets them in a balloon of their own.
+  const bubbleExtras =
+    lastTodoWrite || planCard || thoughts.length > 0 ? (
+      <>
           {/* Inline Todo display */}
           {lastTodoWrite && (() => {
             const rawTodos = lastTodoWrite.input?.todos;
@@ -430,82 +507,164 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
               </div>
             </div>
           )}
+      </>
+    ) : undefined;
 
-        </div>
-        {/* Action buttons for AI messages — on the right */}
-        {!isUser && (
-          <div className="self-start mt-2 ml-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            {message.content && (
-              <button
-                onClick={handleCopy}
-                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent"
-                title={t('chat.copyMessage')}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-            )}
-          </div>
-        )}
-        </div>
-        )}
-
-        {/* THE MACHINERY, outside the bubble.
-            Tool calls used to live INSIDE the `bg-accent rounded-2xl` balloon,
-            wrapped in a second bordered card — so the work the assistant did
-            wore the same clothes as the things it said, and a turn that ran one
-            tool announced itself with a full-width "1 tool call" panel. Out
-            here they are slim muted rows: legible when you look for them,
-            silent when you are reading the answer. */}
-        {!isUser && displayToolCalls.length > 0 && (
-          <div
-            className={`w-full max-w-[90%] ${showBubble ? 'mt-1' : ''}`}
-            data-testid="tool-call-group"
+  // System-event row (task-notification / meta): a muted one-line bar, not a
+  // conversation bubble. Kept after all hooks so hook order stays stable.
+  if (message.role === 'system') {
+    const ev = message.systemEvent;
+    const icon =
+      ev?.kind === 'task-notification'
+        ? ev.status === 'failed'
+          ? '⚠️'
+          : ev.status === 'stopped'
+            ? '⏹️'
+            : '🔔'
+        : 'ℹ️';
+    // Full text for the detail modal — the raw <task-notification> block, or the
+    // message content itself (image annotation / compact-summary notice).
+    const detail = ev?.detail || message.content;
+    return (
+      <>
+        <div className="flex justify-center my-2 px-2" data-role="system">
+          <button
+            type="button"
+            onClick={() => setShowEventDetail(true)}
+            className="flex items-center gap-1.5 max-w-[85%] text-[11px] text-muted-foreground bg-secondary/40 border border-border/50 rounded-full px-3 py-1 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+            title={t('chat.viewDetails', { defaultValue: 'Click for details' })}
           >
-            {useToolCallsHeader ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setToolCallsExpanded(!toolCallsExpanded)}
-                  aria-expanded={toolCallsExpanded}
-                  data-testid="tool-calls-toggle"
-                  className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-                >
-                  {toolCallsExpanded ? (
-                    <ChevronDown className="w-3 h-3 opacity-60" />
-                  ) : (
-                    <ChevronRight className="w-3 h-3 opacity-60" />
-                  )}
-                  <span>{t('chat.toolCalls', { count: displayToolCalls.length })}</span>
-                </button>
-                {toolCallsExpanded && (
-                  <div className="mt-0.5">
-                    {displayToolCalls.map((toolCall, index) => (
-                      <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              displayToolCalls.map((toolCall, index) => (
-                <ToolCallModal key={`${toolCall.id}-${index}`} toolCall={toolCall} cwd={cwd} sessionId={sessionId} />
-              ))
-            )}
-            {/* Questions the run asked. It used to hang off the collapsed
-                header, which no longer exists for short runs — so it is its own
-                row and is reachable whatever the run's size. */}
-            {askQuestionCalls.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShowAskQuestionViewer(true)}
-                className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
-                title={t('chat.viewQuestions')}
+            <span className="flex-shrink-0">{icon}</span>
+            <span className="truncate">{message.content}</span>
+          </button>
+        </div>
+        {showEventDetail && (
+          <Portal>
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+              onClick={() => setShowEventDetail(false)}
+            >
+              <div
+                className="bg-card shadow-xl w-full max-w-4xl max-h-[80vh] rounded-lg flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
               >
-                <MessageCircleQuestion className="w-3.5 h-3.5" />
-                <span>{t('chat.viewQuestions')}</span>
-              </button>
-            )}
+                <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0">
+                  <span className="text-sm text-foreground flex items-center gap-1.5">
+                    <span>{icon}</span>
+                    {ev?.kind === 'task-notification'
+                      ? t('chat.taskNotification', { defaultValue: 'Task notification' })
+                      : t('chat.systemNotice', { defaultValue: 'Notice' })}
+                  </span>
+                  <button
+                    onClick={() => setShowEventDetail(false)}
+                    className="text-muted-foreground hover:text-foreground px-1.5 py-0.5 rounded hover:bg-accent transition-colors"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <pre className="flex-1 overflow-auto px-4 py-3 text-xs text-foreground whitespace-pre-wrap break-words">
+                  {detail}
+                </pre>
+              </div>
+            </div>
+          </Portal>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} mb-4 group`} data-role={message.role}>
+        {/* Message timestamp — shown on hover */}
+        {timeStr && (
+          <span className="text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mb-0.5 px-1">
+            {timeStr}
+          </span>
+        )}
+        {/* THE MODEL'S REASONING, collapsed.
+            Above the answer because that is the order it happened in, and closed by
+            default because it is working-out: available when you want to know why,
+            never in the way when you do not. It is not part of `content`, so
+            copying the message copies the reply alone. */}
+        {!isUser && message.thinking && (
+          <details className="mb-1 w-full max-w-[90%]" data-testid="thinking-block">
+            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+              {t('chat.thinkingBlock', { defaultValue: 'Reasoning' })}
+              <span className="ml-1 opacity-60">
+                {t('chat.thinkingChars', { defaultValue: '({{count}} chars)', count: message.thinking.length })}
+              </span>
+            </summary>
+            <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+              {message.thinking}
+            </div>
+          </details>
+        )}
+        {/* The one balloon the sequence below cannot draw: a user message (which
+            is never a sequence) and a turn that said NOTHING but still produced
+            a panel — a tool-only turn whose todo list or plan card has to live
+            somewhere. Above the machinery, exactly where it always sat. */}
+        {showLegacyBubble && (
+          <MessageBalloon
+            text={message.content}
+            isUser={isUser}
+            isStreaming={!isUser && !!message.isStreaming}
+            onCopy={message.content ? handleCopy : undefined}
+            copyTitle={t('chat.copyMessage')}
+            leading={imagesBlock}
+            extras={bubbleExtras}
+          />
+        )}
+        {/* THE TURN, IN ORDER.
+            A turn is drawn as the sequence it happened in — a bubble for each
+            run of prose, the tool batch that followed it, the next bubble, the
+            block for a delegated run at the point it was launched. It used to be
+            one bubble that kept growing plus every tool call pooled underneath,
+            so "let me look", "now I will fix it" and the explanation all arrived
+            as one merged paragraph with the work hidden below it. */}
+        {!isUser &&
+          renderSegments.map((seg) => {
+            if (seg.kind === 'text') {
+              return (
+                <MessageBalloon
+                  key={seg.id}
+                  text={seg.text}
+                  isUser={false}
+                  // Only where the turn is CURRENTLY writing: the last segment
+                  // of a running turn. A caret under a bubble that tools have
+                  // since run after would claim the model is still typing there.
+                  isStreaming={!!message.isStreaming && seg.id === lastSegmentId}
+                  onCopy={seg.id === lastTextId ? handleCopy : undefined}
+                  copyTitle={t('chat.copyMessage')}
+                  leading={seg.id === firstTextId ? imagesBlock : undefined}
+                  extras={seg.id === lastTextId ? bubbleExtras : undefined}
+                />
+              );
+            }
+            if (seg.kind === 'tools') {
+              return <ToolSegmentRow key={seg.id} calls={seg.calls} cwd={cwd} sessionId={sessionId} />;
+            }
+            // One block per delegated run, anchored at the `Task` call that
+            // launched it — so four subagents running in parallel are four rows
+            // sitting where they were spawned, not one merged batch at the end.
+            return (
+              <div key={seg.id} className="w-full max-w-[90%] mt-1">
+                <SubagentBlock group={seg.group} cwd={cwd} sessionId={sessionId} />
+              </div>
+            );
+          })}
+        {/* Questions the run asked, for the turn as a whole. */}
+        {!isUser && askQuestionCalls.length > 0 && (
+          <div className="w-full max-w-[90%] mt-1">
+            <button
+              type="button"
+              onClick={() => setShowAskQuestionViewer(true)}
+              className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+              title={t('chat.viewQuestions')}
+            >
+              <MessageCircleQuestion className="w-3.5 h-3.5" />
+              <span>{t('chat.viewQuestions')}</span>
+            </button>
           </div>
         )}
       </div>

@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { toChatMessages } from './toChatMessages';
 import type { RuntimeMessage } from '../../engines/naby';
 
@@ -170,5 +172,158 @@ describe('toChatMessages — coalescing tool-call rows', () => {
     const row = toolCallRow('c1', 'Read');
     toChatMessages([assistantText('hi'), row, toolCallRow('c2', 'Read')]);
     expect(row.role === 'assistant' && row.toolCalls).toHaveLength(1);
+  });
+
+  it('carries a stored call\'s subagent attribution through to the view', () => {
+    // The events that describe a subagent's LIFE are observational and never
+    // stored, so on reload the call itself is the only thing left that can say
+    // which delegated run it belonged to. If this drops the attribution, a
+    // reloaded transcript folds every subagent's work back into one anonymous
+    // batch — the exact regression the blocks exist to fix.
+    const out = toChatMessages([
+      assistantText('delegating'),
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            toolCallId: 'c9',
+            toolName: 'Grep',
+            input: { pattern: 'x' },
+            subagent: {
+              agentId: 'a1',
+              agentType: 'general-purpose',
+              parentToolCallId: 'task-1',
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(out[0]!.toolCalls?.[0]).toMatchObject({
+      id: 'c9',
+      agentId: 'a1',
+      agentType: 'general-purpose',
+      parentToolCallId: 'task-1',
+    });
+  });
+
+  it('leaves a main-thread call unattributed', () => {
+    const out = toChatMessages([assistantText('hi'), toolCallRow('c1', 'Read')]);
+    expect(out[0]!.toolCalls?.[0]!.agentId).toBeUndefined();
+  });
+});
+
+/**
+ * A RELOAD MUST SHOW THE TURN THE USER WATCHED.
+ *
+ * The runtime writes each text run and each tool call as its own row, in the
+ * order they happened (`src/runtime/session.ts` — `text` → an assistant row,
+ * `tool_request` → an assistant row carrying one call). So the order is on
+ * disk; these tests pin that it is READ BACK, as the same `segments` the live
+ * reducer builds, instead of being flattened into one bubble plus a pile of
+ * calls.
+ */
+describe('toChatMessages — the turn’s order survives a reload', () => {
+  it('records text, then the calls that followed it', () => {
+    const out = toChatMessages([
+      assistantText('Let me look.'),
+      toolCallRow('c1', 'Glob'),
+      toolResultRow('c1', 'Glob', 'a.ts'),
+      toolCallRow('c2', 'Read'),
+    ]);
+    expect(out[0]!.segments).toEqual([
+      { kind: 'text', id: 's0', text: 'Let me look.' },
+      { kind: 'tools', id: 's1', callIds: ['c1', 'c2'] },
+    ]);
+  });
+
+  it('keeps tools BETWEEN two runs of prose where they happened', () => {
+    // Rendered end to end this is: bubble → batch → bubble. The text row starts
+    // a fresh bubble (the merge deliberately does not cross it), and each
+    // bubble carries the order of its own part of the turn.
+    const out = toChatMessages([
+      { role: 'user', content: 'go' },
+      assistantText('checking'),
+      toolCallRow('c1', 'Read'),
+      toolResultRow('c1', 'Read', 'ok'),
+      assistantText('Found it.'),
+      toolCallRow('c2', 'Edit'),
+    ]);
+    expect(out.map((m) => m.role)).toEqual(['user', 'assistant', 'assistant']);
+    expect(out[1]!.segments).toEqual([
+      { kind: 'text', id: 's0', text: 'checking' },
+      { kind: 'tools', id: 's1', callIds: ['c1'] },
+    ]);
+    expect(out[2]!.segments).toEqual([
+      { kind: 'text', id: 's0', text: 'Found it.' },
+      { kind: 'tools', id: 's1', callIds: ['c2'] },
+    ]);
+  });
+
+  it('gives a tool-only bubble a batch and no empty text segment', () => {
+    const out = toChatMessages([
+      { role: 'user', content: 'go' },
+      toolCallRow('c1', 'Read'),
+      toolCallRow('c2', 'Edit'),
+    ]);
+    expect(out[1]!.segments).toEqual([{ kind: 'tools', id: 's0', callIds: ['c1', 'c2'] }]);
+  });
+
+  it('leaves a text-only bubble with just its text', () => {
+    const out = toChatMessages([assistantText('done')]);
+    expect(out[0]!.segments).toEqual([{ kind: 'text', id: 's0', text: 'done' }]);
+  });
+
+  it('puts a delegated run’s calls in the order they were recorded', () => {
+    // The block itself is assembled at render time from the calls' own
+    // attribution (subagentGroups); what the reload owes it is the POSITION —
+    // the spawning `Task` call's place in the turn.
+    const out = toChatMessages([
+      assistantText('delegating'),
+      toolCallRow('task-1', 'Task', { description: 'research' }),
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            toolCallId: 'g1',
+            toolName: 'Grep',
+            input: {},
+            subagent: { agentId: 'a1', parentToolCallId: 'task-1' },
+          },
+        ],
+      },
+      assistantText('the agent reported back'),
+    ]);
+    expect(out[0]!.segments).toEqual([
+      { kind: 'text', id: 's0', text: 'delegating' },
+      { kind: 'tools', id: 's1', callIds: ['task-1', 'g1'] },
+    ]);
+    expect(out[1]!.segments).toEqual([{ kind: 'text', id: 's0', text: 'the agent reported back' }]);
+  });
+
+  it('is the ONLY mapper — the route the chat panel reloads through shares it', () => {
+    // There were two. `/api/session-by-path` — the route the chat panel actually
+    // loads history from — carried its own copy, and the copy had fallen behind:
+    // no tool-row folding (a reloaded eight-tool turn came back as eight bubbles
+    // each announcing "1 tool call"), no subagent attribution, no order. Every
+    // test in this file passed the whole time, because they all exercised the
+    // other one. If a second implementation reappears, this fails.
+    const src = readFileSync(
+      join(__dirname, '..', 'session-by-path.ts'),
+      'utf8'
+    );
+    expect(src).toContain("from './session/toChatMessages'");
+    expect(src).not.toMatch(/function toChatMessages\s*\(/);
+  });
+
+  it('is deterministic — the same rows reload with the same order', () => {
+    const rows: RuntimeMessage[] = [
+      assistantText('one moment'),
+      toolCallRow('c1', 'Read'),
+      assistantText('done'),
+    ];
+    expect(toChatMessages(rows)).toEqual(toChatMessages(rows));
   });
 });

@@ -70,11 +70,32 @@ describe('tool calls render OUTSIDE the assistant bubble', () => {
     }
   });
 
+  it('a subagent block is a row too, not a card', () => {
+    // A delegated run gets its OWN block so its work stops being folded into the
+    // turn's anonymous batch — but it is still machinery, and machinery does not
+    // get the bubble's clothes. Same source assertion, same reason: jsdom cannot
+    // see a filled card.
+    const classes = classNames(read('SubagentBlock.tsx'));
+    for (const token of ['bg-accent', 'rounded-2xl', 'bg-secondary', 'rounded-lg']) {
+      expect(classes, `SubagentBlock reintroduced "${token}"`).not.toContain(token);
+    }
+    expect(classes).toContain('text-muted-foreground');
+    expect(classes).toContain('hover:bg-muted/30');
+  });
+
   it('does not leave an empty balloon behind for a tool-only turn', () => {
     // An assistant row that only ran tools has nothing to say; without this the
     // bubble still renders as an empty `bg-accent` pill above the rows.
+    //
+    // The turn is now drawn as a SEQUENCE (turnSegments.ts), so the balloons a
+    // turn speaks in come from its text segments — a turn with no text has none
+    // and draws none. The gate below survives for the two cases the sequence
+    // cannot cover: a user message, and a turn that said nothing but still
+    // produced a panel (todo list / plan card / thought table) that has to live
+    // in a balloon somewhere.
     const src = read('MessageBubble.tsx');
     expect(src).toContain('const showBubble = isUser || hasBubbleContent;');
-    expect(src).toContain('{showBubble && (');
+    expect(src).toContain('const showLegacyBubble = showBubble && (isUser || lastTextId === null);');
+    expect(src).toContain('{showLegacyBubble && (');
   });
 });

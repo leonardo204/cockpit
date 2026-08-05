@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef } from 'react';
-import { applyStreamEvent, type StreamEvent } from './applyStreamEvent';
+import { applyStreamEvent, withAssistantText, type StreamEvent } from './applyStreamEvent';
 import { actingAgentFromInit, type ActingAgent } from './actingAgent';
 import type {
   ChatMessage,
@@ -378,8 +378,10 @@ export function useChatStream(
         prev.map((msg) =>
           msg.id === messageId
             ? {
-                ...msg,
-                content: msg.content ? `${msg.content}\n\n⚠️ ${errText}` : `⚠️ ${errText}`,
+                // Through `withAssistantText` so the notice joins the turn's
+                // ORDER as well as its text — after a tool batch it is its own
+                // bubble, not a tail on prose from before the tools.
+                ...withAssistantText(msg, msg.content ? `\n\n⚠️ ${errText}` : `⚠️ ${errText}`),
                 isStreaming: false,
               }
             : msg
@@ -536,7 +538,19 @@ export function useChatStream(
         setMessages((prev) =>
           prev
             .filter((m) => !(typeof m.id === 'string' && m.id.startsWith('auto-') && m.runKey === ar.runKey))
-            .map((m) => (m.id === ar.assistantId ? { ...m, content: '', toolCalls: [] } : m))
+            // `subagents` is reset with the calls it labels: the snapshot is the
+            // whole run (the hub buffers every event, uncapped), so the replay
+            // rebuilds each delegated run's block from its own lifecycle events
+            // rather than leaving a half-updated one behind.
+            // `segments` is reset with the content and calls it orders: the
+            // replay rebuilds the turn's sequence from scratch, and a leftover
+            // skeleton would place the replayed text against tool ids that are
+            // being re-added behind it.
+            .map((m) =>
+              m.id === ar.assistantId
+                ? { ...m, content: '', toolCalls: [], subagents: [], segments: [] }
+                : m
+            )
         );
         for (const ev of msg.events) handleStreamEvent(ev as Record<string, unknown>, curAsstIdRef.current ?? ar.assistantId);
         // Run already finished before we connected (status idle/error in the snapshot).
@@ -652,7 +666,7 @@ export function useChatStream(
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMessageId && !m.content
-                  ? { ...m, content: i18n.t('chat.errorRetry', { defaultValue: 'An error occurred. Please try again.' }) }
+                  ? withAssistantText(m, i18n.t('chat.errorRetry', { defaultValue: 'An error occurred. Please try again.' }))
                   : m
               )
             );
@@ -667,7 +681,7 @@ export function useChatStream(
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMessageId
-              ? { ...msg, content: errorMsg, isStreaming: false }
+              ? { ...withAssistantText(msg, errorMsg), isStreaming: false }
               : msg
           )
         );

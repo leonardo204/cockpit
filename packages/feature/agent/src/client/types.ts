@@ -16,15 +16,32 @@ export interface ToolCallInfo {
   // Skill body loaded by this call (e.g. the Skill tool). Folded into the tool
   // call's expanded view instead of appearing as a separate user bubble.
   skillContent?: string;
+  // WHO made this call, when the backend ran it inside a SUBAGENT (the Claude
+  // Agent SDK's Task tool). Reported by the backend on the call itself — never
+  // inferred from timing — and persisted with it, so a reloaded transcript can
+  // still tell one delegated run's work from another's. Absent = main thread,
+  // which is the common case and keeps the existing batch UI untouched.
+  agentId?: string;
+  /** The subagent's type, e.g. `general-purpose`. */
+  agentType?: string;
+  /** The `Task` call that spawned the subagent, when the backend correlates it. */
+  parentToolCallId?: string;
 }
 
 // Re-export image types from shared-utils (single source of truth).
 import type { ImageMediaType, ImageInfo, MessageImage } from '@cockpit/shared-utils';
 export type { ImageMediaType, ImageInfo, MessageImage };
 
+import type { SubagentTask } from './subagentGroups';
+import type { TurnSegment } from '../shared/turnSegments';
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
+  /** EVERYTHING the assistant said this turn, concatenated. Still the single
+   *  string the rest of the app treats as "the message": copy, search, the
+   *  "has the answer started" test, the live/disk reconcile. `segments` says
+   *  WHERE the splits in it are; it does not replace it. */
   content: string;
   images?: MessageImage[];  // Images in the message
   toolCalls?: ToolCallInfo[];
@@ -40,6 +57,23 @@ export interface ChatMessage {
   // `detail` is the full raw text (e.g. the complete <task-notification> block) —
   // shown in a modal when the one-line bar is clicked. `content` stays the summary.
   systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
+  // The delegated runs (subagents) this turn launched, as the backend reported
+  // their lifecycle. LIVE ONLY: these events are observational and never
+  // persisted, so a reloaded transcript has none — the blocks are then rebuilt
+  // from the tool calls' own attribution, without a running/completed state to
+  // show. See subagentGroups.ts.
+  subagents?: SubagentTask[];
+  // WHAT HAPPENED IN WHAT ORDER. The turn as an ordered list of text runs and
+  // tool-call runs (see shared/turnSegments.ts), so the view can draw the
+  // sequence the model actually produced — say, act, say again — instead of one
+  // ever-growing bubble with all the machinery pooled underneath it. Built by
+  // the live reducer from the stream and by `toChatMessages` from the persisted
+  // rows, which record the same order.
+  //
+  // ABSENT on turns recorded before this existed. The split points of an old
+  // transcript are not recoverable and are never guessed: with no segments the
+  // turn renders exactly as it used to, as one bubble.
+  segments?: TurnSegment[];
   // #bg ephemeral ownership: which run created this LIVE `auto-*` bubble. The snapshot
   // replay is scoped to the current run, so the reconnect filter must only drop the current
   // run's own live bubbles — matching on this stops it from wiping a PRIOR run's continuation
