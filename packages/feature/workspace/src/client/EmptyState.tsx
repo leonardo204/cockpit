@@ -186,9 +186,10 @@ export function EmptyState({
     onSelectSession(cwd, fileName.replace('.jsonl', ''));
   };
 
-  // "Open" — the OS folder picker, the same path the sidebar's project browser
-  // uses (/api/pick-folder). Adding a project is deliberate; this is the only
-  // way a project enters the list besides Create.
+  // "Open" — the OS folder picker, the same client helper the sidebar's project
+  // browser uses (workspaceClient's `pickFolder`, which prefers the Electron
+  // dialog and falls back to the route). Adding a project is deliberate; this
+  // is the only way a project enters the list besides Create.
   const handleOpen = useCallback(async () => {
     if (isPicking) return;
     setIsPicking(true);

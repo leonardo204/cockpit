@@ -185,14 +185,59 @@ export const saveProjectSettings = (
   httpPostJson("/api/project-settings", body)
 
 // ─────────────────────────────────────────────────────────
-// /api/pick-folder
+// folder picker — window.naby.fsOps.pickFolder, else /api/pick-folder
 // ─────────────────────────────────────────────────────────
 
-/** Backend returns `{folder: string | null}` (null = user cancelled or failed). */
-export const pickFolder = (): Effect.Effect<
-  { folder?: string | null },
-  AppError
-> => httpJson("/api/pick-folder")
+/** The one bridge method this file uses. Typed locally: the shell must NEVER
+ *  import from `electron` (Next would try to bundle it), so the preload's shape
+ *  is restated here rather than imported. */
+interface FolderPickerBridge {
+  pickFolder(message?: string): Promise<string | null>
+}
+
+/**
+ * The Electron folder chooser, or null in a plain browser.
+ *
+ * Feature-detected exactly like FileBrowserPanel's `fsBridge()`. The desktop
+ * app has to prefer this: the HTTP fallback shells out to `osascript`, and the
+ * panel that process owns has NO MENU BAR — so cmd+C / cmd+V do nothing in its
+ * "New Folder" name field, which is where a user naturally pastes a path or a
+ * project name. The IPC path opens the same native panel owned by the app, with
+ * the app's Edit menu, and the shortcuts work.
+ */
+const folderPickerBridge = (): FolderPickerBridge | null => {
+  if (typeof window === "undefined") return null
+  const w = window as unknown as {
+    naby?: { fsOps?: Partial<FolderPickerBridge> }
+  }
+  const ops = w.naby?.fsOps
+  return typeof ops?.pickFolder === "function" ? (ops as FolderPickerBridge) : null
+}
+
+/**
+ * Returns `{folder: string | null}` — null = user cancelled (a NORMAL outcome,
+ * never an error). Same shape from both paths, so the four call sites
+ * (Workspace / SessionBrowser / EmptyState open + create) do not know or care
+ * which one answered.
+ *
+ * The route remains the fallback for the cockpit standalone dev server, where
+ * there is no Electron bridge at all.
+ */
+export const pickFolder = (
+  message?: string
+): Effect.Effect<{ folder?: string | null }, AppError> =>
+  // `suspend` so the detection happens when the effect RUNS, not when the
+  // module is evaluated — this module is imported dynamically, but SSR would
+  // otherwise be free to decide there is no bridge on the server's behalf.
+  Effect.suspend(() => {
+    const bridge = folderPickerBridge()
+    if (!bridge) return httpJson<{ folder?: string | null }>("/api/pick-folder")
+    return Effect.tryPromise({
+      try: async () => ({ folder: await bridge.pickFolder(message) }),
+      catch: (cause) =>
+        new AppError({ message: "fsOps.pickFolder failed", cause }),
+    })
+  })
 
 // ─────────────────────────────────────────────────────────
 // /api/create-project
