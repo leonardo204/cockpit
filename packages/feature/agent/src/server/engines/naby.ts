@@ -1645,6 +1645,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const harnessSeen = new Set<string>();
         let harnessEmitted = 0;
         const HARNESS_EVENT_CAP = 20;
+        // Subagent/background-task lifecycle edges, counted separately (see the
+        // `harness` case). One delegated run costs at most a handful of these,
+        // so this bounds roughly a dozen concurrent or sequential subagents in a
+        // single turn — far past what a transcript can usefully show, and still
+        // finite.
+        let taskEventsEmitted = 0;
+        const TASK_EVENT_CAP = 60;
 
         const emitToolResult = (
           toolUseId: string,
@@ -1883,6 +1890,25 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                           id: ev.toolCallId,
                           name: ev.toolName,
                           input: ev.input ?? {},
+                          // WHO ran it, when the backend says a subagent did.
+                          // Carried on the BLOCK (not the message) because the
+                          // attribution is per call, and the client builds one
+                          // tool-call row per block: a subagent's calls used to
+                          // arrive indistinguishable from the main thread's and
+                          // were folded into the same "N tool calls" batch.
+                          // Absent = main thread, which is the common case and
+                          // the reason this is omitted rather than defaulted.
+                          ...(ev.subagent
+                            ? {
+                                agent_id: ev.subagent.agentId,
+                                ...(ev.subagent.agentType
+                                  ? { agent_type: ev.subagent.agentType }
+                                  : {}),
+                                ...(ev.subagent.parentToolCallId
+                                  ? { parent_tool_use_id: ev.subagent.parentToolCallId }
+                                  : {}),
+                              }
+                            : {}),
                         },
                       ],
                     },
@@ -1911,11 +1937,34 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 }
 
                 case 'harness': {
-                  const key = ev.detail ? `${ev.subtype} ${ev.detail}` : ev.subtype;
+                  // IDENTITY FIRST, then text. A subagent lifecycle event is
+                  // deduped per TASK: four research agents running in parallel
+                  // all report `system/task_started agent=general-purpose`, so a
+                  // label-only key collapsed four delegated runs into one line —
+                  // the client then had no way to draw four blocks because it
+                  // had only ever been told about one. Keying on the task id
+                  // keeps each run's own edges, while still collapsing the
+                  // repeats WITHIN a run (progress fires continuously).
+                  const key = ev.task
+                    ? `${ev.subtype} task=${ev.task.id}${ev.task.status ? ` ${ev.task.status}` : ''}`
+                    : ev.detail
+                      ? `${ev.subtype} ${ev.detail}`
+                      : ev.subtype;
                   if (harnessSeen.has(key)) break;
-                  if (harnessEmitted >= HARNESS_EVENT_CAP) break;
+                  // Task lifecycle has its OWN budget. The generic cap exists to
+                  // stop a backend loop from becoming an unbounded transcript,
+                  // and it is right for pills; but a turn that delegates widely
+                  // would spend the whole allowance on ordinary harness noise
+                  // and then silently lose the blocks that carry the actual
+                  // work. Both are still bounded.
+                  if (ev.task) {
+                    if (taskEventsEmitted >= TASK_EVENT_CAP) break;
+                    taskEventsEmitted += 1;
+                  } else {
+                    if (harnessEmitted >= HARNESS_EVENT_CAP) break;
+                    harnessEmitted += 1;
+                  }
                   harnessSeen.add(key);
-                  harnessEmitted += 1;
                   // `subtype:'harness'` keeps this off the client's existing
                   // system subtypes ('init' / 'task_notification' / 'api_retry'),
                   // each of which has its own handler and its own meaning. The
@@ -1928,6 +1977,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     session_id: sessionId,
                     harness_subtype: ev.subtype,
                     ...(ev.detail ? { harness_detail: ev.detail } : {}),
+                    // The lifecycle of ONE delegated run, as structure rather
+                    // than prose. The client turns these into a per-subagent
+                    // block (started opens it, ended closes it) instead of a
+                    // string of near-identical pills; a client that predates
+                    // them still renders the pill from the two fields above.
+                    ...(ev.task
+                      ? {
+                          harness_task_id: ev.task.id,
+                          harness_task_phase: ev.task.phase,
+                          ...(ev.task.agentType
+                            ? { harness_task_agent: ev.task.agentType }
+                            : {}),
+                          ...(ev.task.toolCallId
+                            ? { harness_task_tool_use_id: ev.task.toolCallId }
+                            : {}),
+                          ...(ev.task.status ? { harness_task_status: ev.task.status } : {}),
+                        }
+                      : {}),
                   } satisfies RunEvent);
                   break;
                 }
