@@ -57,11 +57,14 @@ export interface ChatMessage {
   // `detail` is the full raw text (e.g. the complete <task-notification> block) —
   // shown in a modal when the one-line bar is clicked. `content` stays the summary.
   systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
-  // The delegated runs (subagents) this turn launched, as the backend reported
-  // their lifecycle. LIVE ONLY: these events are observational and never
+  // The RUNS this turn launched, as the backend reported their lifecycle:
+  // delegated subagents (`Task`) and background shell jobs (`Bash` with
+  // `run_in_background`), which arrive on the same four edges and are told apart
+  // by `taskType`. LIVE ONLY: these events are observational and never
   // persisted, so a reloaded transcript has none — the blocks are then rebuilt
-  // from the tool calls' own attribution, without a running/completed state to
-  // show. See subagentGroups.ts.
+  // from the tool calls themselves (a subagent's calls carry its attribution, a
+  // background launch carries the flag), without a running/completed state to
+  // show. See subagentGroups.ts and backgroundJobs.ts.
   subagents?: SubagentTask[];
   // WHAT HAPPENED IN WHAT ORDER. The turn as an ordered list of text runs and
   // tool-call runs (see shared/turnSegments.ts), so the view can draw the
@@ -103,13 +106,24 @@ export interface TokenUsage {
   //
   // `contextTokens` is the LAST step's input size — what the model actually held —
   // and `contextWindow` is the model's window, when the runtime registry knows it.
-  // Both are absent when unmeasured or unknown, and the gauge then hides or drops
-  // its ratio (contextGauge.ts). Never defaulted to 0: a zero is a number, and the
-  // rule here is that no number beats a wrong one.
+  // Never defaulted to 0: a zero is a number, and an absence is what the gauge's
+  // branches key on.
+  //
+  // An absent `contextTokens` still hides the gauge (nothing was measured). An
+  // absent `contextWindow` no longer drops the ratio — the gauge estimates a
+  // denominator from `contextModel`'s family and marks the result `~`
+  // (contextGauge.ts, spec §2.1 v0.3.0).
   /** Last step's input tokens (cache reads included) = current window occupancy. */
   contextTokens?: number;
   /** The model's context window, when it is a model the registry knows. */
   contextWindow?: number;
+  /**
+   * The CONCRETE model the provider reported it served — `claude-opus-5[1m]`, not
+   * the `default` we asked for. It is what makes the window resolvable at all on
+   * the app's most common path, and the family fallback's only input when it is
+   * not.
+   */
+  contextModel?: string;
 }
 
 // Retry info (from SDK system/api_retry event)

@@ -77,8 +77,14 @@ export interface StreamEvent {
   harness_task_id?: string;
   harness_task_phase?: SubagentTaskPhase;
   harness_task_agent?: string;
+  /** The backend's KIND for the run: `local_agent` (a delegated subagent) or
+   *  `local_bash` (a background shell job), which is the only field that tells
+   *  the two apart — a shell job carries no agent type. */
+  harness_task_type?: string;
   harness_task_tool_use_id?: string;
   harness_task_status?: 'completed' | 'failed' | 'stopped';
+  /** When the RUNTIME observed this edge (epoch ms) — the elapsed clock's origin. */
+  harness_task_at?: number;
 }
 
 export function applyStreamEvent(
@@ -190,6 +196,12 @@ export function applyStreamEvent(
     // subagent blocks: started opens one, ended closes it, and the calls the
     // backend attributed to that agent render underneath it.
     //
+    // BACKGROUND SHELL JOBS RIDE THE SAME EDGES. `Bash` with
+    // `run_in_background` registers a task too, with no agent type and
+    // `harness_task_type: 'local_bash'`; the record lands in the same list and
+    // `backgroundJobs.ts` takes it out at render time to draw the job's own
+    // block. Without it a backgrounded deploy left no trace after its launch row.
+    //
     // Idempotent by construction (applySubagentTaskEvent), which the viewer
     // needs: a reconnect replays the entire turn through this reducer.
     if (ev.harness_task_id && ev.harness_task_phase) {
@@ -206,8 +218,10 @@ export function applyStreamEvent(
         id: taskId,
         phase,
         ...(ev.harness_task_agent ? { agentType: ev.harness_task_agent } : {}),
+        ...(ev.harness_task_type ? { taskType: ev.harness_task_type } : {}),
         ...(ev.harness_task_tool_use_id ? { toolCallId: ev.harness_task_tool_use_id } : {}),
         ...(ev.harness_task_status ? { status: ev.harness_task_status } : {}),
+        ...(typeof ev.harness_task_at === 'number' ? { at: ev.harness_task_at } : {}),
       });
       if (nextTasks === target.subagents) return messages;
       const out = [...messages];

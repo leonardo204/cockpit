@@ -252,6 +252,61 @@ describe('applyStreamEvent — subagent attribution + lifecycle absorption', () 
     expect(twice).toBe(once); // nothing changed ⇒ nothing re-rendered
   });
 
+  it('a BACKGROUND SHELL JOB rides the same edges, kept apart by its kind', () => {
+    // It carries no agent type — `harness_task_type` is the only field that says
+    // what it is, and the block the bubble draws depends on it.
+    const out = reduce(seed(), [
+      {
+        type: 'system',
+        subtype: 'harness',
+        harness_subtype: 'system/task_started',
+        harness_task_id: 'b1',
+        harness_task_phase: 'started',
+        harness_task_type: 'local_bash',
+        harness_task_tool_use_id: 'bash-1',
+        harness_task_at: 1_000,
+      },
+      {
+        type: 'system',
+        subtype: 'harness',
+        harness_subtype: 'system/task_notification',
+        harness_task_id: 'b1',
+        harness_task_phase: 'ended',
+        harness_task_status: 'completed',
+        harness_task_at: 61_000,
+      },
+    ]);
+    expect(out.some((m) => m.role === 'system')).toBe(false);
+    expect(out[0].subagents).toEqual([
+      {
+        id: 'b1',
+        status: 'completed',
+        taskType: 'local_bash',
+        toolCallId: 'bash-1',
+        startedAt: 1_000,
+        endedAt: 61_000,
+      },
+    ]);
+  });
+
+  it('the elapsed clock survives a reconnect replay (server time, not arrival)', () => {
+    const events: StreamEvent[] = [
+      {
+        type: 'system',
+        subtype: 'harness',
+        harness_subtype: 'system/task_started',
+        harness_task_id: 'b1',
+        harness_task_phase: 'started',
+        harness_task_type: 'local_bash',
+        harness_task_at: 1_000,
+      },
+    ];
+    const once = reduce(seed(), events);
+    const twice = reduce(once, events);
+    expect(twice[0].subagents?.[0].startedAt).toBe(1_000);
+    expect(twice).toBe(once);
+  });
+
   it('a harness event that is NOT a task still renders as its muted pill row', () => {
     const out = reduce(seed(), [
       { type: 'system', subtype: 'harness', harness_subtype: 'system/compact_boundary', harness_detail: 'trigger=auto' },

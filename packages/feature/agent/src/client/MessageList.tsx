@@ -285,6 +285,14 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     dispatchStick({ kind: 'content', metrics });
   }, [readMetrics, dispatchStick]);
 
+  /** The SCROLL BOX changed size, with the transcript untouched: the composer
+   *  grew a line, a banner appeared above it, the window was resized. */
+  const handleViewportResize = useCallback(() => {
+    const metrics = readMetrics();
+    if (!metrics) return;
+    dispatchStick({ kind: 'viewport', metrics });
+  }, [readMetrics, dispatchStick]);
+
   // Listen to scroll events
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
@@ -327,6 +335,24 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     ro.observe(el);
     return () => ro.disconnect();
   }, [handleContentGrowth]);
+
+  // THE OTHER HALF OF THE SAME QUESTION. The observer above watches the CONTENT
+  // grow; this one watches the VIEWPORT shrink. The transcript and the composer
+  // are one flex column (Chat.tsx), so every line the user adds to the input
+  // takes a strip off the bottom of this box — the content is untouched,
+  // `scrollHeight` never moves, and the observer above stays silent while the
+  // newest message slides out of sight behind the taller input. To the user
+  // that is indistinguishable from the composer being drawn ON TOP of the
+  // conversation, which is how it was reported. Same for the banners that
+  // appear above the input (context limit, check-in, tool approval) and for a
+  // window resize: one observer on the scroll box covers every one of them.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => handleViewportResize());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [handleViewportResize]);
 
   // Belt and braces for a render that changes content without changing the box
   // height in a way the observer reports first (and for any environment with no
@@ -552,6 +578,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   sessionId={sessionId}
                   onApprovePlan={onApprovePlan}
                   isLoading={isLoading}
+                  // A hidden tab is `display:none` but still mounted, so the
+                  // per-second clocks inside a turn are told to stand down.
+                  isActive={isActive}
                 />
               </div>
             ))}

@@ -1657,10 +1657,44 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // window). Undefined when no step reported per-step usage, in which case
         // the client hides the gauge rather than guessing.
         let contextTokens: number | undefined;
-        // The DENOMINATOR, resolved once from the engine + model that will answer.
-        // Undefined for a model the registry does not know, which the client shows
-        // as a token count with no ratio.
-        const contextWindow = contextWindowFor(engineId, modelLabel);
+        // WHAT THE RUN SAID ABOUT ITSELF — the concrete model the provider served
+        // and the betas it negotiated, both reported on the engine's result event.
+        //
+        // THE DENOMINATOR IS RESOLVED FROM THESE, NOT FROM `modelLabel`, and that
+        // is the whole fix. `modelLabel` is what we ASKED for, and on the app's
+        // most common path it is `default` — the Agent SDK's own "let Claude pick"
+        // row — which names no window, so the registry answered undefined and the
+        // gauge dropped its percentage. The run always knows the resolved id, and
+        // it is the only place the 1M tier is visible at all.
+        let contextModel: string | undefined;
+        let contextBetas: readonly string[] | undefined;
+        /** The window for the model that actually answered, falling back to the
+         *  requested label when the run reported no id (a turn that died before
+         *  its first step). Still undefined for a model nobody knows — the client
+         *  then estimates and MARKS the estimate (contextGauge.ts). */
+        const resolveContextWindow = (): number | undefined =>
+          contextWindowFor(engineId, contextModel ?? modelLabel, {
+            ...(contextBetas ? { betas: contextBetas } : {}),
+          }) ?? contextWindowFor(engineId, modelLabel);
+        /** The gauge's fields on a `result`, built at emit time — the concrete
+         *  model is only known once the run has reported it, so the denominator
+         *  cannot be resolved up front the way it used to be. Both terminal emit
+         *  sites use this, so a stopped turn's gauge matches a finished one's. */
+        const gaugeFields = (): {
+          context_tokens?: number;
+          context_window?: number;
+          context_model?: string;
+        } => {
+          const window = resolveContextWindow();
+          return {
+            ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
+            ...(window !== undefined ? { context_window: window } : {}),
+            // Passed through so the client can estimate a denominator by FAMILY
+            // when the registry knows no exact one, instead of showing a bare
+            // token count that means nothing to the person reading it.
+            ...(contextModel !== undefined ? { context_model: contextModel } : {}),
+          };
+        };
 
         // ---- autonomy bookkeeping (Phase 3, P3-M3c) ----------------------
         //
@@ -2068,10 +2102,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                           ...(ev.task.agentType
                             ? { harness_task_agent: ev.task.agentType }
                             : {}),
+                          // WHICH KIND OF RUN THIS IS. `local_bash` is a
+                          // BACKGROUND SHELL JOB and `local_agent` a delegated
+                          // subagent; they share every other field, so without
+                          // this the client draws a "Subagent" block for a
+                          // backgrounded `npm run deploy` — or, before the block
+                          // existed, drew nothing and the job ran invisibly.
+                          ...(ev.task.taskType
+                            ? { harness_task_type: ev.task.taskType }
+                            : {}),
                           ...(ev.task.toolCallId
                             ? { harness_task_tool_use_id: ev.task.toolCallId }
                             : {}),
                           ...(ev.task.status ? { harness_task_status: ev.task.status } : {}),
+                          // WHEN the runtime saw this edge. The client's elapsed
+                          // clock reads it rather than stamping arrival: a
+                          // reconnect replays the run's whole event buffer, and a
+                          // client-side clock would restart a ten-minute job's
+                          // counter at zero each time.
+                          ...(ev.task.observedAt !== undefined
+                            ? { harness_task_at: ev.task.observedAt }
+                            : {}),
                         }
                       : {}),
                   } satisfies RunEvent);
@@ -2098,6 +2149,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // NOT accumulated — see the declaration. The newest reading is
                   // the occupancy the next turn starts from.
                   if (ev.contextTokens !== undefined) contextTokens = ev.contextTokens;
+                  // Same rule as the reading itself: the newest wins, because the
+                  // denominator has to describe the same call the numerator does.
+                  if (ev.contextModel !== undefined) contextModel = ev.contextModel;
+                  if (ev.contextBetas !== undefined) contextBetas = ev.contextBetas;
                   // THE STOP DECISION. Taken here because this is the moment both
                   // inputs are known: whether the step used a tool and what it
                   // said. `resolveMaxSteps` collapsed a non-autonomous agent to 1
@@ -2136,13 +2191,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     result: ev.ok ? assistantText : (errorMessage ?? 'run failed'),
                     usage: toSdkUsage(accUsage),
                     total_cost_usd: accCostUsd,
-                    // THE WINDOW GAUGE (session-context-management §2.1). Two
-                    // separate fields, and both are omitted rather than zeroed
-                    // when unknown: the client's rule is that it hides the gauge
-                    // instead of showing a wrong percentage, and a 0 would be a
-                    // number rather than an absence.
-                    ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
-                    ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+                    // THE WINDOW GAUGE (session-context-management §2.1). Three
+                    // fields, each omitted rather than zeroed when unknown: an
+                    // absence is what the client's fallback keys on, and a 0
+                    // would be a number rather than an absence.
+                    ...gaugeFields(),
                     duration_ms: Date.now() - startedAt,
                     num_turns: turns,
                   });
@@ -2207,8 +2260,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             total_cost_usd: accCostUsd,
             // A stopped or failed run still filled the window with whatever it
             // managed to send, so the last measured reading is reported here too.
-            ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
-            ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+            ...gaugeFields(),
             duration_ms: Date.now() - startedAt,
             num_turns: turns,
           });

@@ -8,6 +8,7 @@ import {
   type TurnSegment,
 } from './turnSegments';
 import { groupSubagentCalls } from './subagentGroups';
+import { partitionBackgroundJobs } from './backgroundJobs';
 import type { ToolCallInfo } from './types';
 
 /**
@@ -28,14 +29,16 @@ const call = (id: string, name = 'Read', extra: Partial<ToolCallInfo> = {}): Too
 });
 
 /** The shape of a rendered turn, as a readable string: `text:…`, `tools:a,b`,
- *  `agent:<id>`. Every assertion below reads better as one of these. */
+ *  `agent:<id>`, `bg:<id>`. Every assertion below reads better as one of these. */
 const shape = (segs: RenderSegment[]): string[] =>
   segs.map((s) =>
     s.kind === 'text'
       ? `text:${s.text}`
       : s.kind === 'tools'
         ? `tools:${s.calls.map((c) => c.id).join(',')}`
-        : `agent:${s.group.id}`
+        : s.kind === 'subagent'
+          ? `agent:${s.group.id}`
+          : `bg:${s.job.id}`
   );
 
 const build = (segments: TurnSegment[] | undefined, content: string, calls: ToolCallInfo[]) =>
@@ -251,6 +254,118 @@ describe('buildRenderSegments — a delegated run sits where it was launched', (
       'text:all of it',
       'tools:c9',
       'agent:a1',
+    ]);
+  });
+});
+
+describe('buildRenderSegments — a background job sits where it was launched', () => {
+  const bgTurn = () => {
+    // say → Bash(run_in_background) → say → one main call. The launch returns
+    // instantly, so without a block the turn reads as "deploy finished".
+    const calls = [
+      call('t1', 'Bash', { input: { command: 'npm run deploy', run_in_background: true }, result: 'Command running in background with ID: b1' }),
+      call('c9', 'Edit'),
+    ];
+    let segs = appendTextSegment(undefined, 'Deploying.');
+    segs = appendToolCallSegment(segs, 't1');
+    segs = appendTextSegment(segs, 'Started in the background.');
+    segs = appendToolCallSegment(segs, 'c9');
+    return { segs, calls };
+  };
+
+  const buildBg = (
+    segments: TurnSegment[] | undefined,
+    content: string,
+    calls: ToolCallInfo[],
+    tasks: Parameters<typeof partitionBackgroundJobs>[1]
+  ) => {
+    const bg = partitionBackgroundJobs(calls, tasks);
+    return buildRenderSegments(segments, content, groupSubagentCalls(bg.calls, bg.tasks), bg.jobs);
+  };
+
+  it('anchors the block at the launching call, taking that row’s place', () => {
+    const { segs, calls } = bgTurn();
+    const out = buildBg(segs, 'Deploying.Started in the background.', calls, [
+      { id: 'b1', taskType: 'local_bash', status: 'running', toolCallId: 't1', startedAt: 1_000 },
+    ]);
+    expect(shape(out)).toEqual([
+      'text:Deploying.',
+      'bg:b1',
+      'text:Started in the background.',
+      'tools:c9',
+    ]);
+    const block = out.find((s) => s.kind === 'background') as Extract<RenderSegment, { kind: 'background' }>;
+    expect(block.job.command).toBe('npm run deploy');
+    expect(block.job.spawningCall?.id).toBe('t1');
+  });
+
+  it('two concurrent jobs are two blocks, each at its own launch', () => {
+    const calls = [
+      call('t1', 'Bash', { input: { command: 'npm run deploy', run_in_background: true } }),
+      call('c2', 'Read'),
+      call('t2', 'Bash', { input: { command: 'npm run e2e', run_in_background: true } }),
+    ];
+    let segs = appendToolCallSegment(undefined, 't1');
+    segs = appendToolCallSegment(segs, 'c2');
+    segs = appendToolCallSegment(segs, 't2');
+    expect(
+      shape(
+        buildBg(segs, '', calls, [
+          { id: 'b1', taskType: 'local_bash', status: 'running', toolCallId: 't1' },
+          { id: 'b2', taskType: 'local_bash', status: 'completed', toolCallId: 't2' },
+        ])
+      )
+    ).toEqual(['bg:b1', 'tools:c2', 'bg:b2']);
+  });
+
+  it('a delegated run and a background job keep their own places', () => {
+    const calls = [
+      call('task-1', 'Task', { input: { subagent_type: 'general-purpose' }, result: 'report' }),
+      call('g1', 'Grep', { agentId: 'a1', agentType: 'general-purpose', parentToolCallId: 'task-1' }),
+      call('t1', 'Bash', { input: { command: 'npm run deploy', run_in_background: true } }),
+    ];
+    let segs = appendToolCallSegment(undefined, 'task-1');
+    segs = appendToolCallSegment(segs, 'g1');
+    segs = appendToolCallSegment(segs, 't1');
+    expect(
+      shape(
+        buildBg(segs, '', calls, [
+          { id: 'a1', agentType: 'general-purpose', taskType: 'local_agent', status: 'running', toolCallId: 'task-1' },
+          { id: 'b1', taskType: 'local_bash', status: 'running', toolCallId: 't1' },
+        ])
+      )
+    ).toEqual(['agent:a1', 'bg:b1']);
+  });
+
+  it('a job with no launch call in this batch is appended, never dropped', () => {
+    const calls = [call('c1', 'Read')];
+    const segs = appendToolCallSegment(undefined, 'c1');
+    expect(
+      shape(buildBg(segs, '', calls, [{ id: 'b9', taskType: 'local_bash', status: 'running' }]))
+    ).toEqual(['tools:c1', 'bg:b9']);
+  });
+
+  it('a RELOADED turn still shows the block, from the persisted launch alone', () => {
+    // No lifecycle survives a reload — the call does, and it still says the job
+    // was backgrounded. The block claims no outcome (see backgroundJobs.test).
+    const { segs, calls } = bgTurn();
+    const out = buildBg(segs, 'Deploying.Started in the background.', calls, undefined);
+    expect(shape(out)).toEqual([
+      'text:Deploying.',
+      'bg:call:t1',
+      'text:Started in the background.',
+      'tools:c9',
+    ]);
+    const block = out.find((s) => s.kind === 'background') as Extract<RenderSegment, { kind: 'background' }>;
+    expect(block.job.status).toBe('unknown');
+  });
+
+  it('renders a background job in an OLD (segment-less) transcript at the end', () => {
+    const { calls } = bgTurn();
+    expect(shape(buildBg(undefined, 'all of it', calls, undefined))).toEqual([
+      'text:all of it',
+      'tools:c9',
+      'bg:call:t1',
     ]);
   });
 });

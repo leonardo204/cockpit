@@ -5,7 +5,9 @@ import { Portal, toast } from '@cockpit/shared-ui';
 import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ToolCallModal } from './ToolCallModal';
 import { SubagentBlock } from './SubagentBlock';
+import { BackgroundJobBlock } from './BackgroundJobBlock';
 import { groupSubagentCalls } from './subagentGroups';
+import { partitionBackgroundJobs } from './backgroundJobs';
 import { buildRenderSegments, lastTextSegmentId } from './turnSegments';
 import { filterDisplayToolCalls, shouldGroupUnderHeader } from './toolCallDisplay';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
@@ -223,10 +225,15 @@ interface MessageBubbleProps {
   onApprovePlan?: () => void;
   /** Disable the approve button while a run is streaming (no concurrent send) */
   isLoading?: boolean;
+  /** Whether this tab is the one on screen. Every chat tab stays mounted, so the
+   *  live clocks inside a turn (a background job's elapsed count) must not tick
+   *  in a tab that is `display:none`. Defaults to true — every existing caller
+   *  and every test renders a visible turn. */
+  isActive?: boolean;
 }
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
@@ -274,9 +281,24 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // that ran four agents showed one anonymous "133 tool calls" line and no way
   // to tell whose work was whose. The main thread's calls keep the batch exactly
   // as it was, which is why the header threshold now counts `topLevel`.
+  // A JOB THAT OUTLIVES ITS CALL LEAVES THE BATCH FIRST. A backgrounded `Bash`
+  // returns the instant it is launched, so its row said "done" while the deploy
+  // was still running and nothing else on screen mentioned it again. The launch
+  // is folded into a block that keeps reporting (backgroundJobs.ts), and what is
+  // left goes on to the subagent grouping exactly as before.
+  const background = useMemo(
+    () =>
+      partitionBackgroundJobs(displayToolCalls, message.subagents, {
+        // Once the turn is over, nothing is listening for the job's ending edge
+        // — the backend process winds down with the turn — so a block that had
+        // not heard back stops claiming the job is live (backgroundJobs.ts).
+        turnEnded: !message.isStreaming,
+      }),
+    [displayToolCalls, message.subagents, message.isStreaming]
+  );
   const partition = useMemo(
-    () => groupSubagentCalls(displayToolCalls, message.subagents),
-    [displayToolCalls, message.subagents]
+    () => groupSubagentCalls(background.calls, background.tasks),
+    [background]
   );
   // THE TURN, IN THE ORDER IT HAPPENED. Text runs, tool batches and delegated
   // runs as one ordered list, so what the model said after a tool ran is drawn
@@ -288,8 +310,8 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // `content` but not the calls, so the partition (and with it every subagent
   // group's identity) survives a token, and only the list around it is rebuilt.
   const renderSegments = useMemo(
-    () => buildRenderSegments(message.segments, message.content, partition),
-    [message.segments, message.content, partition]
+    () => buildRenderSegments(message.segments, message.content, partition, background.jobs),
+    [message.segments, message.content, partition, background.jobs]
   );
   // Where the turn ENDS talking — the bubble that carries the turn's actions and
   // the only one that may show a streaming caret.
@@ -653,6 +675,20 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             }
             if (seg.kind === 'tools') {
               return <ToolSegmentRow key={seg.id} calls={seg.calls} cwd={cwd} sessionId={sessionId} />;
+            }
+            // One block per BACKGROUND JOB, at the call that launched it: the
+            // row that reports for as long as the job runs.
+            if (seg.kind === 'background') {
+              return (
+                <div key={seg.id} className="w-full max-w-[90%] mt-1">
+                  <BackgroundJobBlock
+                    job={seg.job}
+                    cwd={cwd}
+                    sessionId={sessionId}
+                    isActive={isActive}
+                  />
+                </div>
+              );
             }
             // One block per delegated run, anchored at the `Task` call that
             // launched it — so four subagents running in parallel are four rows

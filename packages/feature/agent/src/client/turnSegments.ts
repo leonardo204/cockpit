@@ -1,5 +1,6 @@
 import type { ToolCallInfo } from './types';
 import type { SubagentGroup, SubagentPartition } from './subagentGroups';
+import type { BackgroundJob } from './backgroundJobs';
 import {
   type TurnSegment,
   appendTextSegment,
@@ -23,7 +24,8 @@ export { appendTextSegment, appendToolCallSegment, nextSegmentId, segmentedCallI
 export type RenderSegment =
   | { kind: 'text'; id: string; text: string }
   | { kind: 'tools'; id: string; calls: ToolCallInfo[] }
-  | { kind: 'subagent'; id: string; group: SubagentGroup };
+  | { kind: 'subagent'; id: string; group: SubagentGroup }
+  | { kind: 'background'; id: string; job: BackgroundJob };
 
 /**
  * Build the ordered list a turn renders as.
@@ -52,9 +54,14 @@ export type RenderSegment =
 export function buildRenderSegments(
   segments: readonly TurnSegment[] | undefined,
   content: string,
-  partition: SubagentPartition
+  partition: SubagentPartition,
+  /** The turn's BACKGROUND JOBS (backgroundJobs.ts), anchored by the same rule
+   *  as a delegated run: at the call that launched them. Optional so every
+   *  existing caller — and every turn that backgrounded nothing — is unchanged. */
+  backgroundJobs?: readonly BackgroundJob[]
 ): RenderSegment[] {
   const { topLevel, groups } = partition;
+  const jobs = backgroundJobs ?? [];
   const out: RenderSegment[] = [];
 
   if (!segments || segments.length === 0) {
@@ -62,6 +69,9 @@ export function buildRenderSegments(
     if (topLevel.length > 0) out.push({ kind: 'tools', id: 'legacy-tools', calls: topLevel });
     for (const group of groups) {
       out.push({ kind: 'subagent', id: `agent-${group.id}`, group });
+    }
+    for (const job of jobs) {
+      out.push({ kind: 'background', id: `bg-${job.id}`, job });
     }
     return out;
   }
@@ -77,7 +87,19 @@ export function buildRenderSegments(
     const anchor = group.parentCall?.id ?? group.calls[0]?.id;
     if (anchor && !anchorToGroup.has(anchor)) anchorToGroup.set(anchor, group);
   }
+  // A BACKGROUND JOB SITS WHERE IT WAS LAUNCHED, for the same reason a delegated
+  // run does: that is the moment it happened and where the reader is looking.
+  // Its spawning call has already been folded out of the batch, so the anchor is
+  // that call's id — the block takes the row's place rather than adding one
+  // beside it. A job with no spawning call in this batch (launched inside a
+  // subagent) has no anchor and is appended below, never guessed at.
+  const anchorToJob = new Map<string, BackgroundJob>();
+  for (const job of jobs) {
+    const anchor = job.spawningCall?.id;
+    if (anchor && !anchorToJob.has(anchor)) anchorToJob.set(anchor, job);
+  }
   const emitted = new Set<string>();
+  const emittedJobs = new Set<string>();
 
   for (const seg of segments) {
     if (seg.kind === 'text') {
@@ -108,6 +130,13 @@ export function buildRenderSegments(
         out.push({ kind: 'subagent', id: `${seg.id}-agent-${group.id}`, group });
         continue;
       }
+      const job = anchorToJob.get(callId);
+      if (job && !emittedJobs.has(job.id)) {
+        flush();
+        emittedJobs.add(job.id);
+        out.push({ kind: 'background', id: `${seg.id}-bg-${job.id}`, job });
+        continue;
+      }
       // Missing from `topLevel` means the call is a subagent's own work (folded
       // into its block) or filtered from display (ExitPlanMode). Either way it
       // is not a row of this batch.
@@ -125,6 +154,9 @@ export function buildRenderSegments(
   if (orphans.length > 0) out.push({ kind: 'tools', id: 'unsegmented-tools', calls: orphans });
   for (const group of groups) {
     if (!emitted.has(group.id)) out.push({ kind: 'subagent', id: `agent-${group.id}`, group });
+  }
+  for (const job of jobs) {
+    if (!emittedJobs.has(job.id)) out.push({ kind: 'background', id: `bg-${job.id}`, job });
   }
 
   return out;

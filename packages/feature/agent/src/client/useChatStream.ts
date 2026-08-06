@@ -473,13 +473,16 @@ export function useChatStream(
       const usage = event.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
       const totalCostUsd = event.total_cost_usd as number | undefined;
 
-      // The WINDOW gauge's two fields (session-context-management §2.1). They ride
+      // The WINDOW gauge's fields (session-context-management §2.1). They ride
       // the same result event but are NOT part of `usage` — see the TokenUsage
       // doc: one is a per-turn total, the other a single step's prompt size, and
       // conflating them is the bug this feature exists to fix. Absent stays
-      // absent; the gauge hides rather than rendering a zero.
+      // absent; each absence selects a different branch in contextGauge.
       const contextTokens = event.context_tokens as number | undefined;
       const contextWindow = event.context_window as number | undefined;
+      // The model that actually answered, so the gauge can estimate a denominator
+      // by family when the registry knew no exact one.
+      const contextModel = event.context_model as string | undefined;
 
       if (usage) {
         setTokenUsage({
@@ -490,6 +493,7 @@ export function useChatStream(
           totalCostUsd: totalCostUsd || 0,
           ...(typeof contextTokens === 'number' ? { contextTokens } : {}),
           ...(typeof contextWindow === 'number' ? { contextWindow } : {}),
+          ...(typeof contextModel === 'string' && contextModel ? { contextModel } : {}),
         });
       }
 

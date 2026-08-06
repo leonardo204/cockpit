@@ -438,8 +438,8 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // per-step reading until its next turn, and the gauge is absent then — which is
   // the spec's rule (no number beats a wrong one), not an oversight.
   const windowGauge = useMemo(
-    () => contextGauge(tokenUsage?.contextTokens, tokenUsage?.contextWindow),
-    [tokenUsage?.contextTokens, tokenUsage?.contextWindow],
+    () => contextGauge(tokenUsage?.contextTokens, tokenUsage?.contextWindow, tokenUsage?.contextModel),
+    [tokenUsage?.contextTokens, tokenUsage?.contextWindow, tokenUsage?.contextModel],
   );
 
   // HOW THE CONVERSATION KNOWS IT HAS MOVED ON. One counter, bumped on the
