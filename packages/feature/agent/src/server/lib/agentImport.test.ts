@@ -9,6 +9,7 @@ import {
   type Agent,
   type CheckinRecord,
   type EvalEvent,
+  type EvalEventKind,
   type MemoryItem,
   type MemoryScope,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -77,6 +78,15 @@ function ledgerOf(hits: number, total: number): EvalEvent[] {
   })) as EvalEvent[];
 }
 
+/** A ledger reader that honours `kind`, the way the store does. The export reads
+ *  one kind at a time (per-kind budgets, `agentExport.EXPORT_LEDGER_LIMITS`), so
+ *  a reader that ignored the filter would hand each of the three reads the whole
+ *  ledger and triple every count. */
+function ledgerReader(rows: EvalEvent[]) {
+  return (_agentId: string, opts?: { kind?: EvalEventKind; limit?: number }): EvalEvent[] =>
+    opts?.kind ? rows.filter((r) => r.kind === opts.kind) : rows;
+}
+
 /** A store with the behaviours that matter: id minting and a readable ledger. */
 function fakeStore(opts: { memory?: MemoryItem[] } = {}) {
   const agents: Agent[] = [];
@@ -114,7 +124,7 @@ describe('agentImport — the round trip all the way through a store', () => {
     // A file that legitimately reached butterfly where it came from.
     const source = fakeStore();
     const out = exportAgent(
-      { getScopedMemory: () => [mem({ key: 'prefers-metric-units', value: 'Metric.' })], listEvalEvents: () => ledgerOf(20, 20) },
+      { getScopedMemory: () => [mem({ key: 'prefers-metric-units', value: 'Metric.' })], listEvalEvents: ledgerReader(ledgerOf(20, 20)) },
       agent(),
       { now: NOW },
     );
@@ -144,7 +154,7 @@ describe('agentImport — the round trip all the way through a store', () => {
   it('declared as the user\'s own export, the stored rows do count', () => {
     const store = fakeStore();
     const out = exportAgent(
-      { getScopedMemory: () => [], listEvalEvents: () => ledgerOf(18, 20) },
+      { getScopedMemory: () => [], listEvalEvents: ledgerReader(ledgerOf(18, 20)) },
       agent(),
       { now: NOW },
     );
@@ -161,7 +171,7 @@ describe('agentImport — the round trip all the way through a store', () => {
 
   it('files imported growth rows under a placeholder session, never a foreign one', () => {
     const store = fakeStore();
-    const out = exportAgent({ getScopedMemory: () => [], listEvalEvents: () => ledgerOf(2, 2) }, agent(), { now: NOW });
+    const out = exportAgent({ getScopedMemory: () => [], listEvalEvents: ledgerReader(ledgerOf(2, 2)) }, agent(), { now: NOW });
     const parsed = parseAgentSidecar(out.sidecar, IMPORT_OPTS);
     if (!parsed.ok) throw new Error('parse failed');
     const outcome = applyAgentImport(store, parsed.plan);
@@ -226,7 +236,7 @@ describe('agentImport — what it does and does not write', () => {
         throw new Error('disk full');
       },
     };
-    const out = exportAgent({ getScopedMemory: () => [], listEvalEvents: () => ledgerOf(2, 2) }, agent(), { now: NOW });
+    const out = exportAgent({ getScopedMemory: () => [], listEvalEvents: ledgerReader(ledgerOf(2, 2)) }, agent(), { now: NOW });
     const parsed = parseAgentSidecar(out.sidecar, IMPORT_OPTS);
     if (!parsed.ok) throw new Error('parse failed');
     const outcome = applyAgentImport(store, parsed.plan);

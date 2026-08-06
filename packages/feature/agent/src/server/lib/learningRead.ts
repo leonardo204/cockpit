@@ -28,10 +28,12 @@
 import {
   DEFAULT_USER_ID,
   type EvalEvent,
+  type EvalEventKind,
   type MemoryItem,
   type MemoryScope,
   type MemoryStatus,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { readLedgerByKind } from './growthRead';
 
 /** How many distinct sessions must have agreed with a fact for it to count as
  *  corroborated in this reading. NOT `CORROBORATION_THRESHOLD` (3), which is the
@@ -39,10 +41,24 @@ import {
  *  conversation said it", which is the interesting thing to show. */
 export const CORROBORATED_MIN = 2;
 
-/** How much ledger the task-type count reads. The panel is describing breadth
- *  ("it has seen N kinds of work"), so it wants more history than the meter's
- *  recent window — but still a bounded query. */
+/** How much ledger the task-type count reads, PER KIND. The panel is describing
+ *  breadth ("it has seen N kinds of work"), so it wants more history than the
+ *  meter's recent window — but still a bounded query.
+ *
+ *  PER KIND for the same reason the meter's read is (`growthRead`): task types
+ *  are stamped on check-in rows as well as autonomous ones, and one flat limit
+ *  on a ledger writing autonomous rows tens of times faster would count only the
+ *  kinds of work naby did ALONE. "It has seen N kinds of work" would then shrink
+ *  on a busy week — a number moving downward for no reason the user did, which
+ *  is exactly the failure the trust meter had. */
 export const LEARNING_LEDGER_LIMIT = 500;
+
+/** The breadth read's budget, per kind. */
+const LEARNING_LEDGER_LIMITS: Readonly<Record<EvalEventKind, number>> = {
+  checkin: LEARNING_LEDGER_LIMIT,
+  autonomous: LEARNING_LEDGER_LIMIT,
+  tripwire: LEARNING_LEDGER_LIMIT,
+};
 
 /** The narrow store slice this read needs. Structural, so a test hands it four
  *  functions and the production `Store` satisfies it unchanged. */
@@ -53,7 +69,7 @@ export interface LearningStore {
     opts?: { status?: MemoryStatus },
   ): MemoryItem[];
   getMemoryCorroboration(memoryIds: readonly string[]): Record<string, number>;
-  listEvalEvents(agentId: string, opts?: { limit?: number }): EvalEvent[];
+  listEvalEvents(agentId: string, opts?: { kind?: EvalEventKind; limit?: number }): EvalEvent[];
   getLatestReflectionAt(): number | undefined;
 }
 
@@ -161,9 +177,11 @@ export function learningReport(
     }
   }
 
+  // `readLedgerByKind` is already best-effort per kind, so a store hiccup shows
+  // fewer kinds rather than throwing; the try stays for anything it cannot see.
   let distinctTaskTypes = 0;
   try {
-    const rows = store.listEvalEvents(agentId, { limit: LEARNING_LEDGER_LIMIT });
+    const rows = readLedgerByKind(store, agentId, LEARNING_LEDGER_LIMITS);
     distinctTaskTypes = new Set(
       rows.map((r) => r.taskType).filter((t): t is string => typeof t === 'string' && t.length > 0),
     ).size;

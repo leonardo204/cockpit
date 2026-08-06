@@ -1,12 +1,22 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   growthReport,
   isAddressable,
   readGrowth,
+  readLedger,
   recentQuestions,
-  LEDGER_READ_LIMIT,
+  AUTONOMOUS_READ_LIMIT,
+  CHECKIN_READ_LIMIT,
+  LEDGER_READ_LIMITS,
+  TRIPWIRE_READ_LIMIT,
 } from './growthRead';
-import { canBeAddressed } from '../../../../../../../dist/naby-runtime.mjs';
+import {
+  canBeAddressed,
+  GROWTH_MIN_SAMPLE,
+  IMPLICIT_WINDOW,
+} from '../../../../../../../dist/naby-runtime.mjs';
 import type { EvalEvent, EvalEventKind } from '../../../../../../../dist/naby-runtime.mjs';
 
 let seq = 0;
@@ -60,10 +70,41 @@ describe('growthRead — the reading the palette and the panel share', () => {
     expect(growthReport(brokenStore(), 'a1').ledgerRows).toBe(0);
   });
 
-  it('bounds the query so a long history cannot be read in full', () => {
+  it('bounds the query PER KIND, so no kind can be crowded out by another', () => {
     const store = fakeStore([]);
     readGrowth(store, 'a1');
-    expect(store.calls[0]).toEqual({ agentId: 'a1', opts: { limit: LEDGER_READ_LIMIT } });
+    expect(store.calls).toEqual([
+      { agentId: 'a1', opts: { kind: 'checkin', limit: CHECKIN_READ_LIMIT } },
+      { agentId: 'a1', opts: { kind: 'autonomous', limit: AUTONOMOUS_READ_LIMIT } },
+      { agentId: 'a1', opts: { kind: 'tripwire', limit: TRIPWIRE_READ_LIMIT } },
+    ]);
+  });
+
+  it('merges the three reads back into one chronological sequence', () => {
+    // The panel slices the LAST N rows for its decision list and the diagnosis
+    // splits the sequence in half, so a merged read that came back grouped by
+    // kind would quietly reorder history.
+    const rows = [
+      row({ at: 10, kind: 'checkin', hit: true }),
+      row({ at: 20, kind: 'autonomous' }),
+      row({ at: 30, kind: 'tripwire' }),
+      row({ at: 40, kind: 'autonomous' }),
+      row({ at: 50, kind: 'checkin', hit: false }),
+    ];
+    expect(readLedger(fakeStore(rows), 'a1').map((r) => r.at)).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('one unreadable kind costs only that kind', () => {
+    const rows = Array.from({ length: 8 }, () => row({ hit: true }));
+    const store = {
+      listEvalEvents(agentId: string, opts?: { kind?: EvalEventKind; limit?: number }) {
+        if (opts?.kind === 'autonomous') throw new Error('database is locked');
+        return rows.filter((r) => r.kind === (opts?.kind ?? 'checkin'));
+      },
+    };
+    // The check-ins still arrive, so the stage is still measured — the old flat
+    // read turned any failure into a total blank.
+    expect(readGrowth(store, 'a1').stage).toBe('butterfly');
   });
 
   it('reads only the named agent — growth is per agent', () => {
@@ -308,5 +349,198 @@ describe('growthRead — isAddressable, the one @ gate', () => {
       const store = fakeStore(rows);
       expect(isAddressable(store, 'a1')).toBe(canBeAddressed(readGrowth(store, 'a1').stage));
     }
+  });
+});
+
+/**
+ * THE FLOOD (the regression this file's per-kind read exists for).
+ *
+ * A real ledger held 846 autonomous rows against 20 check-ins — one autonomous
+ * row per consequential tool call against one check-in per decision worth
+ * stopping for. The read was a single `{ limit: 200 }`, so the newest 200 rows
+ * held TWO check-ins, the meter saw `trials: 2 < GROWTH_MIN_SAMPLE` and reported
+ * "egg · not measured yet" for an agent whose full ledger computes a butterfly.
+ * The stage regressed because the user WORKED. Nothing they could have done
+ * would have explained it, and a gauge that moves for reasons its owner cannot
+ * reconstruct is a gauge nobody believes again.
+ *
+ * Every test here builds the same shape — a handful of real check-ins buried
+ * under hundreds of autonomous rows — and each one also asserts what the OLD
+ * flat read would have produced, so the fixture is provably still adversarial.
+ */
+describe('growthRead — heavy use must not bury the record (the egg regression)', () => {
+  /** The old read, exactly: newest N rows of every kind at once. */
+  function flatRead(rows: EvalEvent[], limit: number): EvalEvent[] {
+    return [...rows].sort((a, b) => a.at - b.at).slice(-limit);
+  }
+
+  /** `checkins` real answered check-ins, then `autonomous` tool calls on top. */
+  function flooded(opts: { checkins: number; hits: number; autonomous: number; tripwire?: boolean }) {
+    const rows: EvalEvent[] = [];
+    let at = 1_000;
+    for (let i = 0; i < opts.checkins; i += 1) {
+      at += 1;
+      rows.push(
+        row({
+          at,
+          kind: 'checkin',
+          hit: i < opts.hits,
+          question: `Which way for step ${i}?`,
+          options: ['a', 'b'],
+          recommended: 0,
+          chosen: i < opts.hits ? 0 : 1,
+          taskType: 'code-refactor',
+        }),
+      );
+    }
+    if (opts.tripwire) {
+      at += 1;
+      rows.push(row({ at, kind: 'tripwire' }));
+    }
+    for (let i = 0; i < opts.autonomous; i += 1) {
+      at += 1;
+      rows.push(row({ at, kind: 'autonomous', toolName: 'Write', taskType: 'code-refactor' }));
+    }
+    return rows;
+  }
+
+  it('reads the stage from the check-ins, however many tool calls sit on top', () => {
+    const rows = flooded({ checkins: 10, hits: 10, autonomous: 300 });
+
+    // The fixture is genuinely adversarial: the old read saw no check-in at all.
+    const buried = flatRead(rows, 200).filter((r) => r.kind === 'checkin');
+    expect(buried).toHaveLength(0);
+
+    const store = fakeStore(rows);
+    const g = readGrowth(store, 'a1');
+    expect(g.trials).toBe(10);
+    expect(g.trials).toBeGreaterThanOrEqual(GROWTH_MIN_SAMPLE);
+    expect(g.stage).toBe('butterfly');
+    expect(g.percent).toBeGreaterThan(0);
+    expect(isAddressable(fakeStore(rows), 'a1')).toBe(true);
+  });
+
+  it('the panel and the palette agree on the flooded ledger too', () => {
+    const rows = flooded({ checkins: 10, hits: 10, autonomous: 300 });
+    const report = growthReport(fakeStore(rows), 'a1');
+    const palette = readGrowth(fakeStore(rows), 'a1');
+    expect(report.stage).toBe(palette.stage);
+    expect(report.percent).toBe(palette.percent);
+    expect(report.stage).toBe('butterfly');
+    expect(report.addressable).toBe(true);
+    // Every row the reading was based on, both kinds — not 200 of one kind.
+    expect(report.ledgerRows).toBe(310);
+    // The decisions are still listed: they are the rows that make the gauge
+    // auditable, and a flood must not empty the list either.
+    expect(report.recentDecisions).toHaveLength(8);
+    expect(report.recentDecisions[0]!.question).toBe('Which way for step 9?');
+    // The regression sentence is computed from a record that still exists.
+    expect(report.change.code).not.toBe('not-measured');
+  });
+
+  it('the duplicate defence still sees the questions under the flood', () => {
+    // `recentQuestions` filters by kind AT THE STORE. Sliced post-hoc from a flat
+    // read, the newest twelve rows of a working day are twelve tool calls, and
+    // the defence would silently compare every new question against nothing.
+    const rows = flooded({ checkins: 10, hits: 10, autonomous: 300 });
+    const questions = recentQuestions(fakeStore(rows), 'a1');
+    expect(questions).toHaveLength(10);
+    expect(questions[0]).toBe('Which way for step 9?');
+    expect(flatRead(rows, 12).filter((r) => r.question)).toHaveLength(0);
+  });
+
+  it('a tripwire under the flood still blocks butterfly — the hard gate cannot be evicted', () => {
+    // The one axis in the meter that is a refusal rather than an average. If a
+    // safety row could be pushed out of the read by ordinary tool calls, the
+    // block would silently lift on exactly the busiest ledgers.
+    const rows = flooded({ checkins: 10, hits: 10, autonomous: 300, tripwire: true });
+    expect(flatRead(rows, 200).some((r) => r.kind === 'tripwire')).toBe(false);
+
+    const g = readGrowth(fakeStore(rows), 'a1');
+    expect(g.tripwires).toBe(1);
+    expect(g.blockedByTripwire).toBe(true);
+    expect(g.stage).toBe('pupa');
+    expect(isAddressable(fakeStore(rows), 'a1')).toBe(false);
+  });
+
+  it('the implicit pool still fills when reviewed rows sit at the real density', () => {
+    // THE SECOND HALF OF THE SAME BUG, and the one that decided the autonomous
+    // budget. `implicitPool` wants the newest IMPLICIT_WINDOW autonomous rows
+    // THAT REFLECTION HAS REVIEWED — and reviewed rows are a subset: on the
+    // ledger this was found in, 70 of 846 carried `reviewedAt`, so the 40th one
+    // back sat 525 rows from the end. They enter the BOUND, so a budget that
+    // cannot reach them costs a stage: at 400 that ledger read pupa 84% where
+    // the full one reads butterfly 100%.
+    //
+    // The real ledger's check-in record: 10 of 14, which is a PUPA on its own and
+    // a butterfly once the reviewed actions are counted. That is what makes this
+    // assertion load-bearing rather than decorative — the pool has to arrive for
+    // the stage to be right.
+    const rows = flooded({ checkins: 14, hits: 10, autonomous: 0 });
+    expect(readGrowth(fakeStore(rows), 'a1').stage).toBe('pupa');
+    // The reviewed rows are the OLD ones, which is not an unlucky arrangement but
+    // how reflection works: it sweeps IDLE sessions, so the newest actions — the
+    // ones from the conversation still going — are exactly the unreviewed ones.
+    // On the real ledger the newest reviewed row was already 146 rows back.
+    let at = 5_000;
+    for (let i = 0; i < IMPLICIT_WINDOW; i += 1) {
+      at += 1;
+      rows.push(row({ at, kind: 'autonomous', toolName: 'Write', reviewedAt: at + 1 }));
+    }
+    const buriedUnder = IMPLICIT_WINDOW * 11;
+    for (let i = 0; i < buriedUnder; i += 1) {
+      at += 1;
+      rows.push(row({ at, kind: 'autonomous', toolName: 'Write' }));
+    }
+    // The budget has to clear the whole stack, not just the pool.
+    expect(AUTONOMOUS_READ_LIMIT).toBeGreaterThanOrEqual(IMPLICIT_WINDOW + buriedUnder);
+
+    const report = growthReport(fakeStore(rows), 'a1');
+    expect(report.implicitTrials).toBe(IMPLICIT_WINDOW);
+    expect(report.implicitHits).toBe(IMPLICIT_WINDOW);
+    // …and the pool is what carries the stage over the line, which is why this
+    // is asserted on the STAGE and not only on the counts.
+    expect(report.stage).toBe('butterfly');
+  });
+});
+
+/**
+ * SOURCE ASSERTIONS. jsdom cannot see a SQL limit and a passing meter cannot
+ * tell you which query produced it, so what is pinned here is the SHAPE of the
+ * read: three budgets, one per kind, and no flat `limit` left anywhere in the
+ * file. A future edit that "simplifies" this back into one read fails here.
+ */
+describe('growthRead — the read shape is pinned in source', () => {
+  const source = readFileSync(join(__dirname, 'growthRead.ts'), 'utf8');
+
+  it('every ledger read names a kind', () => {
+    const calls = source.match(/listEvalEvents\(agentId, \{[^}]*\}/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call).toContain('kind');
+  });
+
+  it('sizes all three kinds, and the map is keyed by EvalEventKind so a new one must be sized', () => {
+    expect(source).toContain('Readonly<Record<EvalEventKind, number>>');
+    expect(LEDGER_READ_LIMITS).toEqual({
+      checkin: CHECKIN_READ_LIMIT,
+      autonomous: AUTONOMOUS_READ_LIMIT,
+      tripwire: TRIPWIRE_READ_LIMIT,
+    });
+  });
+
+  it('sizes each budget against the window that consumes it', () => {
+    // The check-in budget carries every check-in-consuming window (the stage's
+    // 20, the 12-question lookback, the drill window, the 8 listed decisions).
+    expect(CHECKIN_READ_LIMIT).toBeGreaterThanOrEqual(200);
+    // The autonomous budget reaches a full implicit pool at the review density a
+    // real ledger showed (about one reviewed row in twelve), with headroom.
+    expect(AUTONOMOUS_READ_LIMIT).toBeGreaterThanOrEqual(IMPLICIT_WINDOW * 24);
+    // Tripwires are rare; the separate read, not the size, is what protects them.
+    expect(TRIPWIRE_READ_LIMIT).toBeGreaterThan(0);
+  });
+
+  it('merges chronologically before the meter sees the rows', () => {
+    expect(source).toContain('sortLedger');
+    expect(source).toContain('a.at - b.at');
   });
 });

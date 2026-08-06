@@ -69,7 +69,7 @@ type FakeOptions = {
 
 function fakeStore(options: FakeOptions = {}) {
   const reads: Array<{ scope: MemoryScope; scopeKey: string }> = [];
-  const ledgerCalls: Array<{ agentId: string; opts?: { limit?: number } }> = [];
+  const ledgerCalls: Array<{ agentId: string; opts?: { kind?: string; limit?: number } }> = [];
   const store: LearningStore = {
     getScopedMemory(scope, scopeKey) {
       reads.push({ scope, scopeKey });
@@ -85,10 +85,13 @@ function fakeStore(options: FakeOptions = {}) {
       }
       return out;
     },
+    // Honours `kind` like the real store: the breadth count reads one kind at a
+    // time so a flood of autonomous rows cannot evict the check-ins' task types.
     listEvalEvents(agentId, opts) {
       ledgerCalls.push({ agentId, ...(opts ? { opts } : {}) });
       if (options.breakLedger) throw new Error('database is locked');
-      return options.ledger ?? [];
+      const rows = options.ledger ?? [];
+      return opts?.kind ? rows.filter((r) => r.kind === opts.kind) : rows;
     },
     getLatestReflectionAt() {
       if (options.breakReflection) throw new Error('database is locked');
@@ -177,7 +180,7 @@ describe('learningRead — the counts', () => {
     expect(learningReport(store, 'a1').corroborated2Plus).toBe(0);
   });
 
-  it('counts DISTINCT task types from a bounded ledger read', () => {
+  it('counts DISTINCT task types from a bounded PER-KIND ledger read', () => {
     const { store, ledgerCalls } = fakeStore({
       ledger: [
         ledgerRow('sql-review'),
@@ -188,7 +191,24 @@ describe('learningRead — the counts', () => {
     });
     const report = learningReport(store, 'a1');
     expect(report.distinctTaskTypes).toBe(2);
-    expect(ledgerCalls).toEqual([{ agentId: 'a1', opts: { limit: LEARNING_LEDGER_LIMIT } }]);
+    // One bounded read per kind. A single flat limit would count only the kinds
+    // of work naby did ALONE once autonomous rows outnumber check-ins, so "it has
+    // seen N kinds of work" would shrink on a busy week.
+    expect(ledgerCalls).toEqual([
+      { agentId: 'a1', opts: { kind: 'checkin', limit: LEARNING_LEDGER_LIMIT } },
+      { agentId: 'a1', opts: { kind: 'autonomous', limit: LEARNING_LEDGER_LIMIT } },
+      { agentId: 'a1', opts: { kind: 'tripwire', limit: LEARNING_LEDGER_LIMIT } },
+    ]);
+  });
+
+  it('a task type that only ever appeared on a check-in survives a flood of tool calls', () => {
+    const ledger = [ledgerRow('sql-review')];
+    for (let i = 0; i < 600; i += 1) {
+      ledger.push({ ...ledgerRow('code-refactor'), kind: 'autonomous' } as EvalEvent);
+    }
+    // Adversarial: the newest LEARNING_LEDGER_LIMIT rows are all autonomous.
+    expect(ledger.slice(-LEARNING_LEDGER_LIMIT).some((r) => r.kind === 'checkin')).toBe(false);
+    expect(learningReport(fakeStore({ ledger }).store, 'a1').distinctTaskTypes).toBe(2);
   });
 
   it('reports the last reflection, and omits it before the first one', () => {

@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { exportAgent, gatherExportMemories, EXPORT_LEDGER_LIMIT } from './agentExport';
+import {
+  exportAgent,
+  gatherExportMemories,
+  EXPORT_LEDGER_LIMIT,
+  EXPORT_LEDGER_LIMITS,
+} from './agentExport';
 import { parseSubagentArtifact } from './harnessImporter';
 import {
   DEFAULT_USER_ID,
   type Agent,
   type EvalEvent,
+  type EvalEventKind,
   type MemoryItem,
   type MemoryScope,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -64,9 +70,13 @@ function fakeStore(rows: MemoryItem[], ledger: EvalEvent[] = []) {
       scopeCalls.push({ scope, scopeKey });
       return rows.filter((r) => r.scope === scope && r.scopeKey === scopeKey);
     },
-    listEvalEvents(agentId: string, opts?: { limit?: number }) {
+    // Honours `kind` the way the real store does — the export reads one kind at
+    // a time now, and a fake that ignored the filter would hand every read the
+    // whole ledger and hide exactly the bug the per-kind read exists to prevent.
+    listEvalEvents(agentId: string, opts?: { kind?: EvalEventKind; limit?: number }) {
       ledgerCalls.push({ agentId, opts });
-      return ledger;
+      const rows = opts?.kind ? ledger.filter((r) => r.kind === opts.kind) : ledger;
+      return opts?.limit != null ? rows.slice(-opts.limit) : rows;
     },
   };
 }
@@ -190,13 +200,41 @@ describe('agentExport — which rows are gathered', () => {
     expect(parseSubagentArtifact('x', out.markdown)).not.toBeNull();
   });
 
-  it('bounds the ledger query, and archives more than the meter reads', () => {
+  it('bounds the ledger query PER KIND, and archives more than the meter reads', () => {
     const store = fakeStore([]);
     exportAgent(store, agent(), { now: NOW });
-    expect(store.ledgerCalls[0]).toEqual({ agentId: 'a1', opts: { limit: EXPORT_LEDGER_LIMIT } });
+    expect(store.ledgerCalls).toEqual([
+      { agentId: 'a1', opts: { kind: 'checkin', limit: EXPORT_LEDGER_LIMITS.checkin } },
+      { agentId: 'a1', opts: { kind: 'autonomous', limit: EXPORT_LEDGER_LIMITS.autonomous } },
+      { agentId: 'a1', opts: { kind: 'tripwire', limit: EXPORT_LEDGER_LIMITS.tripwire } },
+    ]);
     // An export is an archive: discarding history the importing machine could
     // have used to recompute a stage would defeat the point of the sidecar.
     expect(EXPORT_LEDGER_LIMIT).toBeGreaterThan(200);
+  });
+
+  it('a flood of autonomous rows cannot bury the check-ins the stage is stamped from', () => {
+    // The same regression growthRead has (see its "egg regression" block), with a
+    // worse consequence: `buildAgentExport` writes the computed stage INTO the
+    // .md, so a flat read would ship "reached the egg stage" for a butterfly — a
+    // false record, in a file, to another machine.
+    const ledger: EvalEvent[] = [];
+    let at = 1_000;
+    for (let i = 0; i < 10; i += 1) {
+      at += 1;
+      ledger.push({ id: `c${i}`, kind: 'checkin', at, agentId: 'a1', sessionId: 's1', hit: true } as EvalEvent);
+    }
+    for (let i = 0; i < EXPORT_LEDGER_LIMIT + 500; i += 1) {
+      at += 1;
+      ledger.push({ id: `n${i}`, kind: 'autonomous', at, agentId: 'a1', sessionId: 's1' } as EvalEvent);
+    }
+    // Adversarial by construction: the newest EXPORT_LEDGER_LIMIT rows are all
+    // autonomous, so one flat read of that size would carry no check-in at all.
+    expect(ledger.slice(-EXPORT_LEDGER_LIMIT).some((r) => r.kind === 'checkin')).toBe(false);
+
+    const out = exportAgent(fakeStore([], ledger), agent(), { now: NOW });
+    expect(out.report.stage).toBe('butterfly');
+    expect(out.markdown).toContain('reached the "butterfly" stage');
   });
 
   it('the filenames are derived from the agent name, not from its id', () => {

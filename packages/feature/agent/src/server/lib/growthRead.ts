@@ -8,7 +8,7 @@
 // (which needs the full breakdown plus a reason for a regression). Both must
 // agree — a palette that says "butterfly" beside a panel that says "pupa" would
 // destroy the meter's credibility faster than a wrong number would. So the read
-// limit, the best-effort behaviour and the shape all live here.
+// budgets, the best-effort behaviour and the shape all live here.
 //
 // EVERY READ IS BEST-EFFORT. A store hiccup or a ledger that does not exist yet
 // must never empty the palette or blank the panel: it reads as an egg, which is
@@ -19,6 +19,7 @@ import {
   canBeAddressed,
   diagnoseChange,
   GROWTH_WINDOW,
+  IMPLICIT_WINDOW,
   type CheckinRecord,
   type GrowthChange,
   type GrowthStage,
@@ -26,14 +27,96 @@ import {
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type { EvalEvent, EvalEventKind } from '../../../../../../../dist/naby-runtime.mjs';
 
-/** How much ledger history a reading pulls per agent. Generous enough for the
- *  change detector (which needs rows on both sides of a candidate split) while
- *  still bounding the query — the meter itself scores only the recent window.
+// ---------------------------------------------------------------------------
+// HOW MUCH LEDGER A READING PULLS — and why it is PER KIND, not one flat limit
+// ---------------------------------------------------------------------------
+//
+// THE BUG THIS SHAPE EXISTS TO PREVENT. The read used to be a single
+// `{ limit: GROWTH_WINDOW * 10 }` over every kind at once. That is sound only
+// while the kinds arrive at comparable rates, and they do not: an `autonomous`
+// row is written per consequential tool call, a `checkin` row only when naby
+// stops and asks. On a real ledger the ratio ran past 40:1 (846 autonomous
+// against 20 check-ins), so the newest 200 rows held TWO check-ins — below
+// `GROWTH_MIN_SAMPLE` — and the meter reported "egg · not measured yet" for an
+// agent whose full ledger computes a butterfly. The user watched their agent
+// regress for no reason but their own heavy use, which is the single most
+// destructive thing a trust meter can do: the number moved, nothing they did
+// explains it, and after that nobody believes the gauge again.
+//
+// The fix is not a bigger number. Any flat limit has the same failure mode one
+// busy week later. Each kind is read on its OWN budget, sized against the window
+// the meter actually consumes it in, and the three reads are merged by time.
+
+/** CHECK-INS — the labelled predictions the stage is computed from.
  *
- *  It also has to be comfortably wider than the IMPLICIT window (P3-M8d): 200
- *  rows of every kind against an implicit pool of 40 autonomous ones, so the
- *  weak-label half is never truncated by this limit before the meter windows it. */
-export const LEDGER_READ_LIMIT = GROWTH_WINDOW * 10;
+ *  Every check-in-consuming window fits inside this with room to spare:
+ *  `GROWTH_WINDOW` (20) for the stage itself, `RECENT_QUESTION_LOOKBACK` (12)
+ *  for the degenerate defence, `DRILL_WINDOW` (20) for practice, and the eight
+ *  rows the panel lists. It also feeds ADWIN, which wants rows on BOTH sides of
+ *  a candidate split, and the lifetime totals — both of which simply get more
+ *  honest the more history they see, so this is set at 10× the scored window
+ *  rather than at the window. */
+export const CHECKIN_READ_LIMIT = GROWTH_WINDOW * 10;
+
+/** AUTONOMOUS ACTIONS — the coverage axis, the correction count, and the weak
+ *  implicit labels.
+ *
+ *  THIS ONE IS NOT MERELY INFORMATIONAL, which is what makes its size worth
+ *  measuring rather than guessing. `implicitPool` takes the newest
+ *  `IMPLICIT_WINDOW` (40) autonomous rows THAT REFLECTION HAS REVIEWED, and
+ *  those enter the same Wilson bound the check-ins do at `IMPLICIT_WEIGHT`. Come
+ *  up short and the bound falls, so a budget that cannot reach 40 reviewed rows
+ *  costs a STAGE, not just a percentage.
+ *
+ *  Sized against what a real ledger looks like, because two things make the
+ *  reviewed rows sit much deeper than 40:
+ *
+ *    - REVIEWED IS A SUBSET. Reflection only stamps sessions its sweep has
+ *      reached. On the ledger this bug was found in, 70 of 846 autonomous rows
+ *      carried `reviewedAt` — about one in twelve — so the 40th-newest reviewed
+ *      row sat 525 rows from the end. A 400-row budget reached 12 of them and
+ *      reported pupa 84% where the full ledger reads butterfly 100%: the same
+ *      class of failure as the flat read, one stage less severe.
+ *    - THE SPAN IS WIDER STILL. `coverage`, `correctedAfter` and the
+ *      ask-quality counts read EVERY autonomous row since the recent check-in
+ *      window began — 576 rows on that same ledger.
+ *
+ *  50× the implicit window (2000) covers both with ~4× headroom at the observed
+ *  review density, and costs nothing measurable: the whole three-read reading
+ *  against that ledger takes ~1.5ms, unchanged from 400, because the budget is a
+ *  ceiling and the rows are not there to be read.
+ *
+ *  IT IS STILL A CEILING, and the honest note is that a ceiling is the wrong
+ *  shape for this axis: what the meter actually wants is every autonomous row
+ *  SINCE the check-in window began, which is a time bound. `listEvalEvents` has
+ *  no `since` filter today, and inventing one is a runtime/store change rather
+ *  than a fix to a display read. Until it exists, this degrades gracefully — a
+ *  truncated pool understates the bound, never inflates it. */
+export const AUTONOMOUS_READ_LIMIT = IMPLICIT_WINDOW * 50;
+
+/** TRIPWIRES — safety refusals. Rare, and the one HARD gate in the meter: a
+ *  single one inside the window blocks butterfly outright (§4.8), so it must
+ *  never be the row an autonomous flood evicts. Its own read makes that
+ *  structural rather than probabilistic.
+ *
+ *  Small on purpose. `computeGrowth` counts tripwires in `spanRows` — the rows
+ *  since the recent check-in window began — and all the gate asks is whether
+ *  that count is non-zero. Fifty newest is far more than a span ever holds; and
+ *  in the pathological case where it is not, the read still returns the NEWEST
+ *  fifty, so the count stays non-zero and the block still fires. The gate cannot
+ *  be lost by truncation in either direction. */
+export const TRIPWIRE_READ_LIMIT = 50;
+
+/** The budget per kind, keyed by `EvalEventKind` so the compiler — not a future
+ *  reviewer — is what forces a NEW kind to be sized before it can be stored.
+ *  A kind missing from this map is a type error, which is the point: the flat
+ *  read failed silently, and a silent failure in the trust meter is worse than
+ *  a broken build. */
+export const LEDGER_READ_LIMITS: Readonly<Record<EvalEventKind, number>> = {
+  checkin: CHECKIN_READ_LIMIT,
+  autonomous: AUTONOMOUS_READ_LIMIT,
+  tripwire: TRIPWIRE_READ_LIMIT,
+};
 
 /** How many past questions the duplicate check compares against. Small on
  *  purpose: "the same thing was JUST asked" is the gaming move worth catching,
@@ -49,13 +132,55 @@ export interface GrowthLedgerStore {
   ): EvalEvent[];
 }
 
-/** Read an agent's recent ledger, oldest-first. [] on any failure. */
+/**
+ * Read an agent's recent ledger, OLDEST FIRST — one bounded read per kind,
+ * merged by time. [] on total failure.
+ *
+ * THREE READS, NOT ONE, for the reason spelled out at `LEDGER_READ_LIMITS`: a
+ * single limit lets the highest-frequency kind evict every other kind, and the
+ * kind that gets evicted is the one the stage is computed from.
+ *
+ * MERGED ASCENDING BY `at`, ties broken by id — exactly the order the store
+ * returns a single read in (`ORDER BY at DESC, id DESC` reversed), so callers
+ * cannot tell a merged read from a flat one by its ordering. It matters:
+ * `computeGrowth` re-sorts defensively, but `growthReport` slices the LAST N
+ * rows for the decision list and `diagnoseChange` splits the sequence in half,
+ * and both of those are chronology, not sets.
+ *
+ * BEST-EFFORT PER KIND. One unreadable kind contributes nothing instead of
+ * blanking the other two — the same fail-direction the whole file has, applied
+ * at the granularity the reads now have.
+ */
 export function readLedger(store: GrowthLedgerStore, agentId: string): EvalEvent[] {
-  try {
-    return store.listEvalEvents(agentId, { limit: LEDGER_READ_LIMIT });
-  } catch {
-    return [];
+  return readLedgerByKind(store, agentId, LEDGER_READ_LIMITS);
+}
+
+/**
+ * The per-kind read itself, with the budget passed in — so the OTHER bounded
+ * ledger readers (the export's archive, the learning panel's breadth count) get
+ * the same protection from the same code instead of each re-deriving it and each
+ * getting it wrong on a different day. It is a READ, not a reading: no stage, no
+ * percentage, nothing that makes this the second place a ledger becomes trust.
+ */
+export function readLedgerByKind(
+  store: GrowthLedgerStore,
+  agentId: string,
+  limits: Readonly<Record<EvalEventKind, number>>,
+): EvalEvent[] {
+  const rows: EvalEvent[] = [];
+  for (const [kind, limit] of Object.entries(limits) as Array<[EvalEventKind, number]>) {
+    try {
+      rows.push(...store.listEvalEvents(agentId, { kind, limit }));
+    } catch {
+      /* one unreadable kind must not cost the others */
+    }
   }
+  return sortLedger(rows);
+}
+
+/** Chronological order, ties broken by id — the store's own ordering. */
+export function sortLedger(rows: EvalEvent[]): EvalEvent[] {
+  return rows.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** The cheap reading: stage + percent, for the palette. */
@@ -96,7 +221,14 @@ export function isAddressable(store: GrowthLedgerStore, agentId: string): boolea
  *  asked — in a drill or in real work — comes back `excludedFromScoring` and
  *  never reaches the drill pool. It cuts both ways, which is right: a real
  *  check-in that merely re-asks yesterday's practice question is not new evidence
- *  either. */
+ *  either.
+ *
+ *  THE KIND FILTER IS THE STORE'S, and must stay there. Reading rows of every
+ *  kind and keeping the check-ins afterwards would return NOTHING on a busy
+ *  ledger — the newest twelve rows of a working day are twelve autonomous tool
+ *  calls — and a duplicate defence that silently compares against an empty
+ *  history is a duplicate defence that is off. Same failure the flat
+ *  `readLedger` had; this one never had it, and this note is why. */
 export function recentQuestions(store: GrowthLedgerStore, agentId: string): string[] {
   let rows: EvalEvent[];
   try {

@@ -28,16 +28,40 @@ import {
   type Agent,
   type AgentExportResult,
   type EvalEvent,
+  type EvalEventKind,
   type MemoryItem,
   type MemoryScope,
   type MemoryStatus,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { readLedgerByKind } from './growthRead';
 
-/** How much ledger history an export carries. Larger than the meter's read
- *  (`growthRead.LEDGER_READ_LIMIT`) because an export is an archive, not a
+/** How much ledger history an export carries PER KIND. Larger than the meter's
+ *  read (`growthRead.CHECKIN_READ_LIMIT`) because an export is an archive, not a
  *  reading: the point is that the importing machine can recompute a stage, and
  *  throwing away history it could have used would defeat that. */
 export const EXPORT_LEDGER_LIMIT = GROWTH_WINDOW * 50;
+
+/** The archive's budget, per kind — and it is per kind for the same reason the
+ *  meter's is (see `growthRead.LEDGER_READ_LIMITS`), with one extra consequence
+ *  that is specific to here: `buildAgentExport` runs `computeGrowth` over
+ *  whatever this returns and STAMPS THE RESULTING STAGE into the .md. A flat
+ *  limit on a ledger writing autonomous rows 40× faster than check-ins would
+ *  therefore export "reached the egg stage" for an agent that is a butterfly —
+ *  a false record, carried in a file, to another machine.
+ *
+ *  Tripwires get a smaller budget only because they are rare; 200 is already
+ *  orders of magnitude past any real count, and the separate read is what
+ *  guarantees a safety refusal cannot be evicted by the flood at all. */
+export const EXPORT_LEDGER_LIMITS: Readonly<Record<EvalEventKind, number>> = {
+  checkin: EXPORT_LEDGER_LIMIT,
+  // Twice the check-in budget, for the reason `growthRead.AUTONOMOUS_READ_LIMIT`
+  // measures out: the reviewed rows that feed the implicit half of the bound sit
+  // roughly one in twelve, so an archive that carried only 1000 of them would
+  // hand the importing machine a ledger that recomputes a LOWER stage than the
+  // exporting one showed.
+  autonomous: EXPORT_LEDGER_LIMIT * 2,
+  tripwire: 200,
+};
 
 /** The narrow store slice an export needs. */
 export interface AgentExportStore {
@@ -46,7 +70,7 @@ export interface AgentExportStore {
     scopeKey: string,
     opts?: { status?: MemoryStatus },
   ): MemoryItem[];
-  listEvalEvents(agentId: string, opts?: { limit?: number }): EvalEvent[];
+  listEvalEvents(agentId: string, opts?: { kind?: EvalEventKind; limit?: number }): EvalEvent[];
 }
 
 /** Read every row an export may consider, best-effort per scope: an unreadable
@@ -78,12 +102,10 @@ export function exportAgent(
   agent: Agent,
   opts: { cwd?: string; now: number },
 ): AgentExportResult {
-  let ledger: EvalEvent[] = [];
-  try {
-    ledger = store.listEvalEvents(agent.id, { limit: EXPORT_LEDGER_LIMIT });
-  } catch {
-    /* no ledger just means the importing machine starts from an egg */
-  }
+  // Per kind, merged chronologically, best-effort per read — `readLedgerByKind`
+  // already swallows a failing kind, so an unreadable ledger arrives here as []
+  // and the importing machine simply starts from an egg.
+  const ledger: EvalEvent[] = readLedgerByKind(store, agent.id, EXPORT_LEDGER_LIMITS);
   return buildAgentExport({
     agent,
     memories: gatherExportMemories(store, opts),
