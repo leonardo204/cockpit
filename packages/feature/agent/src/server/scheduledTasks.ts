@@ -5,6 +5,7 @@ import { updateGlobalState } from './state/globalState';
 import { isRunActive, getRunSnapshot, getRunSessionId, requestStop } from './sessionRunHub';
 import { dispatchChat } from './engines/orchestrator';
 import { getStore, nabySpec } from './engines/naby';
+import { logActivity } from '../../../../../../dist/naby-runtime.mjs';
 import { Effect } from 'effect';
 import { AgentError, type AgentProvider } from '@cockpit/effect-core';
 import { AppRuntime } from '@cockpit/effect-runtime/server';
@@ -146,7 +147,22 @@ const dispatchEngineMessageEff = (
       // loopback, so scheduled tasks need no port and can't mis-target a sibling dev/prod
       // instance. The run registers in sessionRunHub and streams to viewers via
       // /ws/session-stream exactly like an interactive request.
+      // A SCHEDULED TURN IS THE LEAST SUPERVISED ONE IN THE PRODUCT — nobody is
+      // watching it start, and its console output is gone with the process. The
+      // orchestrator writes run_started/run_completed for the turn itself; this
+      // says which TASK caused it, which the orchestrator cannot know.
+      logActivity('scheduled_task_run', {
+        taskId: task.id,
+        phase: 'dispatch',
+        sessionId: task.sessionId,
+        engine,
+        startFresh,
+        cwd: task.cwd,
+        prompt: task.message,
+        ...(task.model ? { model: task.model } : {}),
+      });
       const outcome = await dispatchChat(spec, {
+        source: 'scheduled',
         prompt: task.message,
         // Omit sessionId to start a brand-new session when the resume target is gone;
         // the engine generates a fresh id (captured below via getRunSessionId).
@@ -197,6 +213,13 @@ const dispatchEngineMessageEff = (
           task.sessionId = newSessionId;
         }
       }
+      logActivity('scheduled_task_run', {
+        taskId: task.id,
+        phase: 'finished',
+        sessionId: task.sessionId,
+        engine,
+        status: snap.status,
+      });
       return true as const;
     },
     // 'claude' is the provider label for error classification: naby's dev engine

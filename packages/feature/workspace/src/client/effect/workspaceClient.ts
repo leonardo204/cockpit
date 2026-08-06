@@ -53,6 +53,9 @@ export interface SettingsResponse {
   language?: string
   /** 'light' | 'dark' | 'system' — see shared-utils/bootTheme.ts. */
   theme?: string
+  /** The four font knobs — see shared-utils/fontSettings.ts. Typed loosely on
+   *  purpose: the file is hand-editable, so every reader normalizes. */
+  fonts?: unknown
   [key: string]: unknown
 }
 

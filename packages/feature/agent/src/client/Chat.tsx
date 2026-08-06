@@ -18,6 +18,8 @@ import { MessageList, MessageListHandle } from './MessageList';
 import { FILE_REF_MIME, insertFileRef, osFilePath, quotePath } from './fileRefBus';
 import { ToolApprovalPrompt } from './ToolApprovalPrompt';
 import { CheckinPrompt } from './CheckinPrompt';
+import { ContextLimitBanner } from './ContextLimitBanner';
+import { contextGauge } from './contextGauge';
 import { ChatInput } from './ChatInput';
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
@@ -280,6 +282,16 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     getModel,
   });
 
+  // A SEND RE-PINS THE TRANSCRIPT. Reading history is otherwise sacred — new
+  // content never moves a user who has scrolled up — but pressing send states
+  // the intent outright ("show me what happens next"), so <MessageList/> jumps
+  // to the bottom on every bump of this counter. A counter, not a callback, so
+  // two sends in a row both register. Bumped from every path that actually
+  // dispatches a turn: the input, the plan card's approve & run, and a message
+  // injected through ChatContext.
+  const [sendNonce, setSendNonce] = useState(0);
+  const bumpSend = useCallback(() => setSendNonce((n) => n + 1), []);
+
   // ! prefix: first line is command, subsequent lines are user notes, supports images
   const wrappedHandleSend = useCallback(async (content: string, images?: ImageInfo[]) => {
     const firstLine = content.split('\n')[0];
@@ -304,14 +316,18 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           setPlanMode(true);
           // Explicit override: setPlanMode(true) above won't be reflected in handleSend's
           // closure this tick (React state is async), so force plan mode for this send.
+          bumpSend();
           handleSend(rest, images, { permissionMode: 'plan' });
         }
+        // `/plan` and `/plan off` are consumed locally and dispatch NO turn, so
+        // they are not sends and must not move the viewport.
         return;
       }
     }
 
+    bumpSend();
     handleSend(content, images);
-  }, [handleSend, initialCwd, t, isClaudeEngine, setPlanMode]);
+  }, [handleSend, initialCwd, t, isClaudeEngine, setPlanMode, bumpSend]);
 
   // Plan-card "approve & run": the user's approval for the presented plan. Persistent off —
   // the Plan toggle visibly turns off and stays off for subsequent turns (mirrors native
@@ -319,12 +335,13 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // forces a non-plan execution THIS turn regardless of the async toggle update.
   const handleApprovePlan = useCallback(() => {
     setPlanMode(false);
+    bumpSend();
     handleSend(
       t('chat.approvePlanPrompt', { defaultValue: '已批准，按上述计划开始执行。' }),
       undefined,
       { permissionMode: null }
     );
-  }, [handleSend, setPlanMode, t]);
+  }, [handleSend, setPlanMode, t, bumpSend]);
 
   // History hook
   // #10: whether useLiveStream is actively rendering a live run for this tab. Declared
@@ -414,6 +431,35 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
 
   // Merge token usage: stream takes priority, fallback to history
   const tokenUsage = streamTokenUsage || historyTokenUsage;
+
+  // HOW FULL THE WINDOW IS (session-context-management §2.1). Derived from the same
+  // measurement the status bar shows, so the bar and the banner can never disagree
+  // about whether this conversation is nearly full. A reloaded session has no
+  // per-step reading until its next turn, and the gauge is absent then — which is
+  // the spec's rule (no number beats a wrong one), not an oversight.
+  const windowGauge = useMemo(
+    () => contextGauge(tokenUsage?.contextTokens, tokenUsage?.contextWindow),
+    [tokenUsage?.contextTokens, tokenUsage?.contextWindow],
+  );
+
+  // HOW THE CONVERSATION KNOWS IT HAS MOVED ON. One counter, bumped on the
+  // rising edge of "a turn is in flight for this session" — this tab sending
+  // (`isLoading`) or a turn arriving from anywhere else (`liveRunning`: a
+  // Telegram message, a scheduled task, the fast-growth kickoff).
+  //
+  // Its consumer is the check-in reveal banner, which used to sit above the
+  // input for the rest of the session unless the user found its ✕. The banner
+  // belongs to the exchange it was earned in, so it lives exactly that long and
+  // this is the signal that ends it. Deliberately not a timer: content must not
+  // vanish while a user might be mid-read, and progression — not a clock — is
+  // what makes the banner stale.
+  const running = isLoading || liveRunning;
+  const [runNonce, setRunNonce] = useState(0);
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    if (running && !prevRunningRef.current) setRunNonce((n) => n + 1);
+    prevRunningRef.current = running;
+  }, [running]);
 
   // Notify parent when sessionId changes
   useEffect(() => {
@@ -630,6 +676,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             // started) while this tab is not the originator.
             viewerRun={liveRunning && !isLoading}
             onStop={handleStop}
+            // The user just acted → the transcript goes to the bottom and
+            // follows the answer from there, wherever they had scrolled to.
+            sendNonce={sendNonce}
           />
         )}
         </div>
@@ -639,7 +688,16 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
 
         {/* Phase 2 (M2): a paused tool call awaiting the user's Allow/Deny. */}
         <ToolApprovalPrompt sessionId={sessionId ?? undefined} cwd={initialCwd} />
-        <CheckinPrompt sessionId={sessionId ?? undefined} />
+        {/* The reveal banner it leaves behind is tied to the turn it was earned
+            in: `runNonce` is what retires it when the conversation moves on. */}
+        <CheckinPrompt sessionId={sessionId ?? undefined} runNonce={runNonce} />
+        {/* At 85% of the window: one line offering the new tab (§2.1). An offer,
+            not a block — and dismissible for the rest of this session. */}
+        <ContextLimitBanner
+          atThreshold={windowGauge.show === true && windowGauge.atThreshold}
+          sessionId={sessionId ?? undefined}
+          cwd={initialCwd}
+        />
 
         {/* Input */}
         <ChatInput

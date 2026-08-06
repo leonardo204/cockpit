@@ -131,6 +131,8 @@ import { customTitleKey } from '../state/recentSessions';
 // The opening turn of a fast-growth session (§3.3b). It loads the engine lazily
 // inside itself, so importing it here costs this route nothing at request time.
 import { startFastGrowthKickoff } from '../lib/fastGrowthKickoff';
+import { continueSessionInNewTab } from '../lib/sessionHandoff';
+import { modelHandoffSummarizer } from '../lib/handoffSummary';
 
 /** How much of a client-supplied session title is kept. A name is a row in a
  *  list, not a description; anything past this is a paragraph in a sidebar. */
@@ -586,7 +588,17 @@ export type NabyAction =
   // no tool exposes them. That is the invariant the drill discount rests on
   // (checkin-contracts §4, invariant 9).
   | { action: 'session.fastGrowth.create'; cwd?: string; title?: string; kickoff?: string }
-  | { action: 'session.fastGrowth.set'; sessionId: string; fastGrowth: boolean };
+  | { action: 'session.fastGrowth.set'; sessionId: string; fastGrowth: boolean }
+  // -- session-context-management §2.2 — continue in a new tab ---------------
+  //
+  // The window filled up. This compresses the conversation into a handoff, mints
+  // a session carrying it, and answers with its id so the client can open a tab
+  // there (the same OpenProject path the fast-growth session uses).
+  //
+  // IT NEVER FAILS FOR WANT OF A SUMMARY. A machine with no engine configured
+  // gets a new session with no handoff — the empty new tab it would have had
+  // anyway — rather than a refusal to continue.
+  | { action: 'session.continueInNewTab'; sessionId: string; cwd?: string; title?: string };
 
 export type NabyActionResult =
   | {
@@ -670,6 +682,10 @@ export type NabyActionResult =
       /** `session.fastGrowth.create`: the session that was minted, so the client
        *  can open it (or tell the user where to find it). */
       sessionId?: string;
+      /** `session.continueInNewTab`: whether a handoff summary was actually stored
+       *  on the new session. False is a SUCCESS — the tab opens either way (§2.2);
+       *  it only says the continuation starts cold. */
+      handoff?: boolean;
       /** `session.fastGrowth.create`: the name the session was given, echoed back
        *  so the client renders what was actually stored rather than what it asked
        *  for (they differ when the request carried no title, or an over-long one). */
@@ -907,6 +923,43 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           : {}),
       });
       return { ok: true, sessionId: ref.sessionId, fastGrowth: true, title };
+    }
+
+    case 'session.continueInNewTab': {
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId is required' };
+      }
+      const outcome = await continueSessionInNewTab(
+        {
+          store,
+          summarize: modelHandoffSummarizer(),
+          // The name lands in BOTH places a name can live, exactly as the
+          // fast-growth session's does — `sessions.title` for the project browser
+          // and the custom-title setting for the Recent list and the tab bar.
+          setCustomTitle: (sessionId, title) => store.setSetting(customTitleKey(sessionId), title),
+        },
+        {
+          sessionId: body.sessionId,
+          ...(typeof body.cwd === 'string' && body.cwd ? { cwd: body.cwd } : {}),
+          // THE WORDS TRAVEL FROM THE CLIENT because this server has no locale —
+          // the same reason the fast-growth title does. An absent one falls back
+          // to an English "Continued — …".
+          ...(typeof body.title === 'string' && body.title.trim()
+            ? { title: body.title }
+            : {}),
+        },
+      );
+      if (!outcome.ok) return { ok: false, error: outcome.error };
+      console.log(
+        `[handoff] continued session ${body.sessionId} into ${outcome.sessionId}` +
+          (outcome.handoff ? ' with a handoff' : ` without one (${outcome.reason ?? 'unknown'})`),
+      );
+      return {
+        ok: true,
+        sessionId: outcome.sessionId,
+        title: outcome.title,
+        handoff: outcome.handoff,
+      };
     }
 
     case 'session.fastGrowth.set': {

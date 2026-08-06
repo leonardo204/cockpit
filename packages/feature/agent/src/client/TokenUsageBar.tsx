@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TokenUsage, RateLimitInfo } from './types';
+import { contextGauge, formatTokensShort, gaugeToneClass } from './contextGauge';
 
 // ============================================
 // Token Usage Display
@@ -19,6 +20,11 @@ interface TokenUsageBarProps {
 
 export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps) {
   const { t } = useTranslation();
+
+  // Pure derivation, unit-tested in contextGauge.ts — the branch rules ("hide when
+  // unmeasured", "no ratio without a window", the two tier boundaries) are the part
+  // that goes quietly wrong, so they do not live in JSX.
+  const gauge = contextGauge(tokenUsage.contextTokens, tokenUsage.contextWindow);
 
   // "Now" updates every 30s so the countdown stays fresh without calling Date.now()
   // during render (which would violate react-hooks/purity).
@@ -111,11 +117,44 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
           </span>
         )}
 
+        {/* THE WINDOW GAUGE (session-context-management §2.1). It answers the
+            question the row could not: how full is the conversation's window.
+            Hidden entirely when the last turn reported no per-step usage, and
+            shown as a bare token count when the model's window is unknown — a
+            percentage against a guessed denominator would look exactly as
+            authoritative as a real one. */}
+        {gauge.show && (
+          <span
+            className={`flex items-center gap-1 ${gaugeToneClass(gauge.tier)}`}
+            data-testid="context-window-gauge"
+            title={
+              gauge.window
+                ? `${gauge.tokens.toLocaleString()} / ${gauge.window.toLocaleString()}`
+                : gauge.tokens.toLocaleString()
+            }
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
+            </svg>
+            <span>
+              {t('chat.contextWindow', { defaultValue: 'window' })}{' '}
+              <strong className={gauge.tier === 'neutral' ? 'text-foreground' : undefined}>
+                {gauge.percent !== undefined
+                  ? `${gauge.percent}% (${formatTokensShort(gauge.tokens)}/${formatTokensShort(gauge.window!)})`
+                  : formatTokensShort(gauge.tokens)}
+              </strong>
+            </span>
+          </span>
+        )}
+
         <span className="flex items-center gap-1">
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
           </svg>
-          <span>{t('chat.context')}: <strong className="text-foreground">{(tokenUsage.inputTokens + tokenUsage.cacheReadInputTokens + tokenUsage.cacheCreationInputTokens).toLocaleString()}</strong></span>
+          {/* "turn input", not "context": this is what the LAST TURN consumed,
+              summed over its steps. It was labelled "context" and read as window
+              occupancy, which is how a 748k figure ended up on a 200k window. */}
+          <span>{t('chat.turnInput')}: <strong className="text-foreground">{(tokenUsage.inputTokens + tokenUsage.cacheReadInputTokens + tokenUsage.cacheCreationInputTokens).toLocaleString()}</strong></span>
         </span>
         <span className="flex items-center gap-1">
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

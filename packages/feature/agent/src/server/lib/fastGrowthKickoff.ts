@@ -188,6 +188,9 @@ export async function kickoffDispatch(): Promise<KickoffDispatch> {
   ]);
   return async ({ sessionId, prompt, cwd }) => {
     const outcome = await dispatchChat(nabySpec, {
+      // Descriptive only: the activity log stamps it so a drill's first turn is
+      // distinguishable from something the user typed.
+      source: 'kickoff',
       prompt,
       sessionId,
       ...(cwd ? { cwd } : {}),

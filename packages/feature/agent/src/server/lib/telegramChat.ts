@@ -25,6 +25,7 @@
 // update from any other chat is dropped before a single character of it is read
 // as a command, because a turn here is arbitrary work on the user's machine.
 
+import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import type { SessionRef, Store } from '../../../../../../../dist/naby-runtime.mjs';
 import { formatFinalReport, truncate } from './telegramEscalation';
 import type { TelegramConfig, TelegramUpdate } from './telegram';
@@ -363,6 +364,20 @@ export async function handleChatUpdate(
   const from = msg.chat?.id;
   if (from === undefined || String(from) !== String(cfg.chatId)) return { kind: 'ignored' };
 
+  // EVERY AUTHENTICATED INBOUND MESSAGE (naby-activity-log §3). Logged here,
+  // after the chat check and before any branch, so one line exists per message
+  // the bridge accepted — whether it becomes a command, a turn, or a notice.
+  logActivity('telegram_in', {
+    chatId: String(from),
+    messageId: msg.message_id,
+    ...(msg.reply_to_message?.message_id !== undefined
+      ? { replyTo: msg.reply_to_message.message_id }
+      : {}),
+    text: typeof msg.text === 'string' ? msg.text : '',
+    ...(msg.photo ? { hasPhoto: true } : {}),
+    ...(msg.document ? { hasDocument: true } : {}),
+  });
+
   const text = typeof msg.text === 'string' ? msg.text.trim() : '';
   if (!text) {
     // A photo or a file is a message the user expects an answer to; silence
@@ -632,6 +647,9 @@ export async function chatRuntimeDeps(): Promise<Pick<ChatDeps, 'runTurn' | 'isB
     isBusy: (sessionId: string) => hub.isRunActive(sessionId),
     runTurn: async ({ sessionId, cwd, text }) => {
       const outcome = await dispatchChat(nabySpec, {
+        // Descriptive only — it is what the activity log stamps on the turn so a
+        // line in the file says the phone asked, not the app.
+        source: 'telegram',
         // Stored VERBATIM. The transcript is the record of what the user said,
         // and a "[telegram]" prefix baked into the prompt would be a change to
         // the message itself — the origin belongs in the log line above, not in

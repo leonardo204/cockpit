@@ -97,6 +97,49 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     void setNoLearn(tab.sessionId, !isNoLearn(tab.sessionId));
   }, [tabs, isNoLearn, setNoLearn]);
 
+  // ── Continue this conversation in a new tab (session-context-management §2.2)
+  //
+  // The same action the threshold banner offers, reached from the tab it is about.
+  // The handoff summary happens SERVER-SIDE and can take a few seconds, which is
+  // why the menu item does not wait for it visibly — the new tab appears when the
+  // reply lands (or immediately, when there is no handoff to write).
+  //
+  // The words travel from here, like every other name this client sends: the server
+  // has no locale.
+  const handleContinueInNewTab = useCallback(async (tabId: string) => {
+    const tab = tabs.find((t) => t.id === tabId);
+    // Per SESSION, like pinning and the temporary flag: a blank tab has no
+    // conversation to hand off. The menu item is disabled in that state, and this
+    // is the matching guard.
+    if (!tab?.sessionId) return;
+    const cwd = tab.cwd || initialCwd || '';
+    try {
+      const res = await fetch('/api/naby', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'session.continueInNewTab',
+          sessionId: tab.sessionId,
+          ...(cwd ? { cwd } : {}),
+          title: t('tabBar.continuedTitle', {
+            title: tab.title || new Date().toLocaleDateString(),
+            defaultValue: 'Continued — {{title}}',
+          }),
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { ok?: boolean; sessionId?: string }
+        | null;
+      if (!res.ok || !json?.ok || !json.sessionId) return;
+      // The existing "open this project at this session" path — the one the
+      // fast-growth button and the session-list rows already publish.
+      if (cwd) publishTopic(Topics.OpenProject, { cwd, sessionId: json.sessionId });
+    } catch {
+      // A failed continue leaves the user exactly where they were, which is the
+      // conversation they can still use. Nothing to undo.
+    }
+  }, [tabs, initialCwd, t]);
+
   const handleTogglePin = useCallback((tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
     // A tab with no session has nothing to pin yet: pinning is per SESSION, and
@@ -420,6 +463,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                   onTogglePin={handleTogglePin}
                   onRename={setRenamingTabId}
                   onToggleNoLearn={handleToggleNoLearn}
+                  onContinueInNewTab={handleContinueInNewTab}
                 />
               )}
               <div className="flex-1 overflow-hidden relative">

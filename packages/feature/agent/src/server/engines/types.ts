@@ -20,6 +20,13 @@ export interface DispatchParams {
   model?: string;
   // claude-only (other runners ignore)
   permissionMode?: string;
+  /**
+   * WHAT KICKED THIS TURN OFF — 'chat' (the HTTP route, the default), 'telegram',
+   * 'scheduled', 'kickoff'. PURELY DESCRIPTIVE: nothing branches on it, it is
+   * stamped on the activity log so a line in the file says who asked. Absent
+   * reads as 'chat', which is what an unmarked caller is.
+   */
+  source?: string;
 }
 
 /** Dispatch result. The run is detached (fire-and-forget); on success the caller gets the

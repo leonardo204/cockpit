@@ -13,6 +13,7 @@ import { snapshotOnRunStart, snapshotOnRunEvent } from '../snapshot/hook';
 import { resolveCommandPrompt } from '../lib/slashCommands';
 import { createTranscriptRecorder } from '../state/transcriptRecorder';
 import { getStore } from './naby';
+import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import { randomUUID } from 'crypto';
 import type { DispatchParams, DispatchOutcome, RunCtx, RunEvent, EngineSpec } from './types';
 
@@ -106,6 +107,38 @@ export async function dispatchChat(
     isClosed = true;
     abort.abort();
   });
+
+  // -- THE ACTIVITY LOG: the OUTER lifecycle (naby-activity-log §3) ----------
+  //
+  // WHY HERE. This function is the one door every turn comes through, on every
+  // engine and from every caller — the HTTP route, the Telegram bridge, the
+  // scheduler, the fast-growth kickoff. The runtime logs each MODEL turn from
+  // inside `runTurn`, which is the right level for "what did the model do" and
+  // the wrong one for "what did the user ask for": an autonomous run is many
+  // model turns and one request. This pair brackets the request.
+  //
+  // Non-naby engines (claude / codex / kimi / ollama) never reach `runTurn`, so
+  // for them this is the ONLY record — which is exactly why it lives in the
+  // orchestrator rather than in the naby adapter.
+  const runStartedAt = Date.now();
+  const source = typeof body.source === 'string' ? body.source : 'chat';
+  logActivity('run_started', {
+    runId,
+    runKey: currentKey,
+    ...(sessionId ? { sessionId } : {}),
+    engine: spec.name,
+    source,
+    ...(cwd ? { cwd } : {}),
+    ...(promptText ? { prompt: promptText } : {}),
+    imageCount: images?.length ?? 0,
+  });
+  // What the run reported on its way out, gathered from the event stream because
+  // that is the only channel a runner has. `num_turns` and the autonomy markers
+  // are already emitted for the client; reading them here costs nothing and
+  // spares the engine interface a reporting channel it would otherwise need.
+  let emittedEvents = 0;
+  let autonomySteps = 0;
+  let runResult: { isError?: boolean; numTurns?: number } | undefined;
   if (cwd && sessionId) {
     updateGlobalState(cwd, sessionId, 'loading', undefined, promptText).catch(() => {});
   }
@@ -136,6 +169,16 @@ export async function dispatchChat(
     signal: abort.signal,
     emit(event: RunEvent) {
       if (isClosed) return;
+      emittedEvents += 1;
+      if (event.type === 'result') {
+        runResult = {
+          isError: event.is_error === true,
+          ...(typeof event.num_turns === 'number' ? { numTurns: event.num_turns } : {}),
+        };
+      } else if (event.type === 'system' && event.harness_subtype === 'autonomy') {
+        // One marker per completed autonomy step (naby's own loop emits it).
+        autonomySteps += 1;
+      }
       appendRun(currentKey, event);
       // Tool-call snapshots: observe every engine's tool_use/tool_result here —
       // the single choke point all providers flow through. Fire-and-forget.
@@ -161,6 +204,29 @@ export async function dispatchChat(
     },
   };
 
+  /** The closing record, written on every teardown path exactly once. */
+  const logRunEnd = (
+    kind: 'run_completed' | 'run_failed',
+    extra: Record<string, unknown> = {},
+  ): void => {
+    logActivity(kind, {
+      runId,
+      runKey: currentKey,
+      ...(actualSessionId ? { sessionId: actualSessionId } : {}),
+      engine: spec.name,
+      source,
+      durationMs: Date.now() - runStartedAt,
+      events: emittedEvents,
+      // Steps, when the run was autonomous. A one-step turn emits no marker, so
+      // the honest floor is 1 — and the per-step detail is in the runtime's own
+      // `turn_started` records, which carry the same runId.
+      steps: autonomySteps > 0 ? autonomySteps : 1,
+      ...(runResult?.numTurns !== undefined ? { numTurns: runResult.numTurns } : {}),
+      ...(runResult?.isError !== undefined ? { resultIsError: runResult.isError } : {}),
+      ...extra,
+    });
+  };
+
   void (async () => {
     try {
       await spec.runner.run(ctx);
@@ -172,6 +238,7 @@ export async function dispatchChat(
         // A stopped turn still happened: the user asked something and got part
         // of an answer. Record it rather than losing it for having ended early.
         recorder?.flush(actualSessionId);
+        logRunEnd('run_completed', { aborted: true });
         return;
       }
       console.error(`[engine:${spec.name}] run error:`, error);
@@ -182,6 +249,9 @@ export async function dispatchChat(
       markRunIdle(currentKey, 'error');
       isClosed = true;
       recorder?.flush(actualSessionId);
+      logRunEnd('run_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       // Best-effort teardown of global state even on failure.
       if (cwd && actualSessionId) {
         const title = await getSessionTitle(cwd, actualSessionId).catch(() => undefined);
@@ -202,6 +272,7 @@ export async function dispatchChat(
     }
     isClosed = true;
     markRunIdle(currentKey, 'idle');
+    logRunEnd('run_completed');
   })();
 
   return { ok: true, runKey: currentKey, sessionId: actualSessionId ?? null };

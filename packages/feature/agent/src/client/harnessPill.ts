@@ -28,6 +28,16 @@ const ROUTING_GATE = 'routing-gate';
 const NOT_BUTTERFLY = 'not-butterfly:';
 const STAGE_LIMITED = 'stage-limited:';
 
+/** The AI-SDK engine's rolling compaction (session-context-management §2.3).
+ *
+ *  TWO codes, because the two outcomes are not the same news and must not read as
+ *  if they were: `folded:<n>` means the older turns are still there in compressed
+ *  form, `truncated:<n>` means they are gone and no summary could be written. The
+ *  second is the one a user needs to know about, so it says so. */
+const COMPACTION = 'context-compaction';
+const FOLDED = 'folded:';
+const TRUNCATED = 'truncated:';
+
 /** Render one harness pill. Returns the label and the detail as the transcript
  *  should show them; `detail` undefined means the pill is label-only.
  *
@@ -38,6 +48,27 @@ export function renderHarnessPill(
   detail: string | undefined,
 ): { label: string; detail?: string } {
   const label = subtype || 'harness event';
+
+  if (label === COMPACTION && (detail?.startsWith(FOLDED) || detail?.startsWith(TRUNCATED))) {
+    const truncated = detail.startsWith(TRUNCATED);
+    const count = Number(detail.slice((truncated ? TRUNCATED : FOLDED).length)) || 0;
+    return {
+      label: i18n.t('harnessPill.compaction', {
+        defaultValue: 'folded the conversation into a summary',
+      }),
+      detail: truncated
+        ? i18n.t('harnessPill.compactionTruncated', {
+            count,
+            defaultValue:
+              'Older parts of this conversation were dropped to fit the window ({{count}} messages). No summary could be written.',
+          })
+        : i18n.t('harnessPill.compactionFolded', {
+            count,
+            defaultValue:
+              'Older parts of this conversation were folded into a summary ({{count}} messages).',
+          }),
+    };
+  }
 
   if (label === ROUTING_GATE && detail?.startsWith(STAGE_LIMITED)) {
     // `stage-limited:<stage>:<agentName>` — split once, so an agent name with a

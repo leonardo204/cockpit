@@ -46,6 +46,9 @@ interface TabContextMenuProps {
   onRename: (tabId: string) => void;
   /** P3-M10: mark/unmark this session as one nothing is learned from. */
   onToggleNoLearn: (tabId: string) => void;
+  /** session-context-management §2.2: compress this conversation into a handoff and
+   *  open a new tab carrying it. */
+  onContinueInNewTab: (tabId: string) => void;
 }
 
 /** Keeps the menu on screen when the click lands near an edge. */
@@ -59,6 +62,7 @@ export function TabContextMenu({
   onTogglePin,
   onRename,
   onToggleNoLearn,
+  onContinueInNewTab,
 }: TabContextMenuProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
@@ -156,6 +160,29 @@ export function TabContextMenu({
           <path d="M3 3l18 18" />
         </svg>
         {t(state.isNoLearn ? 'tabBar.noLearnOff' : 'tabBar.noLearn')}
+      </button>
+      {/* session-context-management §2.2 — CONTINUE IN A NEW TAB. It sits here for
+          the same reason the temporary-session switch does: by the time you have
+          decided this conversation should carry on somewhere fresh, you are looking
+          at its tab. Disabled without a session, like the item above it: a blank
+          tab has no conversation to hand off. */}
+      <button
+        role="menuitem"
+        disabled={!state.hasSession}
+        className={`${item} disabled:opacity-40 disabled:cursor-not-allowed`}
+        data-testid="tab-menu-continue"
+        onClick={() => {
+          onContinueInNewTab(state.tabId);
+          onClose();
+        }}
+      >
+        <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          {/* An arrow leaving a page: this conversation, carried onward. */}
+          <path d="M14 5h5v5" />
+          <path d="M19 5l-7 7" />
+          <path d="M19 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h4" />
+        </svg>
+        {t('tabBar.continueInNewTab', { defaultValue: 'Continue in a new tab' })}
       </button>
     </div>
   );

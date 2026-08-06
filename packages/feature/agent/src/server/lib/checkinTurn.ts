@@ -35,6 +35,7 @@ import {
   CHECKIN_MIN_OPTIONS,
   isConsequentialTool,
   isReversibleAction,
+  logActivity,
   normalizeToolName,
   type Agent,
   type CheckinAnswer,
@@ -190,6 +191,22 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
         const settle = (answer: CheckinAnswer) => {
           if (settled) return;
           settled = true;
+          // WHAT THE USER ACTUALLY CHOSE, including the two outcomes the ledger
+          // deliberately does NOT record: an unanswered prompt and an aborted turn
+          // write no row at all (scoring an absence would be a fabrication), so
+          // without this line the question would appear in the log with no ending.
+          logActivity('checkin_answered', {
+            sessionId: deps.sessionId,
+            agentId: deps.agentId,
+            checkinId,
+            question: question.question,
+            options: [...question.options],
+            recommended: question.recommended,
+            chosen: answer.chosen,
+            unanswered: answer.unanswered === true,
+            ...(answer.correction ? { correction: answer.correction } : {}),
+            ...(deps.drill ? { drill: true } : {}),
+          });
           clearTimeout(timer);
           deps.signal.removeEventListener('abort', onAbort);
           unregisterCheckin(checkinId);
@@ -219,6 +236,20 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
         if (deps.signal.aborted) return onAbort();
         deps.signal.addEventListener('abort', onAbort);
         registerCheckin(checkinId, settle, deps.now());
+        // THE QUESTION AS ASKED — with the recommendation, which the UI hides from
+        // the user until afterwards. The log is read by the developer, not by the
+        // person being asked, so hiding it here would only make the pair of records
+        // unable to explain why an answer counted as a hit.
+        logActivity('checkin_asked', {
+          sessionId: deps.sessionId,
+          agentId: deps.agentId,
+          checkinId,
+          question: question.question,
+          options: [...question.options],
+          recommended: question.recommended,
+          ...(deps.drill ? { drill: true } : {}),
+          escalated: deps.escalate !== undefined,
+        });
         deps.emit({
           type: 'checkin_request',
           checkinId,

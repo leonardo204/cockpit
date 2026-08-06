@@ -59,8 +59,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import {
   AiSdkEngine,
   buildToolset,
@@ -78,7 +77,9 @@ import {
   DANGEROUS_BUILTINS,
   OBSERVATION_BUILTINS,
   loadMcpToolset,
+  logActivity,
   makeGate,
+  nabyDbPath,
   isBuiltinPersona,
   normalizeToolName,
   parseAgentAddress,
@@ -104,6 +105,7 @@ import {
   stageRefusalReason,
   toSelectOptions,
   apiKeyCredential,
+  contextWindowFor,
   type Engine,
   type EngineEvent,
   type Executor,
@@ -167,6 +169,7 @@ import { isAddressable, readGrowth } from '../lib/growthRead';
 import { readPersonaAutonomy } from '../lib/personaAutonomy';
 import { stageInstruction } from '../lib/stageTurn';
 import { fastGrowthInstruction } from '../lib/fastGrowth';
+import { handoffInstruction } from '../lib/sessionHandoff';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -181,12 +184,15 @@ import { fastGrowthInstruction } from '../lib/fastGrowth';
  * The packaged app (and `npm run electron:dev`) passes NABY_HOME/NABY_DB_PATH =
  * ~/.naby so every launch mode shares one store; this default already resolves to
  * the same ~/.naby/app.db, so the plain `cockpit` CLI lands there too.
+ *
+ * THE RULE ITSELF LIVES IN THE RUNTIME (`nabyDbPath`), and this function is now
+ * one line, because a second thing came to depend on the answer: the activity log
+ * writes into `<naby home>/logs`. Two copies of "where does this install live"
+ * would eventually disagree, and a support bundle whose logs sit beside a
+ * DIFFERENT database than the app is using is worse than no bundle.
  */
 function resolveDbPath(): string {
-  const explicit = process.env.NABY_DB_PATH;
-  if (explicit) return explicit;
-  const home = process.env.NABY_HOME || process.env.COCKPIT_HOME;
-  return home ? join(home, 'app.db') : join(homedir(), '.naby', 'app.db');
+  return nabyDbPath();
 }
 
 /** One store per server process, opened lazily. SQLite handles the concurrency;
@@ -1255,6 +1261,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           [
             routedAgent?.systemPrompt,
             shellNote,
+            // ---- WHAT THE PREVIOUS TAB AGREED (session-context-management §2.2)
+            //
+            // When this session was opened with "continue in a new tab", the old
+            // conversation was compressed into a handoff and stored on THIS
+            // session's row. It is injected on EVERY turn of the session, not just
+            // the first: the transcript here starts empty, so a first-turn-only
+            // injection would make naby forget the handoff by the second message —
+            // which is precisely the discontinuity the feature exists to remove.
+            //
+            // PLACED HERE — after the persona, before the stage / check-in / style
+            // instructions — because it is CONTEXT, not POLICY. It says what was
+            // agreed, and it must never be able to talk the turn out of a rule that
+            // follows it.
+            handoffInstruction(sessionRef?.handoff),
             stageLimited
               ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
               : undefined,
@@ -1370,6 +1390,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   ...(d.behavior === 'deny' && d.reason ? { reason: d.reason } : {}),
                 });
               }
+              // HOW THE HUMAN ANSWERED. The gate's own `gate_decision` record says
+              // what the gate returned; this says that a PERSON was asked and what
+              // they said — including the two answers nobody gave (a timeout, a
+              // stopped turn), which are invisible in the gate's verdict.
+              logActivity('approval_resolved', {
+                sessionId,
+                ...(growthSubject ? { agentId: growthSubject.id } : {}),
+                approvalId,
+                toolName: call.toolName,
+                decision: d.behavior,
+                ...(d.behavior === 'deny' && d.reason ? { reason: d.reason } : {}),
+              });
               // Tell the UI the prompt is resolved (buttons off) before the turn
               // moves on. Reconciled against the tool_use/tool_result that follows.
               ctx.emit({
@@ -1389,6 +1421,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             if (ctx.signal.aborted) return onAbort();
             ctx.signal.addEventListener('abort', onAbort);
             registerApproval(approvalId, settle, Date.now());
+            logActivity('approval_requested', {
+              sessionId,
+              ...(growthSubject ? { agentId: growthSubject.id } : {}),
+              approvalId,
+              toolName: call.toolName,
+              input: call.input,
+              escalatedToTelegram: escalateToTelegram,
+            });
             ctx.emit({
               type: 'approval_request',
               approvalId,
@@ -1521,6 +1561,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               console.log(
                 `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (stage contract: ${routedStage})`,
               );
+              // ITS OWN KIND, not a `gate_decision`. A stage refusal never reaches
+              // `gated.gate` (it returns above), so no gate_result event exists for
+              // it, and it is a different KIND of refusal besides: the contract
+              // working as designed rather than a policy block. The ledger
+              // deliberately records nothing here (see the note above) — which
+              // makes this line the only durable trace the refusal happened.
+              logActivity('stage_refusal', {
+                sessionId,
+                ...(growthSubject ? { agentId: growthSubject.id } : {}),
+                toolName: call.toolName,
+                toolCallId: call.toolCallId,
+                stage: routedStage,
+                reason: refusal,
+              });
               return { behavior: 'deny', reason: refusal };
             }
           }
@@ -1594,6 +1648,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         let errorMessage: string | undefined;
         let usage: Usage | undefined;
         let turns = 0;
+        // HOW FULL THE WINDOW IS after this run (session-context-management §2.1).
+        //
+        // The LAST step's value wins and the steps are NOT summed — unlike tokens
+        // and cost below, which are per-run totals. A window occupancy is a
+        // snapshot of one prompt; adding five of them together produces the very
+        // number the spec's problem statement is about (a "748k context" on a 200k
+        // window). Undefined when no step reported per-step usage, in which case
+        // the client hides the gauge rather than guessing.
+        let contextTokens: number | undefined;
+        // The DENOMINATOR, resolved once from the engine + model that will answer.
+        // Undefined for a model the registry does not know, which the client shows
+        // as a token count with no ratio.
+        const contextWindow = contextWindowFor(engineId, modelLabel);
 
         // ---- autonomy bookkeeping (Phase 3, P3-M3c) ----------------------
         //
@@ -1736,6 +1803,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               gate,
               executors,
               signal: ctx.signal,
+              // THE THREE FACTS THE RUNTIME CANNOT SEE (naby-activity-log §3).
+              // Routing, the fast-growth flag and what dispatched the turn are all
+              // decided here; the runtime stamps them on every record of the turn
+              // rather than the shell writing a second, parallel event that could
+              // disagree. `runId` groups this run's steps into one request.
+              activity: {
+                ...(growthSubject ? { agentId: growthSubject.id, agentName: growthSubject.name } : {}),
+                ...(sessionFastGrowth ? { fastGrowth: true } : {}),
+                step,
+                source: typeof ctx.params.source === 'string' ? ctx.params.source : 'chat',
+                ...(typeof ctx.params.runId === 'string' ? { runId: ctx.params.runId } : {}),
+              },
               // Phase 2.5 (M4): enabled subagents the model may delegate to. The
               // Claude Agent SDK engine maps these to native `agents` (spawned via
               // the gated Task tool); the AI-SDK engine ignores them.
@@ -2016,6 +2095,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   accUsage.outputTokens += ev.usage?.outputTokens ?? 0;
                   accUsage.cachedInputTokens += ev.usage?.cachedInputTokens ?? 0;
                   accCostUsd += ev.costUsd ?? 0;
+                  // NOT accumulated — see the declaration. The newest reading is
+                  // the occupancy the next turn starts from.
+                  if (ev.contextTokens !== undefined) contextTokens = ev.contextTokens;
                   // THE STOP DECISION. Taken here because this is the moment both
                   // inputs are known: whether the step used a tool and what it
                   // said. `resolveMaxSteps` collapsed a non-autonomous agent to 1
@@ -2054,6 +2136,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     result: ev.ok ? assistantText : (errorMessage ?? 'run failed'),
                     usage: toSdkUsage(accUsage),
                     total_cost_usd: accCostUsd,
+                    // THE WINDOW GAUGE (session-context-management §2.1). Two
+                    // separate fields, and both are omitted rather than zeroed
+                    // when unknown: the client's rule is that it hides the gauge
+                    // instead of showing a wrong percentage, and a 0 would be a
+                    // number rather than an absence.
+                    ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
+                    ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
                     duration_ms: Date.now() - startedAt,
                     num_turns: turns,
                   });
@@ -2116,6 +2205,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             result: sawResult && assistantText ? `${assistantText}\n\n${message}` : message,
             usage: toSdkUsage(sawResult ? accUsage : usage),
             total_cost_usd: accCostUsd,
+            // A stopped or failed run still filled the window with whatever it
+            // managed to send, so the last measured reading is reported here too.
+            ...(contextTokens !== undefined ? { context_tokens: contextTokens } : {}),
+            ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
             duration_ms: Date.now() - startedAt,
             num_turns: turns,
           });

@@ -19,6 +19,7 @@
 // The pure helpers (keyboard build, callback/text parse) are unit-tested; the IO
 // functions are thin wrappers over the Telegram Bot API and verified live.
 
+import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import type { Store } from '../../../../../../../dist/naby-runtime.mjs';
 
 // -- settings keys (in the naby store) --------------------------------------
@@ -241,12 +242,45 @@ export async function sendTelegramMessage(
       | { ok: boolean; result?: { message_id: number }; description?: string }
       | null;
     if (!res.ok || !json?.ok) {
-      return { ok: false, error: json?.description ?? `telegram sendMessage failed (${res.status})` };
+      const error = json?.description ?? `telegram sendMessage failed (${res.status})`;
+      logTelegramOut(cfg, text, opts, { ok: false, error });
+      return { ok: false, error };
     }
-    return { ok: true, messageId: json.result?.message_id ?? 0 };
+    const messageId = json.result?.message_id ?? 0;
+    logTelegramOut(cfg, text, opts, { ok: true, messageId });
+    return { ok: true, messageId };
   } catch (e) {
-    return { ok: false, error: describeFetchError(e) };
+    const error = describeFetchError(e);
+    logTelegramOut(cfg, text, opts, { ok: false, error });
+    return { ok: false, error };
   }
+}
+
+/**
+ * EVERY OUTBOUND MESSAGE, logged at the transport (naby-activity-log §3).
+ *
+ * Here rather than at the callers because there are six of them — a chat reply,
+ * an approval escalation, a check-in, the two "answered" confirmations, the final
+ * report — and one that forgot would be a message the user received with nothing
+ * on record. The trade is that this line says WHAT was sent and not WHY; the why
+ * is the `escalation` record its caller writes.
+ *
+ * THE BOT TOKEN IS NEVER PART OF IT. `cfg` carries one and only `chatId` is read;
+ * the log module's masker is a safety net here, not the primary defence.
+ */
+function logTelegramOut(
+  cfg: Pick<TelegramConfig, 'botToken' | 'chatId'>,
+  text: string,
+  opts: { replyMarkup?: unknown; signal?: AbortSignal } | undefined,
+  outcome: { ok: true; messageId: number } | { ok: false; error: string },
+): void {
+  logActivity('telegram_out', {
+    chatId: String(cfg.chatId),
+    text,
+    hasButtons: opts?.replyMarkup !== undefined,
+    ok: outcome.ok,
+    ...(outcome.ok ? { messageId: outcome.messageId } : { error: outcome.error }),
+  });
 }
 
 /** The outcome of one getUpdates poll. `error` is present ONLY when the poll did

@@ -37,6 +37,43 @@ describe('harnessPill — codes become sentences, in the user’s language', () 
     expect(detail).not.toMatch(/butterfly/i);
   });
 
+  /**
+   * THE COMPACTION PILL (session-context-management §2.3). The AI-SDK engine folds
+   * older turns out of the payload; the user is told, in their language, and the
+   * two outcomes must not read alike — a fold keeps the material in compressed
+   * form, a truncation does not.
+   */
+  it('says what happened when the conversation was folded into a summary', () => {
+    const { label, detail } = renderHarnessPill('context-compaction', 'folded:42');
+    expect(label).toMatch(/summary/i);
+    expect(detail).toContain('42');
+    expect(detail).toMatch(/folded/i);
+  });
+
+  it('distinguishes a TRUNCATION from a fold — the user needs to know material is gone', () => {
+    const { detail } = renderHarnessPill('context-compaction', 'truncated:7');
+    expect(detail).toContain('7');
+    expect(detail).toMatch(/dropped/i);
+    expect(detail).toMatch(/no summary/i);
+  });
+
+  it('has real Korean copy for the compaction pill too', async () => {
+    await i18n.changeLanguage('ko');
+    const folded = renderHarnessPill('context-compaction', 'folded:42');
+    expect(folded.detail).toContain('요약으로 접었습니다');
+    expect(folded.detail).not.toMatch(/folded/i);
+    const truncated = renderHarnessPill('context-compaction', 'truncated:7');
+    expect(truncated.detail).toContain('잘라냈습니다');
+  });
+
+  it('leaves a compaction pill with an unrecognised detail exactly as it arrived', () => {
+    // Additive by construction: a code this table has never heard of renders as
+    // it did before the table existed.
+    const { label, detail } = renderHarnessPill('context-compaction', 'something-else');
+    expect(label).toBe('context-compaction');
+    expect(detail).toBe('something-else');
+  });
+
   it('passes every other harness pill through untouched', () => {
     // The autonomy step bar is already language-neutral bookkeeping and is built
     // server-side; translating it would be a regression, not an improvement.

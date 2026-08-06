@@ -94,6 +94,22 @@ export interface TokenUsage {
   cacheCreationInputTokens: number;
   cacheReadInputTokens: number;
   totalCostUsd: number;
+  // -- the WINDOW gauge (specs/session-context-management.md §2.1) -----------
+  //
+  // SEPARATE FROM THE FOUR COUNTS ABOVE, and deliberately so. Those are what this
+  // TURN consumed, summed across its steps; on a multi-step turn their sum can be
+  // several times the window and reads as an occupancy when it is not (the "748k
+  // context" the spec's problem statement is about).
+  //
+  // `contextTokens` is the LAST step's input size — what the model actually held —
+  // and `contextWindow` is the model's window, when the runtime registry knows it.
+  // Both are absent when unmeasured or unknown, and the gauge then hides or drops
+  // its ratio (contextGauge.ts). Never defaulted to 0: a zero is a number, and the
+  // rule here is that no number beats a wrong one.
+  /** Last step's input tokens (cache reads included) = current window occupancy. */
+  contextTokens?: number;
+  /** The model's context window, when it is a model the registry knows. */
+  contextWindow?: number;
 }
 
 // Retry info (from SDK system/api_retry event)

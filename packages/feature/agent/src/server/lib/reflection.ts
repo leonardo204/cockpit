@@ -78,6 +78,7 @@ import {
   pairKey,
   parseReflectionAnswer,
   parseStyleFingerprint,
+  logActivity,
   readLearningEnabled,
   REFLECTION_EXISTING_CAP,
   REFLECTION_IDLE_MS,
@@ -573,6 +574,11 @@ export async function runReflectionSweep(
         `stale-for-review ${result.staleForReview}, skipped-no-learn ${result.skippedNoLearn}`,
     );
   }
+  // THE SWEEP, DURABLY (naby-activity-log §3). The console line above is the same
+  // information and it is gone the moment the process is; a sweep is the one thing
+  // that changes what the agent believes WITHOUT anybody watching, so its counts
+  // belong in a file. The whole result object goes in: every field is a count.
+  logActivity('reflection_run', { ...result });
   return result;
 }
 
@@ -953,8 +959,12 @@ export class ReflectionJudgeUnavailableError extends Error {
 
 /** What one judge call needs: an engine to drive and the model selection to drive
  *  it with. Which of the two backends produced it is not otherwise interesting —
- *  the prompt, the empty toolset, the deny-all gate and the parse are identical. */
-type JudgeBackend = {
+ *  the prompt, the empty toolset, the deny-all gate and the parse are identical.
+ *
+ *  Exported because the HANDOFF SUMMARIZER (lib/handoffSummary.ts) is the same
+ *  kind of call and must pick its backend the same way. A second copy of that
+ *  choice is how one feature ends up believing a sign-in the other cannot see. */
+export type JudgeBackend = {
   engine: Engine;
   model: ModelSelection;
   /** Names which backend answered, for the log line — "reflection did nothing"
@@ -978,7 +988,7 @@ type JudgeBackend = {
  * Returns undefined when neither exists. The caller turns that into a throw, not
  * into an empty answer — see `ReflectionJudgeUnavailableError`.
  */
-async function resolveJudgeBackend(): Promise<JudgeBackend | undefined> {
+export async function resolveJudgeBackend(): Promise<JudgeBackend | undefined> {
   const resolution = await resolveProviderCredential({});
   if (resolution.ok) {
     const { profile, apiKey } = resolution.value;

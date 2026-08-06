@@ -41,6 +41,7 @@
 // same Next.js bundling reason) as approvalRegistry — the paused turn and the
 // polling loop must see ONE watch map even if their modules are bundled twice.
 
+import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import type { GateDecision, Store } from '../../../../../../../dist/naby-runtime.mjs';
 import { resolveApproval } from './approvalRegistry';
 import { resolveCheckin } from './checkinRegistry';
@@ -495,8 +496,25 @@ export async function escalateApproval(opts: {
     // prompt (and the TTL) still governs this approval.
     unwatch(opts.approvalId);
     console.warn(`[telegram] escalation send failed: ${sent.error}`);
+    logActivity('escalation', {
+      channel: 'telegram',
+      subject: 'approval',
+      approvalId: opts.approvalId,
+      toolName: opts.toolName,
+      ok: false,
+      error: sent.error,
+    });
     return;
   }
+  logActivity('escalation', {
+    channel: 'telegram',
+    subject: 'approval',
+    approvalId: opts.approvalId,
+    toolName: opts.toolName,
+    ...(opts.agentName ? { agentName: opts.agentName } : {}),
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    ok: true,
+  });
   console.log(`[telegram] escalated ${opts.toolName} (${opts.approvalId})`);
 }
 
@@ -567,8 +585,24 @@ export async function escalateCheckin(opts: {
   if (!sent.ok) {
     unwatch(opts.checkinId);
     console.warn(`[telegram] check-in escalation send failed: ${sent.error}`);
+    logActivity('escalation', {
+      channel: 'telegram',
+      subject: 'checkin',
+      checkinId: opts.checkinId,
+      ok: false,
+      error: sent.error,
+    });
     return;
   }
+  logActivity('escalation', {
+    channel: 'telegram',
+    subject: 'checkin',
+    checkinId: opts.checkinId,
+    question: opts.question,
+    options: [...opts.options],
+    ...(opts.agentName ? { agentName: opts.agentName } : {}),
+    ok: true,
+  });
   console.log(`[telegram] escalated check-in (${opts.checkinId}, ${opts.options.length} options)`);
 }
 
@@ -606,6 +640,16 @@ export async function sendFinalReport(store: Store, report: FinalReport): Promis
   // would put the same answer on the phone twice.
   if (report.sessionId && state.chatTurns.has(report.sessionId)) return;
   const sent = await sendTelegramMessage(cfg, formatFinalReport(report));
+  logActivity('escalation', {
+    channel: 'telegram',
+    subject: 'final_report',
+    ...(report.sessionId ? { sessionId: report.sessionId } : {}),
+    ...(report.agentName ? { agentName: report.agentName } : {}),
+    reportOk: report.ok,
+    ...(report.steps !== undefined ? { steps: report.steps } : {}),
+    ...(report.stopReason !== undefined ? { stopReason: report.stopReason } : {}),
+    ok: sent.ok,
+  });
   if (!sent.ok) {
     console.warn(`[telegram] final report failed: ${sent.error}`);
     return;
