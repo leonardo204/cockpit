@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   CLAUDE_CONTEXT_WINDOW,
+  CLAUDE_1M_CONTEXT_WINDOW,
+  CONTEXT_1M_BETA,
   FALLBACK_CONTEXT_WINDOW,
   contextWindowFor,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -32,6 +34,61 @@ describe('contextWindowFor', () => {
     // resolve to has a 200k window — so an empty model is not an unknown one here.
     expect(contextWindowFor('dev-claude', '')).toBe(CLAUDE_CONTEXT_WINDOW);
     expect(contextWindowFor('dev-claude', undefined)).toBe(CLAUDE_CONTEXT_WINDOW);
+  });
+
+  // -- the long-context tier ------------------------------------------------
+  //
+  // A Claude subscription run can be on a 1M window, and NOTHING IN OUR OWN
+  // CONFIGURATION SAYS SO — the plan decides it. Two signals reach us from the run
+  // itself, and each on its own has to be enough: a turn that reported 293k on
+  // what we called a 200k window is what sent us looking.
+
+  it('reads the 1M tier off the CONCRETE model id', () => {
+    // Observed from a live subscription run: the SDK reports the tier in brackets
+    // on the id it actually served.
+    expect(contextWindowFor('dev-claude', 'claude-opus-5[1m]')).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    expect(CLAUDE_1M_CONTEXT_WINDOW).toBe(1_000_000);
+    // Other punctuations of the same marker, so a differently-formatted id is not
+    // silently read as an ordinary 200k model.
+    expect(contextWindowFor('dev-claude', 'claude-sonnet-5-1m')).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    // The marker must STAND ALONE — a version fragment that merely contains the
+    // characters is not a tier.
+    expect(contextWindowFor('dev-claude', 'claude-sonnet-41m-preview')).toBe(CLAUDE_CONTEXT_WINDOW);
+  });
+
+  it('reads the 1M tier off the betas the RUN negotiated', () => {
+    // The Agent SDK's init message reports what the CLI actually enabled, which is
+    // the only signal when the served id carries no marker.
+    expect(CONTEXT_1M_BETA).toBe('context-1m-2025-08-07');
+    expect(
+      contextWindowFor('dev-claude', 'claude-opus-5', { betas: [CONTEXT_1M_BETA] }),
+    ).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    // …including for the sign-in default, which names no model at all.
+    expect(contextWindowFor('dev-claude', '', { betas: [CONTEXT_1M_BETA] })).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+  });
+
+  it('does NOT apply the 1M tier to a run that did not report it', () => {
+    // The mirror-image error: reporting 1M by default would understate fullness on
+    // every ordinary turn. Absence of the signal means the ordinary window.
+    expect(contextWindowFor('dev-claude', 'claude-opus-5')).toBe(CLAUDE_CONTEXT_WINDOW);
+    expect(contextWindowFor('dev-claude', 'claude-opus-5', { betas: [] })).toBe(
+      CLAUDE_CONTEXT_WINDOW,
+    );
+    expect(
+      contextWindowFor('dev-claude', 'claude-opus-5', { betas: ['some-other-beta'] }),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    // …and the beta says nothing about a NON-Claude model.
+    expect(contextWindowFor('ai-sdk', 'gpt-4o', { betas: [CONTEXT_1M_BETA] })).toBe(128_000);
+  });
+
+  it('still answers UNDEFINED for the "default" row the Agent SDK offers', () => {
+    // The row the model picker shows as "let Claude pick". It is a real, common
+    // `model` value and it names no window, which is exactly why the engines now
+    // report the CONCRETE id — the registry has no way to size this one and must
+    // not pretend otherwise.
+    expect(contextWindowFor('dev-claude', 'default')).toBeUndefined();
   });
 
   it('treats an empty model on any OTHER engine as unknown', () => {

@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TokenUsage, RateLimitInfo } from './types';
-import { contextGauge, formatTokensShort, gaugeToneClass } from './contextGauge';
+import { contextGauge, formatGaugePercent, formatTokensShort, gaugeToneClass } from './contextGauge';
 
 // ============================================
 // Token Usage Display
@@ -22,9 +22,14 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
   const { t } = useTranslation();
 
   // Pure derivation, unit-tested in contextGauge.ts — the branch rules ("hide when
-  // unmeasured", "no ratio without a window", the two tier boundaries) are the part
-  // that goes quietly wrong, so they do not live in JSX.
-  const gauge = contextGauge(tokenUsage.contextTokens, tokenUsage.contextWindow);
+  // unmeasured", which denominator to estimate with and when to mark it, the two
+  // tier boundaries) are the part that goes quietly wrong, so they do not live in
+  // JSX.
+  const gauge = contextGauge(
+    tokenUsage.contextTokens,
+    tokenUsage.contextWindow,
+    tokenUsage.contextModel,
+  );
 
   // "Now" updates every 30s so the countdown stays fresh without calling Date.now()
   // during render (which would violate react-hooks/purity).
@@ -119,29 +124,38 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
 
         {/* THE WINDOW GAUGE (session-context-management §2.1). It answers the
             question the row could not: how full is the conversation's window.
-            Hidden entirely when the last turn reported no per-step usage, and
-            shown as a bare token count when the model's window is unknown — a
-            percentage against a guessed denominator would look exactly as
-            authoritative as a real one. */}
+            Hidden entirely when the last turn reported no per-step usage — that
+            is still an absence of measurement, and silence is its honest
+            rendering. It is no longer hidden for an unknown WINDOW: a bare
+            `293k` was found to say nothing to the reader, so a percentage is
+            always shown and an estimated one is prefixed `~` (contextGauge.ts).
+
+            The label is "컨텍스트" / "context". It was "창" / "window", which named
+            the mechanism rather than the thing the user is watching fill up; the
+            name freed up when the old "컨텍스트" stat became "턴 입력". */}
         {gauge.show && (
           <span
             className={`flex items-center gap-1 ${gaugeToneClass(gauge.tier)}`}
             data-testid="context-window-gauge"
-            title={
-              gauge.window
-                ? `${gauge.tokens.toLocaleString()} / ${gauge.window.toLocaleString()}`
-                : gauge.tokens.toLocaleString()
-            }
+            title={[
+              `${gauge.tokens.toLocaleString()} / ${gauge.window.toLocaleString()}`,
+              gauge.approximate
+                ? t('chat.contextApproxHint', {
+                    defaultValue: "Estimated — this model's exact context window is unknown.",
+                  })
+                : null,
+              tokenUsage.contextModel || null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
             </svg>
             <span>
-              {t('chat.contextWindow', { defaultValue: 'window' })}{' '}
+              {t('chat.contextWindow', { defaultValue: 'context' })}{' '}
               <strong className={gauge.tier === 'neutral' ? 'text-foreground' : undefined}>
-                {gauge.percent !== undefined
-                  ? `${gauge.percent}% (${formatTokensShort(gauge.tokens)}/${formatTokensShort(gauge.window!)})`
-                  : formatTokensShort(gauge.tokens)}
+                {`${formatGaugePercent(gauge)} (${formatTokensShort(gauge.tokens)}/${formatTokensShort(gauge.window)})`}
               </strong>
             </span>
           </span>
@@ -162,12 +176,30 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
           </svg>
           <span>{t('chat.output')}: <strong className="text-foreground">{tokenUsage.outputTokens.toLocaleString()}</strong></span>
         </span>
+        {/* CACHE HIT RATE. The label says "적중" / "hit" because "Cache: 7%" reads
+            as "7% of something cached" without saying of what; the number is the
+            share of THIS turn's input that came from the prompt cache.
+
+            The explanation is a `title`, which is what every other hint in this
+            row already uses (both rate-limit spans, the gauge). It is a native
+            tooltip, so it survives Electron's renderer unchanged — no portal, no
+            z-index, and nothing to clip it against the three-panel layout. */}
         {(tokenUsage.cacheReadInputTokens > 0 || tokenUsage.cacheCreationInputTokens > 0) && (
-          <span className="flex items-center gap-1 text-brand">
+          <span
+            className="flex items-center gap-1 text-brand"
+            data-testid="cache-hit-stat"
+            title={t('chat.cacheHitHint', {
+              defaultValue:
+                "The share of this turn's input that was reused from the prompt cache. The higher it is, the faster and cheaper the turn.",
+            })}
+          >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
             </svg>
-            <span>Cache: {((tokenUsage.cacheReadInputTokens / (tokenUsage.inputTokens + tokenUsage.cacheReadInputTokens + tokenUsage.cacheCreationInputTokens)) * 100).toFixed(0)}%</span>
+            <span>
+              {t('chat.cacheHit', { defaultValue: 'Cache hit' })}:{' '}
+              {((tokenUsage.cacheReadInputTokens / (tokenUsage.inputTokens + tokenUsage.cacheReadInputTokens + tokenUsage.cacheCreationInputTokens)) * 100).toFixed(0)}%
+            </span>
           </span>
         )}
         {tokenUsage.totalCostUsd > 0 && (
