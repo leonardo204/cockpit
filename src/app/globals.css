@@ -1,4 +1,10 @@
 @import "tailwindcss";
+/* Tailwind v4's default `dark:` variant follows the OS media query, but this
+   app's theme is the `.dark` class boot.js/ThemeProvider stamp on <html> —
+   with the OS dark and the app light, every dark: utility lit up on a white
+   background (pale amber-200 text on white was the reported symptom). Bind the
+   variant to the class so dark: means the APP's theme, everywhere. */
+@custom-variant dark (&:where(.dark, .dark *));
 /* The xterm.css import lived here for the PTY execution mode's floating terminal.
    That mode (and its XtermFloatingWindow) is gone, and nothing else renders an
    xterm surface, so the stylesheet and the @xterm/xterm dependency went with it. */
