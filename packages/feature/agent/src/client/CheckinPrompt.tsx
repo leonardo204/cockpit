@@ -20,10 +20,17 @@
  * the user chooses blind; the recommendation is REVEALED once they have. They
  * still see how well naby knows them — more convincingly, in fact, because they
  * know the guess was made before they answered.
+ *
+ * HOW LONG THE REVEAL LASTS. It used to last until someone clicked its ✕, which
+ * meant a banner about a question answered twenty minutes ago went on commenting
+ * on a conversation that had moved on. It now belongs to the exchange that
+ * earned it and retires when the next turn starts (`runNonce`). The rule is
+ * `checkinReveal.ts`; the ✕ still works for anyone who wants it gone sooner.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { reduceReveal, type RevealBanner } from './checkinReveal';
 
 type Pending = {
   checkinId: string;
@@ -31,9 +38,6 @@ type Pending = {
   options: string[];
   recommended: number;
 };
-
-/** What the user just answered, kept only to reveal the guess they answered against. */
-type Revealed = { question: string; recommendedOption: string; hit: boolean };
 
 async function postResolve(body: Record<string, unknown>): Promise<void> {
   try {
@@ -47,13 +51,37 @@ async function postResolve(body: Record<string, unknown>): Promise<void> {
   }
 }
 
-export function CheckinPrompt({ sessionId }: { sessionId?: string }) {
+export function CheckinPrompt({
+  sessionId,
+  runNonce = 0,
+}: {
+  sessionId?: string;
+  /** Bumped by <Chat/> each time a turn STARTS on this session — the user
+   *  sending, or a turn arriving from Telegram / a scheduled task. It is what
+   *  retires the reveal banner: the conversation has moved past the exchange
+   *  the banner is about. */
+  runNonce?: number;
+}) {
   const { t } = useTranslation();
   const [queue, setQueue] = useState<Pending[]>([]);
-  const [revealed, setRevealed] = useState<Revealed | null>(null);
+  const [revealed, setRevealed] = useState<RevealBanner | null>(null);
   const [writing, setWriting] = useState(false);
   const [correction, setCorrection] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Read at answer time so the banner records the turn it was earned in,
+  // without `answer` taking runNonce as a dependency (a bump mid-question would
+  // otherwise rebuild the callback under the user's fingers).
+  const runNonceRef = useRef(runNonce);
+  runNonceRef.current = runNonce;
+
+  // The conversation moved on → the banner goes, with no click and no timer.
+  // Guarded inside the reducer: the reveal is created WHILE its own turn is
+  // still in flight (a check-in pauses the turn and the answer resumes it), so
+  // only a STRICTLY newer turn retires it.
+  useEffect(() => {
+    setRevealed((b) => reduceReveal(b, { kind: 'run-start', run: runNonce }));
+  }, [runNonce]);
 
   useEffect(() => {
     const onRequest = (e: Event) => {
@@ -71,7 +99,8 @@ export function CheckinPrompt({ sessionId }: { sessionId?: string }) {
         recommended: typeof d.recommended === 'number' ? d.recommended : -1,
       };
       setQueue((q) => (q.some((p) => p.checkinId === item.checkinId) ? q : [...q, item]));
-      setRevealed(null); // a new question supersedes the last reveal
+      // A new question supersedes the last reveal.
+      setRevealed((b) => reduceReveal(b, { kind: 'question' }));
     };
     const onResolved = (e: Event) => {
       const d = (e as CustomEvent).detail as Record<string, unknown> | undefined;
@@ -97,11 +126,15 @@ export function CheckinPrompt({ sessionId }: { sessionId?: string }) {
       setQueue((q) => q.filter((p) => p.checkinId !== current.checkinId));
       setWriting(false);
       setCorrection('');
-      setRevealed({
-        question: current.question,
-        recommendedOption: current.options[current.recommended] ?? '',
-        hit: chosen >= 0 && chosen === current.recommended,
-      });
+      setRevealed((b) =>
+        reduceReveal(b, {
+          kind: 'answered',
+          question: current.question,
+          recommendedOption: current.options[current.recommended] ?? '',
+          hit: chosen >= 0 && chosen === current.recommended,
+          run: runNonceRef.current,
+        }),
+      );
       await postResolve({
         checkinId: current.checkinId,
         chosen,
@@ -113,14 +146,17 @@ export function CheckinPrompt({ sessionId }: { sessionId?: string }) {
   );
 
   if (!current) {
-    if (!revealed || !revealed.recommendedOption) return null;
+    // A check-in with no recorded recommendation produces no banner at all —
+    // the reducer already refused to build one, so this is just "nothing to
+    // show".
+    if (!revealed) return null;
     return (
       <div
         className="mx-4 mb-2 flex items-start gap-2 rounded-lg border border-border bg-accent/40 px-3 py-2"
         data-testid="checkin-reveal"
       >
         <span className="text-sm leading-5">{revealed.hit ? '🦋' : '🐛'}</span>
-        <div className="flex-1 text-[11px] leading-5 text-muted-foreground">
+        <div className="flex-1 text-[0.786rem] leading-5 text-muted-foreground">
           {revealed.hit
             ? t('checkin.revealHit', {
                 defaultValue: 'naby had recommended the same thing: {{option}}',
@@ -132,8 +168,9 @@ export function CheckinPrompt({ sessionId }: { sessionId?: string }) {
               })}
         </div>
         <button
-          onClick={() => setRevealed(null)}
-          className="text-[11px] text-muted-foreground hover:text-foreground"
+          onClick={() => setRevealed((b) => reduceReveal(b, { kind: 'dismiss' }))}
+          data-testid="checkin-reveal-close"
+          className="text-[0.786rem] text-muted-foreground hover:text-foreground"
           aria-label={t('common.close', { defaultValue: 'Close' })}
         >
           ✕
@@ -196,14 +233,14 @@ export function CheckinPrompt({ sessionId }: { sessionId?: string }) {
         <button
           onClick={() => setWriting(true)}
           disabled={busy}
-          className="mt-1.5 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="mt-1.5 text-[0.786rem] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
           data-testid="checkin-other"
         >
           {t('checkin.other', { defaultValue: 'Neither — I will explain' })}
         </button>
       )}
       {queue.length > 1 ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground">
+        <div className="mt-1.5 text-[0.714rem] text-muted-foreground">
           {t('checkin.more', { defaultValue: '+{{count}} more waiting', count: queue.length - 1 })}
         </div>
       ) : null}

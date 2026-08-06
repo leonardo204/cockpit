@@ -7,6 +7,14 @@ import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './type
 import { MessageBubble } from './MessageBubble';
 import { GENERIC_ENGINE_NAME } from './engineName';
 import { useChatSearch } from './useChatSearch';
+import {
+  initialStickState,
+  reduceStick,
+  shouldShowJumpChip,
+  type ScrollMetrics,
+  type ScrollWrite,
+  type StickEvent,
+} from './stickToBottom';
 import { ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
 import { SendToAIInput } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
@@ -55,6 +63,11 @@ interface MessageListProps {
    *  area, `/api/chat/stop`) but had no visible control, so a long turn looked
    *  indistinguishable from a hung one. */
   onStop?: () => void;
+  /** Bumped by the host every time THE USER sends. A send is an unambiguous
+   *  statement of intent — "show me what happens next" — so it re-pins the
+   *  transcript to the bottom no matter where they had scrolled to. A counter
+   *  rather than a callback because two sends in a row must both register. */
+  sendNonce?: number;
 }
 
 // Methods exposed to parent component
@@ -63,18 +76,25 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop, sendNonce },
   ref
 ) {
   const { t } = useTranslation();
   const bottomRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  /** The block that wraps everything inside the scroll container. Observing it
+   *  is how a STREAMED answer is noticed: its box grows with every delta, and
+   *  the message array — which the old scroll rule watched — does not. */
+  const contentRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const [outerEl, setOuterEl] = useState<HTMLDivElement | null>(null);
-  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const [showTopButton, setShowTopButton] = useState(false);
   const [showBottomButton, setShowBottomButton] = useState(false);
+  /** The "↓ new response" chip: something arrived while the user was reading
+   *  further up. Shown INSTEAD of the plain jump-to-latest control, which stays
+   *  for "I scrolled up and nothing new has happened". */
+  const [showNewChip, setShowNewChip] = useState(false);
 
   // Sync outerRef to state so we can read it during render without violating ref rules
   useEffect(() => {
@@ -185,50 +205,149 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   const scrollHeightBeforeLoadRef = useRef(0);
   const shouldRestoreScrollRef = useRef(false);
 
-  // Check if near the bottom (within 50px of the bottom)
-  const checkIfAtBottom = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return true;
-    const threshold = 50;
-    return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+  // -- STICK TO BOTTOM -----------------------------------------------------
+  //
+  // THE REPORT: "스크롤이 중간에 멈춰 있어서 새로운 응답이 온지 아닌지 헷갈림."
+  //
+  // The rule that used to live here was `if (shouldAutoScroll && messages.length
+  // > prevLength) scrollIntoView()`. A streamed answer never grows that array —
+  // every delta, every appended segment, every subagent block REWRITES THE LAST
+  // MESSAGE — so the list scrolled once, when the empty assistant bubble was
+  // pushed, and then sat still for the rest of the answer while the text it was
+  // meant to be showing grew off the bottom of the viewport.
+  //
+  // What replaces it: a ResizeObserver on the content box (which sees growth
+  // however it was produced) feeding the pure state machine in stickToBottom.ts.
+  // The decisions — pinned or not, chip or not — are pinned by unit tests there;
+  // everything below is measure, obey, and never fight the user's wheel.
+  const stickRef = useRef(initialStickState);
+  const rafRef = useRef<number | null>(null);
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+  /** A scroll that fell due while this tab was hidden, owed on activation. */
+  const owedScrollRef = useRef(false);
+
+  /** The container's metrics, or null when they cannot be trusted. */
+  const readMetrics = useCallback((): ScrollMetrics | null => {
+    const el = containerRef.current;
+    if (!el) return null;
+    // TabManager keeps every chat tab mounted and hides the inactive ones with
+    // `display:none`, where every box metric reads 0 — and 0/0/0 satisfies "at
+    // bottom", so measuring a hidden tab would re-pin a conversation the user
+    // had scrolled up in. Both guards: the flag for correctness, the metric for
+    // the frame between them.
+    if (!isActiveRef.current || el.clientHeight === 0) return null;
+    return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
   }, []);
 
-  // Check if near the top (within 50px of the top)
-  const checkIfAtTop = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return true;
-    const threshold = 50;
-    return container.scrollTop < threshold;
+  /** Perform a scroll write, at most one per frame while streaming. */
+  const applyWrite = useCallback((write: ScrollWrite) => {
+    if (write === 'none') return;
+    if (!isActiveRef.current) {
+      owedScrollRef.current = true;
+      return;
+    }
+    if (write === 'smooth') {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      return;
+    }
+    // rAF-throttled: deltas flush every 50ms and a subagent block can grow
+    // several times between two frames; coalescing them into one write per
+    // frame keeps the browser from laying out for scroll positions nobody sees.
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      // Re-check: the user may have grabbed the wheel between the growth and
+      // this frame, and a queued write must never overrule that.
+      if (!stickRef.current.stuck || !isActiveRef.current) return;
+      const el = containerRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
   }, []);
+
+  /** Feed one event to the state machine and reflect the result. */
+  const dispatchStick = useCallback((ev: StickEvent) => {
+    const d = reduceStick(stickRef.current, ev);
+    stickRef.current = d.state;
+    setShowNewChip(shouldShowJumpChip(d.state));
+    setShowBottomButton(!d.state.stuck);
+    applyWrite(d.write);
+  }, [applyWrite]);
+
+  /** The content box changed size — a delta, a segment, a reconcile, a resize. */
+  const handleContentGrowth = useCallback(() => {
+    const metrics = readMetrics();
+    if (!metrics) return;
+    dispatchStick({ kind: 'content', metrics });
+  }, [readMetrics, dispatchStick]);
 
   // Listen to scroll events
   const handleScroll = useCallback(() => {
-    const atBottom = checkIfAtBottom();
-    const atTop = checkIfAtTop();
-    setShouldAutoScroll(atBottom);
-    setShowTopButton(!atTop); // Show scroll-to-top button when not at the top
-    setShowBottomButton(!atBottom);
+    const container = containerRef.current;
+    if (!container) return;
+    const metrics = readMetrics();
+    if (metrics) dispatchStick({ kind: 'scroll', metrics });
+
+    // Show the scroll-to-top button when not at the top (unchanged, 50px).
+    const atTop = container.scrollTop < 50;
+    setShowTopButton(!atTop);
 
     // When scrolled to the top with more history available, trigger load-more
     if (atTop && hasMoreHistory && !isLoadingMore && onLoadMore) {
       // Record current scroll height to restore position after loading
-      const container = containerRef.current;
-      if (container) {
-        scrollHeightBeforeLoadRef.current = container.scrollHeight;
-        shouldRestoreScrollRef.current = true;
-      }
+      scrollHeightBeforeLoadRef.current = container.scrollHeight;
+      shouldRestoreScrollRef.current = true;
       onLoadMore();
     }
-  }, [checkIfAtBottom, checkIfAtTop, hasMoreHistory, isLoadingMore, onLoadMore]); // hasMoreHistory still needed for loading more logic
+  }, [readMetrics, dispatchStick, hasMoreHistory, isLoadingMore, onLoadMore]); // hasMoreHistory still needed for loading more logic
 
   // Scroll to top
   const scrollToTop = useCallback(() => {
     topRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
-  // Scroll to bottom
+  // Scroll to bottom — the chip and the plain jump control. A deliberate click,
+  // so it also RE-ENGAGES the stick: from here the answer is followed again.
   const scrollToBottom = useCallback(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    dispatchStick({ kind: 'jump' });
+  }, [dispatchStick]);
+
+  // Growth of the content box is the signal the old rule was missing. One
+  // observer covers every source of it: streamed text deltas, appended turn
+  // segments, a subagent block filling in, tool results expanding, the thinking
+  // bubble appearing and going, and the reconcile after a run ends.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => handleContentGrowth());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [handleContentGrowth]);
+
+  // Belt and braces for a render that changes content without changing the box
+  // height in a way the observer reports first (and for any environment with no
+  // ResizeObserver). Idempotent: unchanged height decides `write: 'none'`.
+  useEffect(() => {
+    handleContentGrowth();
+  }, [messages, isLoading, handleContentGrowth]);
+
+  // A send is an unambiguous statement of intent, so it pins unconditionally.
+  const prevSendNonceRef = useRef(sendNonce ?? 0);
+  useEffect(() => {
+    const n = sendNonce ?? 0;
+    if (n === prevSendNonceRef.current) return;
+    prevSendNonceRef.current = n;
+    dispatchStick({ kind: 'send' });
+  }, [sendNonce, dispatchStick]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
   }, []);
 
   // Scroll to a specific message
@@ -253,27 +372,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     scrollToMessage,
   }), [scrollToMessage]);
 
-  // Track the previous message count to detect new messages
-  const prevMessageCountRef = useRef(0);
   // Flag for whether this is the initial load
   const isInitialLoadRef = useRef(true);
 
-  // Scroll logic on message change (new messages only; initial load handled by a separate useEffect)
-  useEffect(() => {
-    const prevCount = prevMessageCountRef.current;
-    const currentCount = messages.length;
-    prevMessageCountRef.current = currentCount;
-
-    // Initial load is handled by a separate useEffect
-    if (isInitialLoadRef.current) {
-      return;
-    }
-
-    // New messages arrived while at the bottom: smooth scroll
-    if (shouldAutoScroll && currentCount > prevCount) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, shouldAutoScroll]);
+  // NO MESSAGE-COUNT SCROLL RULE HERE ANY MORE. It is the bug: a streamed
+  // answer rewrites the last message instead of appending one, so the count
+  // never moved and the list never followed. Growth is watched directly, by the
+  // ResizeObserver above.
 
   // Once the answer has words in it, the "thinking" bubble is a lie sitting under
   // the thing it claims has not happened yet. It goes; the elapsed clock and Stop
@@ -313,12 +418,8 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     return () => clearInterval(id);
   }, [isLoading]);
 
-  // Also check scroll on isLoading change (showing/hiding the "thinking" indicator)
-  useEffect(() => {
-    if (shouldAutoScroll && isLoading) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [isLoading, shouldAutoScroll]);
+  // (The "thinking" indicator appearing/disappearing changes the content box
+  // height, so the growth observer already carries it — no separate effect.)
 
   // Restore scroll position after loading more history
   useEffect(() => {
@@ -329,31 +430,46 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         const heightDiff = container.scrollHeight - scrollHeightBeforeLoadRef.current;
         container.scrollTop = heightDiff;
         shouldRestoreScrollRef.current = false;
+        // Older history was prepended ABOVE the viewport, so the user has not
+        // moved and neither has the bottom. Re-baseline the machine's height so
+        // that growth is not mistaken for new content arriving below.
+        stickRef.current = { ...stickRef.current, height: container.scrollHeight };
       }
     }
   }, [messages, isLoadingMore]);
 
-  // Flag whether a scroll-to-bottom is needed when the tab becomes active
-  const needsScrollOnActivateRef = useRef(false);
-
-  // When the tab activates, compensate for any scroll that was blocked while hidden
+  // When the tab activates, pay any scroll that fell due while it was hidden.
+  // A hidden tab is `display:none`: nothing could be measured, no observer
+  // fired, and the browser does not reliably preserve scrollTop across the
+  // toggle — so a tab that was pinned is re-pinned on the way back in.
   useEffect(() => {
-    if (isActive && needsScrollOnActivateRef.current && messages.length > 0) {
-      needsScrollOnActivateRef.current = false;
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-    }
+    if (!isActive) return;
+    if (!owedScrollRef.current && !stickRef.current.stuck) return;
+    owedScrollRef.current = false;
+    if (messages.length === 0) return;
+    // After layout, so scrollHeight reflects the now-visible content.
+    const id = requestAnimationFrame(() => {
+      if (!stickRef.current.stuck) return;
+      const container = containerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    });
+    return () => cancelAnimationFrame(id);
   }, [isActive, messages.length]);
 
-  // Initial load logic: if the tab is hidden, mark that scroll is needed on activation
+  // Initial load: land on the newest message.
   useEffect(() => {
-    if (isInitialLoadRef.current && messages.length > 0) {
-      isInitialLoadRef.current = false;
-      if (isActive) {
-        bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-      } else {
-        // Tab is hidden — mark that scroll should happen on activation
-        needsScrollOnActivateRef.current = true;
-      }
+    if (!isInitialLoadRef.current || messages.length === 0) return;
+    isInitialLoadRef.current = false;
+    const d = reduceStick(stickRef.current, { kind: 'reset' });
+    stickRef.current = d.state;
+    setShowNewChip(false);
+    setShowBottomButton(false);
+    if (isActive) {
+      const container = containerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    } else {
+      // Tab is hidden — mark that scroll should happen on activation
+      owedScrollRef.current = true;
     }
   }, [messages.length, isActive]);
 
@@ -396,12 +512,16 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         onScroll={handleScroll}
         className="relative flex-1 min-h-0 overflow-y-auto p-4"
       >
+        {/* One block wrapping everything that scrolls. It exists so the growth
+            observer has a box to watch: its height IS the transcript's height,
+            and it changes on every streamed delta — which the message array
+            does not. `h-full` only in the empty state, so the placeholder keeps
+            centring against the container exactly as before. */}
+        <div ref={contentRef} className={messages.length === 0 && !isLoading ? 'flex h-full items-center justify-center text-slate-9' : undefined}>
         {messages.length === 0 && !isLoading ? (
-          <div className="flex items-center justify-center h-full text-slate-9">
-            <div className="text-center">
-              <div className="text-4xl mb-4">💬</div>
-              <div>{t('chat.startConversation')}</div>
-            </div>
+          <div className="text-center">
+            <div className="text-4xl mb-4">💬</div>
+            <div>{t('chat.startConversation')}</div>
           </div>
         ) : (
           <>
@@ -460,7 +580,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                       // teaches them the app freezes.
                       <button
                         onClick={onStop}
-                        className="ml-1 rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:border-red-500/50 hover:text-red-600 dark:hover:text-red-400"
+                        className="ml-1 rounded border border-border px-1.5 py-0.5 text-[0.786rem] text-muted-foreground hover:border-red-500/50 hover:text-red-600 dark:hover:text-red-400"
                         title={t('chat.stopHint', { defaultValue: 'Stop this turn (or press Esc)' })}
                       >
                         {t('chat.stop', { defaultValue: 'Stop' })}
@@ -495,6 +615,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             <div ref={bottomRef} />
           </>
         )}
+        </div>
       </div>
 
       {/* Scroll to top button */}
@@ -510,8 +631,28 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         </button>
       )}
 
-      {/* Scroll to bottom button */}
-      {showBottomButton && messages.length > 0 && (
+      {/* The bottom control, in two strengths and one slot.
+            • Something ARRIVED while the user was reading further up → the
+              labelled "↓ new response" chip. It is the answer to the report
+              ("새로운 응답이 온지 아닌지 헷갈림"): the one thing a user who has
+              scrolled away needs to know is that there is something new, and
+              the transcript must tell them instead of dragging them to it.
+            • Merely scrolled up, nothing new → the plain circle, unchanged.
+          Clicking either re-engages the stick, so the answer is followed again
+          from there. */}
+      {showNewChip && messages.length > 0 ? (
+        <button
+          onClick={scrollToBottom}
+          data-testid="jump-to-latest-chip"
+          className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground shadow-md transition-all hover:shadow-lg active:scale-95"
+          title={t('chat.jumpToLatest')}
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+          {t('chat.newResponse', { defaultValue: 'New response' })}
+        </button>
+      ) : showBottomButton && messages.length > 0 ? (
         <button
           onClick={scrollToBottom}
           className="absolute bottom-2 left-1/2 -translate-x-1/2 p-2 bg-card text-muted-foreground hover:text-foreground shadow-md rounded-full transition-all hover:shadow-lg active:scale-95"
@@ -521,7 +662,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-      )}
+      ) : null}
 
       {/* Selection toolbar */}
       {outerEl && (
