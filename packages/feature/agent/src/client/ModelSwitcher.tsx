@@ -237,7 +237,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
           className="absolute top-full left-0 mt-1 z-50 w-64 rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-2 flex flex-col gap-1"
         >
           <div className="flex items-center justify-between gap-2 px-1 py-0.5">
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            <span className="text-[0.786rem] uppercase tracking-wide text-muted-foreground">
               {t('modelSwitcher.title', { defaultValue: 'Which model' })}
             </span>
             {scope === CLAUDE_MODEL_SCOPE && (
@@ -247,7 +247,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
                 type="button"
                 onClick={() => void loadModels(true)}
                 disabled={refreshing}
-                className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
+                className="text-[0.786rem] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
                 title={t('modelSwitcher.refreshHint', {
                   defaultValue: 'Ask your Claude sign-in which models it can use',
                 })}

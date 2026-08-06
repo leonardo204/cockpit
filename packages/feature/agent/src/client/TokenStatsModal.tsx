@@ -301,7 +301,7 @@ function BarChart({ data, height = 200, formatValue = fmtTokens }: { data: BarCh
       />
       {tooltip && (
         <div
-          className="absolute pointer-events-none bg-popover text-popover-foreground text-[10px] px-2 py-1 rounded shadow-lg border border-border whitespace-nowrap z-10"
+          className="absolute pointer-events-none bg-popover text-popover-foreground text-[0.714rem] px-2 py-1 rounded shadow-lg border border-border whitespace-nowrap z-10"
           style={{ left: tooltip.x, top: tooltip.y, transform: 'translate(-50%, -100%)' }}
         >
           {tooltip.content}
@@ -365,7 +365,7 @@ function HourHeatmap({ hourCounts }: { hourCounts: Record<string, number> }) {
                 }}
               />
               {h % 3 === 0 && (
-                <span className="text-[8px] text-muted-foreground">{h}</span>
+                <span className="text-[0.571rem] text-muted-foreground">{h}</span>
               )}
             </div>
           );
@@ -561,7 +561,7 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
               {rangeButtons.map(b => (
                 <button
                   key={b.key}
-                  className={`px-2.5 py-0.5 text-[11px] rounded transition-colors ${
+                  className={`px-2.5 py-0.5 text-[0.786rem] rounded transition-colors ${
                     timeRange === b.key
                       ? 'bg-background text-foreground shadow-sm'
                       : 'text-muted-foreground hover:text-foreground'
@@ -612,7 +612,7 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-xs font-medium text-muted-foreground">{t('tokenStats.activityTrend')}</h3>
-                  <div className="flex items-center gap-3 text-[10px]">
+                  <div className="flex items-center gap-3 text-[0.714rem]">
                     <span className="flex items-center gap-1">
                       <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: '#3b82f6' }} />
                       {t('tokenStats.messages')}
@@ -635,7 +635,7 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
                     <h3 className="text-xs font-medium text-muted-foreground">{t('tokenStats.byModel')}</h3>
                     <div className="flex bg-muted rounded-md p-0.5">
                       <button
-                        className={`px-2.5 py-0.5 text-[11px] rounded transition-colors ${
+                        className={`px-2.5 py-0.5 text-[0.786rem] rounded transition-colors ${
                           tokenChartMode === 'tokens'
                             ? 'bg-background text-foreground shadow-sm'
                             : 'text-muted-foreground hover:text-foreground'
@@ -643,7 +643,7 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
                         onClick={() => setTokenChartMode('tokens')}
                       >{t('tokenStats.tokenUsage')}</button>
                       <button
-                        className={`px-2.5 py-0.5 text-[11px] rounded transition-colors ${
+                        className={`px-2.5 py-0.5 text-[0.786rem] rounded transition-colors ${
                           tokenChartMode === 'cost'
                             ? 'bg-background text-foreground shadow-sm'
                             : 'text-muted-foreground hover:text-foreground'
@@ -652,7 +652,7 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
                       >{t('tokenStats.equivalentCost')}</button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 text-[10px] flex-wrap">
+                  <div className="flex items-center gap-3 text-[0.714rem] flex-wrap">
                     {modelRows.map(r => (
                       <span key={r.id} className="flex items-center gap-1">
                         <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: r.color }} />
@@ -736,7 +736,7 @@ export function TokenStatsModal({ isOpen, onClose }: TokenStatsModalProps) {
 function StatCard({ label, value, highlight, title }: { label: string; value: string; highlight?: boolean; title?: string }) {
   return (
     <div className={`bg-muted/30 rounded-lg px-3 py-2.5${title ? ' cursor-help' : ''}`} title={title}>
-      <div className="text-[10px] text-muted-foreground">{label}</div>
+      <div className="text-[0.714rem] text-muted-foreground">{label}</div>
       <div className={`text-sm font-semibold mt-0.5 ${highlight ? 'text-brand' : 'text-foreground'}`}>{value}</div>
     </div>
   );

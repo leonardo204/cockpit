@@ -443,7 +443,7 @@ const TreeNode = memo(function TreeNode({
           </span>
           <span className="flex-shrink-0">{entry.isDir ? '📁' : '📄'}</span>
           <span className="truncate">{entry.name}</span>
-          {copying && <span className="ml-1 text-[10px] text-muted-foreground">…</span>}
+          {copying && <span className="ml-1 text-[0.714rem] text-muted-foreground">…</span>}
         </div>
       )}
       {entry.isDir && open && <TreeChildren cwd={cwd} parentRel={rel} depth={depth + 1} />}
@@ -814,7 +814,7 @@ export function FileBrowserPanel({
           </button>
         </div>
       </div>
-      <div className="px-3 py-1.5 border-b border-border text-[10px] text-muted-foreground leading-tight">
+      <div className="px-3 py-1.5 border-b border-border text-[0.714rem] text-muted-foreground leading-tight">
         {t('fileBrowser.hint', {
           defaultValue: 'Drag a row into the message box for its path, or ⌘/Ctrl-click for @path. Drop files here to copy them in.',
         })}

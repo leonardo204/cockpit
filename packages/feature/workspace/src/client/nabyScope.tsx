@@ -126,7 +126,7 @@ export const ScopeBadge = memo(function ScopeBadge({
       : t(shortLabelKey(scope));
   return (
     <span
-      className={`inline-flex items-center gap-1 shrink-0 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${style.pill}`}
+      className={`inline-flex items-center gap-1 shrink-0 text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${style.pill}`}
     >
       <span aria-hidden>{style.icon}</span>
       {label}
@@ -210,7 +210,7 @@ export const ScopeHeader = memo(function ScopeHeader({
       </span>
       <div className="min-w-0">
         <div className={`text-xs font-semibold ${style.text}`}>{title}</div>
-        <div className="text-[11px] text-muted-foreground">{desc}</div>
+        <div className="text-[0.786rem] text-muted-foreground">{desc}</div>
       </div>
     </div>
   );

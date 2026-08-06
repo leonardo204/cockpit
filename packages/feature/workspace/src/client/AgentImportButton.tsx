@@ -163,7 +163,7 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
         })}
       </div>
 
-      <ul className="space-y-0.5 text-[11px] text-foreground">
+      <ul className="space-y-0.5 text-[0.786rem] text-foreground">
         <li className="font-mono">@{r.name}</li>
         {r.renamedFrom ? (
           <li className="text-muted-foreground">
@@ -205,7 +205,7 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
           className="mt-0.5"
           data-testid="agent-import-trust"
         />
-        <span className="text-[11px] leading-relaxed text-foreground">
+        <span className="text-[0.786rem] leading-relaxed text-foreground">
           {t('agentImport.trustLabel', { defaultValue: 'This is my own export.' })}
           <span className="block text-muted-foreground">
             {trustLedger
@@ -222,7 +222,7 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
       </label>
 
       {r.promptLooksSecret ? (
-        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[0.786rem] leading-relaxed text-red-700 dark:text-red-300">
           {t('agentImport.promptWarning', {
             defaultValue:
               "This agent's instructions look like they contain a credential. Read them before importing.",
@@ -234,13 +234,13 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
           border is what makes it look clickable. */}
       {r.warnings.length > 0 ? (
         <details className="rounded border border-border px-2 py-1.5">
-          <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
+          <summary className="cursor-pointer text-[0.714rem] font-medium text-muted-foreground hover:text-foreground">
             {t('agentImport.skipped', {
               defaultValue: '{{count}} thing(s) this machine will not take',
               count: r.warnings.length,
             })}
           </summary>
-          <ul className="mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+          <ul className="mt-1 space-y-0.5 text-[0.714rem] text-muted-foreground">
             {r.warnings.map((w, i) => (
               <li key={`${i}:${w}`}>{w}</li>
             ))}

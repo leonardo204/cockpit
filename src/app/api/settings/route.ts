@@ -19,6 +19,13 @@ interface Settings {
   // scoped per origin, port included: it is empty on every restart. Read back
   // server-side by src/app/layout.tsx. See shared-utils/bootTheme.ts.
   theme?: string
+  // The four font knobs (family / size / chat size / code family). Same reason
+  // as `theme`, one preference later: an ephemeral port makes localStorage
+  // useless across restarts, so the durable copy lives here and is read back
+  // server-side by src/app/layout.tsx. Shape and validation live in
+  // shared-utils/fontSettings.ts — this route stores what it is given and the
+  // readers normalize, exactly as they do for a hand-edited theme.
+  fonts?: unknown
   [key: string]: unknown
 }
 

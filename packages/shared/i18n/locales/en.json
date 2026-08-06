@@ -365,11 +365,21 @@
     "delegationStepsHint": "1 = one turn per message (off). 2+ lets it keep working on its own, up to {{cap}} steps; it stops when it reports done, uses no tool, or spends the budget.",
     "delegationError": "Could not save the delegation settings."
   },
+  "contextBanner": {
+    "long": "This conversation has grown long — continue in a new tab",
+    "continue": "Continue in a new tab",
+    "working": "Writing the handoff…",
+    "failed": "Could not open a new tab",
+    "dismiss": "Dismiss"
+  },
   "harnessPill": {
     "routingGate": "not delegated",
     "notButterfly": "@{{agent}} is not a butterfly yet, so it cannot take delegated work — this ran as a normal turn.",
     "stageScope": "acting within its stage",
-    "stageLimited": "@{{agent}} answered as itself, at the {{stage}} stage — it can read, draft and propose, and the actions it has not been measured on yet are held back."
+    "stageLimited": "@{{agent}} answered as itself, at the {{stage}} stage — it can read, draft and propose, and the actions it has not been measured on yet are held back.",
+    "compaction": "folded the conversation into a summary",
+    "compactionFolded": "Older parts of this conversation were folded into a summary ({{count}} messages).",
+    "compactionTruncated": "Older parts of this conversation were dropped to fit the window ({{count}} messages). No summary could be written."
   },
   "agentExport": {
     "button": "Export",
@@ -571,6 +581,7 @@
     "typing": "naby is typing…",
     "jumpToStart": "Jump to start",
     "jumpToLatest": "Jump to latest",
+    "newResponse": "New response",
     "copyMessage": "Copy message",
     "forkSession": "Fork session from here",
     "imageN": "Image {{index}}",
@@ -610,7 +621,8 @@
     "userMessages": "User messages",
     "projectNotes": "Project Notes",
     "scheduledTasks": "Scheduled Tasks",
-    "context": "Context",
+    "turnInput": "turn input",
+    "contextWindow": "window",
     "output": "Output",
     "copiedCommandTooltip": "Copied!",
     "copyCommandTooltip": "Copy command: claude -r {{sessionId}}",
@@ -929,6 +941,33 @@
     "copyAbsoluteDirPath": "Copy Absolute Dir Path",
     "copyFileName": "Copy File Name",
     "copyFolderName": "Copy Folder Name"
+  },
+  "fonts": {
+    "title": "Fonts",
+    "description": "Choose the faces and sizes the app and the conversation are drawn in.",
+    "uiFont": "App font",
+    "codeFont": "Code font",
+    "scale": "Text size",
+    "chatScale": "Chat text size",
+    "customFamily": "Custom family",
+    "customPlaceholder": "Font family name",
+    "preset": {
+      "system": "System (default)",
+      "pretendard": "Pretendard",
+      "notoSansKr": "Noto Sans KR",
+      "custom": "Custom…"
+    },
+    "mono": {
+      "system": "System mono (default)",
+      "jetbrains": "JetBrains Mono",
+      "firaCode": "Fira Code"
+    },
+    "installHint": "A preset is used only when that font is installed on this machine, and falls back to the system font otherwise.",
+    "preview": "Preview",
+    "previewText": "가나다 ABC 123",
+    "previewCode": "mono",
+    "previewChat": "This is how a message reads.",
+    "reset": "Reset to defaults"
   },
   "settings": {
     "title": "Settings",
@@ -1658,7 +1697,9 @@
     "newTab": "New tab",
     "noLearn": "Exclude from learning",
     "noLearnOff": "Include in learning",
-    "noLearnBadge": "Not learned from"
+    "noLearnBadge": "Not learned from",
+    "continueInNewTab": "Continue in a new tab",
+    "continuedTitle": "Continued — {{title}}"
   },
   "tabManagerTopBar": {
     "copyPageUrl": "Copy page URL",

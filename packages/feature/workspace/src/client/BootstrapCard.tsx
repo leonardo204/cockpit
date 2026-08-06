@@ -106,7 +106,7 @@ export function BootstrapCard({ isOpen, onSaved }: { isOpen: boolean; onSaved?: 
       <div className="text-xs font-medium text-foreground">
         {t('bootstrap.title', { defaultValue: 'Tell naby four things and it starts out knowing you' })}
       </div>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
         {t('bootstrap.body', {
           defaultValue:
             'Every field is optional, and you can change any of it later in this list. Blank answers are not stored.',
@@ -118,7 +118,7 @@ export function BootstrapCard({ isOpen, onSaved }: { isOpen: boolean; onSaved?: 
           it is being asked. The fast-growth session is that answer, and it lives
           on the naby tab, so the card names it rather than pretending the
           interview was everything. */}
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
+      <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
         {t('bootstrap.fastGrowth', {
           defaultValue: 'To teach it more, open a fast-growth session from the Naby tab.',
         })}
@@ -126,7 +126,7 @@ export function BootstrapCard({ isOpen, onSaved }: { isOpen: boolean; onSaved?: 
 
       {state.questions.map((q) => (
         <label key={q.id} className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-muted-foreground">{t(q.labelKey, { defaultValue: q.id })}</span>
+          <span className="text-[0.714rem] text-muted-foreground">{t(q.labelKey, { defaultValue: q.id })}</span>
           <input
             value={answers[q.id] ?? ''}
             onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}

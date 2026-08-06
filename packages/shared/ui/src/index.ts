@@ -14,6 +14,10 @@ export { toast, confirm } from './Toast';
 // Theme
 export * from './ThemeProvider';
 
+// Fonts — the theme's sibling: same persistence path, same pre-paint injection,
+// same cross-frame broadcast. See FontProvider.tsx.
+export * from './FontProvider';
+
 // Markdown
 export * from './MarkdownRenderer';
 export * from './markdownLinks';

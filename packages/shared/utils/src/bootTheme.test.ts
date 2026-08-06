@@ -92,7 +92,12 @@ describe('the persistence chain is actually wired', () => {
     // during render is a deadlock risk on a single-threaded dev server.
     expect(layout).toContain('SETTINGS_FILE');
     expect(layout).not.toMatch(/fetch\(["'`][^"'`]*\/api\/settings/);
-    expect(layout).toContain('buildBootScript(bootSource, storedTheme)');
+    // The call grew a third argument when the FONTS joined the theme on this
+    // path (2026-08-06): one read of settings.json now yields both preferences
+    // and both are injected into the same inlined script. Asserted loosely on
+    // the first two arguments, because this test owns the THEME half — the font
+    // half is pinned in `fontSettings.test.ts`.
+    expect(layout).toMatch(/buildBootScript\(\s*bootSource,\s*storedTheme[,)]/);
     // …and hands the same value to React, so the first render agrees with the
     // class boot.js just applied instead of flipping it back.
     expect(layout).toContain('initialTheme={storedTheme}');

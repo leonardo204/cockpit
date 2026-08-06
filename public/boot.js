@@ -52,6 +52,35 @@
     document.documentElement.classList.add(resolved);
   } catch (_e) {}
 
+  try {
+    // FONTS — the same story as the theme, one preference later (see
+    // shared-utils/fontSettings.ts). The four custom properties are applied to
+    // <html> HERE, before first paint, so the app never renders one frame in the
+    // default face/size and then snaps to the user's.
+    //
+    // WHAT IS READ IS ALREADY DERIVED. localStorage holds `{settings, vars}` and
+    // the server injects `vars` only, so this file carries no font-stack table
+    // of its own — the presets are defined once, in TypeScript, where they are
+    // unit-tested. Precedence matches the theme's: localStorage (the newer write
+    // within a session) → the server value (what survives the port change) →
+    // nothing at all, which leaves the defaults declared in globals.css.
+    var KEYS = ['--app-font-sans', '--app-font-mono', '--app-font-scale', '--chat-text-scale'];
+    var vars = null;
+    try {
+      var rawFonts = localStorage.getItem('fonts');
+      if (rawFonts) vars = (JSON.parse(rawFonts) || {}).vars || null;
+    } catch (_e) {}
+    if (!vars) vars = window.__cockpitServerFontVars || null;
+    if (vars) {
+      for (var i = 0; i < KEYS.length; i++) {
+        var v = vars[KEYS[i]];
+        // Whitelisted names only: a corrupt or hand-written storage entry can
+        // set these four properties and nothing else.
+        if (typeof v === 'string' && v) document.documentElement.style.setProperty(KEYS[i], v);
+      }
+    }
+  } catch (_e) {}
+
   // Clean up legacy Service Workers from the old PWA era, but KEEP our
   // push-only SW (/push-sw.js) — it powers Web Push notifications and does no
   // caching, so it doesn't reintroduce the offline behavior we removed.

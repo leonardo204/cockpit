@@ -194,7 +194,7 @@ export function GrowthReportModal({
               return (
                 <span
                   key={s}
-                  className={`flex items-center gap-1 text-[11px] ${
+                  className={`flex items-center gap-1 text-[0.786rem] ${
                     isNow ? 'font-semibold text-foreground' : reached ? 'text-foreground/70' : 'text-muted-foreground/50'
                   }`}
                 >
@@ -214,7 +214,7 @@ export function GrowthReportModal({
             // drill has been answered the sentence names both the real check-ins
             // still owed and the practice already done. The ledger rule behind it
             // is untouched — practice still cannot start the measurement.
-            <div className="text-[11px] text-muted-foreground">
+            <div className="text-[0.786rem] text-muted-foreground">
               {g.drillTrials !== undefined && g.drillTrials > 0
                 ? t('growth.eggHintWithDrills', {
                     defaultValue:
@@ -232,7 +232,7 @@ export function GrowthReportModal({
             <div>
               <div className="flex items-baseline justify-between">
                 <span className="text-sm font-semibold text-foreground">{g.percent}%</span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-[0.714rem] text-muted-foreground">
                   {t('growth.ofButterfly', { defaultValue: 'of the butterfly threshold' })}
                 </span>
               </div>
@@ -246,12 +246,12 @@ export function GrowthReportModal({
           )}
 
           {/* what it means, and what it does NOT count */}
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+          <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
             {t(`growth.meaning.${g.stage}`, { defaultValue: '' })}
           </p>
 
           {g.blockedByTripwire ? (
-            <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+            <p className="text-[0.786rem] leading-relaxed text-red-700 dark:text-red-300">
               {t('growth.tripwireBlocked', {
                 defaultValue:
                   'Accuracy has reached the line, but {{count}} action(s) were refused for safety recently. Until those fall out of the recent window it does not become a butterfly — a safety refusal is not averaged away.',
@@ -261,7 +261,7 @@ export function GrowthReportModal({
           ) : null}
 
           {/* the axes, stated plainly */}
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+          <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[0.786rem]">
             <dt className="text-muted-foreground">{t('growth.axis.hitRate', { defaultValue: 'Guessed right' })}</dt>
             <dd className="text-foreground text-right">
               {t('growth.axis.hitRateValue', {
@@ -306,7 +306,7 @@ export function GrowthReportModal({
               product: "3.5 of 15" is a number no user can check against anything
               they remember doing. */}
           {g.implicitTrials !== undefined && g.implicitTrials > 0 ? (
-            <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="growth-implicit">
+            <p className="text-[0.786rem] leading-relaxed text-muted-foreground" data-testid="growth-implicit">
               {t('growth.implicitAxis', {
                 defaultValue:
                   'It also acted on its own {{reviewed}} time(s) that were looked back over afterwards, and you left {{stood}} of them alone. Those count toward the gauge too, but each is worth {{weight}} of a check-in you actually answered — not objecting is weaker evidence than choosing.',
@@ -322,7 +322,7 @@ export function GrowthReportModal({
               the screen only ever showed one number, the first time a user
               noticed would be the last time they believed any of it. */}
           {g.drillTrials !== undefined && g.drillTrials > 0 ? (
-            <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="growth-drill">
+            <p className="text-[0.786rem] leading-relaxed text-muted-foreground" data-testid="growth-drill">
               {t('growth.drillAxis', {
                 defaultValue:
                   'Real {{real}} · practice {{drill}} — of the practice questions it guessed {{drillHits}} right. Practice counts toward the gauge at {{weight}} of a real check-in, and it can never START the measurement: the minimum sample has to come from real work.',
@@ -339,11 +339,11 @@ export function GrowthReportModal({
               about as often as it says it is" does. */}
           {g.brier !== undefined || g.ask ? (
             <div className="space-y-1 border-t border-border pt-2">
-              <div className="text-[10px] font-medium text-muted-foreground">
+              <div className="text-[0.714rem] font-medium text-muted-foreground">
                 {t('growth.secondTier', { defaultValue: 'Two other things worth knowing' })}
               </div>
               {g.brier !== undefined ? (
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
                   {/* 0.25 is what an agent scores by always saying "50% sure", so
                       it is the line where stated confidence starts carrying
                       information. */}
@@ -361,7 +361,7 @@ export function GrowthReportModal({
                 </p>
               ) : null}
               {g.ask ? (
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
                   {/* The PAIR, never precision alone: a flawless agent scores 0
                       precision because every ask turned out to be unnecessary. */}
                   {t('growth.askQuality', {
@@ -380,12 +380,12 @@ export function GrowthReportModal({
           {/* per-task-type: trust is graduated, not global */}
           {g.byTaskType.length > 0 ? (
             <div>
-              <div className="text-[10px] font-medium text-muted-foreground">
+              <div className="text-[0.714rem] font-medium text-muted-foreground">
                 {t('growth.byTaskType', { defaultValue: 'By kind of work' })}
               </div>
               <div className="mt-1 space-y-0.5">
                 {g.byTaskType.map((tt) => (
-                  <div key={tt.taskType} className="flex items-center justify-between text-[11px]">
+                  <div key={tt.taskType} className="flex items-center justify-between text-[0.786rem]">
                     <span className="font-mono text-foreground truncate">{tt.taskType}</span>
                     <span className="text-muted-foreground shrink-0">
                       {GLYPH[tt.stage]} {stageName(tt.stage)} · {tt.hits}/{tt.trials}
@@ -393,7 +393,7 @@ export function GrowthReportModal({
                   </div>
                 ))}
               </div>
-              <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
+              <p className="mt-1 text-[0.714rem] leading-relaxed text-muted-foreground/80">
                 {t('growth.byTaskTypeHint', {
                   defaultValue:
                     'A new kind of work starts in its own egg instead of dragging the overall number down.',
@@ -405,7 +405,7 @@ export function GrowthReportModal({
           {/* the decisions themselves, so the number is auditable */}
           {g.recentDecisions.length > 0 ? (
             <details>
-              <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
+              <summary className="cursor-pointer text-[0.714rem] font-medium text-muted-foreground hover:text-foreground">
                 {t('growth.recent', { defaultValue: 'What it asked, and what you chose' })}
               </summary>
               {/* Inset dividers, not one box per decision. */}
@@ -413,19 +413,19 @@ export function GrowthReportModal({
                 {g.recentDecisions.map((d, i) => (
                   <div key={`${d.at}:${i}`} className="py-1.5 first:pt-0 last:pb-0">
                     <div className="flex items-start gap-1.5">
-                      <span className="text-[11px] leading-4">{d.hit ? '🦋' : '🐛'}</span>
-                      <span className="flex-1 text-[11px] leading-4 text-foreground">{d.question}</span>
+                      <span className="text-[0.786rem] leading-4">{d.hit ? '🦋' : '🐛'}</span>
+                      <span className="flex-1 text-[0.786rem] leading-4 text-foreground">{d.question}</span>
                       {/* A practice question is LABELLED, not hidden: this list is
                           what makes the gauge auditable, and an invented scenario
                           sitting here unmarked would read as a decision the user
                           really faced. */}
                       {d.drill ? (
-                        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">
+                        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[0.643rem] text-muted-foreground">
                           {t('growth.drillTag', { defaultValue: 'practice' })}
                         </span>
                       ) : null}
                     </div>
-                    <div className="mt-0.5 pl-5 text-[10px] leading-4 text-muted-foreground">
+                    <div className="mt-0.5 pl-5 text-[0.714rem] leading-4 text-muted-foreground">
                       {d.chosen >= 0
                         ? t('growth.recentChose', {
                             defaultValue: 'you chose: {{option}}',
@@ -443,7 +443,7 @@ export function GrowthReportModal({
                         : ''}
                     </div>
                     {d.excludedCode ? (
-                      <div className="mt-0.5 pl-5 text-[10px] text-amber-700 dark:text-amber-400">
+                      <div className="mt-0.5 pl-5 text-[0.714rem] text-amber-700 dark:text-amber-400">
                         {t('growth.recentExcluded', {
                           defaultValue: 'not counted — {{reason}}',
                           // The server sends a CODE; anything unrecognised (a row
@@ -464,7 +464,7 @@ export function GrowthReportModal({
               stopped being true the day reviewed actions started entering the
               bound, and a disclaimer that is slightly false is worse than none. */}
           <div className="border-t border-border pt-2">
-            <p className="text-[10px] leading-relaxed text-muted-foreground/80">
+            <p className="text-[0.714rem] leading-relaxed text-muted-foreground/80">
               {t('growth.howItMoves', {
                 defaultValue:
                   'This moves when naby says how it would proceed and you pick the same thing — not with how much you talk to it.',
@@ -493,10 +493,10 @@ export function GrowthReportModal({
               ------------------------------------------------------------------ */}
           {learning ? (
             <div className="border-t border-border pt-2" data-testid="growth-learning">
-              <div className="text-[10px] font-medium text-foreground/80">
+              <div className="text-[0.714rem] font-medium text-foreground/80">
                 {t('growth.learning.title', { defaultValue: 'What it has learned so far' })}
               </div>
-              <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+              <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.786rem]">
                 <dt className="text-muted-foreground">
                   {t('growth.learning.confirmed', { defaultValue: 'Facts in use' })}
                 </dt>
@@ -557,7 +557,7 @@ export function GrowthReportModal({
                   })}
                 </dd>
               </dl>
-              <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground/80">
+              <p className="mt-1 text-[0.714rem] leading-relaxed text-muted-foreground/80">
                 {learning.lastReflectionAt
                   ? t('growth.learning.lastReflection', {
                       defaultValue: 'It last looked back over a finished conversation on {{when}}.',
@@ -570,7 +570,7 @@ export function GrowthReportModal({
               {/* THE DISOWNING SENTENCE (spec §6.3, trust-meter §9.2 rule 2). Not
                   optional and not a tooltip: it is the only thing standing between
                   these counts and being read as the growth number. */}
-              <p className="mt-1 border-t border-border pt-1.5 text-[10px] leading-relaxed text-muted-foreground/80">
+              <p className="mt-1 border-t border-border pt-1.5 text-[0.714rem] leading-relaxed text-muted-foreground/80">
                 {t('growth.learning.notTheGauge', {
                   defaultValue:
                     'These numbers do not enter the butterfly judgement — they show WHAT it has learned, not whether it can be trusted.',

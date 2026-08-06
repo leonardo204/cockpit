@@ -155,7 +155,7 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
         })}
       </div>
 
-      <ul className="space-y-0.5 text-[11px] text-foreground">
+      <ul className="space-y-0.5 text-[0.786rem] text-foreground">
         <li>
           {t('agentExport.included', {
             defaultValue: '{{count}} confirmed thing(s) it learned',
@@ -180,10 +180,10 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
           label that separates these lines from the ones above. */}
       {withheld.length > 0 ? (
         <div>
-          <div className="text-[10px] font-medium text-muted-foreground">
+          <div className="text-[0.714rem] font-medium text-muted-foreground">
             {t('agentExport.withheld', { defaultValue: 'Left out' })}
           </div>
-          <ul className="mt-0.5 space-y-0.5 text-[11px] text-muted-foreground">
+          <ul className="mt-0.5 space-y-0.5 text-[0.786rem] text-muted-foreground">
             {withheld.map((line) => (
               <li key={line}>{line}</li>
             ))}
@@ -192,7 +192,7 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
       ) : null}
 
       {r.promptLooksSecret ? (
-        <p className="text-[11px] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[0.786rem] leading-relaxed text-red-700 dark:text-red-300">
           {t('agentExport.promptWarning', {
             defaultValue:
               "This agent's own instructions look like they contain a credential. It is not removed — that would change how the agent behaves — so check it before saving.",
@@ -200,7 +200,7 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
         </p>
       ) : null}
 
-      <div className="text-[10px] font-mono text-muted-foreground break-all">
+      <div className="text-[0.714rem] font-mono text-muted-foreground break-all">
         {pending.markdownName} · {pending.sidecarName}
       </div>
 

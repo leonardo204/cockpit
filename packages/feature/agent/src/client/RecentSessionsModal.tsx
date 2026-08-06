@@ -306,10 +306,10 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
                       {getProjectName(session.cwd)}
                     </h4>
                     {session.status === 'loading' && (
-                      <span className="text-[10px] text-orange-11 flex-shrink-0">{t('sessions.running')}</span>
+                      <span className="text-[0.714rem] text-orange-11 flex-shrink-0">{t('sessions.running')}</span>
                     )}
                     {session.status === 'unread' && (
-                      <span className="text-[10px] text-red-500 flex-shrink-0">{t('sessions.done')}</span>
+                      <span className="text-[0.714rem] text-red-500 flex-shrink-0">{t('sessions.done')}</span>
                     )}
                   </div>
 

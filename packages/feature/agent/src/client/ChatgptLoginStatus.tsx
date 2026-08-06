@@ -231,7 +231,7 @@ export function ChatgptLoginStatus() {
         >
           {/* WHO — the account email from the bridge status (labels only). */}
           <div className="flex flex-col gap-0.5">
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            <span className="text-[0.786rem] uppercase tracking-wide text-muted-foreground">
               {t('chatgptOauth.account', { defaultValue: 'Account' })}
             </span>
             <span className="text-foreground" data-testid="chatgpt-account-identity">
@@ -241,7 +241,7 @@ export function ChatgptLoginStatus() {
             </span>
             {/* The dev-only / ToS caution — small, in the popover, not on the row.
                 Keeps the "not endorsed by OpenAI" nuance without overwhelming. */}
-            <span className="text-[11px] text-amber-600 dark:text-amber-400" data-testid="chatgpt-account-devnote">
+            <span className="text-[0.786rem] text-amber-600 dark:text-amber-400" data-testid="chatgpt-account-devnote">
               {t('chatgptOauth.devBadge')}
             </span>
           </div>
@@ -276,7 +276,7 @@ export function ChatgptLoginStatus() {
           )}
 
           {error && (
-            <span className="text-[11px] text-amber-500" data-testid="chatgpt-account-error">
+            <span className="text-[0.786rem] text-amber-500" data-testid="chatgpt-account-error">
               {error}
             </span>
           )}

@@ -323,7 +323,7 @@ export function ClaudeLoginStatus() {
         >
           {/* WHO — the real identity from `claude auth status`. */}
           <div className="flex flex-col gap-0.5">
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+            <span className="text-[0.786rem] uppercase tracking-wide text-muted-foreground">
               {t('claudeAccount.account', { defaultValue: 'Account' })}
             </span>
             <span className="text-foreground" data-testid="claude-account-identity">
@@ -338,13 +338,13 @@ export function ClaudeLoginStatus() {
             </span>
             {/* Org + plan when signed in — the fuller identity the CLI reports. */}
             {signedIn && (orgName || planLabel) && (
-              <span className="text-[11px] text-muted-foreground" data-testid="claude-account-org">
+              <span className="text-[0.786rem] text-muted-foreground" data-testid="claude-account-org">
                 {[orgName, planLabel ? t('claudeAccount.planLine', { plan: planLabel, defaultValue: '{{plan}} plan' }) : null]
                   .filter(Boolean)
                   .join(' · ')}
               </span>
             )}
-            <span className="text-[11px] text-muted-foreground">{login.summary}</span>
+            <span className="text-[0.786rem] text-muted-foreground">{login.summary}</span>
           </div>
 
           <div className="border-t border-border" />
@@ -379,13 +379,13 @@ export function ClaudeLoginStatus() {
                   : t('claudeAccount.login', { defaultValue: 'Log in' })}
               </button>
               {loginError && (
-                <span className="text-[11px] text-amber-500" data-testid="claude-account-login-error">
+                <span className="text-[0.786rem] text-amber-500" data-testid="claude-account-login-error">
                   {loginError}
                 </span>
               )}
               {/* Fallback: the exact command, for a headless box where no browser
                   can open, or if the spawn was refused. */}
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[0.786rem] text-muted-foreground">
                 {t('claudeAccount.orRunInTerminal', {
                   defaultValue: 'Or run this in a terminal, then re-check:',
                 })}

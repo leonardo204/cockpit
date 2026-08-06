@@ -186,14 +186,14 @@ export function GrowthPanel({
   // rectangles to say "loading".
   if (loading) {
     return (
-      <p className="mt-2.5 border-t border-border pt-2.5 text-[11px] text-muted-foreground">
+      <p className="mt-2.5 border-t border-border pt-2.5 text-[0.786rem] text-muted-foreground">
         {t('growth.loading', { defaultValue: 'Reading the record…' })}
       </p>
     );
   }
   if (failed || !g) {
     return (
-      <p className="mt-2.5 border-t border-border pt-2.5 text-[11px] text-muted-foreground">
+      <p className="mt-2.5 border-t border-border pt-2.5 text-[0.786rem] text-muted-foreground">
         {t('growth.unavailable', { defaultValue: 'The growth record could not be read.' })}
       </p>
     );
@@ -257,7 +257,7 @@ export function GrowthPanel({
           return (
             <span
               key={s}
-              className={`flex items-center gap-1 text-[11px] ${
+              className={`flex items-center gap-1 text-[0.786rem] ${
                 isNow ? 'font-semibold text-foreground' : reached ? 'text-foreground/70' : 'text-muted-foreground/50'
               }`}
             >
@@ -282,7 +282,7 @@ export function GrowthPanel({
         // Both facts, one line, from numbers the reading already carries — and
         // deliberately NOT a second gauge: the egg gauge stays absent, so the
         // numbers and the words keep saying the same thing.
-        <div className="text-[11px] text-muted-foreground">
+        <div className="text-[0.786rem] text-muted-foreground">
           {g.drillTrials !== undefined && g.drillTrials > 0
             ? t('growth.eggHintWithDrills', {
                 defaultValue:
@@ -300,7 +300,7 @@ export function GrowthPanel({
         <div>
           <div className="flex items-baseline justify-between">
             <span className="text-sm font-semibold text-foreground">{g.percent}%</span>
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-[0.714rem] text-muted-foreground">
               {t('growth.ofButterfly', { defaultValue: 'of the butterfly threshold' })}
             </span>
           </div>
@@ -320,7 +320,7 @@ export function GrowthPanel({
           rectangle to the row. The colour still switches on direction, so a drop
           reads as a drop. */}
       <div
-        className={`border-l-2 pl-2.5 text-[11px] leading-relaxed ${
+        className={`border-l-2 pl-2.5 text-[0.786rem] leading-relaxed ${
           c.direction === 'down'
             ? 'border-amber-500/60 text-amber-800 dark:text-amber-200'
             : 'border-border text-muted-foreground'
@@ -340,7 +340,7 @@ export function GrowthPanel({
         <button
           type="button"
           onClick={() => setReportOpen(true)}
-          className="rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-accent"
+          className="rounded border border-border px-2 py-1 text-[0.786rem] text-foreground hover:bg-accent"
         >
           {t('growth.report.open', { defaultValue: 'Growth report' })}
         </button>
@@ -356,7 +356,7 @@ export function GrowthPanel({
             defaultValue:
               'Practice answers count for less than real check-ins, and they can never start the measurement.',
           })}
-          className="rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-accent disabled:opacity-50"
+          className="rounded border border-border px-2 py-1 text-[0.786rem] text-foreground hover:bg-accent disabled:opacity-50"
         >
           {t('growth.fastSession.button', { defaultValue: 'Fast-growth session' })}
         </button>
@@ -371,7 +371,7 @@ export function GrowthPanel({
           discount caveat stayed on the button, where a second-order fact
           belongs. */}
       <p
-        className="text-[10px] leading-relaxed text-muted-foreground"
+        className="text-[0.714rem] leading-relaxed text-muted-foreground"
         data-testid="growth-fast-session-hint"
       >
         {t('growth.fastSession.hint', {
@@ -386,7 +386,7 @@ export function GrowthPanel({
           middle one is the honest report of the fallback path — saying "opened"
           when nothing moved is how the previous version misled. */}
       {drillSession !== 'idle' ? (
-        <p className="text-[10px] leading-relaxed text-muted-foreground/80">
+        <p className="text-[0.714rem] leading-relaxed text-muted-foreground/80">
           {drillSession === 'creating'
             ? t('growth.fastSession.opening', { defaultValue: 'Opening…' })
             : drillSession === 'done'

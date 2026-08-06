@@ -264,18 +264,18 @@ const BrowserRow = memo(function BrowserRow({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {corroboration >= CORROBORATION_BADGE_MIN ? (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-sky-500/15 text-sky-600 dark:text-sky-400">
+            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-sky-500/15 text-sky-600 dark:text-sky-400">
               {t('memoryReview.corroborated', { count: corroboration })}
             </span>
           ) : null}
           {isStale ? (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-500/15 text-slate-600 dark:text-slate-400">
+            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-slate-500/15 text-slate-600 dark:text-slate-400">
               {t('memoryReview.staleBadge')}
             </span>
           ) : null}
           {isSuperseded ? (
             <span
-              className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-violet-500/15 text-violet-600 dark:text-violet-400"
+              className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-violet-500/15 text-violet-600 dark:text-violet-400"
               data-testid="memory-superseded-badge"
             >
               {t('memoryReview.supersededBadge')}
@@ -283,7 +283,7 @@ const BrowserRow = memo(function BrowserRow({
           ) : null}
           <ScopeBadge scope={scope} cwd={cwd} />
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+            className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
               isProposed
                 ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                 : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
@@ -296,7 +296,7 @@ const BrowserRow = memo(function BrowserRow({
 
       {/* Provenance — the load-bearing part of a REVIEW surface, plus (M10) when
           this memory was last actually used, which is what "unused" means. */}
-      <div className="flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-muted-foreground">
+      <div className="flex flex-wrap gap-x-2 gap-y-1 text-[0.714rem] text-muted-foreground">
         <span className="px-1.5 py-0.5 rounded bg-accent">{t(TYPE_LABELS[item.type])}</span>
         <span className="px-1.5 py-0.5 rounded bg-accent">
           {t(TRUST_LABELS[item.provenance.source])}
@@ -756,7 +756,7 @@ export function MemoryBrowserModal({
             filter, so the range statement can never describe a different set
             than the rows above it. */}
         <div className="flex items-center justify-between px-4 py-2.5 border-t border-border">
-          <span className="text-[11px] text-muted-foreground" data-testid="memory-page-range">
+          <span className="text-[0.786rem] text-muted-foreground" data-testid="memory-page-range">
             {t('memoryReview.pageOf', { from: shownFrom, to: shownTo, total })}
           </span>
           <div className="flex items-center gap-1.5">
@@ -780,7 +780,7 @@ export function MemoryBrowserModal({
         {/* What an edit actually does (§3). Stated where the edit button is,
             because "this is now attributed to you and its evidence was reset" is
             not something a user can infer from a text box. */}
-        <p className="px-4 pb-3 text-[10px] text-muted-foreground leading-relaxed">
+        <p className="px-4 pb-3 text-[0.714rem] text-muted-foreground leading-relaxed">
           {t('memoryReview.editNote')}
         </p>
       </div>

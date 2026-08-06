@@ -96,6 +96,31 @@ html, body {
 
   /* ---- Border radius ---- */
   --radius: 0.5rem;
+
+  /* ---- Fonts (user preference, four knobs) ----
+   *
+   * THESE FOUR ARE THE ONLY THING THE FONT SETTINGS TOUCH. The values below are
+   * the DEFAULTS and must stay identical to what `fontCssVars(DEFAULT_FONT_SETTINGS)`
+   * produces in `@cockpit/shared-utils/fontSettings` — that module owns the
+   * preset stacks, `public/boot.js` applies them to <html> before first paint,
+   * and `FontProvider` re-applies them on every change. This declaration is what
+   * the app falls back to when neither has run (a host that does not inline the
+   * boot script, or a corrupt preference).
+   *
+   * `--font-inter` is declared by the Next font class the root layout puts on
+   * <html>. It has to be on <html> rather than <body>, because a custom property
+   * is substituted against the element it is DECLARED on: with the class on
+   * <body>, `var(--font-inter)` inside this `:root` declaration would resolve to
+   * the guaranteed-invalid value and take the whole font-family with it. */
+  --app-font-sans: var(--font-inter), -apple-system, "Segoe UI", "Apple SD Gothic Neo",
+    "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --app-font-mono: "Maple Mono CN", "Maple Mono NF CN", "Sarasa Mono SC",
+    var(--font-jetbrains-mono), ui-monospace, Menlo, Consolas, monospace;
+  /* Unitless multipliers, not sizes: one scales the ROOT font size (so every rem
+   * in the app follows), the other scales message content in `em` (so it
+   * COMPOSES with the first rather than fighting it). */
+  --app-font-scale: 1;
+  --chat-text-scale: 1;
 }
 
 /* ---- Dark theme ---- */
@@ -185,15 +210,17 @@ html, body {
 
 /* ---- Tailwind v4 theme registration ---- */
 @theme inline {
-  /* Fonts */
-  --font-sans: var(--font-inter), "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Fonts — Tailwind's `font-sans` / `font-mono` utilities (and its preflight,
+   * which sets the mono family on code/kbd/samp/pre) now resolve THROUGH the two
+   * user-preference variables above, so choosing a family in Settings reaches
+   * every one of those call sites without touching a single component.
+   *
+   * The stacks themselves moved to `--app-font-sans` / `--app-font-mono`; the
+   * default mono list is unchanged (Maple Mono CN first — perfect 2:1 CJK/Latin
+   * alignment — then Sarasa Mono SC, then the bundled JetBrains Mono). */
+  --font-sans: var(--app-font-sans);
   --font-serif: var(--font-lora), "PingFang SC", "Microsoft YaHei", serif;
-  /*
-   * Monospace: prefer Maple Mono CN (perfect 2:1 CJK/Latin alignment)
-   * Install: brew install --cask font-maple-mono-nf-cn
-   * Fallback: Sarasa Mono SC (brew install --cask font-sarasa-gothic)
-   */
-  --font-mono: "Maple Mono CN", "Maple Mono NF CN", "Sarasa Mono SC", var(--font-jetbrains-mono), "Menlo", "Consolas", monospace;
+  --font-mono: var(--app-font-mono);
 
   /* Colors */
   --color-background: hsl(var(--background));
@@ -275,26 +302,45 @@ html, body {
 
 /* ---- Base styles ---- */
 html {
-  font-size: 14px; /* Reduced base font size */
+  /* 14px is the app's base size (reduced from the browser's 16px). The
+   * multiplier is the GLOBAL SIZE knob: every Tailwind `text-*` class is
+   * rem-based, so scaling the root moves the entire UI together — which is the
+   * only way a single control can honour WCAG 1.4.4's 200%-resize requirement
+   * without a per-surface audit. */
+  font-size: calc(14px * var(--app-font-scale, 1));
 }
 
 body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  /* Use the --font-inter variable directly (defined on body by Next.js font).
-   *
-   * ORDER IS THE WHOLE POINT. Inter carries Latin but no Hangul, so every
-   * Korean glyph falls through to whatever comes next. With the CJK fonts
-   * listed SC-first, Windows resolved Hangul to Microsoft YaHei — a Simplified
-   * Chinese face whose Korean coverage is a fallback, which is why the UI read
-   * as slightly wrong and blurry there. The Korean faces now sit ahead of the
-   * SC ones (Apple SD Gothic Neo on macOS, Malgun Gothic on Windows), and the
-   * SC entries stay behind them so Chinese text still resolves. No font files
-   * are bundled — these are system faces only. */
-  font-family: var(--font-inter), -apple-system, "Segoe UI", "Apple SD Gothic Neo",
-    "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* The UI FAMILY knob. The default stack it resolves to is the one this rule
+   * used to spell out inline, and its ORDER IS STILL THE WHOLE POINT: Inter
+   * carries Latin but no Hangul, so every Korean glyph falls through to whatever
+   * comes next. With the CJK fonts listed SC-first, Windows resolved Hangul to
+   * Microsoft YaHei — a Simplified Chinese face whose Korean coverage is a
+   * fallback, which is why the UI read as slightly wrong and blurry there. The
+   * Korean faces sit ahead of the SC ones (Apple SD Gothic Neo on macOS, Malgun
+   * Gothic on Windows), and the SC entries stay behind them so Chinese text
+   * still resolves. No font files are bundled — these are system faces only, and
+   * every preset in the picker keeps that property. */
+  font-family: var(--app-font-sans);
   /* Disable the browser's default two-finger swipe back/forward navigation */
   overscroll-behavior-x: none;
+}
+
+/* ---- Chat text size ----
+ *
+ * THE SECOND SCALE, and the reason it is `em` rather than `rem`: it has to
+ * COMPOSE with the global one, not replace it. The wrapper inherits the root
+ * size (already multiplied by --app-font-scale) and multiplies it again, so
+ * 125% global + 110% chat is 1.375× base — and a user who only wants the
+ * conversation bigger leaves the surrounding UI exactly where it was.
+ *
+ * Everything inside a message therefore has to be sized in `em` too. That is
+ * what MarkdownRenderer's headings/code were changed to; anything that
+ * reintroduces a rem inside this wrapper simply will not follow the knob. */
+.chat-content {
+  font-size: calc(1em * var(--chat-text-scale, 1));
 }
 
 /* ---- Focus indicators ----
@@ -642,11 +688,13 @@ code[class*="language-"] .token {
   background: hsl(var(--slate-4));
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
-  /* Windows entries (Consolas, Cascadia Mono) before the generic keyword: the
-   * mac-only faces ahead of them resolve to nothing on Windows, which left
-   * inline code rendering in the generic monospace default. System faces only. */
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Cascadia Mono',
-    monospace;
+  /* The CODE FAMILY knob, like every other mono surface. It used to spell out
+   * its own stack — Windows entries (Consolas, Cascadia Mono) before the generic
+   * keyword, because the mac-only faces ahead of them resolve to nothing on
+   * Windows and left inline code in the generic monospace default. That ordering
+   * lives in `--app-font-mono` now, so the note editor and the chat agree on
+   * what "code" looks like. System faces only. */
+  font-family: var(--app-font-mono);
   font-size: 0.875em;
 }
 

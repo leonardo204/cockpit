@@ -71,7 +71,7 @@ export const SubagentBlock = memo(function SubagentBlock({ group, cwd, sessionId
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
         data-testid="subagent-toggle"
-        className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+        className="flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-[0.786rem] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
       >
         {expanded ? (
           <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />

@@ -130,21 +130,21 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         {t('telegramSettings.enable', { defaultValue: 'Enable Telegram escalation' })}
         {ready ? (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+          <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
             {t('telegramSettings.ready', { defaultValue: 'ready' })}
           </span>
         ) : null}
       </label>
 
       <label className="flex flex-col gap-0.5">
-        <span className="text-[10px] text-muted-foreground">{t('telegramSettings.botToken', { defaultValue: 'Bot token' })}</span>
+        <span className="text-[0.714rem] text-muted-foreground">{t('telegramSettings.botToken', { defaultValue: 'Bot token' })}</span>
         <input
           value={tokenInput}
           onChange={(e) => setTokenInput(e.target.value)}
           placeholder={tokenMask || t('telegramSettings.tokenPlaceholder', { defaultValue: '123456:AA… (from @BotFather)' })}
           className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground font-mono"
         />
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[0.714rem] text-muted-foreground">
           {tokenMask
             ? t('telegramSettings.tokenKept', { defaultValue: 'Leave blank to keep the current token.' })
             : t('telegramSettings.tokenHint', { defaultValue: 'A dedicated naby bot, separate from any other tool.' })}
@@ -152,7 +152,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
       </label>
 
       <label className="flex flex-col gap-0.5">
-        <span className="text-[10px] text-muted-foreground">{t('telegramSettings.chatId', { defaultValue: 'Chat ID' })}</span>
+        <span className="text-[0.714rem] text-muted-foreground">{t('telegramSettings.chatId', { defaultValue: 'Chat ID' })}</span>
         <div className="flex gap-2 items-center">
           <input
             value={chatId}
@@ -168,7 +168,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
             {t('telegramSettings.detect', { defaultValue: 'Detect' })}
           </button>
         </div>
-        <span className="text-[10px] text-muted-foreground">
+        <span className="text-[0.714rem] text-muted-foreground">
           {t('telegramSettings.detectHint', { defaultValue: 'Message your naby bot once, then tap Detect.' })}
         </span>
       </label>

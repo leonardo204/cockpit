@@ -104,7 +104,7 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         {current.toolName}
       </div>
       {current.inputPreview ? (
-        <div className="mt-0.5 text-[11px] font-mono text-muted-foreground break-all line-clamp-2">
+        <div className="mt-0.5 text-[0.786rem] font-mono text-muted-foreground break-all line-clamp-2">
           {current.inputPreview}
         </div>
       ) : null}
@@ -139,7 +139,7 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         </button>
       </div>
       {queue.length > 1 ? (
-        <div className="mt-1.5 text-[10px] text-muted-foreground">
+        <div className="mt-1.5 text-[0.714rem] text-muted-foreground">
           {t('toolApproval.more', { defaultValue: '+{{count}} more waiting', count: queue.length - 1 })}
         </div>
       ) : null}

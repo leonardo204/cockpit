@@ -1480,7 +1480,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
               <p className="text-sm text-foreground truncate flex items-center gap-1.5">
                 {row.name}
                 {row.status === 'proposed' && (
-                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-px">
+                  <span className="shrink-0 text-[0.714rem] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-px">
                     {t('providerSetup.mcpProposed')}
                   </span>
                 )}

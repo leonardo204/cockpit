@@ -353,7 +353,7 @@ export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActi
           data-testid="engine-switcher-menu"
           className="absolute top-full left-0 mt-1 z-50 w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-2 flex flex-col gap-1"
         >
-          <span className="px-1 py-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <span className="px-1 py-0.5 text-[0.786rem] uppercase tracking-wide text-muted-foreground">
             {t('engineSwitcher.title', { defaultValue: 'Which model answers' })}
           </span>
           {options.map((o) => (

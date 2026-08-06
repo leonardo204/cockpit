@@ -91,12 +91,12 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
         className="w-full flex items-center gap-1.5 rounded px-2 py-1 text-left text-xs leading-5 text-muted-foreground hover:bg-muted/30 transition-colors"
         title={t('toolCall.toggleDetails', { defaultValue: 'Show details' })}
       >
-        <span className="text-[11px] leading-none flex-shrink-0">{toolIcon}</span>
+        <span className="text-[0.786rem] leading-none flex-shrink-0">{toolIcon}</span>
         <span className="text-foreground flex-shrink-0">{toolCall.name}</span>
         {displayText && (
           <>
             <span
-              className="truncate flex-1 min-w-0 font-mono text-[11px]"
+              className="truncate flex-1 min-w-0 font-mono text-[0.786rem]"
               title={preview?.text || ''}
             >
               {displayText}
@@ -133,7 +133,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
               tabIndex={0}
               onClick={(e) => { e.stopPropagation(); setShowSubagent(true); }}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setShowSubagent(true); } }}
-              className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
+              className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
               title={t('chat.subagentViewTitle')}
             >
               {t('chat.subagent')}
@@ -145,7 +145,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
               tabIndex={0}
               onClick={(e) => { e.stopPropagation(); setShowWorkflow(true); }}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setShowWorkflow(true); } }}
-              className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
+              className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
               title={t('chat.workflowViewTitle')}
             >
               {t('chat.workflowRun')}
@@ -158,7 +158,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
                 tabIndex={0}
                 onClick={(e) => { e.stopPropagation(); openPreview('input'); }}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openPreview('input'); } }}
-                className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
+                className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
                 title={t('toolCall.inputParamsTitle')}
               >
                 {t('toolCall.input')}
@@ -169,7 +169,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
                   tabIndex={0}
                   onClick={(e) => { e.stopPropagation(); openPreview('result'); }}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openPreview('result'); } }}
-                  className="text-[11px] text-brand hover:text-teal-10 cursor-pointer"
+                  className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
                   title={t('toolCall.resultTitle')}
                 >
                   {t('toolCall.result')}
@@ -190,7 +190,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
       {/* Detail, indented under its row and lit like the reasoning block rather
           than like a card — same recipe as the thinking summary body. */}
       {expanded && (
-        <div className="ml-6 mb-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[11px] leading-relaxed">
+        <div className="ml-6 mb-1 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[0.786rem] leading-relaxed">
           <div>
             <div className="mb-0.5 text-muted-foreground">{t('toolCall.inputParams')}</div>
             <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-foreground/90">

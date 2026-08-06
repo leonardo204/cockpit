@@ -696,7 +696,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
             return (
               <div key={cmd.name}>
                 {groupHeader && (
-                  <div className="px-4 py-1 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
+                  <div className="px-4 py-1 text-[0.714rem] uppercase tracking-wider text-muted-foreground bg-muted/40">
                     {groupHeader}
                   </div>
                 )}

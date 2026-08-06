@@ -43,6 +43,11 @@ import { NabyAgentManager } from './NabyAgentManager';
 // Phase 3 (P3-M3). The Telegram escalation channel config — how an agent reaches
 // the user for a critical decision and sends its final report.
 import { NabyTelegramSettings } from './NabyTelegramSettings';
+// The four font knobs (family / size / chat size / code family). It sits under
+// General beside theme and language because it is the third thing in the same
+// question — what this app looks like — and because a nav row per one-control
+// tab is the menu the reorg (§3.1) removed.
+import { FontSettingsPanel } from './FontSettingsPanel';
 // Every section is a flat header + content block; the content pane below draws
 // the full-width rule between them (`divide-y`). Cards were tried first and made
 // the multi-panel sections (Agents, Harness, About) boxes-inside-boxes.
@@ -327,6 +332,14 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                     </button>
                   ))}
                 </div>
+              </SettingsSection>
+
+              {/* FONTS — the third appearance control, and the only one with more
+                  than one knob, so it renders as a panel rather than a tile grid
+                  (the panel also keeps the `<label>`s out of this pane; see
+                  settingsLayout.test.ts). */}
+              <SettingsSection title={t('fonts.title')}>
+                <FontSettingsPanel />
               </SettingsSection>
               </>
             ) : null}

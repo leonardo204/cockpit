@@ -8,10 +8,14 @@ import {
   APP_DESCRIPTION,
   APP_NAME,
   APP_TITLE,
+  FONTS_STORAGE_KEY,
   SETTINGS_FILE,
   THEME_STORAGE_KEY,
   buildBootScript,
+  fontCssVars,
+  normalizeFontSettings,
   normalizeTheme,
+  type FontSettings,
   type StoredTheme,
 } from "@cockpit/shared-utils";
 
@@ -32,9 +36,9 @@ try {
 }
 
 /**
- * The persisted theme, read PER REQUEST (every page under this layout is
- * `dynamic = 'force-dynamic'`, so this runs on each render rather than being
- * baked into a prerender).
+ * The persisted APPEARANCE preferences — theme and fonts — read PER REQUEST
+ * (every page under this layout is `dynamic = 'force-dynamic'`, so this runs on
+ * each render rather than being baked into a prerender).
  *
  * Read straight off the settings file — the same file `/api/settings` serves —
  * instead of fetching our own route from inside a server component: an HTTP
@@ -44,18 +48,30 @@ try {
  * Synchronous on purpose. It runs before the first byte of HTML and the file is
  * a few hundred bytes; an await here would buy nothing and complicate the
  * layout's signature.
+ *
+ * ONE READ FOR BOTH. The fonts joined the theme here rather than getting a read
+ * of their own: they are two fields of the same document, needed at the same
+ * moment (the boot script) for the same reason (the shell's ephemeral port makes
+ * localStorage useless across restarts).
  */
-function readStoredTheme(): StoredTheme | undefined {
+function readStoredAppearance(): {
+  theme: StoredTheme | undefined;
+  fonts: FontSettings;
+} {
   try {
     const parsed = JSON.parse(readFileSync(SETTINGS_FILE, "utf8")) as Record<
       string,
       unknown
     >;
-    return normalizeTheme(parsed[THEME_STORAGE_KEY]);
+    return {
+      theme: normalizeTheme(parsed[THEME_STORAGE_KEY]),
+      fonts: normalizeFontSettings(parsed[FONTS_STORAGE_KEY]),
+    };
   } catch {
     // No settings file yet, or unreadable/corrupt: fall through to the boot
-    // script's own default. Never fail the whole layout over a preference.
-    return undefined;
+    // script's own default (theme) and the defaults declared in globals.css
+    // (fonts). Never fail the whole layout over a preference.
+    return { theme: undefined, fonts: normalizeFontSettings(undefined) };
   }
 }
 
@@ -109,13 +125,34 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   // One read per request, used twice: by the boot script (pre-paint, kills the
-  // FOUC on a fresh origin) and by ThemeProvider (so React's first render agrees
-  // with the class the boot script just applied instead of flipping it back).
-  const storedTheme = readStoredTheme();
-  const bootScript = buildBootScript(bootSource, storedTheme);
+  // FOUC on a fresh origin) and by ThemeProvider / FontProvider (so React's
+  // first render agrees with what the boot script just applied instead of
+  // flipping it back).
+  const { theme: storedTheme, fonts: storedFonts } = readStoredAppearance();
+  const bootScript = buildBootScript(
+    bootSource,
+    storedTheme,
+    fontCssVars(storedFonts)
+  );
 
   return (
-    <html lang="en" suppressHydrationWarning className="overflow-hidden">
+    /*
+     * THE NEXT FONT VARIABLES LIVE ON <html>, not on <body>.
+     *
+     * They used to sit on the body className. That worked while nothing but
+     * body-scoped rules referenced them — but `--app-font-sans` is declared on
+     * `:root` and REFERENCES `--font-inter`, and a custom property is
+     * substituted against the element it is declared on. Left on <body>, the
+     * reference would resolve to the guaranteed-invalid value at `:root` and
+     * take the UI font-family down with it. `boot.js` and `FontProvider` also
+     * write the four variables onto <html>, so the declarations and their
+     * dependencies are on one element.
+     */
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${inter.variable} ${lora.variable} ${jetbrainsMono.variable} overflow-hidden`}
+    >
       <head>
         {/*
          * boot.js inlined, prefixed with the server-persisted theme (see
@@ -127,10 +164,8 @@ export default function RootLayout({
          */}
         <script dangerouslySetInnerHTML={{ __html: bootScript }} />
       </head>
-      <body
-        className={`${inter.variable} ${lora.variable} ${jetbrainsMono.variable} antialiased overflow-hidden`}
-      >
-        <Providers initialTheme={storedTheme}>
+      <body className="antialiased overflow-hidden">
+        <Providers initialTheme={storedTheme} initialFonts={storedFonts}>
           {children}
         </Providers>
       </body>

@@ -224,7 +224,7 @@ export function AskQuestionViewerModal({ toolCalls, onClose }: AskQuestionViewer
                       }
                     </button>
                     {q.header && (
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-brand/10 text-brand flex-shrink-0 mt-0.5">
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[0.714rem] font-medium bg-brand/10 text-brand flex-shrink-0 mt-0.5">
                         {q.header}
                       </span>
                     )}

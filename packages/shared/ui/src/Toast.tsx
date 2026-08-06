@@ -193,7 +193,7 @@ export function toast(message: string, type: ToastType = 'success') {
   el.id = `toast-${++toastSeq}`;
   el.className =
     'toast-surface group pointer-events-auto flex items-start gap-2.5 w-[356px] max-w-[calc(100vw-2rem)] ' +
-    'px-4 py-3 rounded-lg border border-border bg-popover text-[13px] leading-snug text-foreground';
+    'px-4 py-3 rounded-lg border border-border bg-popover text-[0.929rem] leading-snug text-foreground';
   el.style.animation = `toastIn ${TOAST_ENTER_MS}ms cubic-bezier(0.16, 1, 0.3, 1)`;
 
   const icon = TOAST_ICON[type] ?? TOAST_ICON.info;

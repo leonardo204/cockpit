@@ -153,10 +153,10 @@ const PersonaDelegation = memo(function PersonaDelegation() {
     // panel inside it is card-in-card, and the divider says the same thing —
     // "a different question starts here" — with a line instead of a rectangle.
     <div className="mt-2.5 border-t border-border pt-2.5">
-      <p className="text-[11px] font-medium text-foreground">
+      <p className="text-[0.786rem] font-medium text-foreground">
         {t('agentManager.delegationTitle', { defaultValue: 'How you delegate' })}
       </p>
-      <p className="mt-0.5 text-[10px] text-muted-foreground leading-relaxed">
+      <p className="mt-0.5 text-[0.714rem] text-muted-foreground leading-relaxed">
         {t('agentManager.delegationHint', {
           defaultValue:
             'These are your settings, not naby’s: how much of your work it may carry on its own, and where it reaches you.',
@@ -165,7 +165,7 @@ const PersonaDelegation = memo(function PersonaDelegation() {
 
       <div className="mt-2 flex gap-2 flex-wrap">
         <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[0.714rem] text-muted-foreground">
             {t('agentManager.delegationEscalation', { defaultValue: 'Reach me via' })}
           </span>
           <select
@@ -180,7 +180,7 @@ const PersonaDelegation = memo(function PersonaDelegation() {
           </select>
         </label>
         <label className="flex flex-col gap-0.5">
-          <span className="text-[10px] text-muted-foreground">
+          <span className="text-[0.714rem] text-muted-foreground">
             {t('agentManager.delegationMaxSteps', { defaultValue: 'Steps it may take alone' })}
           </span>
           <input
@@ -198,7 +198,7 @@ const PersonaDelegation = memo(function PersonaDelegation() {
         </label>
       </div>
 
-      <p className="mt-1.5 text-[10px] text-muted-foreground leading-relaxed">
+      <p className="mt-1.5 text-[0.714rem] text-muted-foreground leading-relaxed">
         {t('agentManager.delegationStepsHint', {
           cap,
           defaultValue:
@@ -274,7 +274,7 @@ const AgentRow = memo(function AgentRow({
             @{agent.name}
           </span>
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+            className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
               isPersona
                 ? 'bg-brand/15 text-brand'
                 : 'bg-muted text-muted-foreground'
@@ -291,12 +291,12 @@ const AgentRow = memo(function AgentRow({
           </span>
         </div>
         {agent.description ? (
-          <p className="mt-0.5 text-[11px] text-muted-foreground line-clamp-2">{agent.description}</p>
+          <p className="mt-0.5 text-[0.786rem] text-muted-foreground line-clamp-2">{agent.description}</p>
         ) : null}
         {/* Says WHY there are no Edit/Remove buttons on this row. Without it the
             persona just looks like an agent whose controls failed to render. */}
         {isPersona ? (
-          <p className="mt-1 text-[10px] text-muted-foreground italic">
+          <p className="mt-1 text-[0.714rem] text-muted-foreground italic">
             {t('agentManager.personaReadOnly', {
               defaultValue:
                 'Built in to naby — it cannot be edited or removed. It grows by learning from you, not by being rewritten.',
@@ -451,7 +451,7 @@ export function NabyAgentManager({
           question behind ("so how do I make one?"), and the honest answer is that
           the thing they wanted has a different name and a different home. One
           line, no link: Harness is the next section of this same modal. */}
-      <p className="text-[11px] text-muted-foreground leading-relaxed">
+      <p className="text-[0.786rem] text-muted-foreground leading-relaxed">
         {t('agentManager.subagentHint', {
           defaultValue: 'For a specialist role, add a harness subagent under Harness.',
         })}
@@ -465,7 +465,7 @@ export function NabyAgentManager({
         <div className="space-y-2 rounded-lg border border-brand/40 bg-brand/5 p-3">
           <div className="flex gap-2 items-end">
             <label className="flex-1 flex flex-col gap-0.5">
-              <span className="text-[10px] text-muted-foreground">{t('agentManager.name', { defaultValue: 'Name (@handle)' })}</span>
+              <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.name', { defaultValue: 'Name (@handle)' })}</span>
               <input
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
@@ -474,7 +474,7 @@ export function NabyAgentManager({
               />
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-muted-foreground">{t('agentManager.model', { defaultValue: 'Model (optional)' })}</span>
+              <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.model', { defaultValue: 'Model (optional)' })}</span>
               <input
                 value={form.model}
                 onChange={(e) => set('model', e.target.value)}
@@ -485,7 +485,7 @@ export function NabyAgentManager({
           </div>
 
           <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">{t('agentManager.summary', { defaultValue: 'Short description (optional)' })}</span>
+            <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.summary', { defaultValue: 'Short description (optional)' })}</span>
             <input
               value={form.description}
               onChange={(e) => set('description', e.target.value)}
@@ -494,7 +494,7 @@ export function NabyAgentManager({
           </label>
 
           <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">{t('agentManager.instructions', { defaultValue: 'Instructions (system prompt)' })}</span>
+            <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.instructions', { defaultValue: 'Instructions (system prompt)' })}</span>
             <textarea
               value={form.systemPrompt}
               onChange={(e) => set('systemPrompt', e.target.value)}
@@ -505,7 +505,7 @@ export function NabyAgentManager({
 
           <div className="flex gap-2 flex-wrap">
             <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-muted-foreground">{t('agentManager.memoryScope', { defaultValue: 'Learns in' })}</span>
+              <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.memoryScope', { defaultValue: 'Learns in' })}</span>
               <select
                 value={form.memoryScope}
                 onChange={(e) => set('memoryScope', e.target.value as MemoryScope)}
@@ -518,7 +518,7 @@ export function NabyAgentManager({
               </select>
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-muted-foreground">{t('agentManager.escalation', { defaultValue: 'Escalate via' })}</span>
+              <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.escalation', { defaultValue: 'Escalate via' })}</span>
               <select
                 value={form.escalation}
                 onChange={(e) => set('escalation', e.target.value as Escalation)}
@@ -530,7 +530,7 @@ export function NabyAgentManager({
               </select>
             </label>
             <label className="flex flex-col gap-0.5">
-              <span className="text-[10px] text-muted-foreground">{t('agentManager.maxSteps', { defaultValue: 'Max autonomous steps' })}</span>
+              <span className="text-[0.714rem] text-muted-foreground">{t('agentManager.maxSteps', { defaultValue: 'Max autonomous steps' })}</span>
               <input
                 value={form.maxSteps}
                 onChange={(e) => set('maxSteps', e.target.value.replace(/[^0-9]/g, ''))}
@@ -543,7 +543,7 @@ export function NabyAgentManager({
           {/* P3-M3c: what the number actually does. An empty field is autonomy
               OFF (one turn), not "unlimited" — and the store's value is clamped,
               so the ceiling is stated rather than discovered. */}
-          <p className="text-[10px] text-muted-foreground">
+          <p className="text-[0.714rem] text-muted-foreground">
             {t('agentManager.stepsHint', {
               defaultValue:
                 'Empty or 1 = a single turn. 2+ lets the agent keep working on its own (hard cap 20); it stops when it reports done, uses no tool, or spends the budget.',

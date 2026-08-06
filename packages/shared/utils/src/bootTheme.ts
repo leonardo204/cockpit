@@ -18,6 +18,8 @@
  * call sites (the route reads/writes settings.json, the layout reads it).
  */
 
+import { buildFontVarsScript, type FontCssVars } from './fontSettings';
+
 export type StoredTheme = 'light' | 'dark' | 'system';
 
 /** Key used in `localStorage` and as the settings.json field name. */
@@ -49,16 +51,26 @@ export function normalizeTheme(value: unknown): StoredTheme | undefined {
 }
 
 /**
- * Prefix the boot script with the server-persisted theme.
+ * Prefix the boot script with the server-persisted theme, and — since the fonts
+ * ride the same path (see `fontSettings.ts`) — with the derived font variables.
  *
- * The value is emitted from the WHITELIST above, never from raw file contents,
- * so a hand-edited settings.json cannot inject `</script>` into the inlined
- * tag. `undefined` emits `null`, which `boot.js` treats as "no server value".
+ * The theme value is emitted from the WHITELIST above, never from raw file
+ * contents, so a hand-edited settings.json cannot inject `</script>` into the
+ * inlined tag. `undefined` emits `null`, which `boot.js` treats as "no server
+ * value". The font vars are built by `buildFontVarsScript`, which whitelists and
+ * sanitizes for the same reason.
+ *
+ * `fontVars` is OPTIONAL rather than required: a caller that has no font state
+ * to inject (any host other than our root layout) emits the same byte-identical
+ * one-line prefix it always did, and `boot.js` falls through to the defaults
+ * declared in `globals.css`.
  */
 export function buildBootScript(
   bootSource: string,
-  serverTheme: StoredTheme | undefined
+  serverTheme: StoredTheme | undefined,
+  fontVars?: FontCssVars
 ): string {
   const literal = serverTheme ? JSON.stringify(serverTheme) : 'null';
-  return `window.${SERVER_THEME_GLOBAL}=${literal};\n${bootSource}`;
+  const fonts = fontVars ? `${buildFontVarsScript(fontVars)}\n` : '';
+  return `window.${SERVER_THEME_GLOBAL}=${literal};\n${fonts}${bootSource}`;
 }

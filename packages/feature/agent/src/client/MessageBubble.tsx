@@ -120,7 +120,14 @@ const MessageBalloon = memo(function MessageBalloon({
       >
         {leading}
         {text && (
-          <div className="break-words">
+          /* `chat-content` is the CHAT TEXT SIZE knob's only mounting point
+             (globals.css): `font-size: calc(1em * var(--chat-text-scale))`. It
+             wraps BOTH branches of MarkdownRenderer — the markdown one, the
+             plain-text user one and the streamed tail — so one class covers
+             everything a message says, and nothing outside a bubble (tool rows,
+             timestamps, the composer) moves with it. It scales in `em`, so it
+             composes with the global size scale instead of replacing it. */
+          <div className="break-words chat-content">
             <MarkdownRenderer content={text} isUser={isUser} isStreaming={isStreaming} enableMath={false} />
             {isStreaming && <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse" />}
           </div>
@@ -170,7 +177,7 @@ const ToolSegmentRow = memo(
               onClick={() => setExpanded(!expanded)}
               aria-expanded={expanded}
               data-testid="tool-calls-toggle"
-              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[0.786rem] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
             >
               {expanded ? (
                 <ChevronDown className="w-3 h-3 opacity-60" />
@@ -415,7 +422,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                         style={{ width: `${total > 0 ? (completed / total) * 100 : 0}%` }}
                       />
                     </div>
-                    <span className="text-[10px] text-muted-foreground flex-shrink-0">{completed}/{total}</span>
+                    <span className="text-[0.714rem] text-muted-foreground flex-shrink-0">{completed}/{total}</span>
                   </div>
                   {/* Todo items */}
                   {todos.map((todo, i) => (
@@ -455,7 +462,10 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                     {t('chat.planTitle', { defaultValue: 'Plan (awaiting your review)' })}
                   </span>
                 </div>
-                <div className="px-3 py-2">
+                {/* The plan is prose the agent wrote, so it follows the chat
+                    text size like every other thing the agent says. The card's
+                    own chrome (title bar, approve row) does not — it is UI. */}
+                <div className="px-3 py-2 chat-content">
                   <MarkdownRenderer content={planCard} isUser={false} enableMath={false} />
                 </div>
                 {/* Approve & run: the in-UI replacement for the (non-existent) "Exit plan
@@ -531,7 +541,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
           <button
             type="button"
             onClick={() => setShowEventDetail(true)}
-            className="flex items-center gap-1.5 max-w-[85%] text-[11px] text-muted-foreground bg-secondary/40 border border-border/50 rounded-full px-3 py-1 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 max-w-[85%] text-[0.786rem] text-muted-foreground bg-secondary/40 border border-border/50 rounded-full px-3 py-1 hover:bg-secondary hover:text-foreground transition-colors cursor-pointer"
             title={t('chat.viewDetails', { defaultValue: 'Click for details' })}
           >
             <span className="flex-shrink-0">{icon}</span>
@@ -578,7 +588,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
       <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} mb-4 group`} data-role={message.role}>
         {/* Message timestamp — shown on hover */}
         {timeStr && (
-          <span className="text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mb-0.5 px-1">
+          <span className="text-[0.786rem] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mb-0.5 px-1">
             {timeStr}
           </span>
         )}
@@ -589,13 +599,13 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             copying the message copies the reply alone. */}
         {!isUser && message.thinking && (
           <details className="mb-1 w-full max-w-[90%]" data-testid="thinking-block">
-            <summary className="cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
+            <summary className="cursor-pointer select-none text-[0.786rem] text-muted-foreground hover:text-foreground">
               {t('chat.thinkingBlock', { defaultValue: 'Reasoning' })}
               <span className="ml-1 opacity-60">
                 {t('chat.thinkingChars', { defaultValue: '({{count}} chars)', count: message.thinking.length })}
               </span>
             </summary>
-            <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            <div className="mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border bg-muted/30 px-3 py-2 text-[0.786rem] leading-relaxed text-muted-foreground">
               {message.thinking}
             </div>
           </details>

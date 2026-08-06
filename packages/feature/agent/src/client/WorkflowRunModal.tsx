@@ -249,8 +249,8 @@ function WorkflowAgentRow({
         <span className="text-xs text-foreground truncate flex-1 min-w-0" title={agent.label || ''}>
           {agent.label || agent.agentId}
         </span>
-        <span className={`text-[10px] flex-shrink-0 ${stateColor}`}>{agent.state}</span>
-        <span className="text-[10px] text-muted-foreground flex-shrink-0">
+        <span className={`text-[0.714rem] flex-shrink-0 ${stateColor}`}>{agent.state}</span>
+        <span className="text-[0.714rem] text-muted-foreground flex-shrink-0">
           {formatTokens(agent.tokens)} tok · {formatDuration(agent.durationMs)}
         </span>
         {agent.agentId && (
@@ -267,7 +267,7 @@ function WorkflowAgentRow({
         )}
       </div>
       {expanded && preview && (
-        <pre className="text-[11px] bg-secondary px-2 py-1.5 rounded-b overflow-x-auto max-h-32 overflow-y-auto text-muted-foreground whitespace-pre-wrap border-t border-border">
+        <pre className="text-[0.786rem] bg-secondary px-2 py-1.5 rounded-b overflow-x-auto max-h-32 overflow-y-auto text-muted-foreground whitespace-pre-wrap border-t border-border">
           {preview}
         </pre>
       )}

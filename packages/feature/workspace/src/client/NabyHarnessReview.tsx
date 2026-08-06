@@ -326,7 +326,7 @@ const HarnessRow = memo(function HarnessRow({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand/10 text-brand font-medium">
+            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full bg-brand/10 text-brand font-medium">
               {t(KIND_LABEL[item.kind])}
             </span>
             <span className="text-xs font-mono font-medium text-foreground break-words">
@@ -349,7 +349,7 @@ const HarnessRow = memo(function HarnessRow({
               button next to it is about to do. Task-critical, so it is not
               something the user has to go looking for. */}
           {needsPhase25(item) ? (
-            <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+            <div className="text-[0.714rem] text-amber-600 dark:text-amber-400 mt-1">
               {t('harnessReview.needsPhase25')}
             </div>
           ) : null}
@@ -358,7 +358,7 @@ const HarnessRow = memo(function HarnessRow({
           {/* Which scope this item lives in — global vs this project. */}
           <ScopeBadge scope={scope} cwd={cwd} />
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+            className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
               removed
                 ? 'bg-muted text-muted-foreground'
                 : enabled
@@ -381,7 +381,7 @@ const HarnessRow = memo(function HarnessRow({
         // so the row is what keeps the next scan from re-importing it.
         <div className="space-y-1.5">
           {tier.tier === 'vendor' ? (
-            <div className="text-[10px] text-muted-foreground break-all">
+            <div className="text-[0.714rem] text-muted-foreground break-all">
               {t('harnessReview.removedVendorHint', { path: tier.path })}
             </div>
           ) : null}
@@ -425,7 +425,7 @@ const HarnessRow = memo(function HarnessRow({
             {body}
           </div>
         ) : null}
-        <div className="text-[10px] space-y-0.5">
+        <div className="text-[0.714rem] space-y-0.5">
           <div>
             {t('harnessReview.trustLabel')}:{' '}
             <span className="font-medium">{t(TRUST_LABEL[item.provenance.source])}</span>
@@ -667,16 +667,16 @@ const HarnessSetTools = memo(function HarnessSetTools({
       {/* EXPORT */}
       <div className="space-y-2">
         <div className="text-xs font-medium text-foreground">{t('harnessSet.exportTitle')}</div>
-        <p className="text-[11px] text-muted-foreground">{t('harnessSet.exportDescription')}</p>
+        <p className="text-[0.786rem] text-muted-foreground">{t('harnessSet.exportDescription')}</p>
         <div>
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+          <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground mb-1">
             {t('harnessReview.scope')}
           </div>
           {scopeButtons(exportScope, setExportScope)}
         </div>
         <div className="flex flex-wrap gap-2">
           <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">{t('harnessSet.nameLabel')}</span>
+            <span className="text-[0.714rem] text-muted-foreground">{t('harnessSet.nameLabel')}</span>
             <input
               value={setName}
               onChange={(e) => setSetName(e.target.value)}
@@ -685,7 +685,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
             />
           </label>
           <label className="flex flex-col gap-0.5">
-            <span className="text-[10px] text-muted-foreground">{t('harnessSet.versionLabel')}</span>
+            <span className="text-[0.714rem] text-muted-foreground">{t('harnessSet.versionLabel')}</span>
             <input
               value={setVersion}
               onChange={(e) => setSetVersion(e.target.value)}
@@ -708,7 +708,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
       {/* IMPORT */}
       <div className="space-y-2">
         <div className="text-xs font-medium text-foreground">{t('harnessSet.importTitle')}</div>
-        <p className="text-[11px] text-muted-foreground">{t('harnessSet.importDescription')}</p>
+        <p className="text-[0.786rem] text-muted-foreground">{t('harnessSet.importDescription')}</p>
 
         {/* File picker + paste fallback */}
         <input
@@ -721,14 +721,14 @@ const HarnessSetTools = memo(function HarnessSetTools({
           }}
           className="block text-xs text-muted-foreground file:mr-2 file:text-xs file:px-2 file:py-1 file:rounded file:border file:border-border file:bg-accent file:text-foreground"
         />
-        <div className="text-[10px] text-muted-foreground">{t('harnessSet.orPaste')}</div>
+        <div className="text-[0.714rem] text-muted-foreground">{t('harnessSet.orPaste')}</div>
         <div className="flex gap-2 items-start">
           <textarea
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
             placeholder={t('harnessSet.pastePlaceholder')}
             rows={2}
-            className="flex-1 text-[11px] font-mono px-2 py-1 rounded border border-border bg-background text-foreground resize-y"
+            className="flex-1 text-[0.786rem] font-mono px-2 py-1 rounded border border-border bg-background text-foreground resize-y"
           />
           <button
             onClick={() => loadFromText(pasteText)}
@@ -739,7 +739,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
           </button>
         </div>
         {parseError ? (
-          <p className="text-[11px] text-red-600 dark:text-red-400">
+          <p className="text-[0.786rem] text-red-600 dark:text-red-400">
             {t('harnessSet.parseError', { error: parseError })}
           </p>
         ) : null}
@@ -750,7 +750,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
           // selection UI, three levels deep inside the disclosure already.
           <div className="space-y-2 border-t border-border pt-2.5">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-[11px] font-medium text-foreground">
+              <div className="text-[0.786rem] font-medium text-foreground">
                 {t('harnessSet.loadedSet', {
                   name: loaded.name,
                   version: loaded.version,
@@ -759,26 +759,26 @@ const HarnessSetTools = memo(function HarnessSetTools({
               </div>
               <button
                 onClick={clearLoaded}
-                className="text-[10px] px-1.5 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
+                className="text-[0.714rem] px-1.5 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
               >
                 {t('harnessSet.clearLoaded')}
               </button>
             </div>
 
             <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
                 {t('harnessSet.selectItems')}
               </div>
               <div className="flex gap-1.5">
                 <button
                   onClick={selectAll}
-                  className="text-[10px] px-1.5 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
+                  className="text-[0.714rem] px-1.5 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
                 >
                   {t('harnessSet.selectAll')}
                 </button>
                 <button
                   onClick={clearSelection}
-                  className="text-[10px] px-1.5 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
+                  className="text-[0.714rem] px-1.5 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
                 >
                   {t('harnessSet.deselectAll')}
                 </button>
@@ -796,7 +796,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
                     checked={selectedIds.has(it.id)}
                     onChange={() => toggleId(it.id)}
                   />
-                  <span className="text-[10px] px-1 py-0.5 rounded-full bg-brand/10 text-brand">
+                  <span className="text-[0.714rem] px-1 py-0.5 rounded-full bg-brand/10 text-brand">
                     {t(KIND_LABEL[it.kind])}
                   </span>
                   <span className="font-mono break-all">
@@ -807,7 +807,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
             </div>
 
             <div className="space-y-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
                 {t('harnessSet.targetScope')}
               </div>
               {scopeButtons(importScope, setImportScope)}
@@ -828,7 +828,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
 
             {/* Landing result: everything disabled + any conflicts */}
             {landed ? (
-              <div className="space-y-1 text-[11px] text-muted-foreground">
+              <div className="space-y-1 text-[0.786rem] text-muted-foreground">
                 <div className="text-emerald-600 dark:text-emerald-400">
                   {t('harnessSet.importDone', { count: landed.count })}
                 </div>
@@ -1172,7 +1172,7 @@ export function NabyHarnessReview({
           />
           <span>{t('harnessReview.autoEnableLabel')}</span>
         </label>
-        <p className="text-[10px] text-muted-foreground leading-relaxed pl-6">
+        <p className="text-[0.714rem] text-muted-foreground leading-relaxed pl-6">
           {t('harnessReview.autoEnableHint')}
         </p>
       </div>
@@ -1180,7 +1180,7 @@ export function NabyHarnessReview({
       {/* Scope filter + banner: whether these harness items are global (every
           project) or bound to this project. */}
       <div className="space-y-2">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
           {t('harnessReview.scope')}
         </div>
         <ScopeSelector
@@ -1225,15 +1225,15 @@ export function NabyHarnessReview({
             // action. Flattened to a heading over muted text — a box here framed
             // a paragraph, and sat directly under another box.
             <div className="space-y-1">
-              <div className="text-[11px] font-medium text-foreground">
+              <div className="text-[0.786rem] font-medium text-foreground">
                 {t('harnessImport.resultTitle')}
               </div>
               {!summary.baseExists ? (
-                <div className="text-[11px] text-muted-foreground">
+                <div className="text-[0.786rem] text-muted-foreground">
                   {t('harnessImport.resultNone', { base: summary.baseDir })}
                 </div>
               ) : (
-                <div className="text-[11px] text-muted-foreground space-y-0.5">
+                <div className="text-[0.786rem] text-muted-foreground space-y-0.5">
                   <div>
                     {t('harnessImport.resultImported', {
                       command: summary.imported.command,
@@ -1265,7 +1265,7 @@ export function NabyHarnessReview({
                 <button
                   onClick={() => void revertImport()}
                   disabled={busy}
-                  className="text-[11px] px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+                  className="text-[0.786rem] px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
                 >
                   {t('harnessReview.revertImport')}
                 </button>
@@ -1279,7 +1279,7 @@ export function NabyHarnessReview({
       {available ? (
         <div className="flex flex-wrap gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+            <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground mb-1">
               {t('harnessReview.kindFilterLabel')}
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -1299,7 +1299,7 @@ export function NabyHarnessReview({
             </div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">
+            <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground mb-1">
               {t('harnessReview.statusFilterLabel')}
             </div>
             <div className="flex flex-wrap gap-1.5">

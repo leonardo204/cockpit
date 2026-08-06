@@ -138,7 +138,7 @@ const CommandRow = memo(function CommandRow({
             {item.command?.template}
           </div>
           {item.command?.argumentHint ? (
-            <div className="text-[10px] text-muted-foreground mt-1">
+            <div className="text-[0.714rem] text-muted-foreground mt-1">
               {t('commandManager.argumentHintLabel')}: <span className="font-mono">{item.command.argumentHint}</span>
             </div>
           ) : null}
@@ -147,7 +147,7 @@ const CommandRow = memo(function CommandRow({
           {/* Which scope this command lives in — global vs this project. */}
           <ScopeBadge scope={scope} cwd={cwd} />
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+            className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
               enabled
                 ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
                 : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
@@ -382,7 +382,7 @@ export function NabyCommandManager({
       {/* Scope filter + banner: whether these commands are global (every
           project) or bound to this project. */}
       <div className="space-y-2">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
           {t('commandManager.scope')}
         </div>
         <ScopeSelector
@@ -398,12 +398,12 @@ export function NabyCommandManager({
         draft ? (
           <div className="rounded-lg border border-brand/40 p-3 space-y-2 bg-brand/5">
             <div className="flex items-center justify-between gap-2">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
                 {draft.id === null ? t('commandManager.createTitle') : t('commandManager.editTitle')}
               </div>
               {/* Make the SAVE TARGET scope explicit so a new command is never
                   accidentally created global when the user meant this project. */}
-              <span className="text-[10px] text-muted-foreground">
+              <span className="text-[0.714rem] text-muted-foreground">
                 {scope === 'user'
                   ? t('scope.targetGlobal')
                   : t('scope.targetProject', { name: projectName(cwd) || t('scope.noProject') })}

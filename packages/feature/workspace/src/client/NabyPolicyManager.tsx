@@ -59,7 +59,7 @@ const RuleRow = memo(function RuleRow({
   return (
     <div className="flex items-center justify-between gap-2 rounded-lg border border-border p-2.5">
       <div className="flex items-center gap-2 min-w-0">
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${EFFECT_STYLE[rule.effect] ?? ''}`}>
+        <span className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${EFFECT_STYLE[rule.effect] ?? ''}`}>
           {t(`policyManager.effect_${rule.effect}`, { defaultValue: rule.effect })}
         </span>
         <span className="text-xs font-mono text-foreground truncate" title={rule.toolPattern}>
@@ -170,7 +170,7 @@ export function NabyPolicyManager({ isOpen, cwd }: { isOpen: boolean; cwd?: stri
           {/* Add */}
           <div className="flex gap-2 items-end">
             <label className="flex-1 flex flex-col gap-0.5">
-              <span className="text-[10px] text-muted-foreground">{t('policyManager.toolLabel', { defaultValue: 'Tool' })}</span>
+              <span className="text-[0.714rem] text-muted-foreground">{t('policyManager.toolLabel', { defaultValue: 'Tool' })}</span>
               <input
                 value={pattern}
                 onChange={(e) => setPattern(e.target.value)}

@@ -365,11 +365,21 @@
     "delegationStepsHint": "1이면 메시지마다 한 번만 답합니다(끔). 2 이상이면 최대 {{cap}}단계까지 스스로 작업을 이어갑니다. 다 했다고 선언하거나, 도구를 쓰지 않거나, 단계를 다 쓰면 멈춥니다.",
     "delegationError": "위임 설정을 저장하지 못했습니다."
   },
+  "contextBanner": {
+    "long": "이 대화가 길어졌습니다 — 새 탭에서 이어가기",
+    "continue": "새 탭에서 이어가기",
+    "working": "인계 요약을 만드는 중…",
+    "failed": "새 탭을 열지 못했습니다",
+    "dismiss": "닫기"
+  },
   "harnessPill": {
     "routingGate": "위임하지 않음",
     "notButterfly": "@{{agent}}는 아직 나비 단계가 아니라 위임을 받을 수 없어, 일반 턴으로 처리했습니다.",
     "stageScope": "단계 범위 안에서 처리함",
-    "stageLimited": "@{{agent}}가 {{stage}} 단계로 답했습니다. 읽기와 제안, 초안은 하고, 아직 검증되지 않은 행동은 하지 않습니다."
+    "stageLimited": "@{{agent}}가 {{stage}} 단계로 답했습니다. 읽기와 제안, 초안은 하고, 아직 검증되지 않은 행동은 하지 않습니다.",
+    "compaction": "대화를 요약으로 접었습니다",
+    "compactionFolded": "이전 대화 일부를 요약으로 접었습니다 (메시지 {{count}}개).",
+    "compactionTruncated": "창을 맞추려고 이전 대화 일부를 잘라냈습니다 (메시지 {{count}}개). 요약은 만들지 못했습니다."
   },
   "agentExport": {
     "button": "내보내기",
@@ -571,6 +581,7 @@
     "typing": "나비가 입력 중…",
     "jumpToStart": "처음으로 이동",
     "jumpToLatest": "최신으로 이동",
+    "newResponse": "새 응답",
     "copyMessage": "메시지 복사",
     "forkSession": "여기서 세션 분기",
     "imageN": "이미지 {{index}}",
@@ -610,7 +621,8 @@
     "userMessages": "사용자 메시지",
     "projectNotes": "프로젝트 노트",
     "scheduledTasks": "예약 작업",
-    "context": "컨텍스트",
+    "turnInput": "턴 입력",
+    "contextWindow": "창",
     "output": "출력",
     "copiedCommandTooltip": "복사됨!",
     "copyCommandTooltip": "명령 복사: claude -r {{sessionId}}",
@@ -929,6 +941,33 @@
     "copyAbsoluteDirPath": "절대 디렉터리 경로 복사",
     "copyFileName": "파일 이름 복사",
     "copyFolderName": "폴더 이름 복사"
+  },
+  "fonts": {
+    "title": "글꼴",
+    "description": "앱과 대화에 쓰는 글꼴과 크기를 고릅니다.",
+    "uiFont": "앱 글꼴",
+    "codeFont": "코드 글꼴",
+    "scale": "글자 크기",
+    "chatScale": "대화 글자 크기",
+    "customFamily": "직접 입력",
+    "customPlaceholder": "글꼴 이름",
+    "preset": {
+      "system": "시스템(기본)",
+      "pretendard": "Pretendard",
+      "notoSansKr": "Noto Sans KR",
+      "custom": "직접 입력…"
+    },
+    "mono": {
+      "system": "시스템 고정폭(기본)",
+      "jetbrains": "JetBrains Mono",
+      "firaCode": "Fira Code"
+    },
+    "installHint": "프리셋은 그 글꼴이 이 컴퓨터에 설치돼 있을 때만 적용되고 없으면 시스템 글꼴로 대체됩니다.",
+    "preview": "미리보기",
+    "previewText": "가나다 ABC 123",
+    "previewCode": "mono",
+    "previewChat": "메시지는 이렇게 보입니다.",
+    "reset": "기본값으로"
   },
   "settings": {
     "title": "설정",
@@ -1658,7 +1697,9 @@
     "newTab": "새 탭",
     "noLearn": "학습 제외",
     "noLearnOff": "학습 포함",
-    "noLearnBadge": "학습 제외됨"
+    "noLearnBadge": "학습 제외됨",
+    "continueInNewTab": "새 탭에서 이어가기",
+    "continuedTitle": "이어서 — {{title}}"
   },
   "tabManagerTopBar": {
     "copyPageUrl": "페이지 URL 복사",

@@ -95,6 +95,11 @@ const PANELS = [
   'AgentImportButton.tsx',
   'UpdatePanel.tsx',
   'DevModePanel.tsx',
+  // The font knobs (2026-08-06). A panel of four selects and a preview, so it is
+  // squarely in scope for the no-box rules: the preview is the surface most
+  // likely to be "helpfully" wrapped in a tinted rectangle, and it uses the left
+  // accent every other sample-of-something in this pane uses.
+  'FontSettingsPanel.tsx',
 ] as const;
 
 describe('a section is flat, not a card', () => {
@@ -170,8 +175,15 @@ describe('every settings block is a section', () => {
   //                                             the IA-3 block below.)
   //
   // Anything that is NOT a move would show up here as a total that grew.
+  //
+  // THE 2026-08-06 ADDITION. `general` grew by ONE — and this is the first entry
+  // here that is not a move, so it is stated plainly: the Fonts section (family,
+  // global size, chat size, code family) is new UI, and it belongs beside theme
+  // and language because all three answer "what does this app look like". The
+  // alternative — a nav row of its own — is the per-control tab the §3.1 regroup
+  // deleted twice over.
   const EXPECTED: Record<string, number> = {
-    general: 2, // theme + language, merged
+    general: 3, // theme + language (merged) + fonts (2026-08-06)
     provider: 1, // engine choice + API keys; MCP moved to connections
     connections: 2, // MCP servers (system presets + user-added) / telegram
     agents: 1, // the naby agent list; its memory and telegram moved out
@@ -665,6 +677,13 @@ describe('a panel introduces itself in one sentence', () => {
     // discount caveat that shared the old string stayed on the control as
     // `growth.fastSession.weight`, which is where a second-order fact belongs.
     'growth.fastSession.hint',
+    // The font panel's two standing lines (2026-08-06): what the section is,
+    // and the one caveat a preset carries — that nothing is bundled, so a font
+    // the machine does not have falls back instead of applying. The caveat is
+    // rendered, not hidden in a `title`, for the reason the fast-growth button
+    // established: a tooltip never appears in Electron.
+    'fonts.description',
+    'fonts.installHint',
   ] as const;
 
   for (const locale of LOCALES) {

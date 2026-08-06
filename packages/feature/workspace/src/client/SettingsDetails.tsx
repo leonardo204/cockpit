@@ -45,10 +45,10 @@ export function SettingsDetails({ children, label }: SettingsDetailsProps) {
   const { t } = useTranslation();
   return (
     <details className="mt-1">
-      <summary className="cursor-pointer select-none text-[10px] text-muted-foreground hover:text-foreground">
+      <summary className="cursor-pointer select-none text-[0.714rem] text-muted-foreground hover:text-foreground">
         {label ?? t('settings.moreDetails')}
       </summary>
-      <div className="mt-1.5 border-t border-border pt-1.5 text-[11px] leading-relaxed text-muted-foreground space-y-1">
+      <div className="mt-1.5 border-t border-border pt-1.5 text-[0.786rem] leading-relaxed text-muted-foreground space-y-1">
         {children}
       </div>
     </details>

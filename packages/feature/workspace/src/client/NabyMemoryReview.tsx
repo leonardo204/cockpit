@@ -241,7 +241,7 @@ const ProposalRow = memo(function ProposalRow({
           {manualOnly ? (
             <span
               title={t('memoryReview.manualApprovalTitle')}
-              className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground"
+              className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground"
               data-testid="memory-manual-approval"
             >
               {t('memoryReview.manualApproval')}
@@ -303,7 +303,7 @@ const SupersessionRow = memo(function SupersessionRow({
       {/* ONE LINE OF EACH CLAIM. The old one is what is no longer in use, the new
           one is what took its place; without both the notice cannot be judged,
           and with more than a line each it stops being a notice. */}
-      <div className="text-[11px] text-muted-foreground break-words line-clamp-1">
+      <div className="text-[0.786rem] text-muted-foreground break-words line-clamp-1">
         {t('memoryReview.supersessionOld', { value: notice.oldValue })}
       </div>
       <div className="text-sm text-foreground/90 break-words line-clamp-2">
@@ -548,7 +548,7 @@ export function NabyMemoryReview({
               which are capped for size. A badge that said 12 over a heading that
               said 3 would be worse than the bare number it replaced. */}
           <div
-            className="text-[10px] uppercase tracking-wide text-muted-foreground"
+            className="text-[0.714rem] uppercase tracking-wide text-muted-foreground"
             data-testid="memory-inbox-heading"
           >
             {t('memoryReview.summaryPendingCount', { count: summary?.pendingCount ?? 0 })}
@@ -560,7 +560,7 @@ export function NabyMemoryReview({
               has to answer. */}
           {proposals.length > 0 ? (
             <div className="space-y-1.5" data-testid="memory-proposals">
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-[0.714rem] text-muted-foreground">
                 {t('memoryReview.inboxMemory')}
               </div>
               {proposals.map((item) => (
@@ -582,7 +582,7 @@ export function NabyMemoryReview({
               confirmed by anything but a person. */}
           {styleProposals.length > 0 ? (
             <div className="space-y-1.5" data-testid="memory-style-proposals">
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-[0.714rem] text-muted-foreground">
                 {t('memoryReview.inboxStyle')}
               </div>
               {styleProposals.map(({ item, isGlobal }) => (
@@ -601,7 +601,7 @@ export function NabyMemoryReview({
 
           {supersessions.length > 0 ? (
             <div className="space-y-1.5" data-testid="memory-supersessions">
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-[0.714rem] text-muted-foreground">
                 {t('memoryReview.inboxSuperseded')}
               </div>
               {supersessions.map((notice) => (
@@ -622,7 +622,7 @@ export function NabyMemoryReview({
           the automatic half is running.
           ------------------------------------------------------------------ */}
       <div className="space-y-1.5" data-testid="memory-summary">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
           {t('memoryReview.summaryTitle')}
         </div>
         {loading && !summary ? (
@@ -664,7 +664,7 @@ export function NabyMemoryReview({
         {/* WHEN IT LAST LOOKED BACK. The same reading the growth report's learning
             block shows, on the screen where "does this happen by itself?" is the
             question being asked. */}
-        <p className="text-[10px] text-muted-foreground" data-testid="memory-last-reflection">
+        <p className="text-[0.714rem] text-muted-foreground" data-testid="memory-last-reflection">
           {t(reflection.key, { count: reflection.count })}
         </p>
       </div>
@@ -673,7 +673,7 @@ export function NabyMemoryReview({
           3. HOW IT LEARNS — both switches, and the four channels they govern.
           ------------------------------------------------------------------ */}
       <div className="pt-1 border-t border-border/60 space-y-1.5" data-testid="memory-learning-method">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
           {t('memoryReview.learningMethodTitle')}
         </div>
 
@@ -692,7 +692,7 @@ export function NabyMemoryReview({
           />
           <span>{t('memoryReview.learningLabel')}</span>
         </label>
-        <p className="text-[10px] text-muted-foreground leading-relaxed pl-6">
+        <p className="text-[0.714rem] text-muted-foreground leading-relaxed pl-6">
           {t('memoryReview.learningHint')}
         </p>
 
@@ -709,7 +709,7 @@ export function NabyMemoryReview({
           />
           <span>{t('memoryReview.autoConfirmLabel')}</span>
         </label>
-        <p className="text-[10px] text-muted-foreground leading-relaxed pl-6">
+        <p className="text-[0.714rem] text-muted-foreground leading-relaxed pl-6">
           {t('memoryReview.autoConfirmHint', { count: threshold })}
         </p>
 
@@ -719,7 +719,7 @@ export function NabyMemoryReview({
             predictable rather than surprising. */}
         <ul className="pl-6 space-y-0.5" data-testid="memory-channels">
           {LEARNING_CHANNEL_KEYS.map((key) => (
-            <li key={key} className="text-[10px] text-muted-foreground leading-relaxed">
+            <li key={key} className="text-[0.714rem] text-muted-foreground leading-relaxed">
               {t(key)}
             </li>
           ))}
@@ -737,7 +737,7 @@ export function NabyMemoryReview({
           from a handful of messages.
           ------------------------------------------------------------------ */}
       <div className="pt-1 border-t border-border/60 space-y-1" data-testid="style-fingerprint">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
           {t('memoryReview.styleTitle')}
         </div>
         {!style ? (
@@ -765,7 +765,7 @@ export function NabyMemoryReview({
             </span>
           </div>
         )}
-        <p className="text-[10px] text-muted-foreground leading-relaxed">
+        <p className="text-[0.714rem] text-muted-foreground leading-relaxed">
           {t('memoryReview.styleHint')}
         </p>
       </div>
@@ -806,7 +806,7 @@ export function NabyMemoryReview({
       <SettingsDetails>
         <p>{t('memoryReview.proposedNote')}</p>
         <div className="pt-1">
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
             {t('memoryReview.bulkTitle')}
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
