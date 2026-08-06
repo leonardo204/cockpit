@@ -9,6 +9,7 @@ import { ScheduleTaskPopover } from './ScheduleTaskPopover';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSlashCommands } from './effect/agentClient';
 import { isHarnessChangedMessage } from './harnessSignal';
+import { composerHeight } from './composerHeight';
 import {
   FILE_REF_MIME,
   setActiveFileRefInserter,
@@ -210,25 +211,35 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     return () => clearActiveFileRefInserter(insertAtCaret);
   }, [isActive, insertAtCaret]);
 
-  // Auto-adjust textarea height
+  // Auto-adjust textarea height.
+  //
+  // The composer does NOT float over the transcript — the two share one flex
+  // column (Chat.tsx), so every pixel this box grows is a pixel the
+  // conversation loses. The arithmetic that decides how many it may take lives
+  // in composerHeight.ts (floor ~3 lines, ceiling ~10 lines AND never more than
+  // a fraction of the window); here we only measure and obey.
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
     // Reset height to get the correct scrollHeight
     textarea.style.height = 'auto';
-    // Floor at ~3 lines like a normal LLM composer, so the multi-line placeholder
-    // hint is never clipped/scrolled; grow up to ~10 lines, then scroll.
-    const minHeight = 76;
-    const maxHeight = 200;
-    const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight));
-    textarea.style.height = `${newHeight}px`;
+    const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
+    textarea.style.height = `${composerHeight(textarea.scrollHeight, viewportHeight)}px`;
   }, []);
 
   // Adjust height when input changes (useLayoutEffect: runs synchronously before paint to avoid double-paint flicker)
   useLayoutEffect(() => {
     adjustTextareaHeight();
   }, [input, adjustTextareaHeight]);
+
+  // …and when the WINDOW changes, because the ceiling is partly a fraction of
+  // it. Without this, shrinking the window leaves a composer sized for the old
+  // one, holding on to a share of the column the transcript now needs.
+  useEffect(() => {
+    window.addEventListener('resize', adjustTextareaHeight);
+    return () => window.removeEventListener('resize', adjustTextareaHeight);
+  }, [adjustTextareaHeight]);
 
   // Load command list: in-process builtins merged with Naby-owned enabled
   // commands (Phase 1.6 HP-02). Passing `cwd` includes this project's

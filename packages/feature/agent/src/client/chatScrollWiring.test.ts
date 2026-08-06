@@ -24,7 +24,10 @@ const read = (rel: string): string => readFileSync(join(ROOT, rel), 'utf8');
 const AGENT = 'feature/agent/src/client';
 const messageList = read(`${AGENT}/MessageList.tsx`);
 const chat = read(`${AGENT}/Chat.tsx`);
+const chatInput = read(`${AGENT}/ChatInput.tsx`);
 const checkinPrompt = read(`${AGENT}/CheckinPrompt.tsx`);
+const contextLimitBanner = read(`${AGENT}/ContextLimitBanner.tsx`);
+const toolApprovalPrompt = read(`${AGENT}/ToolApprovalPrompt.tsx`);
 
 describe('MessageList — the transcript follows the answer', () => {
   it('THE BUG IS GONE: nothing scrolls on a message-COUNT change any more', () => {
@@ -90,6 +93,95 @@ describe('MessageList — the transcript follows the answer', () => {
   it('a send re-pins, through a counter that survives repeats', () => {
     expect(messageList).toMatch(/sendNonce/);
     expect(messageList).toMatch(/kind:\s*'send'/);
+  });
+});
+
+describe('the composer takes room FROM the transcript, it does not cover it', () => {
+  /**
+   * THE REPORT. "엔터로 여러 줄을 입력하면 입력창이 커지면서 질문/답변 영역을
+   * 덮어버린다" — typing a second line grows the input and the last messages
+   * disappear behind it.
+   *
+   * WHAT IT ACTUALLY WAS. Nothing was drawn on top of anything; the column is
+   * already flex. The composer's extra lines came off the BOTTOM of the list's
+   * viewport, `scrollTop` did not move on its own, and nothing re-pinned —
+   * because the growth observer watches the CONTENT box, whose height is
+   * exactly what does not change when the composer grows. The newest message
+   * slid under the taller input, which is indistinguishable from an overlay.
+   *
+   * Both halves are asserted here: the layout must stay a flex column (so
+   * growth SHRINKS the list rather than covering it) and the re-pin must exist
+   * (so the shrink does not hide the answer). jsdom has no layout, so — like
+   * `sidebarPopoverClipping.test.ts` — the source is the only witness.
+   */
+
+  it('one flex column owns header, transcript, banners and composer', () => {
+    expect(chat).toMatch(/id="chat-screen"/);
+    expect(chat).toMatch(/className="flex-1 flex flex-col min-w-0 relative"/);
+  });
+
+  it('the transcript is the item that flexes, and it is ALLOWED to shrink', () => {
+    // `flex-1` hands it the leftover space; `min-h-0` is what lets the leftover
+    // get smaller. Without min-h-0 a flex item refuses to go below its content
+    // height, the column overflows, and the composer is pushed off the window
+    // instead of the list giving way.
+    expect(chat).toMatch(/className="flex-1 flex flex-col min-h-0 overflow-hidden"/);
+    expect(messageList).toMatch(/relative flex-1 min-h-0 overflow-y-auto/);
+  });
+
+  it('NOT AN OVERLAY: nothing in the column is positioned over the list', () => {
+    expect(chat).not.toMatch(/absolute[^"'`]*bottom-0/);
+    expect(chatInput).not.toMatch(/className=\{`\s*(absolute|fixed)/);
+    // The composer's root is an ordinary in-flow block. `relative` is for the
+    // drag overlay and the "/" palette INSIDE it, not for the composer itself.
+    expect(chatInput).toMatch(/className=\{`border-t bg-card relative/);
+  });
+
+  it('NO MAGIC PADDING stands in for the composer height', () => {
+    // The overlay design this rules out reserves room with a constant
+    // padding-bottom sized for a one-line input; every extra line the user
+    // types then lands on top of the transcript. There is no constant here to
+    // get wrong — the flex column measures it for free.
+    for (const src of [chat, messageList]) {
+      expect(src).not.toMatch(/pb-\[\d/);
+      expect(src).not.toMatch(/paddingBottom/);
+    }
+  });
+
+  it('the banners sit BETWEEN the transcript and the composer, in flow', () => {
+    const order = ['<MessageList', '<ToolApprovalPrompt', '<CheckinPrompt', '<ContextLimitBanner', '<ChatInput']
+      .map((tag) => chat.indexOf(tag));
+    expect(order.every((i) => i > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    // …and each is an ordinary block, so it PUSHES the list up rather than
+    // covering it — the screenshot showed two of them stacked above the input.
+    for (const src of [toolApprovalPrompt, checkinPrompt, contextLimitBanner]) {
+      expect(src).not.toMatch(/className="(absolute|fixed)/);
+    }
+  });
+
+  it('THE FIX: a viewport shrink re-pins a list that was at the bottom', () => {
+    expect(messageList).toMatch(/kind:\s*'viewport'/);
+    // Observed on the SCROLL CONTAINER. The content observer cannot stand in
+    // for it: when the composer grows, the content box is untouched.
+    expect(messageList).toMatch(
+      /const el = containerRef\.current;\s*\n\s*if \(!el \|\| typeof ResizeObserver === 'undefined'\) return;/,
+    );
+    const observers = messageList.match(/new ResizeObserver/g) ?? [];
+    expect(observers.length).toBeGreaterThanOrEqual(2); // content box + scroll box
+  });
+});
+
+describe('ChatInput — a bounded composer', () => {
+  it('the height rule is the tested one, not a magic number inline', () => {
+    expect(chatInput).toMatch(/from '\.\/composerHeight'/);
+    expect(chatInput).toMatch(/composerHeight\(textarea\.scrollHeight/);
+    expect(chatInput).not.toMatch(/const maxHeight = \d/);
+  });
+
+  it('re-measures on window resize, because the cap is partly a share of it', () => {
+    expect(chatInput).toMatch(/addEventListener\('resize', adjustTextareaHeight\)/);
+    expect(chatInput).toMatch(/removeEventListener\('resize', adjustTextareaHeight\)/);
   });
 });
 

@@ -185,6 +185,83 @@ describe('reduceStick — the user scrolled up', () => {
   });
 });
 
+describe('reduceStick — the viewport shrank under a growing composer', () => {
+  /**
+   * THE SECOND REPORT. "엔터로 여러 줄을 입력하면 입력창이 커지면서 질문/답변
+   * 영역을 덮어버린다" — the input grows as you type a second line and the last
+   * messages disappear behind it.
+   *
+   * WHAT IS ACTUALLY HAPPENING. Nothing is drawn on top of anything: the
+   * transcript and the composer share one flex column, so the composer's extra
+   * lines come off the BOTTOM of the list's viewport. `scrollHeight` is
+   * unchanged, `scrollTop` is unchanged, `clientHeight` fell — and the pixels
+   * that fell off the bottom are exactly the newest message. The content
+   * observer cannot see this: by its measure nothing happened.
+   */
+
+  it('THE REPORT: a pinned list re-pins when the composer takes 124px', () => {
+    // Pinned at the bottom of a 500px viewport over 2000px of transcript…
+    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    // …the composer grows from 1 line to 10, so the viewport is now 376px. The
+    // content did not move: scrollHeight is still 2000, scrollTop still 1500.
+    const d = reduceStick(pinned, { kind: 'viewport', metrics: metrics(1500, 2000, 376) });
+    expect(d.write).toBe('instant');
+    expect(d.state.stuck).toBe(true);
+  });
+
+  it('the content observer would have said nothing — which is the bug', () => {
+    // The same measurements as a `content` event: no growth, so no write. This
+    // is why a separate event kind exists rather than another call into the old
+    // one.
+    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    expect(reduceStick(pinned, { kind: 'content', metrics: metrics(1500, 2000, 376) }).write).toBe('none');
+  });
+
+  it('a shrinking viewport does not unstick a user who never scrolled', () => {
+    // distanceFromBottom is now 124 — past the 96px tolerance. Re-deriving
+    // `stuck` from the metrics here would detach a pinned list for the crime of
+    // typing a second line, and the next delta would raise a "new response"
+    // chip for an answer already on screen.
+    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    const d = reduceStick(pinned, { kind: 'viewport', metrics: metrics(1500, 2000, 376) });
+    expect(d.state.stuck).toBe(true);
+    expect(shouldShowJumpChip(d.state)).toBe(false);
+  });
+
+  it('READING HISTORY IS STILL SACRED: no write while scrolled up', () => {
+    // scrollTop is measured from the TOP, so a shorter viewport does not move
+    // what they are reading. Any correction would.
+    const reading: StickState = { stuck: false, pending: true, height: 2000 };
+    const d = reduceStick(reading, { kind: 'viewport', metrics: metrics(400, 2000, 376) });
+    expect(d.write).toBe('none');
+    expect(d.state.stuck).toBe(false);
+    // …and the chip they have not clicked yet is still owed to them.
+    expect(shouldShowJumpChip(d.state)).toBe(true);
+  });
+
+  it('a reflow caused by the resize is not mistaken for new content', () => {
+    // A width change rewraps the transcript, so scrollHeight moves without a
+    // single new token. Re-baselining here keeps that out of the `grew` test.
+    const reading: StickState = { stuck: false, pending: false, height: 2000 };
+    const after = reduceStick(reading, { kind: 'viewport', metrics: metrics(400, 2200, 376) }).state;
+    expect(after.height).toBe(2200);
+    expect(shouldShowJumpChip(after)).toBe(false);
+  });
+
+  it('the composer collapsing again re-pins too', () => {
+    // Send clears the input, the box returns to one line, the viewport grows.
+    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    expect(reduceStick(pinned, { kind: 'viewport', metrics: metrics(1500, 2000, 500) }).write).toBe('instant');
+  });
+
+  it('a hidden tab is not measured here either', () => {
+    const detached: StickState = { stuck: false, pending: true, height: 2600 };
+    const d = reduceStick(detached, { kind: 'viewport', metrics: metrics(0, 0, 0) });
+    expect(d.state).toEqual(detached);
+    expect(d.write).toBe('none');
+  });
+});
+
 describe('reduceStick — send', () => {
   it('sending pins, whatever the user was reading', () => {
     const detached = run(

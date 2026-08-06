@@ -20,7 +20,11 @@
  *     transcript must never have. New content raises a "↓ new response" chip
  *     instead, and the chip — a deliberate click — re-engages the stick;
  *   • the user sends           → pin unconditionally. They just acted; their
- *     intent is not in question.
+ *     intent is not in question;
+ *   • the VIEWPORT shrinks     → a pinned list re-pins. The composer grows as
+ *     the user types a second line and takes those pixels from the bottom of
+ *     the transcript; without this the last message hides behind it, which
+ *     reads as the input having been drawn ON TOP of the conversation.
  *
  * WHY A NEAR-BOTTOM TOLERANCE. Exact equality is unreachable in practice:
  * sub-pixel layout, a lazily measured code block, an image that finishes
@@ -76,6 +80,14 @@ export type StickEvent =
   /** The content box changed size — a streamed delta, an appended segment, a
    *  growing subagent block, the reconcile after a run ends. */
   | { kind: 'content'; metrics: ScrollMetrics }
+  /** THE VIEWPORT ITSELF changed size, with the content untouched: the composer
+   *  grew as the user typed a second line, a banner appeared above it, the
+   *  window was resized. The transcript and the composer share one flex column,
+   *  so every pixel the composer takes is a pixel the list loses FROM THE
+   *  BOTTOM — and `scrollTop` does not move on its own, so the newest message
+   *  silently slides out of view behind the taller input. Content-size events
+   *  cannot stand in for this: `scrollHeight` is identical before and after. */
+  | { kind: 'viewport'; metrics: ScrollMetrics }
   /** The user pressed send. */
   | { kind: 'send' }
   /** The user clicked the jump-to-latest chip/button. */
@@ -136,6 +148,27 @@ export function reduceStick(
         state: { stuck: false, pending: prev.pending || grew, height: ev.metrics.scrollHeight },
         write: 'none',
       };
+    }
+    case 'viewport': {
+      if (ev.metrics.clientHeight === 0) return { state: prev, write: 'none' };
+      if (prev.stuck) {
+        // Pinned, and the floor just rose. Re-pin unconditionally — NOT on a
+        // `grew` test: a viewport shrink leaves `scrollHeight` exactly where it
+        // was, which is the whole reason the content observer misses this.
+        return {
+          state: { stuck: true, pending: false, height: ev.metrics.scrollHeight },
+          write: 'instant',
+        };
+      }
+      // Scrolled up and reading. `scrollTop` is measured from the TOP, so a
+      // viewport change does not move what they are looking at, and the one
+      // thing we must not do is "help". We only re-baseline the height, so a
+      // reflow caused by the resize is not mistaken for new content arriving.
+      //
+      // NOT re-derived from `isAtBottom` either: shrinking the viewport pushes
+      // the distance-from-bottom up by the same pixels, which would spuriously
+      // unstick a user who had never scrolled at all.
+      return { state: { ...prev, height: ev.metrics.scrollHeight }, write: 'none' };
     }
     case 'send':
       return { state: { stuck: true, pending: false, height: prev.height }, write: 'instant' };
