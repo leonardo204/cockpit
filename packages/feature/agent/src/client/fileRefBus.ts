@@ -41,6 +41,36 @@ export function insertFileRef(text: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Composer REPLACE channel — "edit this message".
+// ---------------------------------------------------------------------------
+// Same singleton discipline as the inserter above (every tab keeps its
+// ChatInput mounted; only the active one registers), but a different verb:
+// the message-bubble Edit button REPLACES the composer's draft with the
+// message being edited, rather than splicing at the caret. A separate channel
+// because splicing an entire past message into the middle of a draft is never
+// what "edit" means.
+
+let activeComposerSetter: Inserter | null = null
+
+/** The active ChatInput registers its whole-draft replacement function. */
+export function setActiveComposerSetter(fn: Inserter): void {
+  activeComposerSetter = fn
+}
+
+/** Relinquish, with the same still-the-registrant guard as the inserter. */
+export function clearActiveComposerSetter(fn: Inserter): void {
+  if (activeComposerSetter === fn) activeComposerSetter = null
+}
+
+/** Replace the active chat input's draft with `text` (caret to the end,
+ *  focused). Returns whether a composer handled it. */
+export function setComposerText(text: string): boolean {
+  if (!activeComposerSetter) return false
+  activeComposerSetter(text)
+  return true
+}
+
+// ---------------------------------------------------------------------------
 // OS drag-drop (Finder/Explorer) → absolute path.
 // ---------------------------------------------------------------------------
 

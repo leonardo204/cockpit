@@ -390,6 +390,25 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     if (!liveViewerEnabled) setLiveRunning(false);
   }, [liveViewerEnabled]);
 
+  // RESEND a past user message, verbatim. Same dispatch as typing it again —
+  // through wrappedHandleSend, so a resent "/plan …" is still consumed as the
+  // command it was. Stored MessageImage attachments are rehydrated into the
+  // composer's ImageInfo shape (id/preview are display-side fields the DB
+  // never kept). Guarded on isLoading/liveRunning besides the button's own
+  // disabled state — one active run per session; a concurrent send would 409.
+  // Declared BELOW liveRunning's useState: the dep array reads it at render.
+  const handleResendMessage = useCallback((message: ChatMessage) => {
+    if (isLoading || liveRunning) return;
+    if (!message.content) return;
+    const images: ImageInfo[] | undefined = message.images?.map((img, i) => ({
+      id: `resend-${message.id}-${i}`,
+      data: img.data,
+      preview: `data:${img.media_type};base64,${img.data}`,
+      media_type: img.media_type,
+    }));
+    wrappedHandleSend(message.content, images);
+  }, [isLoading, liveRunning, wrappedHandleSend]);
+
   // Keep the originator's reconcile-on-run-end closure current (same disk reload the viewer's
   // onComplete uses). Injected into useChatStream via reconcileFromDiskRef so a finished run
   // converges its live bubbles to canonical UUIDs.
@@ -679,6 +698,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             // The user just acted → the transcript goes to the bottom and
             // follows the answer from there, wherever they had scrolled to.
             sendNonce={sendNonce}
+            onResendMessage={handleResendMessage}
           />
         )}
         </div>

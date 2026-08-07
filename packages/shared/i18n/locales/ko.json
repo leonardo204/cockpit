@@ -583,6 +583,8 @@
     "jumpToLatest": "최신으로 이동",
     "newResponse": "새 응답",
     "copyMessage": "메시지 복사",
+    "resendMessage": "메시지 재전송",
+    "editMessage": "메시지 편집",
     "forkSession": "여기서 세션 분기",
     "imageN": "이미지 {{index}}",
     "imagePreview": "이미지 미리보기",

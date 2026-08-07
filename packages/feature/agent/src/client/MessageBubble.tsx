@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo, memo, useCallback, type ReactNode } from 'react';
 import { Portal, toast } from '@cockpit/shared-ui';
-import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
+import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight, RotateCw, Pencil } from 'lucide-react';
+import { setComposerText } from './fileRefBus';
 import { ToolCallModal } from './ToolCallModal';
 import { SubagentBlock } from './SubagentBlock';
 import { BackgroundJobBlock } from './BackgroundJobBlock';
@@ -68,6 +69,34 @@ function CopyButton({ onCopy, title }: { onCopy: () => void; title: string }) {
   );
 }
 
+/** The other hover controls (resend / edit), same footprint as CopyButton so
+ *  the column reads as one set. */
+function ActionButton({
+  onClick,
+  title,
+  disabled,
+  testId,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  disabled?: boolean;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      data-testid={testId}
+      className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:bg-transparent"
+      title={title}
+    >
+      {children}
+    </button>
+  );
+}
+
 interface MessageBalloonProps {
   text: string;
   isUser: boolean;
@@ -80,6 +109,16 @@ interface MessageBalloonProps {
    *  bubble the turn ends on, and to a user message. */
   onCopy?: () => void;
   copyTitle?: string;
+  /** USER bubbles only: send this message again, verbatim. Disabled while a
+   *  run streams — one active run per session, a concurrent send would 409. */
+  onResend?: () => void;
+  resendTitle?: string;
+  resendDisabled?: boolean;
+  /** USER bubbles only: load this message into the composer to revise and
+   *  send as a NEW message. (Naby history is append-only — there is no
+   *  rewrite-in-place; see the no-fork note below.) */
+  onEdit?: () => void;
+  editTitle?: string;
   /** Attachments, drawn ABOVE the text as they always were. Given to the FIRST
    *  bubble of a turn — they arrived with the message, not with its ending. */
   leading?: ReactNode;
@@ -102,15 +141,30 @@ const MessageBalloon = memo(function MessageBalloon({
   isStreaming,
   onCopy,
   copyTitle,
+  onResend,
+  resendTitle,
+  resendDisabled,
+  onEdit,
+  editTitle,
   leading,
   extras,
 }: MessageBalloonProps) {
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
       {/* Action buttons for user messages — on the left */}
-      {isUser && onCopy && (
+      {isUser && (onCopy || onResend || onEdit) && (
         <div className="self-start mt-2 mr-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <CopyButton onCopy={onCopy} title={copyTitle ?? ''} />
+          {onCopy && <CopyButton onCopy={onCopy} title={copyTitle ?? ''} />}
+          {onResend && (
+            <ActionButton onClick={onResend} title={resendTitle ?? ''} disabled={resendDisabled} testId="resend-message">
+              <RotateCw className="w-4 h-4" />
+            </ActionButton>
+          )}
+          {onEdit && (
+            <ActionButton onClick={onEdit} title={editTitle ?? ''} testId="edit-message">
+              <Pencil className="w-4 h-4" />
+            </ActionButton>
+          )}
         </div>
       )}
       <div
@@ -230,10 +284,14 @@ interface MessageBubbleProps {
    *  in a tab that is `display:none`. Defaults to true — every existing caller
    *  and every test renders a visible turn. */
   isActive?: boolean;
+  /** USER messages only: send this message again, verbatim (content + images).
+   *  Wired by Chat down through MessageList; absent in read-only surfaces
+   *  (subagent transcript modal), where the button simply does not render. */
+  onResendMessage?: (message: ChatMessage) => void;
 }
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true, onResendMessage }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
@@ -370,6 +428,21 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
       toast(t('toast.copiedMessage'));
     }
   }, [message.content, t]);
+
+  // RESEND sends the message AGAIN, verbatim — a new turn with the same text
+  // (and images), not a rewrite of history. The common case it serves: the run
+  // errored out or was stopped, and the user wants the same ask retried.
+  const handleResend = useCallback(() => {
+    onResendMessage?.(message);
+  }, [onResendMessage, message]);
+
+  // EDIT loads the message into the composer (fileRefBus: only the active
+  // tab's input is registered, and a bubble can only be hovered on the active
+  // tab). Revise and send as a NEW message — history is append-only in naby,
+  // so there is no rewrite-in-place; see the no-fork note below for why.
+  const handleEdit = useCallback(() => {
+    if (message.content) setComposerText(message.content);
+  }, [message.content]);
 
   // NO FORK BUTTON. Cockpit upstream puts a branch-from-here button next to Copy,
   // and it CANNOT work in naby: /api/session/[id]/fork forks by copying the Claude
@@ -643,6 +716,11 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             isStreaming={!isUser && !!message.isStreaming}
             onCopy={message.content ? handleCopy : undefined}
             copyTitle={t('chat.copyMessage')}
+            onResend={isUser && onResendMessage && message.content ? handleResend : undefined}
+            resendTitle={t('chat.resendMessage', { defaultValue: 'Resend message' })}
+            resendDisabled={isLoading}
+            onEdit={isUser && onResendMessage && message.content ? handleEdit : undefined}
+            editTitle={t('chat.editMessage', { defaultValue: 'Edit message' })}
             leading={imagesBlock}
             extras={bubbleExtras}
           />

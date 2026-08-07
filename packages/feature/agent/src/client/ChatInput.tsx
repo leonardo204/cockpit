@@ -14,6 +14,8 @@ import {
   FILE_REF_MIME,
   setActiveFileRefInserter,
   clearActiveFileRefInserter,
+  setActiveComposerSetter,
+  clearActiveComposerSetter,
   osFilePath,
   quotePath,
 } from './fileRefBus';
@@ -201,15 +203,34 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     });
   }, []);
 
+  // Replace the WHOLE draft (the message-bubble Edit button). Caret to the
+  // end and focus, so the user lands ready to revise and resend.
+  const replaceDraft = useCallback((text: string) => {
+    setInput(text);
+    setCaret(text.length);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(text.length, text.length);
+      }
+    });
+  }, []);
+
   // Register as the file-reference target only while this tab is active, so a
   // modifier-click in the file browser inserts into the visible input, never a
   // hidden tab's. Cleanup relinquishes only if still the registrant (tab-switch
-  // race guard).
+  // race guard). The composer-replace channel (Edit button) follows the same
+  // active-tab discipline.
   useEffect(() => {
     if (!isActive) return;
     setActiveFileRefInserter(insertAtCaret);
-    return () => clearActiveFileRefInserter(insertAtCaret);
-  }, [isActive, insertAtCaret]);
+    setActiveComposerSetter(replaceDraft);
+    return () => {
+      clearActiveFileRefInserter(insertAtCaret);
+      clearActiveComposerSetter(replaceDraft);
+    };
+  }, [isActive, insertAtCaret, replaceDraft]);
 
   // Auto-adjust textarea height.
   //

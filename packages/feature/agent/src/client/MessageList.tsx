@@ -68,6 +68,10 @@ interface MessageListProps {
    *  transcript to the bottom no matter where they had scrolled to. A counter
    *  rather than a callback because two sends in a row must both register. */
   sendNonce?: number;
+  /** Resend a USER message verbatim (hover control on user bubbles). Also the
+   *  signal that this list is an interactive chat — absent, the resend/edit
+   *  controls do not render at all. */
+  onResendMessage?: (message: ChatMessage) => void;
 }
 
 // Methods exposed to parent component
@@ -76,7 +80,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop, sendNonce },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop, sendNonce, onResendMessage },
   ref
 ) {
   const { t } = useTranslation();
@@ -581,6 +585,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   // A hidden tab is `display:none` but still mounted, so the
                   // per-second clocks inside a turn are told to stand down.
                   isActive={isActive}
+                  onResendMessage={onResendMessage}
                 />
               </div>
             ))}
