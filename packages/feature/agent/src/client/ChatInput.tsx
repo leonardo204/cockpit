@@ -232,6 +232,35 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     };
   }, [isActive, insertAtCaret, replaceDraft]);
 
+  // AUTO-FOCUS — "entering" a session lands the caret in the composer. Two
+  // distinct arrivals produce an entry, and they need different signals:
+  //   * the tab becomes active WITHIN this project → `isActive` flips true
+  //     (this effect re-runs);
+  //   * the whole project iframe is unhidden by the parent window → `isActive`
+  //     never flips (the tab was already the active one), but the textarea
+  //     goes from display:none to visible. IntersectionObserver catches that:
+  //     it fires once on observe with the current visibility and again on
+  //     every hidden→visible transition, so both the initial mount and the
+  //     project switch focus without any cross-frame message.
+  // Focus only ever happens on those transitions — never on re-render — so it
+  // cannot steal the caret from someone typing elsewhere mid-session.
+  useEffect(() => {
+    if (!isActive) return;
+    const ta = textareaRef.current;
+    if (!ta) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      // jsdom (tests) has no IntersectionObserver — and no layout either, so
+      // "visible" is meaningless there. Plain focus keeps behaviour testable.
+      ta.focus();
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) ta.focus();
+    });
+    observer.observe(ta);
+    return () => observer.disconnect();
+  }, [isActive]);
+
   // Auto-adjust textarea height.
   //
   // The composer does NOT float over the transcript — the two share one flex
