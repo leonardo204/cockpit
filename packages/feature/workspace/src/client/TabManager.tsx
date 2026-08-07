@@ -327,6 +327,11 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   tabsRef.current = tabs;
   const switchTabRef = useRef(switchTab);
   switchTabRef.current = switchTab;
+  // Cmd/Ctrl+W (close the active tab) reads through the same indirection.
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+  const closeTabRef = useRef(closeTab);
+  closeTabRef.current = closeTab;
 
   // Global keyboard shortcuts for the chat host. This listener lives on the
   // project iframe's own window (the same window the tab UI renders into), so
@@ -341,6 +346,18 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       // Swallow Cmd+S so the browser's "Save Page As..." never leaks through.
       if (e.key === 's') {
         e.preventDefault();
+        return;
+      }
+      // Cmd/Ctrl+W → close the ACTIVE session tab, the way a browser closes a
+      // browser tab. The key only reaches this handler because the Electron
+      // application menu (electron/menu.ts) deliberately does not bind it to
+      // "close window". On the LAST tab, closeTab already does the right thing:
+      // it leaves a fresh blank tab behind and publishes GoHome, so the window
+      // lands on the home screen instead of vanishing.
+      if (e.key === 'w') {
+        e.preventDefault();
+        const activeId = activeTabIdRef.current;
+        if (activeId) closeTabRef.current(activeId);
         return;
       }
       // Cmd/Ctrl+1..9 → switch to the Nth tab. 1..8 are positional; 9 always
