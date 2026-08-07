@@ -5,7 +5,9 @@ import {
   CONTEXT_1M_BETA,
   FALLBACK_CONTEXT_WINDOW,
   contextWindowFor,
+  reportedContextWindow,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { resolveContextWindow } from './contextWindow';
 
 /**
  * The context-window registry (specs/session-context-management.md §2.1) — the
@@ -133,5 +135,169 @@ describe('contextWindowFor', () => {
     // folds against the smallest window any supported provider ships.
     expect(FALLBACK_CONTEXT_WINDOW).toBe(128_000);
     expect(contextWindowFor('ai-sdk', 'llama-3.1-70b') ?? FALLBACK_CONTEXT_WINDOW).toBe(128_000);
+  });
+});
+
+/**
+ * THE PRECEDENCE THE GAUGE ACTUALLY USES — a size the RUN reported beats
+ * anything the registry above can infer.
+ *
+ * The bug that put this here: a live Agent SDK 0.3.215 turn served
+ * `claude-fable-5` on a 1,000,000-token window with NO `context-1m-2025-08-07`
+ * beta and NO `[1m]` marker on the id — the long-context tier had gone GA, so
+ * both signals the registry reads were simply absent — and the status bar
+ * reported `64% (127k/200k)`. The result message said `contextWindow: 1000000`
+ * the whole time.
+ *
+ * So the rule under test is an ORDERING, not a lookup: reported wins, inference
+ * is the fallback, and the fallback's own behaviour must not have moved.
+ */
+describe('resolveContextWindow', () => {
+  it('prefers the window the RUN reported over anything inferred', () => {
+    // The live case, exactly: a model the registry sizes at 200k, on a run that
+    // reported 1M and announced the tier in no other way.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        reportedWindow: 1_000_000,
+        contextModel: 'claude-fable-5',
+        modelLabel: 'default',
+      }),
+    ).toBe(1_000_000);
+    // …and it wins over a registry answer that DISAGREES in the other direction,
+    // so the reported figure is genuinely the source and not a coincidence.
+    expect(
+      resolveContextWindow({
+        engineId: 'ai-sdk',
+        reportedWindow: 64_000,
+        contextModel: 'gemini-2.5-pro',
+        modelLabel: 'gemini-2.5-pro',
+      }),
+    ).toBe(64_000);
+    // The reported size also answers where the registry knows NOTHING — the case
+    // that used to leave the client estimating from the model's family.
+    expect(
+      resolveContextWindow({
+        engineId: 'ai-sdk',
+        reportedWindow: 400_000,
+        contextModel: 'my-azure-deployment',
+        modelLabel: 'my-azure-deployment',
+      }),
+    ).toBe(400_000);
+  });
+
+  it('falls back to the registry when the run reported NO window', () => {
+    // Every AI-SDK backend, and any Agent SDK turn that ended before its result.
+    // The chain below must behave exactly as it did before the reported field
+    // existed — the served id first, the requested label second.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5',
+        modelLabel: 'default',
+      }),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    // The served id is `default` (nameable but unsizeable), so the label carries it.
+    expect(
+      resolveContextWindow({
+        engineId: 'ai-sdk',
+        contextModel: 'default',
+        modelLabel: 'gpt-4o',
+      }),
+    ).toBe(128_000);
+    // The betas still reach the registry, so a run that DID announce the tier the
+    // old way is sized the old way.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5',
+        modelLabel: 'default',
+        betas: [CONTEXT_1M_BETA],
+      }),
+    ).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    // …and an unknown model is still UNDEFINED rather than a guess.
+    expect(
+      resolveContextWindow({
+        engineId: 'ai-sdk',
+        contextModel: 'llama-3.1-70b',
+        modelLabel: 'llama-3.1-70b',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('ignores a reported window that is not a size', () => {
+    // A zero or a NaN forwarded from a backend would divide the gauge by nothing.
+    // These fall THROUGH to the inference rather than poisoning the answer.
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        resolveContextWindow({
+          engineId: 'dev-claude',
+          reportedWindow: bad,
+          contextModel: 'claude-opus-5',
+          modelLabel: 'default',
+        }),
+      ).toBe(CLAUDE_CONTEXT_WINDOW);
+    }
+  });
+});
+
+/**
+ * WHICH `modelUsage` ENTRY THE REPORTED WINDOW COMES FROM — the Agent SDK engine's
+ * side of the same fix. Asserted here, from the shell, for the same reason the
+ * registry is: this is what decides the number on screen, and it must be
+ * checkable without a live SDK run.
+ */
+describe('reportedContextWindow', () => {
+  const usage = (contextWindow: number) => ({
+    inputTokens: 1,
+    outputTokens: 1,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+    contextWindow,
+    maxOutputTokens: 64_000,
+  });
+
+  it('takes the entry keyed by the model that produced the reading', () => {
+    expect(
+      reportedContextWindow(
+        { 'claude-fable-5': usage(1_000_000), 'claude-haiku-4-5': usage(200_000) },
+        'claude-fable-5',
+      ),
+    ).toBe(1_000_000);
+  });
+
+  it('takes a SOLE entry when the exact key is missing', () => {
+    // A turn that ended before any assistant message named an id, or an id
+    // reported in a form the result keys differently. One entry leaves nothing to
+    // choose between, so it is the run's window by construction.
+    expect(reportedContextWindow({ 'claude-fable-5': usage(1_000_000) }, undefined)).toBe(
+      1_000_000,
+    );
+    expect(reportedContextWindow({ 'claude-fable-5': usage(1_000_000) }, 'claude-opus-5')).toBe(
+      1_000_000,
+    );
+  });
+
+  it('answers UNDEFINED rather than picking between models it cannot attribute', () => {
+    // Two entries and no matching key: the numerator belongs to ONE of these
+    // windows and nothing here says which. Guessing is the bug, not the fix.
+    expect(
+      reportedContextWindow(
+        { 'claude-fable-5': usage(1_000_000), 'claude-haiku-4-5': usage(200_000) },
+        'claude-opus-5',
+      ),
+    ).toBeUndefined();
+    // Nothing reported at all — an older CLI, or a backend that has no such field.
+    expect(reportedContextWindow(undefined, 'claude-fable-5')).toBeUndefined();
+    expect(reportedContextWindow({}, 'claude-fable-5')).toBeUndefined();
+  });
+
+  it('rejects a non-size, so the caller falls back instead of dividing by nothing', () => {
+    expect(reportedContextWindow({ 'claude-fable-5': usage(0) }, 'claude-fable-5')).toBeUndefined();
+    expect(
+      reportedContextWindow({ 'claude-fable-5': usage(Number.NaN) }, 'claude-fable-5'),
+    ).toBeUndefined();
   });
 });

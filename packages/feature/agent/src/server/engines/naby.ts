@@ -105,7 +105,6 @@ import {
   stageRefusalReason,
   toSelectOptions,
   apiKeyCredential,
-  contextWindowFor,
   type Engine,
   type EngineEvent,
   type Executor,
@@ -143,6 +142,7 @@ import {
   finishEscalation,
   sendFinalReport,
 } from '../lib/telegramEscalation';
+import { resolveContextWindow as resolveRunContextWindow } from '../lib/contextWindow';
 import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
@@ -1668,14 +1668,30 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // it is the only place the 1M tier is visible at all.
         let contextModel: string | undefined;
         let contextBetas: readonly string[] | undefined;
-        /** The window for the model that actually answered, falling back to the
-         *  requested label when the run reported no id (a turn that died before
-         *  its first step). Still undefined for a model nobody knows — the client
-         *  then estimates and MARKS the estimate (contextGauge.ts). */
+        // THE WINDOW THE RUN REPORTED FOR ITSELF, when the backend states one —
+        // the Agent SDK does (`modelUsage[model].contextWindow`), forwarded on
+        // the runtime's result event. It OUTRANKS the inference above, because
+        // the tier stopped announcing itself: a 1M run arrived with no beta and
+        // no `[1m]` marker, and the gauge divided 127k by 200k. Undefined on
+        // every backend that reports nothing, which changes nothing for them.
+        let reportedContextWindow: number | undefined;
+        /** The window this run filled: the reported size when there is one, else
+         *  the registry's answer for the model that actually served — falling
+         *  back to the requested label when the run reported no id (a turn that
+         *  died before its first step). Still undefined for a model nobody knows,
+         *  and the client then estimates and MARKS the estimate (contextGauge.ts).
+         *  The precedence itself lives in lib/contextWindow.ts, where it can be
+         *  asserted without driving a whole turn. */
         const resolveContextWindow = (): number | undefined =>
-          contextWindowFor(engineId, contextModel ?? modelLabel, {
+          resolveRunContextWindow({
+            engineId,
+            ...(reportedContextWindow !== undefined
+              ? { reportedWindow: reportedContextWindow }
+              : {}),
+            ...(contextModel !== undefined ? { contextModel } : {}),
+            modelLabel,
             ...(contextBetas ? { betas: contextBetas } : {}),
-          }) ?? contextWindowFor(engineId, modelLabel);
+          });
         /** The gauge's fields on a `result`, built at emit time — the concrete
          *  model is only known once the run has reported it, so the denominator
          *  cannot be resolved up front the way it used to be. Both terminal emit
@@ -2153,6 +2169,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // denominator has to describe the same call the numerator does.
                   if (ev.contextModel !== undefined) contextModel = ev.contextModel;
                   if (ev.contextBetas !== undefined) contextBetas = ev.contextBetas;
+                  // Same rule again, and for the same reason: the size the run
+                  // reported describes the call the newest reading came from.
+                  if (ev.contextWindow !== undefined) reportedContextWindow = ev.contextWindow;
                   // THE STOP DECISION. Taken here because this is the moment both
                   // inputs are known: whether the step used a tool and what it
                   // said. `resolveMaxSteps` collapsed a non-autonomous agent to 1
