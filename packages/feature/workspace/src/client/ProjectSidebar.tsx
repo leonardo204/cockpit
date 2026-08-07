@@ -3,12 +3,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ProjectItem } from './ProjectItem';
+import { ProjectSessionRow } from './ProjectSessionRow';
 import { GlobalSessionMonitor, GlobalSession } from '@cockpit/feature-agent';
 import { PinnedSessionsPanel } from '@cockpit/feature-agent';
 import { ScheduledTasksPanel } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
 import { useScheduledTasks } from '@cockpit/feature-agent';
 import { useWebSocket } from '@cockpit/shared-ui';
+import { BrowserRuntime } from '@cockpit/effect-runtime';
+import {
+  deleteSession,
+  loadProjectSessions,
+  projectStateAt,
+  projectStateChangedCwd,
+  sessionIdOf,
+  shouldRefetch,
+  withExpanded,
+  withLoadError,
+  withLoading,
+  withSessions,
+  withoutSession,
+  type ProjectSessionTree,
+} from './projectSessionTree';
 
 export interface ProjectInfo {
   cwd: string;
@@ -87,6 +103,73 @@ export function ProjectSidebar({
   const reloadScheduledRef = useRef(reloadScheduled);
   useEffect(() => { reloadScheduledRef.current = reloadScheduled; });
 
+  // ── Project tree: each project's own sessions, nested under its row ──
+  //
+  // Keyed by cwd, so a `project-state-changed` push (which carries a cwd) is a
+  // direct lookup. Only expanded branches are ever fetched.
+  const [sessionTree, setSessionTree] = useState<ProjectSessionTree>({});
+  const sessionTreeRef = useRef(sessionTree);
+  useEffect(() => { sessionTreeRef.current = sessionTree; });
+
+  const activeCwd = projects[activeIndex]?.cwd;
+
+  const refreshProjectSessions = useCallback(async (cwd: string) => {
+    setSessionTree((prev) => withLoading(prev, cwd));
+    const exit = await BrowserRuntime.runPromiseExit(loadProjectSessions(cwd));
+    setSessionTree((prev) =>
+      exit._tag === 'Success'
+        ? withSessions(prev, cwd, exit.value)
+        : withLoadError(prev, cwd, 'load-failed'),
+    );
+  }, []);
+
+  // Ref indirection: the WebSocket handler below must keep ONE identity for the
+  // lifetime of the panel (useWebSocket shares a connection per URL and a
+  // changing listener would churn it), yet still call the current fetcher.
+  const refreshProjectSessionsRef = useRef(refreshProjectSessions);
+  useEffect(() => { refreshProjectSessionsRef.current = refreshProjectSessions; });
+
+  const handleToggleProject = useCallback((cwd: string) => {
+    const state = projectStateAt(sessionTreeRef.current, cwd);
+    if (state.isExpanded) {
+      setSessionTree((prev) => withExpanded(prev, cwd, false));
+      return;
+    }
+    // Expanding always refetches: sessions come and go while the branch is
+    // shut, so a cached list is only ever a placeholder.
+    void refreshProjectSessionsRef.current(cwd);
+  }, []);
+
+  // The ACTIVE project opens expanded — that is the project the user is looking
+  // at, and its sessions are the ones worth a click. Tracked in a ref so a
+  // deliberate collapse is not undone on the next render; a project only
+  // auto-expands the first time it becomes active.
+  const autoExpandedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!activeCwd || collapsed) return;
+    if (autoExpandedRef.current.has(activeCwd)) return;
+    autoExpandedRef.current.add(activeCwd);
+    void refreshProjectSessionsRef.current(activeCwd);
+  }, [activeCwd, collapsed]);
+
+  const handleSwitchProjectRef = useRef(onSwitchProject);
+  useEffect(() => { handleSwitchProjectRef.current = onSwitchProject; });
+
+  const handleSelectSession = useCallback((cwd: string, sessionId: string) => {
+    handleSwitchProjectRef.current(cwd, sessionId);
+  }, []);
+
+  const handleDeleteSession = useCallback((cwd: string, sessionId: string) => {
+    void (async () => {
+      const exit = await BrowserRuntime.runPromiseExit(deleteSession(cwd, sessionId));
+      // Optimistic removal. The server's `project-state-changed` broadcast
+      // lands right behind this and refetches the branch, which confirms it.
+      if (exit._tag === 'Success') {
+        setSessionTree((prev) => withoutSession(prev, cwd, sessionId));
+      }
+    })();
+  }, []);
+
   const handleGlobalStateMessage = useCallback((msg: unknown) => {
     try {
       const parsed = msg as { type: string; data?: { sessions: GlobalSession[] } };
@@ -94,6 +177,17 @@ export function ProjectSidebar({
       // Scheduled task trigger notification
       if (parsed.type === 'task-fired') {
         reloadScheduledRef.current();
+        return;
+      }
+
+      // A session was added or closed somewhere in the app — the server
+      // broadcasts this after every project-state write. Refetch the affected
+      // branch so the tree does not show sessions that no longer exist.
+      const changedCwd = projectStateChangedCwd(msg);
+      if (changedCwd) {
+        if (shouldRefetch(sessionTreeRef.current, changedCwd)) {
+          void refreshProjectSessionsRef.current(changedCwd);
+        }
         return;
       }
 
@@ -219,34 +313,106 @@ export function ProjectSidebar({
         )}
       </div>
 
-      {/* Project list */}
+      {/* Project list — a TREE. Each project row owns a chevron that unfolds
+          that project's sessions as an indented list directly beneath it. The
+          scrolling happens HERE (see the root comment above): this is the
+          element that may clip, and the nested rows live inside it. */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {projects.map((project, index) => (
-          <div
-            key={project.cwd}
-            draggable
-            onDragStart={() => handleDragStart(index)}
-            onDragOver={(e) => handleDragOver(e, index)}
-            onDrop={() => handleDrop(index)}
-            onDragEnd={handleDragEnd}
-            className={`${
-              dragOverIndex === index ? 'border-t-2 border-brand' : ''
-            } ${dragIndex === index ? 'opacity-50' : ''}`}
-          >
-            <ProjectItem
-              index={index}
-              name={getProjectName(project.cwd)}
-              cwd={project.cwd}
-              isActive={index === activeIndex}
-              collapsed={collapsed}
-              hasUnread={unreadCwds.has(project.cwd)}
-              isLoading={loadingCwds.has(project.cwd)}
-              onClick={() => onSelectProject(index)}
-              onRemove={() => onRemoveProject(index)}
-              onOpenNote={() => onOpenNote(project.cwd)}
-            />
-          </div>
-        ))}
+        {projects.map((project, index) => {
+          const branch = projectStateAt(sessionTree, project.cwd);
+          // The collapsed rail is an icon strip 48px wide — a session title has
+          // nowhere to go there, so the whole tree folds away with it.
+          const showBranch = !collapsed && branch.isExpanded;
+          return (
+            <div
+              key={project.cwd}
+              draggable
+              onDragStart={() => handleDragStart(index)}
+              onDragOver={(e) => handleDragOver(e, index)}
+              onDrop={() => handleDrop(index)}
+              onDragEnd={handleDragEnd}
+              className={`${
+                dragOverIndex === index ? 'border-t-2 border-brand' : ''
+              } ${dragIndex === index ? 'opacity-50' : ''}`}
+            >
+              <div className="flex items-center">
+                {/* Expand/collapse. A separate control from the project row —
+                    unfolding the sessions must never also switch project. */}
+                {!collapsed && (
+                  <button
+                    data-testid="sidebar-project-expand"
+                    data-cwd={project.cwd}
+                    aria-expanded={branch.isExpanded}
+                    aria-label={t('sessions.projectSessions')}
+                    title={t('sessions.projectSessions')}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleProject(project.cwd);
+                    }}
+                    className="flex-shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <svg
+                      className={`w-3.5 h-3.5 transition-transform ${branch.isExpanded ? 'rotate-90' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                )}
+                <div className="flex-1 min-w-0">
+                  <ProjectItem
+                    index={index}
+                    name={getProjectName(project.cwd)}
+                    cwd={project.cwd}
+                    isActive={index === activeIndex}
+                    collapsed={collapsed}
+                    hasUnread={unreadCwds.has(project.cwd)}
+                    isLoading={loadingCwds.has(project.cwd)}
+                    onClick={() => onSelectProject(index)}
+                    onRemove={() => onRemoveProject(index)}
+                    onOpenNote={() => onOpenNote(project.cwd)}
+                  />
+                </div>
+              </div>
+
+              {showBranch && (
+                <div className="mt-0.5 space-y-0.5" data-testid="sidebar-session-branch" data-cwd={project.cwd}>
+                  {branch.isLoading && branch.sessions.length === 0 && (
+                    <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
+                      {t('sessions.loadingSessions')}
+                    </div>
+                  )}
+                  {!branch.isLoading && branch.error && (
+                    <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
+                      {t('sessions.loadSessionsFailed')}
+                    </div>
+                  )}
+                  {!branch.isLoading && !branch.error && branch.sessions.length === 0 && (
+                    <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
+                      {t('sessions.noSessionsYet')}
+                    </div>
+                  )}
+                  {branch.sessions.map((session) => {
+                    const sessionId = sessionIdOf(session);
+                    return (
+                      <ProjectSessionRow
+                        key={sessionId}
+                        cwd={project.cwd}
+                        sessionId={sessionId}
+                        title={session.title}
+                        isActive={index === activeIndex && project.sessionId === sessionId}
+                        onSelect={handleSelectSession}
+                        onDelete={handleDeleteSession}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Bottom button area */}

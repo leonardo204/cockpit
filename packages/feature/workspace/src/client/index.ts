@@ -13,6 +13,14 @@
 export { Workspace } from './Workspace';
 export { ProjectSidebar, type ProjectInfo } from './ProjectSidebar';
 export { ProjectItem } from './ProjectItem';
+export { ProjectSessionRow } from './ProjectSessionRow';
+export {
+  encodeProjectPath,
+  sessionIdOf,
+  projectStateAt,
+  type ProjectSessionTree,
+  type SidebarSessionInfo,
+} from './projectSessionTree';
 export { EmptyState } from './EmptyState';
 
 // ============================================

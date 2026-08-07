@@ -185,6 +185,7 @@
     "noPinnedSessions": "No pinned sessions. Click the pin icon in the tab bar to add.",
     "editTitle": "Edit title",
     "remove": "Remove",
+    "deleteSession": "Delete session",
     "projectSessions": "Project Sessions",
     "browseAllSessions": "Browse all sessions",
     "sessionList": "Session List",

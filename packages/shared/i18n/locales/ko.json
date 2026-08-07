@@ -185,6 +185,7 @@
     "noPinnedSessions": "고정된 세션이 없습니다. 탭 바의 핀 아이콘을 눌러 추가하세요.",
     "editTitle": "제목 편집",
     "remove": "제거",
+    "deleteSession": "세션 삭제",
     "projectSessions": "프로젝트 세션",
     "browseAllSessions": "모든 세션 보기",
     "sessionList": "세션 목록",
