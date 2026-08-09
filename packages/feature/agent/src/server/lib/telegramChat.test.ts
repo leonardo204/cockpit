@@ -16,6 +16,7 @@ import {
   projectLabel,
   readLink,
   renderProjectList,
+  repointLink,
   renderSessionList,
   resolveListPick,
   sessionTitle,
@@ -89,6 +90,26 @@ describe('telegramChat — link state', () => {
     clearLink(store);
     expect(readLink(store)).toBeUndefined();
     store.setSetting(TELEGRAM_LINK_KEY, '{not json');
+    expect(readLink(store)).toBeUndefined();
+  });
+
+  // A session continued in a new tab takes the conversation with it. The phone
+  // must follow, or replies land in the session the user just left (§2.2).
+  it('repoints a link that names the CONTINUED session, keeping when it was made', () => {
+    const store = fakeStore();
+    writeLink(store, { sessionId: 'old', linkedAt: 5, lastActivityAt: 7 });
+    expect(repointLink(store, 'old', 'new', 1234)).toBe(true);
+    expect(readLink(store)).toEqual({ sessionId: 'new', linkedAt: 5, lastActivityAt: 1234 });
+  });
+
+  it('leaves a link that names some OTHER session alone', () => {
+    const store = fakeStore();
+    writeLink(store, { sessionId: 'other', linkedAt: 5, lastActivityAt: 7 });
+    expect(repointLink(store, 'old', 'new', 1234)).toBe(false);
+    expect(readLink(store)?.sessionId).toBe('other');
+    // And with no link at all there is simply nothing to move.
+    clearLink(store);
+    expect(repointLink(store, 'old', 'new', 1234)).toBe(false);
     expect(readLink(store)).toBeUndefined();
   });
 });

@@ -128,12 +128,17 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
         }),
       });
       const json = (await res.json().catch(() => null)) as
-        | { ok?: boolean; sessionId?: string }
+        | { ok?: boolean; sessionId?: string; cwd?: string }
         | null;
       if (!res.ok || !json?.ok || !json.sessionId) return;
       // The existing "open this project at this session" path — the one the
       // fast-growth button and the session-list rows already publish.
-      if (cwd) publishTopic(Topics.OpenProject, { cwd, sessionId: json.sessionId });
+      //
+      // The server's cwd wins when this tab has none: it answers with the project
+      // the new session was linked to (the SOURCE session's, when the request
+      // carried none), which is the only way a cwd-less tab can navigate at all.
+      const openIn = json.cwd ?? cwd;
+      if (openIn) publishTopic(Topics.OpenProject, { cwd: openIn, sessionId: json.sessionId });
     } catch {
       // A failed continue leaves the user exactly where they were, which is the
       // conversation they can still use. Nothing to undo.

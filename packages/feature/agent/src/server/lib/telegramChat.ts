@@ -97,6 +97,37 @@ export function clearLink(store: Store): void {
   store.setSetting(TELEGRAM_LINK_KEY, '');
 }
 
+/**
+ * REPOINT THE LINK when the session it names was continued in a new tab
+ * (session-context-management §2.2).
+ *
+ * The link is what makes a plain phone message a turn, and it names ONE session
+ * id. When that conversation is continued elsewhere, the desktop moves and the
+ * phone does not: every reply typed on the phone would keep landing in the
+ * session the user just left, for up to the idle window (an hour) — answered by
+ * an agent with none of the context the continuation carries.
+ *
+ * ONLY WHEN IT ACTUALLY POINTS AT THE OLD SESSION. A link the user set to some
+ * other conversation is their choice, and a continuation happening in a third
+ * session is no reason to steal the phone away from it. `false` = nothing to do,
+ * which is the ordinary case (most machines have no Telegram link at all).
+ *
+ * `linkedAt` is preserved because the link is the same link; `lastActivityAt` is
+ * stamped because continuing IS activity — a link about to expire should not die
+ * a second after being moved.
+ */
+export function repointLink(
+  store: Store,
+  fromSessionId: string,
+  toSessionId: string,
+  now: number = Date.now(),
+): boolean {
+  const link = readLink(store);
+  if (!link || link.sessionId !== fromSessionId) return false;
+  writeLink(store, { ...link, sessionId: toSessionId, lastActivityAt: now });
+  return true;
+}
+
 /** True when the link has gone quiet for longer than the idle window (§3). */
 export function isLinkExpired(link: TelegramLink, now: number): boolean {
   return now - link.lastActivityAt >= TELEGRAM_LINK_IDLE_MS;

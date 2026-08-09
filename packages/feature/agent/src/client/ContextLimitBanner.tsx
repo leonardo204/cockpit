@@ -75,7 +75,7 @@ export function ContextLimitBanner({ atThreshold, sessionId, cwd }: ContextLimit
         }),
       });
       const json = (await res.json().catch(() => null)) as
-        | { ok?: boolean; sessionId?: string }
+        | { ok?: boolean; sessionId?: string; cwd?: string }
         | null;
       if (!res.ok || !json?.ok || !json.sessionId) {
         setState('failed');
@@ -84,7 +84,13 @@ export function ContextLimitBanner({ atThreshold, sessionId, cwd }: ContextLimit
       // GO THERE. `Topics.OpenProject` is the existing "open this project at this
       // session" message — the same path the fast-growth session's button takes,
       // and the same one the session-list rows publish.
-      if (cwd) publishTopic(Topics.OpenProject, { cwd, sessionId: json.sessionId });
+      //
+      // THE SERVER'S CWD WINS WHEN THIS BANNER HAS NONE. A tab opened without a
+      // cwd prop still belongs to a project (the session row says so), and the
+      // server answers with the project the new session was actually linked to —
+      // so the tab opens instead of silently doing nothing.
+      const openIn = json.cwd ?? cwd;
+      if (openIn) publishTopic(Topics.OpenProject, { cwd: openIn, sessionId: json.sessionId });
       // The offer has been taken; this banner's conversation is the OLD one, and
       // repeating the offer in it would invite a second empty tab.
       setBanner((b) => reduceContextBanner(b, { kind: 'continued', sessionId }));

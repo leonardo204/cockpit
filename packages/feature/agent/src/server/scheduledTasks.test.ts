@@ -22,6 +22,9 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Effect } from 'effect';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const dispatchChat = vi.fn();
 const getSession = vi.fn();
@@ -48,7 +51,13 @@ vi.mock('./state/globalState', () => ({
   getSessionTitle: async () => undefined,
 }));
 
-const { sendChatMessageEff } = await import('./scheduledTasks');
+// A REBIND WRITES THE TASK FILE, so this suite gets a data dir of its own before
+// anything resolves one. `COCKPIT_HOME` is the documented switch (paths.ts), and
+// it is set here — ahead of the dynamic import below — because the paths module
+// reads it once, at load.
+process.env.COCKPIT_HOME = mkdtempSync(join(tmpdir(), 'cockpit-tasks-'));
+
+const { sendChatMessageEff, scheduledTaskManager } = await import('./scheduledTasks');
 
 type Task = Parameters<typeof sendChatMessageEff>[0];
 
@@ -137,5 +146,47 @@ describe('scheduled tasks are pinned to the naby engine', () => {
     });
     await run(task());
     expect(dispatchChat.mock.calls[0][1].sessionId).toBe('sess-1');
+  });
+});
+
+/**
+ * REBINDING A CONTINUED SESSION (session-context-management §2.2).
+ *
+ * "Continue in a new tab" retires a session in everything but name. A task still
+ * naming the old id would keep firing unattended turns into a conversation nobody
+ * reads — the same wrong-place failure the `startFresh` rebind fixes for a session
+ * that is GONE, applied to one that has been superseded.
+ *
+ * Every task here is created PAUSED on purpose: an unpaused one arms a real timer
+ * in the test process, and the rebind is supposed to work regardless of state.
+ */
+describe('rebinding the session a task is bound to', () => {
+  it('moves exactly the tasks bound to the old session, and persists them', async () => {
+    await scheduledTaskManager.addTask(
+      task({ id: 'r1', sessionId: 'old-sess', paused: true }),
+    );
+    await scheduledTaskManager.addTask(
+      task({ id: 'r2', sessionId: 'old-sess', paused: true }),
+    );
+    await scheduledTaskManager.addTask(
+      task({ id: 'r3', sessionId: 'other-sess', paused: true }),
+    );
+
+    expect(await scheduledTaskManager.rebindSession('old-sess', 'new-sess')).toBe(2);
+
+    // Read back from DISK (getTasks always does) — the file is the shared truth
+    // between the two module instances, so a rebind only in memory is no rebind.
+    const after = await scheduledTaskManager.getTasks();
+    const byId = Object.fromEntries(after.map((t) => [t.id, t.sessionId]));
+    expect(byId.r1).toBe('new-sess');
+    expect(byId.r2).toBe('new-sess');
+    // A task on another conversation is not swept up by someone else's continue.
+    expect(byId.r3).toBe('other-sess');
+  });
+
+  it('does nothing when no task names the old session, or when the ids are the same', async () => {
+    expect(await scheduledTaskManager.rebindSession('nobodys-session', 'new-sess')).toBe(0);
+    expect(await scheduledTaskManager.rebindSession('new-sess', 'new-sess')).toBe(0);
+    expect(await scheduledTaskManager.rebindSession('', 'new-sess')).toBe(0);
   });
 });

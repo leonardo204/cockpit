@@ -612,6 +612,56 @@ class ScheduledTaskManager {
   }
 
   /**
+   * REBIND every task bound to `fromSessionId` onto `toSessionId`.
+   *
+   * WHY THIS EXISTS (session-context-management §2.2). A task names the session it
+   * resumes, and "continue in a new tab" retires that session in everything but
+   * name: the user is now working in the continuation, which carries the handoff
+   * and the session-scoped memory. A task left pointing at the old id keeps firing
+   * unattended turns into a conversation nobody will read — the same silent-wrong-
+   * place failure the `startFresh` rebind above already fixes for a session that is
+   * GONE, applied to one that has merely been superseded.
+   *
+   * Same shape as `markReadBySessionId`: one locked read-modify-write on the file
+   * (which is the shared truth across the two module instances), plus a sync of the
+   * in-memory copy so this instance's already-armed timer fires against the new id
+   * rather than reverting the file on its next saveToDisk.
+   *
+   * IT DOES NOT `ensureInit()`, and that is the one difference from its neighbours.
+   * A rebind is a side effect of a chat action, reachable from the API-route module
+   * instance; initializing there would ARM A TIMER PER TASK in a process that was
+   * never meant to run them. The file is the shared truth, so writing it is enough:
+   * an uninitialized manager picks the new ids up when it does init, and an
+   * initialized one is patched in place below.
+   *
+   * Returns how many tasks moved, so the caller can log it and a test can assert it.
+   */
+  async rebindSession(fromSessionId: string, toSessionId: string): Promise<number> {
+    if (!fromSessionId || !toSessionId || fromSessionId === toSessionId) return 0;
+    const moved = await withFileLock(SCHEDULED_TASKS_FILE, async () => {
+      const allTasks = await readJsonFile<ScheduledTask[]>(SCHEDULED_TASKS_FILE, []);
+      let count = 0;
+      for (const task of allTasks) {
+        if (task.sessionId === fromSessionId) {
+          task.sessionId = toSessionId;
+          count += 1;
+        }
+      }
+      if (count > 0) await writeJsonFile(SCHEDULED_TASKS_FILE, allTasks);
+      return count;
+    });
+    if (moved > 0) {
+      for (const task of this.tasks) {
+        if (task.sessionId === fromSessionId) task.sessionId = toSessionId;
+      }
+      console.log(
+        `[ScheduledTask] rebound ${moved} task(s) from session ${fromSessionId} to ${toSessionId}`,
+      );
+    }
+    return moved;
+  }
+
+  /**
    * Mark all tasks as read (operates directly on disk; avoids dual-instance issues).
    */
   async markAllRead(): Promise<void> {

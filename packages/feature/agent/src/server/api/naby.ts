@@ -133,6 +133,9 @@ import { customTitleKey } from '../state/recentSessions';
 import { startFastGrowthKickoff } from '../lib/fastGrowthKickoff';
 import { continueSessionInNewTab } from '../lib/sessionHandoff';
 import { modelHandoffSummarizer } from '../lib/handoffSummary';
+// The chat link's rebind (session-context-management §2.2). Pure over the store —
+// no poll loop, no network — so importing it here costs nothing.
+import { repointLink } from '../lib/telegramChat';
 
 /** How much of a client-supplied session title is kept. A name is a row in a
  *  list, not a description; anything past this is a paragraph in a sidebar. */
@@ -686,6 +689,11 @@ export type NabyActionResult =
        *  on the new session. False is a SUCCESS — the tab opens either way (§2.2);
        *  it only says the continuation starts cold. */
       handoff?: boolean;
+      /** `session.continueInNewTab`: the project the new session is linked to —
+       *  the requested one, or the SOURCE session's when the request carried none.
+       *  The client navigates on it, so a tab with no cwd of its own can still
+       *  open the continuation. */
+      cwd?: string;
       /** `session.fastGrowth.create`: the name the session was given, echoed back
        *  so the client renders what was actually stored rather than what it asked
        *  for (they differ when the request carried no title, or an over-long one). */
@@ -937,6 +945,20 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           // fast-growth session's does — `sessions.title` for the project browser
           // and the custom-title setting for the Recent list and the tab bar.
           setCustomTitle: (sessionId, title) => store.setSetting(customTitleKey(sessionId), title),
+          // The two bindings that name a session id from OUTSIDE the store. Both
+          // are passed as seams (see `ContinueDeps`) so the flow's own tests never
+          // touch a bot link or the scheduled-task file.
+          //
+          // A no-op on most machines: `repointLink` only moves a link that names
+          // the old session, and the rebind only touches tasks bound to it.
+          rebindTelegramLink: (fromId, toId) => void repointLink(store, fromId, toId),
+          // IMPORTED LAZILY, exactly as the engine modules are: /api/naby is
+          // imported by every settings request, and scheduledTasks drags in the
+          // orchestrator and the run hub behind it.
+          rebindScheduledTasks: async (fromId, toId) => {
+            const { scheduledTaskManager } = await import('../scheduledTasks');
+            await scheduledTaskManager.rebindSession(fromId, toId);
+          },
         },
         {
           sessionId: body.sessionId,
@@ -952,13 +974,21 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (!outcome.ok) return { ok: false, error: outcome.error };
       console.log(
         `[handoff] continued session ${body.sessionId} into ${outcome.sessionId}` +
-          (outcome.handoff ? ' with a handoff' : ` without one (${outcome.reason ?? 'unknown'})`),
+          (outcome.handoff ? ' with a handoff' : ` without one (${outcome.reason ?? 'unknown'})`) +
+          ` (carried: ${outcome.carried.memoryKeys} memory key(s)` +
+          `${outcome.carried.noLearn ? ', no-learn' : ''}` +
+          `${outcome.carried.planMode ? ', plan mode' : ''}` +
+          `${outcome.carried.failed.length ? `; failed: ${outcome.carried.failed.join(', ')}` : ''})`,
       );
       return {
         ok: true,
         sessionId: outcome.sessionId,
         title: outcome.title,
         handoff: outcome.handoff,
+        // THE PROJECT THE TAB OPENS IN. Echoed rather than assumed by the client:
+        // when the request carried no cwd the flow fell back to the SOURCE
+        // session's project, and that is the only place the client can learn it.
+        ...(outcome.cwd ? { cwd: outcome.cwd } : {}),
       };
     }
 

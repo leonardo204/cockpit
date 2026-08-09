@@ -28,14 +28,30 @@ vi.mock('../lib/handoffSummary', () => ({
   },
 }));
 
+// AND NO TEST MAY TOUCH THE SCHEDULED-TASK FILE. The action rebinds tasks off the
+// continued session; the manager behind that lives on `~/.cockpit`, and its own
+// behaviour is covered in scheduledTasks.test.ts. Here the assertion is only that
+// the action WIRES the seam with the right two ids.
+const rebinds = vi.hoisted(() => ({ calls: [] as [string, string][] }));
+
+vi.mock('../scheduledTasks', () => ({
+  scheduledTaskManager: {
+    rebindSession: async (from: string, to: string) => {
+      rebinds.calls.push([from, to]);
+      return 0;
+    },
+  },
+}));
+
 import { runNabyAction } from './naby';
 import { getStore } from '../engines/naby';
 import { customTitleKey } from '../state/recentSessions';
-import { handoffInstruction } from '../lib/sessionHandoff';
+import { handoffInstruction, sessionPlanModeKey } from '../lib/sessionHandoff';
+import { readLink, writeLink } from '../lib/telegramChat';
 
-function seededSession(): string {
+function seededSession(cwd?: string): string {
   const store = getStore();
-  const { sessionId } = store.createSession('test-provider', 'Pricing work');
+  const { sessionId } = store.createSession('test-provider', 'Pricing work', cwd);
   store.appendMessage(sessionId, { role: 'user', content: '금요일에 출시하기로 했습니다' });
   store.appendMessage(sessionId, { role: 'assistant', content: '알겠습니다' });
   return sessionId;
@@ -114,5 +130,64 @@ describe('POST /api/naby — session.continueInNewTab', () => {
     expect(noSuch.ok).toBe(false);
     if (noSuch.ok) return;
     expect(noSuch.error).toMatch(/not found/);
+  });
+
+  // -- the environment carry, through the ACTION's wiring -------------------
+
+  it('carries the session environment and answers with the project the tab opens in', async () => {
+    summarizer.calls = 0;
+    summarizer.fail = false;
+    rebinds.calls = [];
+    const store = getStore();
+    const sourceId = seededSession('/tmp/naby-source-project');
+    store.setSessionNoLearn(sourceId, true);
+    store.setMemory(sourceId, 'release.date', 'Friday');
+    store.setSetting(sessionPlanModeKey(sourceId), 'true');
+    writeLink(store, { sessionId: sourceId, linkedAt: 100, lastActivityAt: 200 });
+
+    // NO cwd IN THE REQUEST — the case a tab with no cwd prop produces, which used
+    // to answer with nothing to navigate with.
+    const result = await runNabyAction({
+      action: 'session.continueInNewTab',
+      sessionId: sourceId,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const newId = result.sessionId!;
+    // The project travelled, and came back — this is what the client navigates on.
+    expect(result.cwd).toBe('/tmp/naby-source-project');
+    expect(store.getSession(newId)?.cwd).toBe('/tmp/naby-source-project');
+    // A temporary conversation stays temporary.
+    expect(store.getSession(newId)?.noLearn).toBe(true);
+    // What was learned inside the conversation comes along …
+    expect(store.getAllMemory(newId)['release.date']).toBe('Friday');
+    // … and so does the posture the user chose for it.
+    expect(store.getSetting(sessionPlanModeKey(newId))).toBe('true');
+    // The phone follows the conversation instead of talking to the empty room.
+    expect(readLink(store)?.sessionId).toBe(newId);
+    expect(readLink(store)?.linkedAt).toBe(100);
+    // And the scheduled-task seam was handed the move.
+    expect(rebinds.calls).toEqual([[sourceId, newId]]);
+  });
+
+  it('leaves a phone link that names a DIFFERENT session where it is', async () => {
+    summarizer.fail = false;
+    const store = getStore();
+    const sourceId = seededSession('/tmp/naby-other-project');
+    writeLink(store, { sessionId: 'someone-elses-session', linkedAt: 1, lastActivityAt: 2 });
+
+    const result = await runNabyAction({
+      action: 'session.continueInNewTab',
+      sessionId: sourceId,
+    });
+    expect(result.ok).toBe(true);
+    // The link was the user's choice about another conversation; continuing this
+    // one is no reason to steal the phone away from it.
+    expect(readLink(store)).toEqual({
+      sessionId: 'someone-elses-session',
+      linkedAt: 1,
+      lastActivityAt: 2,
+    });
   });
 });

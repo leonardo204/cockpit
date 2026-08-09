@@ -9,8 +9,12 @@ import {
   handoffInstruction,
   handoffSourceMessages,
   normalizeHandoff,
+  sessionPlanModeKey,
   type HandoffStore,
 } from './sessionHandoff';
+// The prompt lives next door; importing it here costs nothing, because every
+// model-reaching import inside it is dynamic.
+import { HANDOFF_SUMMARY_SYSTEM } from './handoffSummary';
 import { MemoryStore } from '../../../../../../../dist/naby-runtime.mjs';
 import type { RuntimeMessage } from '../../../../../../../dist/naby-runtime.mjs';
 
@@ -24,12 +28,35 @@ import type { RuntimeMessage } from '../../../../../../../dist/naby-runtime.mjs'
  * the tab from opening.
  */
 
-function seeded(): { store: HandoffStore & MemoryStore; sessionId: string } {
+function seeded(cwd?: string): { store: HandoffStore & MemoryStore; sessionId: string } {
   const store = new MemoryStore();
-  const { sessionId } = store.createSession('test-provider', 'Pricing work');
+  const { sessionId } = store.createSession('test-provider', 'Pricing work', cwd);
   store.appendMessage(sessionId, { role: 'user', content: 'we agreed to ship on Friday' });
   store.appendMessage(sessionId, { role: 'assistant', content: 'noted' });
   return { store, sessionId };
+}
+
+/**
+ * The same store with ONE method replaced by a thrower.
+ *
+ * Written out rather than proxied: the point of these cases is that a single
+ * broken store call is survivable, so the test says exactly which call breaks and
+ * leaves every other one real.
+ */
+function storeWhereMemoryReadFails(store: HandoffStore & MemoryStore): HandoffStore {
+  return {
+    getSession: (id) => store.getSession(id),
+    getMessages: (id) => store.getMessages(id),
+    createSession: (providerId, title, cwd) => store.createSession(providerId, title, cwd),
+    setSessionHandoff: (id, handoff) => store.setSessionHandoff(id, handoff),
+    setSetting: (key, value) => store.setSetting(key, value),
+    getSetting: (key) => store.getSetting(key),
+    setSessionNoLearn: (id, noLearn) => store.setSessionNoLearn(id, noLearn),
+    getAllMemory: () => {
+      throw new Error('the memory table is locked');
+    },
+    setMemory: (id, key, value) => store.setMemory(id, key, value),
+  };
 }
 
 describe('handoffInstruction', () => {
@@ -217,5 +244,196 @@ describe('continueSessionInNewTab', () => {
     expect(store.getSession(out.sessionId)?.title).toBe('이어서 — Pricing work');
     // … and the custom-title setting (the Recent list and the tab bar).
     expect(titles).toEqual([[out.sessionId, '이어서 — Pricing work']]);
+  });
+});
+
+/**
+ * THE ENVIRONMENT CARRY.
+ *
+ * A continuation is only "the same conversation somewhere else" if the things
+ * that were true of the SESSION are true of the new one. Each case below is a
+ * thing that was silently lost before, and every one of them is also forgiving:
+ * a carry that throws still leaves the user with the tab they clicked for.
+ */
+describe('continueSessionInNewTab — the session-scoped environment', () => {
+  it('falls back to the SOURCE project when the caller names none, and answers with it', async () => {
+    const { store, sessionId } = seeded('/tmp/pricing');
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    // The new row is linked to the same project …
+    expect(store.getSession(out.sessionId)?.cwd).toBe('/tmp/pricing');
+    // … and the caller is TOLD, because a tab with no cwd of its own has nothing
+    // else to navigate with.
+    expect(out.cwd).toBe('/tmp/pricing');
+  });
+
+  it('prefers the project the caller asked for over the source one', async () => {
+    const { store, sessionId } = seeded('/tmp/pricing');
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId, cwd: '/tmp/elsewhere' },
+    );
+    expect(out.ok && out.cwd).toBe('/tmp/elsewhere');
+    if (!out.ok) return;
+    expect(store.getSession(out.sessionId)?.cwd).toBe('/tmp/elsewhere');
+  });
+
+  it('carries the TEMPORARY mark, so a no-learn conversation cannot become a learning one', async () => {
+    const { store, sessionId } = seeded();
+    store.setSessionNoLearn(sessionId, true);
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(store.getSession(out.sessionId)?.noLearn).toBe(true);
+    expect(out.carried.noLearn).toBe(true);
+  });
+
+  it('leaves an ordinary conversation ordinary', async () => {
+    const { store, sessionId } = seeded();
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(store.getSession(out.sessionId)?.noLearn).toBeFalsy();
+    expect(out.carried.noLearn).toBe(false);
+  });
+
+  it('copies the session-scoped memory rows onto the new session', async () => {
+    const { store, sessionId } = seeded();
+    store.setMemory(sessionId, 'release.date', 'Friday');
+    store.setMemory(sessionId, 'release.owner', '지수');
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(store.getAllMemory(out.sessionId)).toEqual({
+      'release.date': 'Friday',
+      'release.owner': '지수',
+    });
+    expect(out.carried.memoryKeys).toBe(2);
+    // The source keeps its own rows — this is a copy, not a move.
+    expect(store.getAllMemory(sessionId)['release.date']).toBe('Friday');
+  });
+
+  it('a memory copy that THROWS does not fail the continuation', async () => {
+    const { store, sessionId } = seeded();
+    const out = await continueSessionInNewTab(
+      { store: storeWhereMemoryReadFails(store), summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    // The tab opens, with its handoff, and the failure is recorded rather than raised.
+    expect(store.getSession(out.sessionId)?.handoff).toBe('S');
+    expect(out.carried.memoryKeys).toBe(0);
+    expect(out.carried.failed).toContain('memory');
+  });
+
+  it('carries PLAN MODE, under the key /api/project-state reads', async () => {
+    const { store, sessionId } = seeded();
+    store.setSetting(sessionPlanModeKey(sessionId), 'true');
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(store.getSetting(sessionPlanModeKey(out.sessionId))).toBe('true');
+    expect(out.carried.planMode).toBe(true);
+  });
+
+  it('does not invent plan mode for a session that was not in it', async () => {
+    const { store, sessionId } = seeded();
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(store.getSetting(sessionPlanModeKey(out.sessionId))).toBeFalsy();
+    expect(out.carried.planMode).toBe(false);
+  });
+
+  it('hands both rebind seams the old id and the new one', async () => {
+    const { store, sessionId } = seeded();
+    const telegram: [string, string][] = [];
+    const scheduled: [string, string][] = [];
+    const out = await continueSessionInNewTab(
+      {
+        store,
+        summarize: async () => 'S',
+        rebindTelegramLink: (from, to) => void telegram.push([from, to]),
+        rebindScheduledTasks: async (from, to) => void scheduled.push([from, to]),
+      },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(telegram).toEqual([[sessionId, out.sessionId]]);
+    expect(scheduled).toEqual([[sessionId, out.sessionId]]);
+  });
+
+  it('a rebind that throws is recorded, not raised — the tab still opens', async () => {
+    const { store, sessionId } = seeded();
+    const out = await continueSessionInNewTab(
+      {
+        store,
+        summarize: async () => 'S',
+        rebindTelegramLink: () => {
+          throw new Error('no bot configured');
+        },
+        rebindScheduledTasks: async () => {
+          throw new Error('task file is unreadable');
+        },
+      },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.carried.failed).toEqual(['telegram', 'scheduled-tasks']);
+    expect(store.getSession(out.sessionId)?.handoff).toBe('S');
+  });
+
+  it('does NOT carry the things that belong to the old session alone', async () => {
+    const { store, sessionId } = seeded();
+    store.setSessionPinned(sessionId, true);
+    store.setSessionFastGrowth(sessionId, true);
+    const out = await continueSessionInNewTab(
+      { store, summarize: async () => 'S' },
+      { sessionId },
+    );
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    const ref = store.getSession(out.sessionId)!;
+    // Pinning is a gesture on ONE conversation, and a drill has its own kickoff
+    // lifecycle — inheriting either would be the continuation claiming something
+    // the user never gave it.
+    expect(ref.pinnedAt).toBeFalsy();
+    expect(ref.fastGrowth).toBeFalsy();
+    // And nothing derived from a transcript follows an empty one.
+    expect(store.getMessages(out.sessionId)).toEqual([]);
+  });
+});
+
+describe('the handoff prompt', () => {
+  it('asks for the WORKING ENVIRONMENT, not only what was decided', () => {
+    // Without this the continuation knows what was agreed but not where it was
+    // being done, and reaches for a different branch/service than the sitting it
+    // continues.
+    expect(HANDOFF_SUMMARY_SYSTEM).toMatch(/tools, services, files and branches/i);
+    expect(HANDOFF_SUMMARY_SYSTEM).toMatch(/reaches for the same ones/i);
+    // The instruction that keeps a handoff from restating general memory stays.
+    expect(HANDOFF_SUMMARY_SYSTEM).toMatch(/do NOT restate general facts/);
   });
 });

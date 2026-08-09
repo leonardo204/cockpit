@@ -25,6 +25,11 @@ import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
+// The plan-mode setting key is OWNED by the handoff flow's module, which also
+// writes one when a session is continued in a new tab. Imported rather than
+// re-derived: a second copy of the key is how a continued session gets its plan
+// mode stored where this reader never looks.
+import { sessionPlanModeKey } from "@cockpit/feature-agent/server/lib/sessionHandoff"
 import { broadcastToGlobalState } from "../../../lib/globalStateBroadcast"
 
 export const runtime = "nodejs"
@@ -37,7 +42,7 @@ interface ProjectState {
 }
 
 const activeSessionKey = (cwd: string) => `ui.activeSession.${cwd}`
-const planModeKey = (sessionId: string) => `session.planMode.${sessionId}`
+const planModeKey = sessionPlanModeKey
 
 /**
  * Build the wire state for a project from the store: the MRU session list, the

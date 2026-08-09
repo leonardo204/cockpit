@@ -34,7 +34,13 @@ export const HANDOFF_SUMMARY_SYSTEM = [
   '  - decisions that were agreed (and anything explicitly ruled out),',
   '  - work in progress and exactly where it stands,',
   '  - open questions and what is waiting on whom,',
-  '  - names, paths, ids and numbers the next turn will need.',
+  '  - names, paths, ids and numbers the next turn will need,',
+  // THE WORKING ENVIRONMENT, not just the work. A continuation that knows what was
+  // decided but not WHERE it was being done reaches for a different branch, a
+  // different service or a different file than the sitting it continues — and the
+  // user has to say all of it again, which is exactly what the handoff is for.
+  '  - the tools, services, files and branches actively in use (so the next sitting',
+  '    reaches for the same ones).',
   "Preserve the conversation's language. Be dense and specific; no preamble, no",
   'closing remark, no offer to help — output the handoff text and nothing else.',
 ].join('\n');
