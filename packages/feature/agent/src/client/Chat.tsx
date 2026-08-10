@@ -21,6 +21,7 @@ import { CheckinPrompt } from './CheckinPrompt';
 import { ContextLimitBanner } from './ContextLimitBanner';
 import { contextGauge } from './contextGauge';
 import { ChatInput } from './ChatInput';
+import { buildComposerHistory, sameComposerHistory } from './composerHistory';
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
@@ -571,6 +572,22 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     setIsUserMessagesOpen(true);
   }, []);
 
+  // What the user has already sent this session, for the composer's `↑` list.
+  // Derived from `messages` — no request, no second copy to keep in sync.
+  //
+  // The identity is PINNED to the previous array whenever the list is unchanged.
+  // `messages` gets a new identity on every streamed chunk, so without this the
+  // `memo`'d ChatInput would be handed a fresh array several times a second for
+  // a list that only moves when the user sends something (React Performance
+  // Conventions in CLAUDE.md).
+  const composerHistoryRef = useRef<readonly string[]>([]);
+  const composerHistory = useMemo(() => {
+    const next = buildComposerHistory(messages);
+    if (sameComposerHistory(composerHistoryRef.current, next)) return composerHistoryRef.current;
+    composerHistoryRef.current = next;
+    return next;
+  }, [messages]);
+
   const handleCreateScheduledTask = useMemo(() => {
     if (!onCreateScheduledTask || !initialCwd || !tabId || !sessionId) return undefined;
     return (params: { message: string; type: 'once' | 'interval' | 'cron'; delayMinutes?: number; intervalMinutes?: number; activeFrom?: string; activeTo?: string; cron?: string }) => {
@@ -728,6 +745,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           cwd={initialCwd}
           isActive={isActive}
           engine={engine}
+          history={composerHistory}
           onShowUserMessages={handleShowUserMessages}
           onOpenNote={onOpenNote}
           onCreateScheduledTask={handleCreateScheduledTask}

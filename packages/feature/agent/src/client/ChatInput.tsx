@@ -20,6 +20,11 @@ import {
   quotePath,
 } from './fileRefBus';
 import {
+  composerHistoryKey,
+  composerHistoryPreview,
+  EMPTY_COMPOSER_HISTORY,
+} from './composerHistory';
+import {
   fileRows,
   findMentionQuery,
   mentionInsertion,
@@ -138,6 +143,11 @@ interface ChatInputProps {
    *  tab's textarea. Defaults true for standalone use. */
   isActive?: boolean;
   engine?: ChatEngine;
+  /** What the user has already sent in THIS session, newest first — the list
+   *  `↑` offers back from an empty box. Derived by the caller
+   *  (`buildComposerHistory`) and expected to be referentially stable, since
+   *  this component is `memo`'d. */
+  history?: readonly string[];
   onShowUserMessages?: () => void;
   onOpenNote?: () => void;
   onCreateScheduledTask?: (params: {
@@ -164,7 +174,7 @@ const GROWTH_GLYPH: Record<'egg' | 'larva' | 'pupa' | 'butterfly', string> = {
   butterfly: '🦋',
 };
 
-export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, history = EMPTY_COMPOSER_HISTORY, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
   // Caret offset into `input`; drives line-aware command autocomplete.
@@ -174,8 +184,13 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   const [showScheduler, setShowScheduler] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [commandsDismissed, setCommandsDismissed] = useState(false);
+  // The `↑`-from-empty history list: whether it is showing, and which of the
+  // rows in `history` is selected (0 = the most recent message).
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const commandListRef = useRef<HTMLDivElement>(null);
+  const historyListRef = useRef<HTMLDivElement>(null);
 
   // Latest input/caret in refs so the file-reference inserter (registered once
   // for the active tab) always splices at the current position without a stale
@@ -449,6 +464,12 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   const showCommands =
     !commandsDismissed && !!(commandQuery || mentionQuery) && filteredCommands.length > 0;
 
+  // ONE popup at a time. The palette and the history list read the same four
+  // keys, so the palette — which the user opened by typing a marker — wins, and
+  // the history list is not even drawn while it is up. `composerHistoryKey` is
+  // told the same thing, so the two never disagree.
+  const showHistory = historyOpen && history.length > 0 && !showCommands;
+
   // Reset selected index and dismiss state when input changes
   const prevInputRef = useRef(input);
   useLayoutEffect(() => {
@@ -468,6 +489,28 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
       }
     }
   }, [selectedIndex, showCommands]);
+
+  // Same for the history list. Its rows are the container's children after the
+  // sticky header, hence the +1.
+  useLayoutEffect(() => {
+    if (showHistory && historyListRef.current) {
+      const row = historyListRef.current.children[historyIndex + 1] as HTMLElement | undefined;
+      row?.scrollIntoView?.({ block: 'nearest' });
+    }
+  }, [historyIndex, showHistory]);
+
+  // Put a past message back in the box — FILL ONLY, never a send, so it can be
+  // edited before it goes. `replaceDraft` already focuses and puts the caret at
+  // the end; the explicit height call covers the one case the `input` layout
+  // effect misses, which is re-picking the SAME text after typing over it.
+  const applyHistoryEntry = useCallback(
+    (text: string) => {
+      setHistoryOpen(false);
+      replaceDraft(text);
+      requestAnimationFrame(adjustTextareaHeight);
+    },
+    [replaceDraft, adjustTextareaHeight],
+  );
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
@@ -557,12 +600,53 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
       }
     }
 
+    // The `↑`-from-empty message history. Deliberately AFTER the palette block
+    // (which returns for the keys it owns) and BEFORE the send below, so a
+    // chosen row can never fall through into a send. Every rule lives in
+    // composerHistoryKey — see that file for why `↑` only opens on an empty
+    // box and why Enter fills instead of sending.
+    const historyAction = composerHistoryKey(e.key, {
+      // `showHistory`, not `historyOpen`: the list only owns keys while it is
+      // actually on screen. A hidden-but-open list swallowing every keystroke is
+      // exactly the bug the two names exist to prevent.
+      open: showHistory,
+      index: historyIndex,
+      text: input,
+      historyLength: history.length,
+      paletteOpen: showCommands && filteredCommands.length > 0,
+    });
+    if (historyAction.type !== 'none') {
+      e.preventDefault();
+      // STOP THE EVENT HERE. Chat.tsx keeps a window-level keydown listener that
+      // aborts the running turn on Escape; without this, closing the list would
+      // also kill the generation the user is watching. React dispatches from its
+      // root container, which is below window, so stopping the native event
+      // there keeps it from ever reaching that listener.
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+      switch (historyAction.type) {
+        case 'open':
+          setHistoryOpen(true);
+          setHistoryIndex(historyAction.index);
+          return;
+        case 'move':
+          setHistoryIndex(historyAction.index);
+          return;
+        case 'accept':
+          applyHistoryEntry(history[historyAction.index]);
+          return;
+        case 'close':
+          setHistoryOpen(false);
+          return;
+      }
+    }
+
     // Normal send (excluding IME composition state)
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
-  }, [showCommands, filteredCommands, selectedIndex, handleSelectCommand, handleSend]);
+  }, [showCommands, filteredCommands, selectedIndex, handleSelectCommand, handleSend, showHistory, historyIndex, input, history, applyHistoryEntry]);
 
   // Capture one image File into state. Shared by paste, the file picker, and
   // drag-drop. The image is DOWNSCALED + re-encoded on the client (prepareImage)
@@ -817,6 +901,44 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
         </div>
       )}
 
+      {/* Message history ("↑" on an empty box). Same container, highlight and
+          metrics as the command palette above — one popup language for the
+          composer, not two. `absolute bottom-full` with the same `mx-4` inset
+          keeps it inside this panel's width, so it cannot bleed into the
+          Explorer panel beside it. */}
+      {showHistory && (
+        <div
+          ref={historyListRef}
+          className="absolute bottom-full left-0 right-0 mx-4 mb-2 max-h-64 overflow-y-auto bg-card border border-border rounded-lg shadow-lg"
+        >
+          <div className="flex items-center justify-between gap-3 px-4 py-1 text-[0.714rem] uppercase tracking-wider text-muted-foreground bg-muted/40">
+            <span>{t('chatInput.historyGroup', { defaultValue: 'Your messages in this session' })}</span>
+            <span className="normal-case tracking-normal whitespace-nowrap">
+              {t('chatInput.historyHint', { defaultValue: 'Enter fills · Esc closes' })}
+            </span>
+          </div>
+          {/* OLDEST AT TOP, NEWEST AT THE BOTTOM — next to the composer it came
+              from. `history` is newest-first and ArrowUp walks that array
+              forward, so rendering it in array order put the newest row at the
+              top and made pressing ↑ move the highlight DOWN. An arrow that
+              moves the selection the other way needs a legend to explain it,
+              which is the tell that the layout is wrong rather than the keys.
+              Reversed here, ↑ moves up the list AND further back in time. */}
+          {history
+            .map((entry, index) => ({ entry, index }))
+            .reverse()
+            .map(({ entry, index }) => (
+              <div
+                key={`${index}-${entry.slice(0, 32)}`}
+                onClick={() => applyHistoryEntry(entry)}
+                className={`px-4 py-2 cursor-pointer ${index === historyIndex ? 'bg-brand/10' : 'hover:bg-accent'}`}
+              >
+                <div className="text-sm text-foreground truncate">{composerHistoryPreview(entry)}</div>
+              </div>
+            ))}
+        </div>
+      )}
+
       {/* Composer box: textarea on top, action toolbar beneath — so a taller
           (3-line) input keeps the controls anchored to the bottom-left like a
           normal LLM input, instead of the icons floating beside a tall field. */}
@@ -828,6 +950,10 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
             onChange={(e) => {
               setInput(e.target.value);
               setCaret(e.target.selectionStart ?? e.target.value.length);
+              // Typing is an answer to the list: the user is writing something
+              // new, so stop offering the old messages. (This fires on user
+              // edits only — filling from history sets state directly.)
+              if (historyOpen) setHistoryOpen(false);
             }}
             onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
             onKeyDown={handleKeyDown}
