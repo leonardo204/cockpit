@@ -167,8 +167,16 @@ const MessageBalloon = memo(function MessageBalloon({
           )}
         </div>
       )}
+      {/* `self-start` IS LOAD-BEARING. The row has no `items-*`, so a flex child
+          without `self-*` stretches to the line's cross size — and the action
+          column beside it is three 24px buttons tall (~84px) while a one-line
+          balloon is ~40px. `self-start` on the column alone does not help: it
+          places that item but still contributes its height to the line. Without
+          this the balloon grows to ~84px and the text sits at the top of a box
+          with 40px of dead space under it, which reads as "the Enter key got
+          sent too". */}
       <div
-        className={`max-w-[80%] ${
+        className={`self-start max-w-[80%] ${
           isUser
             ? 'bg-accent text-foreground border border-brand rounded-2xl rounded-br-md'
             : 'bg-accent text-foreground dark:text-slate-11 rounded-2xl rounded-bl-md'

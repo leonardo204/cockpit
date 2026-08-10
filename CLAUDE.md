@@ -23,6 +23,15 @@
     simply did nothing. Clip on the parts that scroll instead. Neither tests nor
     typecheck can see this — jsdom has no layout — so the guard is a source
     assertion (`sidebarPopoverClipping.test.ts`)
+  - **A flex child with no `self-*` stretches to whatever is tallest in its
+    row.** `self-start` on the *sibling* does not stop this — it places that
+    item but still contributes its height to the line. Growing the message
+    bubble's action column from one button to three made the balloon stretch to
+    ~84px, leaving 40px of dead space under one line of text; it was reported as
+    "the Enter key gets sent too". jsdom computes every height as 0, so a
+    mounted test cannot see it — source assertion again
+    (`messageBubbleStretch.test.ts`). Whenever you add a button to a column
+    that sits beside content, check which one now sets the row height
 
 ## React Performance Conventions
 
