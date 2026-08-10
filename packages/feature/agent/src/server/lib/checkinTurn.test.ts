@@ -466,16 +466,22 @@ describe('naby engine wiring — the check-in instruction gets a stage', () => {
     expect(source).toContain('checkinInstruction(subjectGrowth?.stage)');
   });
 
-  it('reads the subject\'s record, reusing the routed read, only when the tool is there', () => {
+  it('reads the subject\'s record once per turn, reusing the routed read, for every consumer', () => {
     const block = source.slice(source.indexOf('const subjectGrowth ='), source.indexOf('if (checksIn) {'));
-    // Gated on the tool being present — an ordinary turn without a check-in sink
-    // must not pay for a ledger read it cannot use.
-    expect(block).toContain('checksIn && growthSubject');
+    // NOT GATED ON THE CHECK-IN TOOL (P3-M14a review defect 5). It used to be
+    // `checksIn && growthSubject`, which tied the STAGE to a switch about
+    // RECORDING: a temporary session built no check-in sink, so the naby layer
+    // read the stage as unknown and stopped restyling a butterfly's answers.
+    // The read now follows the subject, and only the subject.
+    expect(block).toContain('const subjectGrowth = growthSubject');
+    expect(block).not.toContain('checksIn &&');
     // A routed turn already read this exact ledger above.
     expect(block).toContain('routedGrowth');
     expect(block).toContain('readGrowth(store, growthSubject.id)');
-    // ONE read per turn: the fast-growth block shares it instead of repeating it.
+    // ONE read per turn: the fast-growth block and the naby layer share it instead
+    // of repeating it.
     expect(source.match(/readGrowth\(store, growthSubject\.id\)/g) ?? []).toHaveLength(2);
     expect(source).toContain('subjectGrowth ?? readGrowth(store, growthSubject.id)');
+    expect(source).toContain('stage: subjectGrowth?.stage ?? routedStage');
   });
 });

@@ -93,7 +93,9 @@ import {
   parseStyleFingerprint,
   readLearningEnabled,
   renderStyleFingerprintLine,
+  renderVoiceLanguageLine,
   STYLE_FINGERPRINT_KEY,
+  VOICE_PREVENTIVE_THRESHOLD,
   readSettings,
   resolveProviderCredential,
   runTurn,
@@ -147,6 +149,8 @@ import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
 import { kickReflectionSweep } from '../lib/reflection';
+import { createVoicePort, readVoiceStats } from '../lib/voice';
+import type { JudgeBackend } from '../lib/reflection';
 import { runNestedTurn } from '../lib/delegation';
 import { planTextRender } from './textRender';
 import {
@@ -350,6 +354,23 @@ export interface NabyEngineDeps {
   /** Observe every gate decision, in order. Used by SPIKE-02 to prove the gate
    *  is consulted before the executor runs. */
   onGateDecision?: (entry: GateLogEntry) => void;
+  /**
+   * Override which backend the NABY LAYER restyles with (P3-M14a).
+   *
+   * IT DEFAULTS TO SILENCE WHENEVER `resolveModel` IS INJECTED, and that rule is
+   * the important half. The layer picks its own backend — `resolveJudgeBackend`,
+   * i.e. a provider key or a local Claude sign-in — which is exactly right in
+   * production and exactly wrong in a spike: a scripted-model run would still
+   * reach a real provider to polish its scripted answer, making a deterministic
+   * regression depend on a sign-in, on the network and on a bill. So an injected
+   * resolver means "this process does not go to a provider on its own", the same
+   * rule `preflight` already applies, and the layer answers every block with the
+   * text it was given.
+   *
+   * A spike that wants to PROVE the layer's behaviour end to end injects a
+   * deterministic backend here instead.
+   */
+  resolveVoiceBackend?: () => Promise<JudgeBackend | undefined>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,27 +1111,39 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // Phase 3 P3-M5: TELL THE AGENT TO CHECK IN. Same condition as the sink
         // above, so the words are only ever present alongside the tool.
         const checksIn = checkinSink !== undefined;
-        // P3-M12e: WHOSE RECORD THE CHECK-IN WORDING FOLLOWS. The instruction leans
-        // harder on asking while the subject's record is still short — that is the
-        // fix for a ledger real usage could not move (hundreds of autonomous rows,
-        // zero real check-ins), and it needs the subject's stage to know when to
-        // stop leaning.
+        // P3-M12e: WHOSE RECORD THIS TURN FOLLOWS. Two callers, one reading.
         //
-        // ONE READ, AT MOST, AND ONLY WHEN THE TOOL IS THERE. A routed turn already
-        // read exactly this ledger (`routedGrowth`, and the routed agent IS the
-        // subject then), so it is reused; an ordinary persona turn pays for one
-        // ledger read, the same one the fast-growth block below now shares instead
-        // of repeating. A turn without a check-in tool reads nothing at all.
+        //   the CHECK-IN WORDING leans harder on asking while the record is still
+        //   short — the fix for a ledger real usage could not move (hundreds of
+        //   autonomous rows, zero real check-ins).
+        //   the NABY LAYER's stage table (§5) decides whether an answer is
+        //   restyled always or only on a measured deviation.
         //
-        // FAILS TOWARD ASKING: `readGrowth` turns an unreadable ledger into an egg,
-        // and undefined reads as "not measured yet" in the instruction — an agent
-        // whose record cannot be established should be asking.
-        const subjectGrowth =
-          checksIn && growthSubject
-            ? routedGrowth && routedAgent?.id === growthSubject.id
-              ? routedGrowth
-              : readGrowth(store, growthSubject.id)
-            : undefined;
+        // ONE READ PER TURN, AND IT IS NO LONGER GATED ON THE CHECK-IN TOOL
+        // (P3-M14a review defect 5). It used to be `checksIn && growthSubject`,
+        // which tied the STAGE to a switch that has nothing to do with it: a
+        // temporary session builds no check-in sink, so `subjectGrowth` was
+        // undefined, so the layer read the stage as unknown and fell back to the
+        // egg rule. A butterfly persona stopped sounding like itself the moment the
+        // user opened a temporary tab — precisely the confusion §2 principle 5
+        // forbids ("게이트는 배우는 것만 막는다": the switches decide what naby
+        // RECORDS, never whether it may use what it already knows).
+        //
+        // A routed turn already read exactly this ledger (`routedGrowth`, and the
+        // routed agent IS the subject then), so it is reused rather than re-queried;
+        // the fast-growth block below shares this same reading too. One turn, one
+        // read, one answer — two reads could also disagree if a row landed between
+        // them.
+        //
+        // FAILS TOWARD ASKING (and toward the narrow layer rule): `readGrowth`
+        // turns an unreadable ledger into an egg, and undefined reads as "not
+        // measured yet" — an agent whose record cannot be established should be
+        // asking, and should not be restyling for free.
+        const subjectGrowth = growthSubject
+          ? routedGrowth && routedAgent?.id === growthSubject.id
+            ? routedGrowth
+            : readGrowth(store, growthSubject.id)
+          : undefined;
         if (checksIn) {
           console.log(
             `[engine:naby] check-ins: on (@${growthSubject?.name}, record: ` +
@@ -1165,13 +1198,48 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // Below `STYLE_FINGERPRINT_MIN_SAMPLES` the renderer returns undefined and
         // this contributes nothing at all, so a fresh install's turn is
         // byte-for-byte what it was.
+        //
+        // P3-M14a (naby-voice-layer §7): WHAT REPEATED LANGUAGE DRIFT BUYS,
+        // REDESIGNED AFTER THE REVIEW (defect 6).
+        //
+        // The first version widened the AUDIENCE: once the layer had corrected the
+        // language VOICE_PREVENTIVE_THRESHOLD times, the fingerprint line was
+        // injected on non-persona turns too. That was wrong in both directions.
+        // `growthSubject = routedAgent ?? persona`, so an ordinary turn IS a
+        // persona turn and already carries the line — the only turns the switch
+        // actually reached were SPECIALIST ones, i.e. exactly the audience the
+        // paragraph above excludes, and for the reason it gives.
+        //
+        // So the feedback changes shape instead: the block that is already being
+        // injected gets ONE MORE SENTENCE, in the imperative. The existing line
+        // describes a habit and ends by subordinating itself ("the current request
+        // always wins"), which is the right register for style and the wrong one
+        // for a rule a model has now demonstrably ignored three times.
+        // `renderVoiceLanguageLine` is pure and lives in the runtime with every
+        // other prompt fragment; this only carries the count to it.
+        //
+        // A SPECIALIST TURN GETS NEITHER HALF, whatever the totals say.
+        //
+        // Fails toward the old behaviour: an unreadable totals row counts as zero
+        // drift, and an unreadable fingerprint contributes nothing.
+        const languageDrift = (() => {
+          try {
+            return readVoiceStats(store).byReason.language ?? 0;
+          } catch {
+            return 0;
+          }
+        })();
         const styleLine =
           growthSubject?.id === BUILTIN_PERSONA_ID
             ? (() => {
                 try {
-                  return renderStyleFingerprintLine(
-                    parseStyleFingerprint(store.getSetting(STYLE_FINGERPRINT_KEY)),
-                  );
+                  const parts = [
+                    renderStyleFingerprintLine(
+                      parseStyleFingerprint(store.getSetting(STYLE_FINGERPRINT_KEY)),
+                    ),
+                    renderVoiceLanguageLine(languageDrift),
+                  ].filter(Boolean);
+                  return parts.length > 0 ? parts.join(' ') : undefined;
                 } catch {
                   // An unreadable setting is not a reason to fail a turn; it is a
                   // reason to send the turn naby would have sent last month.
@@ -1179,7 +1247,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 }
               })()
             : undefined;
-        if (styleLine) console.log('[engine:naby] style fingerprint: injected');
+        if (styleLine) {
+          console.log(
+            `[engine:naby] style line: injected${
+              languageDrift >= VOICE_PREVENTIVE_THRESHOLD
+                ? ` (+ language directive — ${languageDrift} corrections)`
+                : ''
+            }`,
+          );
+        }
         // ---- the fast-growth session's THREE REAL NUMBERS (P3-M12b-5) --------
         //
         // Computed HERE and handed to the pure text builder, for the reason the
@@ -1721,6 +1797,49 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // reports the whole goal rather than only its last step (for a
         // single-step run they equal that step's own numbers, so nothing about
         // an ordinary turn changes).
+        // ---- the naby layer (P3-M14a, specs/naby-voice-layer.md) ---------
+        //
+        // ONE INSTANCE FOR THE WHOLE RUN, built here and handed to every step. The
+        // per-turn rewrite cap is a counter inside it (§5): a twenty-step
+        // autonomous run must not buy twenty extra model calls to tidy twenty
+        // progress notes, so the cap has to be per GOAL, which is what this scope
+        // is.
+        //
+        // NO EXTRA READS. The stage is the one reading this turn already took
+        // (`subjectGrowth` — the growth subject's own ledger, reused by the
+        // check-in wording and by the fast-growth block), and the style line is the
+        // one already assembled above. An ordinary turn pays for the fingerprint
+        // lookup the layer makes itself and nothing more; an answer already in the
+        // user's voice never reaches a model at all.
+        //
+        // THE STAGE COMES FROM THE LEDGER, NOT FROM A SWITCH (review defect 5).
+        // `routedStage` remains the fallback for the one case `subjectGrowth`
+        // cannot cover — a routed turn whose agent row is gone — and the two are
+        // the same value whenever both exist.
+        //
+        // `turnText` rather than the step's own user message: from step 2 on, that
+        // message is the harness's continuation prompt, and judging the answer's
+        // language against our own English would translate every Korean answer in
+        // an autonomous run. See `VoicePortDeps.turnText`.
+        const voice = createVoicePort({
+          store,
+          stage: subjectGrowth?.stage ?? routedStage,
+          ...(styleLine ? { styleLine } : {}),
+          // The gates decide what naby RECORDS, never whether it uses what it has
+          // learned (§2 principle 5): a temporary session still gets a consistent
+          // voice, and simply leaves no totals behind.
+          learningAllowed: capturesMemory,
+          turnText,
+          // Production leaves both unset and the layer resolves the reflection
+          // judge's backend for itself. See `NabyEngineDeps.resolveVoiceBackend`
+          // for why an injected model resolver silences it instead.
+          ...(deps.resolveVoiceBackend
+            ? { resolveBackend: deps.resolveVoiceBackend }
+            : deps.resolveModel
+              ? { resolveBackend: async () => undefined }
+              : {}),
+        });
+
         let step = 0;
         let stepText = '';
         // Whether token deltas already put THIS assistant message on screen. Reset
@@ -1853,6 +1972,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               gate,
               executors,
               signal: ctx.signal,
+              // THE NABY LAYER (P3-M14a). The runtime offers this step's LAST
+              // assistant block to it before that block reaches the client, the
+              // transcript or the log — so what was shown is what was stored (§2
+              // principle 3). The `[[DONE]]` marker survives because the port takes
+              // it off before the model sees the text and puts it back afterwards;
+              // the autonomy stop decision below reads the RESTYLED text, so if
+              // that ever stopped working an autonomous run would stop stopping.
+              voice,
               // THE THREE FACTS THE RUNTIME CANNOT SEE (naby-activity-log §3).
               // Routing, the fast-growth flag and what dispatched the turn are all
               // decided here; the runtime stamps them on every record of the turn
