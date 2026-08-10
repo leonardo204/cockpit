@@ -105,6 +105,13 @@ type NabyBridge = {
  *  out) lives ONLY in the session bottom bar (ChatgptLoginStatus), never here. */
 const CHATGPT_OAUTH_KIND = 'openai-chatgpt-oauth';
 
+/** Google Gemini. THE ONE PROVIDER WHERE THE MODEL IS A LIST RATHER THAN A
+ *  STRING TO KNOW: a single Google key opens the whole Gemini catalog, so this
+ *  form offers the live list (`models.list` provider:'google') beside the text
+ *  box instead of asking the user to remember an id. The key is not involved on
+ *  this side — the server resolves it and answers with model ids. */
+const GOOGLE_KIND = 'google';
+
 declare global {
   interface Window {
     naby?: Partial<NabyBridge>;
@@ -184,6 +191,49 @@ function ProviderForm({
   // in state is what turns the second click into an informed decision.
   const [insecureWarning, setInsecureWarning] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // The live Gemini catalog (Google only). Null = not asked yet; an empty answer
+  // becomes a NOTE rather than an empty control, because the reason is almost
+  // always "the key is not saved yet" and the user can act on that.
+  const [models, setModels] = useState<string[] | null>(null);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsNote, setModelsNote] = useState<string | null>(null);
+
+  /**
+   * Ask the SERVER which Gemini models this key can use.
+   *
+   * The key never comes near this component: `models.list` resolves the stored
+   * credential in the Next server, calls Google there and answers with model ids
+   * (api/naby.ts). A failure is a note next to the box, never a broken form —
+   * the text input below still accepts any id, which is the whole reason the
+   * list is an aid and not a gate.
+   */
+  const loadModels = useCallback(
+    async (refresh: boolean) => {
+      if (row.kind !== GOOGLE_KIND) return;
+      setModelsBusy(true);
+      setModelsNote(null);
+      try {
+        const res = await nabyPost({
+          action: 'models.list',
+          provider: GOOGLE_KIND,
+          ...(refresh ? { refresh: true } : {}),
+        });
+        const list = res.models?.google;
+        if (Array.isArray(list) && list.length > 0) setModels(list);
+        else setModelsNote(t('providerSetup.modelListEmpty'));
+      } finally {
+        setModelsBusy(false);
+      }
+    },
+    [row.kind, t],
+  );
+
+  // Ask once when this provider's form opens (the accordion mounts it), and
+  // again right after a save — the moment a first-time key makes the lookup
+  // possible at all.
+  useEffect(() => {
+    void loadModels(false);
+  }, [loadModels]);
 
   // Azure has TWO valid endpoint shapes, so not every configField is required at
   // once: supply EITHER `baseURL` (newer AI-Services /openai/v1 endpoint) OR
@@ -242,11 +292,14 @@ function ProviderForm({
         setInsecureWarning(null);
         setSaved(true);
         onSaved();
+        // A first key makes the catalog reachable for the first time, so the list
+        // beside the model box fills in without the user pressing anything.
+        void loadModels(true);
       } finally {
         setBusy(false);
       }
     },
-    [config, key, model, onSaved, row.kind, row.label],
+    [config, key, loadModels, model, onSaved, row.kind, row.label],
   );
 
   const clear = useCallback(async () => {
@@ -291,7 +344,42 @@ function ProviderForm({
           onChange={(e) => setModel(e.target.value)}
           placeholder={row.defaultModel || row.modelMeaning}
           className={inputClass}
+          data-testid={`provider-model-${row.kind}`}
         />
+        {/* THE LIST NEVER BECOMES A GATE. The text box above stays the source of
+            truth and accepts anything, so a model released this morning is usable
+            this morning even if the cached list has never heard of it. The picker
+            just spares the user from knowing an id by heart. */}
+        {row.kind === GOOGLE_KIND && (
+          <div className="mt-1 flex items-center gap-2">
+            <select
+              value={models?.includes(model) ? model : ''}
+              onChange={(e) => {
+                if (e.target.value) setModel(e.target.value);
+              }}
+              disabled={!models || models.length === 0}
+              className={`${inputClass} flex-1 disabled:opacity-50`}
+              data-testid="provider-model-list"
+            >
+              <option value="">{t('providerSetup.modelChoose')}</option>
+              {(models ?? []).map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => void loadModels(true)}
+              disabled={modelsBusy}
+              className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+              data-testid="provider-model-refresh"
+            >
+              {modelsBusy ? t('providerSetup.modelRefreshing') : t('providerSetup.modelRefresh')}
+            </button>
+          </div>
+        )}
+        {modelsNote && <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{modelsNote}</p>}
         <p className="mt-1 text-xs text-muted-foreground">{row.modelMeaning}</p>
       </div>
 
@@ -387,6 +475,28 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
   const { t } = useTranslation();
   const { data, unavailable, reload } = useProviders(isOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
+  /**
+   * SAVING A KEY IS A CHANGE TO THE LIST ABOVE IT, not just to the accordion row
+   * the user is looking at.
+   *
+   * The key list and "which model answers" are two components reading two
+   * sources (the preload bridge and /api/naby), and only the first one was being
+   * re-read after a save — so a user who saved a Gemini key with Settings still
+   * open saw "key saved" on the row and NOTHING new in the selector above it, and
+   * reasonably concluded the key had not taken. (The chat header's own switcher
+   * has always refreshed, because it polls; that difference is what made this
+   * read as "it only fails in Settings".)
+   *
+   * A counter rather than a shared reload function: the selector owns its own
+   * fetch and its own state, and this is a SIGNAL that something it depends on
+   * changed. No polling is added — a save is an unambiguous event, and asking on
+   * a timer for something that happens twice a year is the wrong trade.
+   */
+  const [savedTick, setSavedTick] = useState(0);
+  const onSaved = useCallback(() => {
+    void reload();
+    setSavedTick((n) => n + 1);
+  }, [reload]);
 
   if (unavailable) {
     return (
@@ -396,7 +506,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
         </p>
         {/* Engine choice is runtime state, not keychain state, so it works here
             even without the desktop bridge. */}
-        <NabyEngineSelector isOpen={isOpen} />
+        <NabyEngineSelector isOpen={isOpen} refreshToken={savedTick} />
       </div>
     );
   }
@@ -405,7 +515,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
   return (
     <div className="space-y-2">
       <SecurityBanner security={data.security} />
-      <NabyEngineSelector isOpen={isOpen} />
+      <NabyEngineSelector isOpen={isOpen} refreshToken={savedTick} />
       {/* The ChatGPT (subscription) engine appears inside the selector above,
           exactly like Claude (subscription). Account sign in / out lives in the
           session bottom bar, so there is no account UI here. The paste-a-key
@@ -430,7 +540,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
           </button>
           {expanded === row.kind && (
             <div className="px-2 pb-2">
-              <ProviderForm row={row} onSaved={() => void reload()} autoFocus />
+              <ProviderForm row={row} onSaved={onSaved} autoFocus />
             </div>
           )}
         </div>
@@ -660,10 +770,39 @@ export function NabyOnboardingWizard() {
 // — electron-builder excludes it), so a shipped app simply does not show a
 // choice that could not work.
 
+/** One copy-paste install command, as the runtime computed it. `id` is a stable
+ *  route name (never English shown to a user): the label comes from i18n. */
+type ClaudeInstallCommand = { id: string; command: string };
+
+/** How to install Claude Code on THIS machine — the official setup page as data
+ *  (see `claudeInstallHelp` in the runtime). The UI renders it; it never picks
+ *  commands of its own, because a second copy of these strings is a second place
+ *  for them to go stale. */
+type ClaudeInstallHelp = {
+  platform: string;
+  docsUrl: string;
+  recommended: ClaudeInstallCommand;
+  alternatives: ClaudeInstallCommand[];
+  /** Facts to read BEFORE running anything, as ids the UI translates. */
+  notes: string[];
+};
+
+/** The subset of `/api/naby`'s `claudeLogin` block this screen needs: whether a
+ *  `claude` executable exists at all, and what to do when it does not. */
+type ClaudeLoginBlock = {
+  status: string;
+  cliFound: boolean;
+  relevant: boolean;
+  installHelp: ClaudeInstallHelp | null;
+};
+
 type NabyEngineState = {
   engine: { ok: boolean; id?: string; costBasis?: string; summary: string };
   settings: { enginePreference?: string; selectedProvider?: string };
   devEngineAvailable: boolean;
+  /** The LOCAL Claude sign-in the Claude (subscription) engine answers on. Absent
+   *  from an older server, which reads as "nothing to say" rather than a crash. */
+  claudeLogin?: ClaudeLoginBlock;
   providers: { id: string; label: string; model: string; ready: boolean }[];
   mcp: McpRow[];
   /** Every built-in System MCP preset's connection state, keyed by preset name.
@@ -673,9 +812,18 @@ type NabyEngineState = {
   systemMcp?: Record<string, SystemMcpStatus>;
 };
 
-async function nabyGet(): Promise<NabyEngineState | null> {
+/**
+ * Read the runtime's state.
+ *
+ * `recheckLogin` is the EXISTING re-check path (`readNabyState`'s one option),
+ * not a new endpoint: it bypasses the runtime's 10s `claude auth status` cache
+ * so a user who has just installed the CLI is not shown a stale "not found" for
+ * another ten seconds. Ordinary reads must NOT set it — that cache is what keeps
+ * a settings screen from spawning a process per poll.
+ */
+async function nabyGet(recheckLogin = false): Promise<NabyEngineState | null> {
   try {
-    const res = await fetch('/api/naby');
+    const res = await fetch(`/api/naby${recheckLogin ? '?recheckLogin=1' : ''}`);
     if (!res.ok) return null;
     return (await res.json()) as NabyEngineState;
   } catch {
@@ -695,6 +843,9 @@ type NabyPostResult = {
   errorField?: string;
   message?: string;
   toolCount?: number;
+  /** `models.list`: the live model catalog for the provider that was asked for.
+   *  Model IDS ONLY — the key that fetched them stays in the server. */
+  models?: { claude?: unknown[]; google?: string[]; fetchedAt?: number; cached?: boolean };
 };
 
 async function nabyPost(body: unknown): Promise<NabyPostResult> {
@@ -719,24 +870,200 @@ async function nabyPost(body: unknown): Promise<NabyPostResult> {
       // `systemMcp.test` answers with a COUNT rather than a sentence, so the two
       // surfaces that show it can phrase it in the user's own language.
       ...(typeof json?.toolCount === 'number' ? { toolCount: json.toolCount } : {}),
+      ...(json?.models ? { models: json.models } : {}),
     };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
-export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
+// ---------------------------------------------------------------------------
+// Claude (subscription) with no CLI on the machine
+// ---------------------------------------------------------------------------
+//
+// The Claude (subscription) engine answers on the Claude Code sign-in that lives
+// on this computer, so a machine with no `claude` executable cannot use it — and
+// the app used to say so and stop, which leaves the reader holding a problem and
+// no next step. (On Windows it was worse: the app could say this to someone who
+// HAD installed it, because the known-location probe never looked for
+// `claude.exe`. That is fixed in the runtime; this card is what the honest
+// "really not installed" case deserves.)
+//
+// WHAT IS HERE: what is missing and why it matters, a link to the official setup
+// page, the command for THIS platform with a copy button, the other routes, the
+// two caveats worth knowing before starting — and "Check again", because the
+// install happens outside the app and the app must be able to notice.
+//
+// WHAT IS DELIBERATELY NOT HERE: a button that installs it. Running an installer
+// on the user's behalf is a different decision with a different blast radius,
+// and it is not this change.
+//
+// The commands are NOT written here. They come from the runtime's
+// `claudeInstallHelp`, whose ids are mapped to translated labels below — so a
+// change to the official instructions is a runtime change, and this file cannot
+// disagree with it.
+
+/** id → i18n key. An id with no entry falls back to the raw id, so a route added
+ *  in the runtime shows up (unlabelled) rather than vanishing from the list. */
+const INSTALL_COMMAND_LABELS: Record<string, string> = {
+  'windows-powershell': 'claudeInstall.routePowershell',
+  'windows-cmd': 'claudeInstall.routeCmd',
+  'windows-winget': 'claudeInstall.routeWinget',
+  'unix-native': 'claudeInstall.routeNativeScript',
+  'macos-homebrew': 'claudeInstall.routeHomebrew',
+  npm: 'claudeInstall.routeNpm',
+};
+
+const INSTALL_NOTES: Record<string, string> = {
+  'no-admin-required': 'claudeInstall.noteNoAdmin',
+  'paid-plan-required': 'claudeInstall.notePaidPlan',
+};
+
+/** One command: what it is, the command itself, and a copy button. A command a
+ *  user has to select by hand is a command that gets copied with half a word
+ *  missing. */
+function InstallCommandRow({ entry }: { entry: ClaudeInstallCommand }) {
+  const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(entry.command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard denied: the command is shown in full beside the button, so it
+      // can still be selected by hand.
+    }
+  }, [entry.command]);
+
+  const labelKey = INSTALL_COMMAND_LABELS[entry.id];
+
+  return (
+    <div className="space-y-1" data-testid={`claude-install-command-${entry.id}`}>
+      <p className="text-xs text-muted-foreground">{labelKey ? t(labelKey) : entry.id}</p>
+      <div className="flex items-center gap-1">
+        <code className="flex-1 px-2 py-1 rounded bg-secondary text-foreground text-xs break-all">
+          {entry.command}
+        </code>
+        <button
+          type="button"
+          onClick={() => void copy()}
+          className="shrink-0 px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
+          data-testid={`claude-install-copy-${entry.id}`}
+        >
+          {copied ? t('claudeInstall.copied') : t('claudeInstall.copy')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ClaudeCliMissingCard({
+  help,
+  onRecheck,
+  rechecking,
+}: {
+  help: ClaudeInstallHelp;
+  onRecheck: () => void;
+  rechecking: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    // The same left-accent amber treatment the insecure-storage banner uses:
+    // this is advice about something the user has to go and do, not a failure.
+    <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-2" data-testid="claude-cli-install">
+      <p className="text-xs text-amber-600 dark:text-amber-400">⚠ {t('claudeInstall.missing')}</p>
+      <p className="text-xs text-muted-foreground">{t('claudeInstall.why')}</p>
+      {/* target="_blank" is what electron/boot.ts turns into "open in the OS
+          browser" — the docs must not load inside the app shell. */}
+      <a
+        href={help.docsUrl}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-block text-xs text-brand underline"
+        data-testid="claude-install-docs"
+      >
+        {t('claudeInstall.docsLink')}
+      </a>
+
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-foreground">{t('claudeInstall.recommended')}</p>
+        <InstallCommandRow entry={help.recommended} />
+      </div>
+
+      {help.alternatives.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-foreground">{t('claudeInstall.alternatives')}</p>
+          {help.alternatives.map((entry) => (
+            <InstallCommandRow key={entry.id} entry={entry} />
+          ))}
+        </div>
+      )}
+
+      {help.notes.length > 0 && (
+        <ul className="space-y-0.5">
+          {help.notes.map((note) => (
+            <li key={note} className="text-xs text-muted-foreground">
+              · {INSTALL_NOTES[note] ? t(INSTALL_NOTES[note]) : note}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <button
+        type="button"
+        onClick={onRecheck}
+        disabled={rechecking}
+        className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+        data-testid="claude-install-recheck"
+      >
+        {rechecking ? t('claudeInstall.rechecking') : t('claudeInstall.recheck')}
+      </button>
+    </div>
+  );
+}
+
+export function NabyEngineSelector({
+  isOpen,
+  /** Bump to re-read /api/naby. The parent raises it when a KEY IS SAVED OR
+   *  REMOVED — a change this component cannot observe on its own, because keys
+   *  live behind the preload bridge and this list comes from the server. Without
+   *  it, saving a key while Settings is open left this list showing the state
+   *  from before the save (see NabyProviderSettings). */
+  refreshToken = 0,
+}: {
+  isOpen: boolean;
+  refreshToken?: number;
+}) {
   const { t } = useTranslation();
   const [state, setState] = useState<NabyEngineState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [recheckingCli, setRecheckingCli] = useState(false);
 
   const reload = useCallback(async () => {
     setState(await nabyGet());
   }, []);
 
+  /** "Check again" after installing the CLI outside the app. It re-reads THIS
+   *  state with the login cache bypassed — the existing `recheckLogin` path —
+   *  rather than adding an endpoint for a question the GET already answers. */
+  const recheckCli = useCallback(async () => {
+    setRecheckingCli(true);
+    try {
+      const fresh = await nabyGet(true);
+      // A failed re-check keeps the last known answer rather than blanking the
+      // whole section: the card is advice, and losing it mid-install helps
+      // nobody.
+      if (fresh) setState(fresh);
+    } finally {
+      setRecheckingCli(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isOpen) void reload();
-  }, [isOpen, reload]);
+  }, [isOpen, reload, refreshToken]);
 
   const choose = useCallback(
     async (enginePreference: string, selectedProvider: string) => {
@@ -834,6 +1161,18 @@ export function NabyEngineSelector({ isOpen }: { isOpen: boolean }) {
           </button>
         ))}
       </div>
+      {/* Claude (subscription) is offered above but the CLI it signs in with is
+          not on this computer: say so HERE, next to the choice, and say how to
+          fix it. `installHelp` is present only when the runtime found no
+          executable, so this cannot appear for a machine that merely needs to
+          sign in — that is the chip's job in the session bar. */}
+      {state.devEngineAvailable && state.claudeLogin?.installHelp && (
+        <ClaudeCliMissingCard
+          help={state.claudeLogin.installHelp}
+          onRecheck={() => void recheckCli()}
+          rechecking={recheckingCli}
+        />
+      )}
       {/* The runtime's own sentence about what will actually happen — kept as
           the single source of truth rather than re-derived in the UI. */}
       <p className={`text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-amber-500'}`}>

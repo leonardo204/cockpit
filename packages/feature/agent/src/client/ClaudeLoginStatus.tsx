@@ -85,6 +85,9 @@ export function ClaudeLoginStatus() {
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  /** Set only when the refusal was "no CLI here" — the one failure this popover
+   *  cannot fully explain on its own. */
+  const [loginDocsUrl, setLoginDocsUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // Guards against a state update on an unmounted component when a tab is
   // closed mid-request — every chat tab mounts one of these.
@@ -182,6 +185,7 @@ export function ClaudeLoginStatus() {
   // we poll and let the chip update the moment the sign-in lands.
   const doLogin = useCallback(async () => {
     setLoginError(null);
+    setLoginDocsUrl(null);
     setLoggingIn(true);
     loginPollRef.current = true;
     try {
@@ -191,11 +195,22 @@ export function ClaudeLoginStatus() {
         body: JSON.stringify({ action: 'claude.login' }),
       });
       if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        const body = (await res.json().catch(() => null)) as {
+          error?: string;
+          errorHeadline?: string;
+          installHelp?: { docsUrl?: string } | null;
+        } | null;
         if (aliveRef.current) {
           // The command is shown for copy-paste, so a spawn failure (headless /
           // no CLI) is recoverable by the user.
-          setLoginError(body?.error ?? 'Could not start sign-in.');
+          //
+          // PREFER THE HEADLINE. "Claude Code is not installed" arrives as a
+          // four-sentence paragraph — the right length for the settings card
+          // that shows the install commands, and a wall of text in this
+          // popover's small amber span. The server sends the first sentence
+          // beside it for exactly this spot, and the docs link carries the rest.
+          setLoginError(body?.errorHeadline ?? body?.error ?? 'Could not start sign-in.');
+          setLoginDocsUrl(body?.installHelp?.docsUrl ?? null);
           setLoggingIn(false);
         }
         loginPollRef.current = false;
@@ -381,6 +396,20 @@ export function ClaudeLoginStatus() {
               {loginError && (
                 <span className="text-[0.786rem] text-amber-500" data-testid="claude-account-login-error">
                   {loginError}
+                  {loginDocsUrl && (
+                    <>
+                      {' '}
+                      <a
+                        href={loginDocsUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline"
+                        data-testid="claude-account-install-docs"
+                      >
+                        {t('claudeAccount.installGuide', { defaultValue: 'How to install' })}
+                      </a>
+                    </>
+                  )}
                 </span>
               )}
               {/* Fallback: the exact command, for a headless box where no browser

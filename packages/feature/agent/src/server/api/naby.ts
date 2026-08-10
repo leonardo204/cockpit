@@ -52,6 +52,7 @@ import {
   BUILTIN_PERSONA_ID,
   parseAgentSidecar,
   probeClaudeModels,
+  listGoogleModels,
   type ClaudeModelInfo,
   BOOTSTRAP_DONE_KEY,
   BOOTSTRAP_QUESTIONS,
@@ -63,6 +64,8 @@ import {
   type StyleFingerprint,
   shouldOfferBootstrap,
   writeLearningEnabled,
+  CLAUDE_CLI_MISSING_HEADLINE,
+  type ClaudeInstallHelp,
   type ClaudeLoginAccount,
   type McpEntry,
   type HarnessScope,
@@ -153,12 +156,31 @@ export const dynamic = 'force-dynamic';
 // The bottom-bar ModelSwitcher persists its pick under a per-engine SCOPE, using
 // the generic setting store directly (the same escape hatch `gate.allowChanges`
 // uses), so it never needs a new key in the runtime's typed `writeSettings`. The
-// scope is 'dev-claude' for the Claude subscription and the ChatGPT provider id
-// for the dev ChatGPT subscription — the only two engines with a per-turn model
-// choice. A metered API-key provider's model is a profile setting, not a pick.
+// scope is 'dev-claude' for the Claude subscription, the ChatGPT provider id for
+// the dev ChatGPT subscription, and the Google provider id for Gemini.
+//
+// WHAT A SCOPE MEANS, unchanged by the Google addition: the pick is stored under
+// `model.selected:<scope>` in the settings table, which is APP-WIDE and NOT
+// per-session — there is no session id anywhere in the key. Every session
+// running on that engine gets the same model until the user picks another. The
+// client also threads the pick into each turn's payload; this is the durable
+// copy that survives a reload.
+//
+// WHY GOOGLE JOINS THEM AND THE OTHER METERED PROVIDERS DO NOT. The rule was
+// "a metered provider's model is a profile setting, not a per-turn pick", and
+// it holds wherever a key means ONE model. A Google key opens the whole Gemini
+// catalogue at once (`models.list` provider:'google' enumerates it), so "which
+// model" is a live choice there in exactly the way it is for a subscription —
+// while an Azure key addresses one deployment and Anthropic/OpenAI profiles
+// name the one model the user configured.
 
 /** The engine scopes that expose a per-turn model pick. Mirrors modelCatalog.ts. */
-const MODEL_SCOPES: readonly string[] = ['dev-claude', CHATGPT_OAUTH_PROVIDER_ID];
+const GOOGLE_PROVIDER_ID = 'google';
+const MODEL_SCOPES: readonly string[] = [
+  'dev-claude',
+  CHATGPT_OAUTH_PROVIDER_ID,
+  GOOGLE_PROVIDER_ID,
+];
 
 /** The setting key a scope's picked model lives under. */
 function modelSettingKey(scope: string): string {
@@ -331,6 +353,12 @@ export async function readNabyState(
      *  `claude auth status` (the credential file has neither); `null` when signed
      *  out/unknown. Labels only, no secret material. */
     account: ClaudeLoginAccount | null;
+    /** HOW TO INSTALL Claude Code on THIS machine, present only when no `claude`
+     *  executable was found (`cliFound:false`). The runtime computes it from the
+     *  official setup page so the settings UI can render a link and copy buttons
+     *  rather than telling the user to "install it" and stopping there. Nothing
+     *  here is machine-specific beyond the platform: a docs URL and commands. */
+    installHelp: ClaudeInstallHelp | null;
   };
   /** CO-06 — the DEV-ONLY ChatGPT subscription sign-in, the HTTP mirror of the
    *  former preload bridge so the chat bottom-bar chip works inside the iframe.
@@ -550,13 +578,20 @@ export type NabyAction =
   // offer it and what to ask; `bootstrap.save` writes the answers as CONFIRMED
   // user-tier memory (the user typed them, which is what that tier means).
   // `dismiss` closes it for good without storing anything.
-  // WHICH MODELS THE LOCAL SIGN-IN ACTUALLY HAS. The chat bar's list used to be a
+  // WHICH MODELS THIS ACCOUNT ACTUALLY HAS. The chat bar's list used to be a
   // constant, so it went stale the day a new model shipped and naby had to be
   // rebuilt to name one. `models.list` returns the cached answer (and probes when
-  // the cache is empty or old); `refresh: true` always probes. The probe asks the
-  // Agent SDK, which reports what THIS sign-in is entitled to — strictly better
-  // than any list we could maintain, because it reflects the user's own plan.
-  | { action: 'models.list'; refresh?: boolean }
+  // the cache is empty or old); `refresh: true` always probes.
+  //
+  // `provider` picks the catalogue, and defaults to Claude so every existing
+  // caller keeps its meaning:
+  //   absent / 'claude'  the local sign-in, asked through the Agent SDK — what
+  //                      THIS plan is entitled to, which is strictly better than
+  //                      any list we could maintain.
+  //   'google'           the Gemini catalogue, asked over HTTP with the stored
+  //                      key. THE KEY IS READ SERVER-SIDE and never returned;
+  //                      the answer is a list of model ids.
+  | { action: 'models.list'; refresh?: boolean; provider?: string }
   | { action: 'bootstrap.get' }
   | { action: 'bootstrap.save'; answers?: Record<string, string>; dismiss?: boolean }
   | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string }
@@ -700,9 +735,14 @@ export type NabyActionResult =
       title?: string;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
-      /** `models.list`: the live model catalog for the Claude sign-in. */
+      /** `models.list`: the live model catalog for the catalogue that was asked
+       *  for. Exactly one of `claude` / `google` is present — the other was not
+       *  probed, which is different from "probed and empty" and is why the absent
+       *  one is absent rather than an empty array. NO SECRET: model ids only. */
       models?: {
-        claude: ClaudeModelInfo[];
+        claude?: ClaudeModelInfo[];
+        /** Gemini model ids, `models/` prefix already stripped. */
+        google?: string[];
         /** epoch ms the list was fetched, or 0 when it has never succeeded. */
         fetchedAt: number;
         /** True when this list came from the cache rather than a fresh probe. False
@@ -738,32 +778,81 @@ export type NabyActionResult =
       /** The field id `errorKey` refers to, so the UI can name it with the
        *  field's own translated label instead of the server guessing a language. */
       errorField?: string;
+      /** `claude.login`: how to install Claude Code, when the refusal was "there
+       *  is none on this computer". Absent for every other failure — a spawn that
+       *  broke for another reason is not fixed by installing anything. */
+      installHelp?: ClaudeInstallHelp;
+      /** The first sentence of `error`, for a UI with no room for the rest.
+       *  Sent only alongside `installHelp`, since that is the one refusal whose
+       *  full text is a paragraph. */
+      errorHeadline?: string;
     };
 
-/** Setting key holding the last successful model probe. */
-const CLAUDE_MODELS_CACHE_KEY = 'models.claude.cache';
+/**
+ * WHICH CATALOGUES `models.list` CAN ANSWER FOR.
+ *
+ * Two providers ask the same question — "which models may I use" — of two very
+ * different places: Claude asks the local sign-in through the Agent SDK, Google
+ * asks its own HTTP catalogue with the stored key. Everything AROUND that probe
+ * is identical (a settings-row cache, a day's TTL, an explicit refresh, and a
+ * failure that falls back to the cache rather than emptying a picker), so it is
+ * written once below and parameterised by this name rather than copied.
+ */
+type ModelCatalog = 'claude' | 'google';
+
+/** Setting key holding the last successful probe, per catalogue. The names follow
+ *  one rule — `models.<catalogue>.cache` — and `claude`'s is the pre-existing key,
+ *  so nothing that was already cached is invalidated by the generalisation. */
+function modelCacheKey(catalog: ModelCatalog): string {
+  return `models.${catalog}.cache`;
+}
 
 /** How long a probed list is trusted before another probe is worth it. A day: new
  *  models do not ship hourly, and the user has an explicit refresh either way. */
 const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** Read the cache defensively — it is JSON in a settings row, so a hand-edited or
- *  half-written value must read as "no cache" rather than throwing in a chat
- *  header. */
-function readModelCache(raw: string | undefined): { fetchedAt: number; claude: ClaudeModelInfo[] } | null {
+/**
+ * Read the cache defensively — it is JSON in a settings row, so a hand-edited or
+ * half-written value must read as "no cache" rather than throwing in a chat
+ * header or a settings screen.
+ *
+ * The payload field is NAMED AFTER THE CATALOGUE (`{ fetchedAt, claude: [...] }`,
+ * `{ fetchedAt, google: [...] }`), which is what lets one reader serve both
+ * without touching the shape Claude's cache is already written in.
+ */
+function readModelCache<T>(
+  raw: string | undefined,
+  catalog: ModelCatalog,
+  keep: (row: unknown) => row is T,
+): { fetchedAt: number; models: T[] } | null {
   if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as { fetchedAt?: unknown; claude?: unknown };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
     const fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0;
-    const claude = Array.isArray(parsed.claude)
-      ? parsed.claude.filter(
-          (m): m is ClaudeModelInfo =>
-            !!m && typeof m === 'object' && typeof (m as ClaudeModelInfo).value === 'string',
-        )
-      : [];
-    return { fetchedAt, claude };
+    const rows = parsed[catalog];
+    return { fetchedAt, models: Array.isArray(rows) ? rows.filter(keep) : [] };
   } catch {
     return null;
+  }
+}
+
+const isClaudeModel = (row: unknown): row is ClaudeModelInfo =>
+  !!row && typeof row === 'object' && typeof (row as ClaudeModelInfo).value === 'string';
+
+const isModelId = (row: unknown): row is string => typeof row === 'string' && row.length > 0;
+
+/** Persist a probe. An unwritable cache costs a probe next time, nothing more —
+ *  which is why this swallows rather than failing the request that produced it. */
+function writeModelCache(
+  store: { setSetting(k: string, v: string): void },
+  catalog: ModelCatalog,
+  fetchedAt: number,
+  models: unknown[],
+): void {
+  try {
+    store.setSetting(modelCacheKey(catalog), JSON.stringify({ fetchedAt, [catalog]: models }));
+  } catch {
+    /* see above */
   }
 }
 
@@ -940,7 +1029,10 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       const outcome = await continueSessionInNewTab(
         {
           store,
-          summarize: modelHandoffSummarizer(),
+          // The store rides in twice on purpose: the flow reads and writes
+          // sessions with it, and the summariser reads the user's provider choice
+          // from it so its model call is billed where the user aimed it.
+          summarize: modelHandoffSummarizer(store),
           // The name lands in BOTH places a name can live, exactly as the
           // fast-growth session's does — `sessions.title` for the project browser
           // and the custom-title setting for the Recent list and the tab bar.
@@ -1309,7 +1401,10 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     // Awaited here, unlike the engine's trigger: an on-demand caller asked for the
     // counts, so returning before the work is done would report zeros.
     case 'reflection.run': {
-      const sweep = await runReflectionSweep(store, modelReflectionJudge(), {
+      // The judge gets the store for the same reason `kickReflectionSweep` hands
+      // its default one the store: the sweep must bill the provider the user
+      // picked, not whichever profile holds the first key.
+      const sweep = await runReflectionSweep(store, modelReflectionJudge(store), {
         ...(typeof body.excludeSessionId === 'string' && body.excludeSessionId
           ? { excludeSessionId: body.excludeSessionId }
           : {}),
@@ -1375,16 +1470,63 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       };
     }
 
-    // The live model catalog. Cached in settings because the probe spawns the
-    // Claude CLI: cheap (~1.6s measured) but not something to pay on every render
-    // of a chat header.
+    // The live model catalog. Cached in settings because a probe is not free:
+    // Claude's spawns the CLI (~1.6s measured), Google's is a network round trip.
+    // Neither is something to pay on every render of a chat header or a settings
+    // screen.
     case 'models.list': {
-      const cachedRaw = store.getSetting(CLAUDE_MODELS_CACHE_KEY);
-      const cached = readModelCache(cachedRaw);
+      if (body.provider === GOOGLE_PROVIDER_ID) {
+        const cached = readModelCache(
+          store.getSetting(modelCacheKey('google')),
+          'google',
+          isModelId,
+        );
+        const fresh =
+          cached !== null &&
+          Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS &&
+          cached.models.length > 0;
+        if (fresh && body.refresh !== true) {
+          return {
+            ok: true,
+            models: { google: cached!.models, fetchedAt: cached!.fetchedAt, cached: true },
+          };
+        }
+        /** Whatever is cached — the answer for every failure below. A stale list
+         *  beats an empty picker, and the settings form still takes a typed id. */
+        const fallback = (): NabyActionResult => {
+          const have = cached?.models ?? [];
+          return {
+            ok: true,
+            models: { google: have, fetchedAt: cached?.fetchedAt ?? 0, cached: have.length > 0 },
+          };
+        };
+        // THE KEY IS READ HERE, IN THE SERVER, AND GOES NO FURTHER. This is the
+        // same resolution a turn runs; the secret is handed to the runtime's
+        // catalogue call and what comes back — and what this route returns — is a
+        // list of model ids. A user with no Google key saved simply gets the
+        // fallback, which is why this never becomes an error the settings screen
+        // has to render.
+        const resolution = await resolveProviderCredential({ providerId: GOOGLE_PROVIDER_ID });
+        if (!resolution.ok) return fallback();
+        const probed = await listGoogleModels({ apiKey: resolution.value.apiKey });
+        // `undefined` = could not ask (offline, refused, timed out). `[]` = asked
+        // and nothing qualifies, which is also no reason to throw away a list that
+        // worked yesterday.
+        if (!probed || probed.length === 0) return fallback();
+        const fetchedAt = Date.now();
+        writeModelCache(store, 'google', fetchedAt, probed);
+        return { ok: true, models: { google: probed, fetchedAt, cached: false } };
+      }
+
+      const cached = readModelCache(
+        store.getSetting(modelCacheKey('claude')),
+        'claude',
+        isClaudeModel,
+      );
       const fresh =
-        cached !== null && Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS && cached.claude.length > 0;
+        cached !== null && Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS && cached.models.length > 0;
       if (fresh && body.refresh !== true) {
-        return { ok: true, models: { claude: cached!.claude, fetchedAt: cached!.fetchedAt, cached: true } };
+        return { ok: true, models: { claude: cached!.models, fetchedAt: cached!.fetchedAt, cached: true } };
       }
       const probed = await probeClaudeModels();
       if (!probed) {
@@ -1393,18 +1535,14 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         // picker, and the client's own fallback covers a cold cache. `cached` is
         // only true when there is genuinely something cached — reporting a cache
         // hit for an empty list would be a small lie the client cannot check.
-        const have = cached?.claude ?? [];
+        const have = cached?.models ?? [];
         return {
           ok: true,
           models: { claude: have, fetchedAt: cached?.fetchedAt ?? 0, cached: have.length > 0 },
         };
       }
       const fetchedAt = Date.now();
-      try {
-        store.setSetting(CLAUDE_MODELS_CACHE_KEY, JSON.stringify({ fetchedAt, claude: probed }));
-      } catch {
-        /* an unwritable cache costs a probe next time, nothing more */
-      }
+      writeModelCache(store, 'claude', fetchedAt, probed);
       return { ok: true, models: { claude: probed, fetchedAt, cached: false } };
     }
 
@@ -1493,7 +1631,21 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         ...(typeof body.email === 'string' ? { email: body.email } : {}),
         ...(typeof body.console === 'boolean' ? { console: body.console } : {}),
       });
-      if (!result.ok) return { ok: false, error: result.error };
+      // A refusal because there is NO CLI carries install instructions; pass them
+      // through so the UI can offer the command instead of only the complaint.
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error,
+          // The short form travels BESIDE the long one, not instead of it. The
+          // chat chip renders a failure in a small amber span where four
+          // sentences read as a wall; the settings card has room for all of it.
+          // Both come from the runtime so neither is a second wording.
+          ...(result.installHelp
+            ? { installHelp: result.installHelp, errorHeadline: CLAUDE_CLI_MISSING_HEADLINE }
+            : {}),
+        };
+      }
       return { ok: true, started: true, command: result.command };
     }
 

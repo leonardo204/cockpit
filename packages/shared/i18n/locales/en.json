@@ -675,6 +675,7 @@
     "statusUnknown": "Sign-in status unknown",
     "logout": "Log out",
     "loggingOut": "Signing out…",
+    "installGuide": "How to install",
     "login": "Log in",
     "waitingForBrowser": "Waiting for browser sign-in…",
     "loginInstructions": "Run this in a terminal, then re-check:",
@@ -683,6 +684,25 @@
     "copied": "Copied",
     "recheck": "Re-check",
     "checking": "Checking…"
+  },
+  "claudeInstall": {
+    "missing": "Claude Code is not installed on this computer.",
+    "why": "Claude (subscription) answers with the Claude Code sign-in on this computer, so it needs Claude Code installed. Install it, then sign in — no API key is involved.",
+    "docsLink": "Open the official setup guide",
+    "recommended": "Recommended for this computer",
+    "alternatives": "Other ways to install",
+    "routePowershell": "Windows · PowerShell",
+    "routeCmd": "Windows · Command Prompt",
+    "routeWinget": "Windows · WinGet",
+    "routeNativeScript": "Terminal · native installer",
+    "routeHomebrew": "macOS · Homebrew",
+    "routeNpm": "npm · needs Node.js 22 or newer",
+    "noteNoAdmin": "The native installer does not need administrator rights.",
+    "notePaidPlan": "Claude Code needs a Pro, Max, Team or Enterprise plan, or a Console account. The free plan does not include it.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "recheck": "Check again",
+    "rechecking": "Checking…"
   },
   "engineSwitcher": {
     "title": "Which model answers",
@@ -700,7 +720,8 @@
     "title": "Which model",
     "refresh": "Refresh",
     "refreshing": "Checking…",
-    "refreshHint": "Ask your Claude sign-in which models it can use"
+    "refreshHint": "Ask your Claude sign-in which models it can use",
+    "refreshHintGoogle": "Ask Google which Gemini models this key can use"
   },
   "console": {
     "enterCommandOrUrl": "Enter a command or URL to start",
@@ -1017,6 +1038,10 @@
     "pasteKey": "Paste your API key",
     "whereToFind": "Where to find it: {{help}}",
     "model": "Model",
+    "modelChoose": "Choose from the list…",
+    "modelRefresh": "Refresh list",
+    "modelRefreshing": "Checking…",
+    "modelListEmpty": "Could not get the model list. Save your API key first, or just type a model id — anything you type is used as it is.",
     "saveAnyway": "Save it anyway — I accept the risk",
     "saving": "Saving…",
     "save": "Save",
@@ -1855,7 +1880,9 @@
     },
     "filesGroup": "Files & folders",
     "file": "file",
-    "folder": "folder"
+    "folder": "folder",
+    "historyGroup": "Your messages in this session",
+    "historyHint": "Enter fills · Esc closes"
   },
   "growth": {
     "stage": {

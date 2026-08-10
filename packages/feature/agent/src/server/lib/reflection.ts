@@ -83,9 +83,11 @@ import {
   REFLECTION_EXISTING_CAP,
   REFLECTION_IDLE_MS,
   REFLECTION_SWEEP_CAP,
+  readSettings,
   resolveMemoryScopeKey,
   resolveProviderCredential,
   serializeStyleFingerprint,
+  toSelectOptions,
   shouldAutoConfirmMemory,
   staleReviewCutoff,
   shouldExtractMemoryOnly,
@@ -111,6 +113,7 @@ import {
   type ReflectionVerdict,
   type RuntimeMessage,
   type SessionRef,
+  type Store,
   type StyleFingerprint,
   type ValidatedMemoryCandidate,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -972,24 +975,84 @@ export type JudgeBackend = {
   label: string;
 };
 
+/** The narrow slice a provider choice is read from: one settings reader. Same
+ *  trick as `ReflectionStore` — a test hands this a plain object, and every real
+ *  store (`Store`, `VoiceStore`) satisfies it structurally. */
+export type JudgeProviderStore = Pick<ReflectionStore, 'getSetting'>;
+
+/**
+ * The provider the user picked, read the ONE way the turn path reads it.
+ *
+ * IT DELEGATES ON PURPOSE. `readSettings` + `toSelectOptions` is exactly what
+ * `resolveMeteredProvider` (engines/naby.ts) calls, and re-spelling the settings
+ * key here would be a second answer to "which provider did the user pick" — which
+ * is how the background calls and the turn came to disagree in the first place.
+ * This function exists to give the narrow-store callers (the voice port, the
+ * handoff summariser) access to that one answer, not to become a second copy of it.
+ *
+ * `undefined` means AUTOMATIC — the user has chosen nothing, and the resolution
+ * below keeps its old freedom to take the first configured provider.
+ */
+export function selectedJudgeProviderId(store: JudgeProviderStore): string | undefined {
+  // `readSettings` touches nothing on the store but `getSetting`
+  // (runtime/settings.ts), so the narrow slice IS its whole dependency. The cast
+  // is what lets a caller holding only a settings reader — and a test holding a
+  // plain object — reuse the runtime function instead of copying it.
+  return toSelectOptions(readSettings(store as unknown as Store)).providerId;
+}
+
+export type JudgeBackendOptions = {
+  /**
+   * The provider the user picked, from `selectedJudgeProviderId`. Undefined means
+   * "automatic" and restores the pre-choice behaviour exactly.
+   */
+  providerId?: string;
+};
+
 /**
  * Pick a backend for the judge, in the order that costs the user least.
  *
- * 1. AN API KEY, through the same `resolveProviderCredential` the engine uses.
- *    Preferred because it is a cheap, small, side call on a provider the user has
- *    already chosen, and because it is metered per token rather than counted
- *    against a subscription's rate limits.
+ * 1. AN API KEY, through the same `resolveProviderCredential` the engine uses,
+ *    FOR THE PROVIDER THE USER PICKED. Preferred because it is a cheap, small,
+ *    side call on a provider the user has already chosen, and because it is
+ *    metered per token rather than counted against a subscription's rate limits.
  * 2. THE CLAUDE AGENT SDK, when a local sign-in is present. This is the path that
  *    used to be missing, and its absence was the reason reflection did nothing on
  *    subscription-only machines. Availability is asked of
  *    `isClaudeAgentSdkAvailable` — the ONE predicate for that question; a second
  *    copy of it here is exactly how a UI ends up believing the wrong one.
  *
+ * WHY `providerId` IS AN ARGUMENT AND NOT A LOOKUP. This function used to call
+ * `resolveProviderCredential({})` — no provider named at all — while the comment
+ * above it claimed the call went to "a provider the user has already chosen".
+ * Unforced, that resolution walks the profile list and takes the FIRST one holding
+ * a key. So a user who picked Gemini had their reflection sweeps, their handoff
+ * summaries and — through the naby voice layer, which runs on every turn — their
+ * rewrites billed to whichever profile sorted first. The turn path had the same
+ * defect and was fixed in `resolveMeteredProvider`; this is the other half of it.
+ *
+ * WHEN THE CHOSEN PROVIDER CANNOT BE RESOLVED, DO NOT TRY ANOTHER KEY. Step 1
+ * fails and control drops straight to step 2 (the subscription) and, failing that,
+ * to `undefined`. Reaching for a different metered key would BE the bug: it
+ * charges an account the user never aimed this call at, and it does so silently,
+ * because a background call has no screen to disagree on. The subscription is the
+ * one permitted fallback precisely because it costs nothing per message and so
+ * cannot surprise anyone with a bill. The rule is enforced by
+ * `resolveProviderCredential` itself, which filters both the vault and the env
+ * fallback by `providerId` when one is given — passing the id is the whole
+ * mechanism, and `judgeBackendProviderChoice.test.ts` pins it.
+ *
  * Returns undefined when neither exists. The caller turns that into a throw, not
  * into an empty answer — see `ReflectionJudgeUnavailableError`.
  */
-export async function resolveJudgeBackend(): Promise<JudgeBackend | undefined> {
-  const resolution = await resolveProviderCredential({});
+export async function resolveJudgeBackend(
+  opts: JudgeBackendOptions = {},
+): Promise<JudgeBackend | undefined> {
+  // An empty string is "automatic", not a provider named "" — `toSelectOptions`
+  // already drops a blank choice, and this keeps a caller that spells it
+  // differently on the same behaviour.
+  const providerId = opts.providerId?.trim() || undefined;
+  const resolution = await resolveProviderCredential(providerId ? { providerId } : {});
   if (resolution.ok) {
     const { profile, apiKey } = resolution.value;
     const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
@@ -1045,8 +1108,16 @@ export async function resolveJudgeBackend(): Promise<JudgeBackend | undefined> {
  * that case THROWS and the sweep leaves the session exactly as it found it. A
  * provider ERROR (a 401, a timeout) likewise propagates: an attempt that failed
  * has not read anything either.
+ *
+ * THE STORE IS FOR ONE THING: the user's provider choice, so the sweep bills the
+ * provider they picked rather than whichever profile sorts first
+ * (`resolveJudgeBackend`). It is read INSIDE the call, not here, because a judge
+ * built at module scope can outlive the choice it was built under — a user who
+ * switches provider mid-session must have the next sweep follow them. Optional so
+ * the existing test callers, which inject their own judge anyway, are untouched;
+ * omitting it means "automatic", the pre-choice behaviour.
  */
-export function modelReflectionJudge(): ReflectionJudge {
+export function modelReflectionJudge(store?: JudgeProviderStore): ReflectionJudge {
   return async (cases: readonly ReflectionCase[], context?: ReflectionSessionContext) => {
     // NOTHING TO ASK ABOUT: no case to judge AND no conversation to read facts
     // out of. Since M8c the first half alone is no longer a reason to skip — a
@@ -1056,7 +1127,8 @@ export function modelReflectionJudge(): ReflectionJudge {
       return [] as ReflectionVerdict[];
     }
 
-    const backend = await resolveJudgeBackend();
+    const providerId = store ? selectedJudgeProviderId(store) : undefined;
+    const backend = await resolveJudgeBackend(providerId ? { providerId } : {});
     if (!backend) {
       throw new ReflectionJudgeUnavailableError(
         'no reflection judge is available: no provider API key is configured and the Claude Agent SDK is not installed',
@@ -1112,7 +1184,12 @@ let sweepInFlight = false;
 export function kickReflectionSweep(
   store: ReflectionStore,
   opts: ReflectionSweepOptions = {},
-  judge: ReflectionJudge = modelReflectionJudge(),
+  // THE DEFAULT JUDGE IS BUILT FROM THIS SWEEP'S OWN STORE, which is what carries
+  // the user's provider choice into the background call. A default argument may
+  // name an earlier parameter, so the wiring costs nothing and cannot be forgotten
+  // by a caller — the engine's fire-and-forget trigger (engines/naby.ts) passes
+  // only the store and gets the right provider for free.
+  judge: ReflectionJudge = modelReflectionJudge(store),
 ): void {
   if (sweepInFlight) return;
   sweepInFlight = true;

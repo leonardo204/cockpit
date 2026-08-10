@@ -20,6 +20,9 @@
 // believing a sign-in the other cannot see.
 
 import type { RuntimeMessage } from '../../../../../../../dist/naby-runtime.mjs';
+// TYPE-ONLY, so the lazy import below stays the only runtime edge to reflection.ts
+// (and through it to the engine composition root).
+import type { JudgeProviderStore } from './reflection';
 import type { HandoffSummarizer } from './sessionHandoff';
 
 /** A handoff is a background convenience, not the turn the user is waiting on, so
@@ -77,12 +80,20 @@ export function buildHandoffPrompt(messages: readonly RuntimeMessage[]): string 
  * does it: /api/naby is imported by every settings request, and a static import
  * would drag the engine composition root into requests that only wanted to read a
  * checkbox.
+ *
+ * THE STORE IS FOR ONE THING: the user's provider choice, so this handoff is
+ * billed to the provider they picked rather than to whichever profile happens to
+ * hold the first key (`resolveJudgeBackend`). Read inside the call, like the
+ * reflection judge's, so a summariser built before a settings change still follows
+ * it. Optional because the flow's own tests inject a fake summariser; omitting it
+ * means "automatic", the pre-choice behaviour.
  */
-export function modelHandoffSummarizer(): HandoffSummarizer {
+export function modelHandoffSummarizer(store?: JudgeProviderStore): HandoffSummarizer {
   return async ({ messages, signal }) => {
     if (messages.length === 0) return '';
-    const { resolveJudgeBackend } = await import('./reflection');
-    const backend = await resolveJudgeBackend();
+    const { resolveJudgeBackend, selectedJudgeProviderId } = await import('./reflection');
+    const providerId = store ? selectedJudgeProviderId(store) : undefined;
+    const backend = await resolveJudgeBackend(providerId ? { providerId } : {});
     if (!backend) {
       console.warn('[handoff] no backend can write a handoff summary (no API key, no Claude sign-in)');
       return '';

@@ -369,8 +369,14 @@ export function createVoicePort(deps: VoicePortDeps): VoicePort {
       // checkbox. And it is `resolveJudgeBackend` itself, not a copy of it — a
       // second answer to "which backend can answer here" is how one feature ends
       // up believing a sign-in the other cannot see (§8).
-      const { resolveJudgeBackend } = await import('./reflection');
-      backend = await resolveJudgeBackend();
+      const { resolveJudgeBackend, selectedJudgeProviderId } = await import('./reflection');
+      // THE USER'S PROVIDER, NOT WHICHEVER KEY SORTS FIRST. This layer runs on
+      // EVERY turn, so it was the loudest voice in the defect
+      // `resolveJudgeBackend` documents: a user who picked Gemini had a rewrite
+      // billed to another account on every answer they read. `deps.store` is the
+      // same store the turn read its own provider from, so the two cannot disagree.
+      const providerId = selectedJudgeProviderId(deps.store);
+      backend = await resolveJudgeBackend(providerId ? { providerId } : {});
     }
     return backend;
   };

@@ -30,6 +30,10 @@ export interface ModelOption {
 /** The scope key a switcher persists/reads under. Mirrors accountChipForEngine:
  *  the ChatGPT provider id for the subscription engine, a fixed key for Claude. */
 export const CLAUDE_MODEL_SCOPE = 'dev-claude';
+/** Gemini. The provider PROFILE id, which for a one-key-per-provider setup is the
+ *  provider kind (providers/resolve.ts) — the same string the engine selector
+ *  stores as `provider.selected`, so the two cannot drift apart. */
+export const GOOGLE_MODEL_SCOPE = 'google';
 export { CHATGPT_OAUTH_PROVIDER_ID };
 
 /**
@@ -92,22 +96,56 @@ export const CHATGPT_MODELS: ModelOption[] = [
 ];
 
 /**
+ * Google Gemini — LIVE ONLY, and deliberately without a curated fallback.
+ *
+ * One Google key opens the whole catalog, so "which model" is a real choice here
+ * rather than a profile setting, and the candidates come from `models.list`
+ * provider:'google' — the same cached list the settings form offers, never a
+ * second source. When that list is empty (no key saved, or the lookup has never
+ * succeeded) this returns nothing and the switcher renders nothing, which is the
+ * honest answer: a hardcoded Gemini list would be exactly the stale catalog the
+ * live lookup exists to replace.
+ *
+ * The leading `''` row means "use the model saved in Settings", so a user can
+ * always get back to their profile's own model.
+ */
+export function googleOptionsFrom(live: readonly string[] | null | undefined): ModelOption[] {
+  if (!live || live.length === 0) return [];
+  return [
+    { value: '', label: 'Default', hint: 'the model saved in Settings' },
+    ...live.map((id) => ({ value: id, label: id })),
+  ];
+}
+
+/**
  * The switcher scope for an active engine selection, or null when the engine
- * has no user-facing model choice (a metered API-key provider — its model is a
- * profile setting, not a per-turn pick). Mirrors `accountChipForEngine`.
+ * has no user-facing model choice (an API-key provider whose key addresses ONE
+ * model — its model is a profile setting, not a per-turn pick). Mirrors
+ * `accountChipForEngine`, and mirrors the server's own MODEL_SCOPES.
  */
 export function modelScopeFor(
   engineId: string | null,
   selectedProvider: string | null,
 ): string | null {
   if (engineId === 'ai-sdk') {
-    return selectedProvider === CHATGPT_OAUTH_PROVIDER_ID ? CHATGPT_OAUTH_PROVIDER_ID : null;
+    if (selectedProvider === CHATGPT_OAUTH_PROVIDER_ID) return CHATGPT_OAUTH_PROVIDER_ID;
+    // Gemini is metered like Azure or OpenAI, but unlike them ONE KEY OPENS A
+    // WHOLE CATALOG — so it gets a per-turn pick and they do not.
+    if (selectedProvider === GOOGLE_MODEL_SCOPE) return GOOGLE_MODEL_SCOPE;
+    return null;
   }
   // dev-claude (or a not-yet-resolved claude engine) → the Claude catalog.
   return CLAUDE_MODEL_SCOPE;
 }
 
-/** The catalog for a scope. Empty for an unknown scope. */
+/** True for the scopes whose candidates are FETCHED rather than curated. Both the
+ *  loader and the refresh button key off this one answer. */
+export function scopeHasLiveCatalog(scope: string | null): boolean {
+  return scope === CLAUDE_MODEL_SCOPE || scope === GOOGLE_MODEL_SCOPE;
+}
+
+/** The CURATED catalog for a scope. Empty for a scope whose list is live-only
+ *  (Google) or unknown. */
 export function modelsForScope(scope: string | null): ModelOption[] {
   if (scope === CHATGPT_OAUTH_PROVIDER_ID) return CHATGPT_MODELS;
   if (scope === CLAUDE_MODEL_SCOPE) return CLAUDE_MODELS;

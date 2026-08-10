@@ -98,6 +98,7 @@ import {
   VOICE_PREVENTIVE_THRESHOLD,
   readSettings,
   resolveProviderCredential,
+  type NabySettings,
   runTurn,
   seedBuiltinPersona,
   selectEngine,
@@ -332,10 +333,38 @@ export function getStore(): Store {
  * logic sat in a submodule module that neither the main process nor a spike
  * driver could import.
  */
-type ResolvedCredential = { profile: ProviderProfile; apiKey: string };
+export type ResolvedCredential = { profile: ProviderProfile; apiKey: string };
 
-async function resolveProvider(requestedModel?: string): Promise<ResolvedCredential | null> {
-  const resolution = await resolveProviderCredential({ requestedModel });
+/**
+ * The credential for a METERED turn — the user's stored provider choice
+ * included.
+ *
+ * THE SETTINGS ARGUMENT IS THE WHOLE POINT, and leaving it out was a real bug
+ * for as long as this function took only a model. `preflight` and `selectEngine`
+ * both pass `toSelectOptions(readSettings(store))`, so they answered "Google
+ * will answer" — but the branch that actually BUILDS the model called
+ * `resolveProviderCredential({ requestedModel })` with no providerId, and that
+ * function, unforced, walks the profile list and takes the first one holding a
+ * key. A user who picked Gemini got whichever profile happened to sort first
+ * (azure-openai here) while every header and summary in the app said Gemini.
+ * The disagreement was invisible: the two calls are twenty lines apart and both
+ * succeed.
+ *
+ * "Automatic" (no stored choice) must keep the old behaviour exactly:
+ * `toSelectOptions` leaves `providerId` undefined, and `resolveProviderCredential`
+ * then falls back to `NABY_PROVIDER` and, failing that, to the first configured
+ * profile — unchanged.
+ *
+ * Exported so the wiring itself is testable: a regression test can install a
+ * credential bridge with two keyed profiles and assert which one this returns
+ * for a given settings row, which is precisely the question that went wrong.
+ */
+export async function resolveMeteredProvider(
+  settings: NabySettings,
+  requestedModel?: string,
+): Promise<ResolvedCredential | null> {
+  const { providerId } = toSelectOptions(settings);
+  const resolution = await resolveProviderCredential({ requestedModel, providerId });
   return resolution.ok ? { profile: resolution.value.profile, apiKey: resolution.value.apiKey } : null;
 }
 
@@ -519,6 +548,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // THIS session is excluded — the user is still reacting to it, so judging
         // it now would score an unfinished exchange. A failure is logged inside
         // `kickReflectionSweep` and cannot surface in the turn.
+        //
+        // THE STORE IS ALSO HOW THE PROVIDER CHOICE TRAVELS. The default judge is
+        // `modelReflectionJudge(store)` (see `kickReflectionSweep`), so the sweep's
+        // model call is billed to the provider this user picked — the same one
+        // `resolveMeteredProvider` resolves for the turn below.
         kickReflectionSweep(store, { excludeSessionId: sessionId });
 
         const requestedModel =
@@ -654,7 +688,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             });
             console.log(`[engine:naby] ${selection.summary}`);
           } else {
-            const resolved = await resolveProvider(requestedModel);
+            // The SAME settings the selection above ran on — so "Gemini will
+            // answer" and "Gemini answers" cannot come apart.
+            const resolved = await resolveMeteredProvider(settings, requestedModel);
             if (!resolved) {
               // selectEngine said a credential resolves, so this is a race
               // (a key cleared between the two calls), not a normal path.
@@ -1822,6 +1858,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // language against our own English would translate every Korean answer in
         // an autonomous run. See `VoicePortDeps.turnText`.
         const voice = createVoicePort({
+          // The store carries the style totals AND the user's provider choice —
+          // the layer resolves its backend with `selectedJudgeProviderId(deps.store)`
+          // so a rewrite is billed to the provider that answered the turn.
           store,
           stage: subjectGrowth?.stage ?? routedStage,
           ...(styleLine ? { styleLine } : {}),

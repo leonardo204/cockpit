@@ -27,6 +27,14 @@
  * not include is never offered. modelCatalog's constant is the fallback for before
  * the first answer arrives (or when nobody is signed in). ChatGPT has no
  * equivalent live source, so it stays curated.
+ *
+ * GEMINI IS THE THIRD SCOPE, and it is live-only. One Google API key opens the
+ * whole catalog, so — unlike Azure or OpenAI, where the key addresses the one
+ * model the profile names — the model is a genuine per-turn choice. Its
+ * candidates come from `models.list` provider:'google', which is the SAME cached
+ * list the Settings form offers; there is no second source and no curated
+ * constant to go stale. THE KEY IS NEVER HERE: the server resolves it, asks
+ * Google, and answers with model ids.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -35,11 +43,14 @@ import { useTranslation } from 'react-i18next';
 import {
   CHATGPT_OAUTH_PROVIDER_ID,
   CLAUDE_MODEL_SCOPE,
+  GOOGLE_MODEL_SCOPE,
   claudeOptionsFrom,
   defaultModelForScope,
+  googleOptionsFrom,
   modelLabel,
   modelScopeFor,
   modelsForScope,
+  scopeHasLiveCatalog,
   type LiveModel,
   type ModelOption,
 } from './modelCatalog';
@@ -67,6 +78,9 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
   // The live Claude catalog. Null until the first answer; the curated fallback
   // covers that window so the picker is never empty.
   const [liveClaude, setLiveClaude] = useState<LiveModel[] | null>(null);
+  // The live Gemini catalog (model ids). Null until the first answer, and with no
+  // curated fallback behind it — see googleOptionsFrom.
+  const [liveGoogle, setLiveGoogle] = useState<string[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [value, setValue] = useState<string>('');
   const [open, setOpen] = useState(false);
@@ -118,29 +132,39 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
     };
   }, [scope]);
 
-  // -- THE LIVE CLAUDE CATALOG ----------------------------------------------
+  // -- THE LIVE CATALOGS (Claude, Gemini) ------------------------------------
   //
-  // Fetched when the menu is OPENED rather than on mount: the probe spawns the
-  // Claude CLI on a cache miss, and paying that for every chat header that renders
-  // would be rude. `models.list` serves the cached answer for a day, so opening the
-  // menu twice costs one probe.
+  // `models.list` serves a cached answer for a day, so repeated calls cost one
+  // probe — which is what makes it safe to ask for on a menu open.
   const loadModels = useCallback(
     async (refresh: boolean) => {
-      if (scope !== CLAUDE_MODEL_SCOPE) return;
+      if (!scopeHasLiveCatalog(scope)) return;
       if (refresh) setRefreshing(true);
       try {
         const res = await fetch('/api/naby', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'models.list', ...(refresh ? { refresh: true } : {}) }),
+          body: JSON.stringify({
+            action: 'models.list',
+            ...(scope === GOOGLE_MODEL_SCOPE ? { provider: GOOGLE_MODEL_SCOPE } : {}),
+            ...(refresh ? { refresh: true } : {}),
+          }),
         });
         const json = (await res.json().catch(() => null)) as
-          | { ok?: boolean; models?: { claude?: LiveModel[] } }
+          | { ok?: boolean; models?: { claude?: LiveModel[]; google?: string[] } }
           | null;
-        const list = json?.ok ? json.models?.claude : undefined;
+        if (!aliveRef.current || !json?.ok) return;
+        if (scope === GOOGLE_MODEL_SCOPE) {
+          const list = json.models?.google;
+          // An empty answer means "no key saved yet, or the lookup failed". Keep
+          // whatever was already shown rather than blanking the picker mid-use.
+          if (Array.isArray(list) && list.length > 0) setLiveGoogle(list);
+          return;
+        }
+        const list = json.models?.claude;
         // An empty answer leaves the curated fallback in place rather than
         // emptying the picker — not signed in should not mean "no models".
-        if (aliveRef.current && Array.isArray(list) && list.length > 0) setLiveClaude(list);
+        if (Array.isArray(list) && list.length > 0) setLiveClaude(list);
       } catch {
         /* the fallback list stays; the send path surfaces any real failure */
       } finally {
@@ -153,6 +177,15 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
   useEffect(() => {
     if (open) void loadModels(false);
   }, [open, loadModels]);
+
+  // GEMINI HAS TO LOAD BEFORE THE CHIP RENDERS, not on menu open like Claude's.
+  // Claude has a curated fallback, so its chip exists to be clicked while the
+  // live list is still unknown; Gemini has none, so an empty list renders no chip
+  // — and a chip that is never rendered can never be opened to trigger the load
+  // that would fill it. One cached round trip per scope change, no polling.
+  useEffect(() => {
+    if (scope === GOOGLE_MODEL_SCOPE) void loadModels(false);
+  }, [scope, loadModels]);
 
   // Close on an outside click or Escape — a popover in the three-panel layout
   // must not linger once the user has moved on.
@@ -208,7 +241,11 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
   // engine resolved yet) → nothing to show.
   if (!scope) return null;
   const options: ModelOption[] =
-    scope === CLAUDE_MODEL_SCOPE ? claudeOptionsFrom(liveClaude) : modelsForScope(scope);
+    scope === CLAUDE_MODEL_SCOPE
+      ? claudeOptionsFrom(liveClaude)
+      : scope === GOOGLE_MODEL_SCOPE
+        ? googleOptionsFrom(liveGoogle)
+        : modelsForScope(scope);
   if (options.length === 0) return null;
   // Label from whatever list is in play, so a live-only id does not render raw.
   const currentLabel = options.find((o) => o.value === value)?.label ?? modelLabel(scope, value);
@@ -240,7 +277,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
             <span className="text-[0.786rem] uppercase tracking-wide text-muted-foreground">
               {t('modelSwitcher.title', { defaultValue: 'Which model' })}
             </span>
-            {scope === CLAUDE_MODEL_SCOPE && (
+            {scopeHasLiveCatalog(scope) && (
               // The list is cached for a day, so this is how a model released
               // today shows up today — without rebuilding the app.
               <button
@@ -248,9 +285,15 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
                 onClick={() => void loadModels(true)}
                 disabled={refreshing}
                 className="text-[0.786rem] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-50"
-                title={t('modelSwitcher.refreshHint', {
-                  defaultValue: 'Ask your Claude sign-in which models it can use',
-                })}
+                title={
+                  scope === GOOGLE_MODEL_SCOPE
+                    ? t('modelSwitcher.refreshHintGoogle', {
+                        defaultValue: 'Ask Google which Gemini models this key can use',
+                      })
+                    : t('modelSwitcher.refreshHint', {
+                        defaultValue: 'Ask your Claude sign-in which models it can use',
+                      })
+                }
               >
                 {refreshing
                   ? t('modelSwitcher.refreshing', { defaultValue: 'Checking…' })
