@@ -87,6 +87,9 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
   const [busy, setBusy] = useState(false);
   const aliveRef = useRef(true);
   const rootRef = useRef<HTMLSpanElement>(null);
+  // The SCROLLING part of the menu (the options), which is the only element
+  // allowed to clip: see the list container below.
+  const listRef = useRef<HTMLDivElement>(null);
   // Ref-stable so the scope effect below never re-runs just because the parent
   // re-created the callback (shell perf convention).
   const onModelChangeRef = useRef(onModelChange);
@@ -205,6 +208,29 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
     };
   }, [open]);
 
+  // OPENING THE MENU MUST SHOW WHAT IS ALREADY CHOSEN. Google's live catalog is
+  // 30+ models, so the pick is routinely far down the list; a menu that always
+  // opens at the top cannot be used to confirm what is selected, which is half
+  // of what this chip is for.
+  //
+  // The LIST is scrolled, never `scrollIntoView()`: that walks up every
+  // scrollable ancestor, and in the three-panel layout the nearest ones are the
+  // chat panel and the swipe container — it would slide the whole panel to
+  // reveal a menu that is already on screen. Setting `scrollTop` on the one box
+  // that scrolls cannot move anything else.
+  useEffect(() => {
+    if (!open) return;
+    const list = listRef.current;
+    if (!list) return;
+    const active = list.querySelector<HTMLElement>('[data-active="true"]');
+    if (!active) return;
+    const centered = active.offsetTop - (list.clientHeight - active.offsetHeight) / 2;
+    list.scrollTop = Math.max(0, Math.min(centered, list.scrollHeight - list.clientHeight));
+    // Re-runs when a catalog arrives while the menu is open (the refresh
+    // button, or the cached lookup resolving) — the rows move, so the position
+    // has to be taken again.
+  }, [open, liveClaude, liveGoogle]);
+
   const onUserSelectRef = useRef(onUserSelect);
   onUserSelectRef.current = onUserSelect;
 
@@ -268,6 +294,11 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
       </button>
 
       {open && (
+        // NO `overflow-hidden` HERE, and none on any ancestor: this menu escapes
+        // the chip (`absolute top-full`) in the three-panel layout, and a
+        // clipping ancestor would erase it exactly the way one on the sidebar
+        // root erased its three popovers (CLAUDE.md, UI Layout). The scrolling
+        // is done by the options list INSIDE, which is the part that scrolls.
         <div
           role="menu"
           data-testid="model-switcher-menu"
@@ -301,6 +332,27 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
               </button>
             )}
           </div>
+          {/* THE ONLY BOX THAT SCROLLS. Google's live catalog answers with 30+
+              models and the menu grew past the bottom of the window; capped
+              here at ~5 rows, the rest reachable by scrolling.
+
+              The header above stays OUTSIDE this box on purpose: it holds the
+              only control that is not a model ("Refresh", which is how a model
+              released today shows up today) and the list's title, and both
+              become unreachable the moment they scroll away.
+
+              The `Default` row, by contrast, stays IN the list. It is not
+              structurally distinct across scopes — Claude's live catalog has no
+              `''` row at all, its default is an ordinary entry the SDK returns
+              — so pinning "the default" would be a rule that holds for two of
+              the three scopes and quietly mis-renders the third. The pick being
+              visible on open is handled properly instead, by the scroll
+              positioning above, which covers Default like any other row. */}
+          <div
+            ref={listRef}
+            data-testid="model-switcher-list"
+            className="flex flex-col gap-1 max-h-56 overflow-y-auto"
+          >
           {options.map((o) => {
             const active = o.value === value;
             return (
@@ -310,7 +362,12 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
                 onClick={() => void pick(o.value)}
                 disabled={busy}
                 data-testid={`model-option-${o.value || 'default'}`}
-                className={`w-full text-left px-2 py-1.5 rounded border transition-colors ${
+                // Read by the open-scroll effect above to find the current pick.
+                // An attribute rather than a ref map: the list is rebuilt from a
+                // live catalog, and a ref per row would have to be reconciled
+                // with it on every refresh.
+                data-active={active ? 'true' : 'false'}
+                className={`w-full flex-shrink-0 text-left px-2 py-1.5 rounded border transition-colors ${
                   active
                     ? 'border-brand bg-brand/5'
                     : 'border-border hover:border-brand/50 hover:bg-accent/40'
@@ -328,6 +385,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
               </button>
             );
           })}
+          </div>
         </div>
       )}
     </span>
