@@ -148,14 +148,25 @@ describe('the popup is not clipped and speaks the same language as the palette',
     expect(rootClass).not.toContain('overflow-clip');
   });
 
-  it('reuses the palette container, highlight and row metrics', () => {
+  it('reuses the palette container and row metrics', () => {
     const commandList = /ref=\{commandListRef\}\s*\n\s*className="([^"]+)"/.exec(chatInput)?.[1];
     const historyList = /ref=\{historyListRef\}\s*\n\s*className="([^"]+)"/.exec(chatInput)?.[1];
     expect(commandList).toBeDefined();
     expect(historyList).toBe(commandList);
-    // Selected-row highlight is the palette's, not a new one.
-    expect(chatInput).toMatch(/index === historyIndex \? 'bg-brand\/10' : 'hover:bg-accent'/);
     expect(chatInput).toContain('px-4 py-2 cursor-pointer');
+  });
+
+  // THE HIGHLIGHT IS THE ONE THING THIS LIST DOES NOT BORROW, and that is a
+  // correction rather than an inconsistency. This test used to require the
+  // palette's `bg-brand/10` on the ground that one popup language beats two.
+  // It shipped, and the selection could not be seen: the palette's rows carry
+  // icons and a second line for a 10% tint to sit against, and these rows are
+  // bare sentences. It was reported as the arrow keys not working at all —
+  // the user reached for the mouse instead. The active row now also gets the
+  // left accent bar, which is asserted in composerHistoryVisibility.test.ts
+  // together with the scroll behaviour that depends on its marker.
+  it('does not borrow the palette highlight, which was too faint here', () => {
+    expect(chatInput).not.toMatch(/index === historyIndex \? 'bg-brand\/10'/);
   });
 
   it('is pickable by mouse as well as by keyboard', () => {

@@ -490,13 +490,24 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     }
   }, [selectedIndex, showCommands]);
 
-  // Same for the history list. Its rows are the container's children after the
-  // sticky header, hence the +1.
+  // Same for the history list — but found by its own marker, and moved by
+  // setting `scrollTop` on the one box that scrolls.
+  //
+  // Two things went wrong with the obvious version. Indexing `children` by
+  // position assumed the rows were painted in array order; they are painted
+  // reversed (oldest at the top), so `children[i + 1]` pointed at the wrong row
+  // the moment that changed. And `scrollIntoView` walks every scrollable
+  // ancestor — in the three-panel layout those are the chat panel and the swipe
+  // container, so it can slide the whole panel to reveal a popover that is
+  // already on screen.
   useLayoutEffect(() => {
-    if (showHistory && historyListRef.current) {
-      const row = historyListRef.current.children[historyIndex + 1] as HTMLElement | undefined;
-      row?.scrollIntoView?.({ block: 'nearest' });
-    }
+    if (!showHistory) return;
+    const list = historyListRef.current;
+    if (!list) return;
+    const active = list.querySelector<HTMLElement>('[data-active="true"]');
+    if (!active) return;
+    const centered = active.offsetTop - (list.clientHeight - active.offsetHeight) / 2;
+    list.scrollTop = Math.max(0, Math.min(centered, list.scrollHeight - list.clientHeight));
   }, [historyIndex, showHistory]);
 
   // Put a past message back in the box — FILL ONLY, never a send, so it can be
@@ -931,7 +942,22 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
               <div
                 key={`${index}-${entry.slice(0, 32)}`}
                 onClick={() => applyHistoryEntry(entry)}
-                className={`px-4 py-2 cursor-pointer ${index === historyIndex ? 'bg-brand/10' : 'hover:bg-accent'}`}
+                // `data-active` is what the scroll effect above looks for, and
+                // what a test can assert on. `aria-selected` says the same thing
+                // to a screen reader.
+                data-active={index === historyIndex ? 'true' : 'false'}
+                aria-selected={index === historyIndex}
+                // A LEFT BAR PLUS A TINT, not a tint alone. The palette's
+                // `bg-brand/10` is legible there because its rows carry icons and
+                // a second line to sit against; on a list of bare sentences at
+                // 10% alpha it is close to invisible, and a selection nobody can
+                // see reads as arrow keys that do nothing. Same accent the model
+                // switcher marks its current row with.
+                className={`px-4 py-2 cursor-pointer border-l-2 ${
+                  index === historyIndex
+                    ? 'border-brand bg-brand/15'
+                    : 'border-transparent hover:bg-accent'
+                }`}
               >
                 <div className="text-sm text-foreground truncate">{composerHistoryPreview(entry)}</div>
               </div>
