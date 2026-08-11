@@ -215,6 +215,76 @@ export function formatGaugePercent(gauge: { percent: number; approximate: boolea
   return `${gauge.approximate ? '~' : ''}${gauge.percent}%`;
 }
 
+/**
+ * THE ONE PLACE THE SUBSCRIPTION'S `utilization` BECOMES A PERCENTAGE
+ * (specs/claude-multi-account.md §4.4).
+ *
+ * It lives beside the context gauge because it is the same KIND of thing and
+ * carries the same hazard: a number arrives from a backend, and the honest
+ * rendering of it depends on knowing something about it that is not written down.
+ * The gauge's version of that is which denominator it may divide by; this one's
+ * is what scale the numerator is already on.
+ *
+ * ⚠️ THE SCALE IS UNVERIFIED, AND THAT IS THE REASON THIS FUNCTION EXISTS.
+ * The SDK's `SDKRateLimitInfo` documents `utilization` as a bare `number` and
+ * says nothing about its range, and in the readings actually observed from a live
+ * subscription THE FIELD DID NOT APPEAR AT ALL — the event carried `status`,
+ * `resetsAt` and `rateLimitType` and nothing else. So there has never been a
+ * value to check the assumption against.
+ *
+ * The bar was doing `utilization * 100` inline in FOUR places, which meant the
+ * unverified assumption (that this is a 0..1 fraction) was written down four
+ * times and could be corrected in three. It is written once now. When a real
+ * value is finally observed — if it turns out to be 0..100 already, this becomes
+ * an identity — this is the only line that changes, and the four call sites are
+ * correct by construction.
+ *
+ * RETURNS null WHEN THERE IS NO VALUE, and every caller must render nothing for
+ * null. That is the spec's rule (§2-3, §4.1): a limit reading is something the
+ * backend either gives us or does not, and a missing one is not zero. `0` is a
+ * legitimate reading (a freshly reset window) and is deliberately NOT folded in
+ * with absence — hence null rather than a falsy number.
+ */
+export function rateLimitUtilizationPercent(utilization: number | null | undefined): number | null {
+  if (typeof utilization !== 'number' || !Number.isFinite(utilization)) return null;
+  // The assumption, stated once: a 0..1 fraction.
+  return Math.round(utilization * 100);
+}
+
+/** The percentage as the limit chip prints it — `83%` — or null when there is no
+ *  reading, so a caller cannot accidentally render the string "null%". Formatting
+ *  lives next to the arithmetic for the same reason `formatGaugePercent` does:
+ *  the two call sites must not be able to drift apart. */
+export function formatRateLimitPercent(utilization: number | null | undefined): string | null {
+  const percent = rateLimitUtilizationPercent(utilization);
+  return percent === null ? null : `${percent}%`;
+}
+
+/**
+ * `resetsAt` AS A JAVASCRIPT TIMESTAMP — the seconds/milliseconds boundary, in
+ * one place and under test.
+ *
+ * THE CONTRACT SAYS SECONDS. The runtime declares `resetsAt` in UNIX SECONDS
+ * (runtime/engine.ts) and the shell adapter passes it across unconverted, because
+ * the backend sends seconds — an observed reading is `1786426200`, which is
+ * 2026-08-11T05:30Z as seconds. Everything from here on is `Date.now()`'s scale,
+ * so the conversion happens exactly once, here.
+ *
+ * THE HEURISTIC IS KEPT ANYWAY, and deliberately. A unit is the one thing about
+ * this value that goes wrong SILENTLY in both directions — read seconds as
+ * milliseconds and the reset lands in 1970, so the countdown renders nothing at
+ * all; read milliseconds as seconds and it lands roughly fifty thousand years
+ * out, and the chip confidently says `438000000h`. Neither throws and neither
+ * looks like a bug. So the contract is asserted in tests and this guard makes a
+ * violation of it degrade to the right answer rather than to a wrong one: any
+ * value below 1e12 (i.e. before 2001 when read as ms — no reset is ever in the
+ * past) is seconds.
+ */
+export function rateLimitResetsAtMs(resetsAt: number | null | undefined): number | null {
+  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  return resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
+}
+
 /** The Tailwind text colour for a tier, reusing the classes the bar already uses
  *  for its other states (muted / amber / red) so nothing new enters the palette. */
 export function gaugeToneClass(tier: ContextGaugeTier): string {

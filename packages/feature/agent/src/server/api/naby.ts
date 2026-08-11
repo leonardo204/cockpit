@@ -29,9 +29,20 @@
 import { Effect } from 'effect';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
-  claudeLogin,
-  claudeLogout,
-  describeClaudeLoginAsync,
+  addClaudeAccount,
+  claudeLoginForAccount,
+  claudeLogoutForAccount,
+  describeClaudeAccounts,
+  describeClaudeLoginForAccount,
+  logActivity,
+  removeClaudeAccount,
+  resetClaudeLoginCache,
+  setActiveClaudeAccount,
+  verifyClaudeAccount,
+  activeClaudeAccountId,
+  isClaudeAccountId,
+  listClaudeAccounts,
+  type ClaudeAccountsDescription,
   getCredentialBridge,
   isClaudeAgentSdkAvailable,
   loadMcpToolset,
@@ -78,6 +89,9 @@ import {
   type MemoryScope,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
+// "Is anything running anywhere" — the one question the account switch has to ask
+// before it may change which subscription answers (claude-multi-account §5.4).
+import { anyRunActive } from '../sessionRunHub';
 import { resolveApproval } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
@@ -360,6 +374,13 @@ export async function readNabyState(
      *  here is machine-specific beyond the platform: a docs URL and commands. */
     installHelp: ClaudeInstallHelp | null;
   };
+  /** MORE THAN ONE CLAUDE SUBSCRIPTION (claude-multi-account §5): the accounts
+   *  naby keeps, which one answers turns, and whether this computer can keep them
+   *  apart at all. IDS AND LABELS ONLY — the config directory each account lives
+   *  in never crosses this boundary (§5.6), because a path that reaches a client
+   *  is a path some later endpoint accepts back. Read from the store; no process
+   *  is spawned on this path. */
+  claudeAccounts: ClaudeAccountsDescription;
   /** CO-06 — the DEV-ONLY ChatGPT subscription sign-in, the HTTP mirror of the
    *  former preload bridge so the chat bottom-bar chip works inside the iframe.
    *  `available` is the dev seal; `signedIn`/`email` come from the vault via the
@@ -434,7 +455,20 @@ export async function readNabyState(
     // Runs `claude auth status` (against a de-shimmed binary) and is cached 10s
     // in the runtime, so ordinary polls do not spawn a process — only a forced
     // re-check (a user action or the post-login poll) bypasses the cache.
-    claudeLogin: await describeClaudeLoginAsync(opts.recheckLogin ? { force: true } : {}),
+    // ABOUT THE ACCOUNT THAT ACTUALLY ANSWERS. With a second Claude account
+    // selected, reading the machine's default sign-in here would put one identity
+    // in the chip while the turns spent another — the exact disagreement §5.4
+    // refuses a mid-turn switch to prevent. The id goes in, the runtime resolves
+    // the namespace; with no account selected this is the original call.
+    claudeLogin: await describeClaudeLoginForAccount(
+      activeClaudeAccountId(store),
+      opts.recheckLogin ? { force: true } : {},
+    ),
+    // The account list is a settings read, so it rides along with every poll at
+    // no cost. The identity of each row is refreshed only when the user (or the
+    // post-login poll) asks — `claude-account.verify` — because refreshing three
+    // accounts on every GET would be three processes per poll.
+    claudeAccounts: describeClaudeAccounts(store),
     // CO-06 — read from the vault through the in-process account bridge (the exact
     // sibling of claudeLogin's `claude auth status` read). Seal-gated inside.
     chatgptLogin: await readChatgptLogin(),
@@ -476,6 +510,22 @@ export type NabyAction =
   | { action: 'model.set'; providerId: string; model: string }
   | { action: 'claude.login'; email?: string; console?: boolean }
   | { action: 'claude.logout' }
+  // MORE THAN ONE CLAUDE SUBSCRIPTION (claude-multi-account §5), shaped after the
+  // two actions above because they are the same operations with one difference:
+  // WHICH namespace the CLI is pointed at. Every one of them takes an opaque
+  // account id and never a path (§5.6).
+  //
+  //   add     make a namespace, prove the machine keeps namespaces apart, then
+  //           start the browser sign-in in it. Does not wait for the user.
+  //   verify  ask `claude auth status` in one account's namespace and store what
+  //           it says. Also the post-add poll.
+  //   select  which account answers turns. GLOBAL, not per session (§5.5), and
+  //           REFUSED while any turn is in flight (§5.4).
+  //   remove  logout in that namespace FIRST, then delete it.
+  | { action: 'claude-account.add'; email?: string; console?: boolean }
+  | { action: 'claude-account.verify'; accountId: string }
+  | { action: 'claude-account.select'; accountId: string }
+  | { action: 'claude-account.remove'; accountId: string }
   // CO-06 — the DEV-ONLY ChatGPT sign-in, mirroring `claude.login`/`claude.logout`.
   | { action: 'chatgpt-oauth.signin' }
   | { action: 'chatgpt-oauth.signout' }
@@ -650,6 +700,17 @@ export type NabyActionResult =
       /** `claude.login`: the exact command, as a copy-paste fallback for a
        *  headless machine where no browser can open. */
       command?: string;
+      /** `claude-account.*`: the account block as it now stands, so the settings
+       *  screen redraws from the reply instead of racing its own next GET. Same
+       *  shape as the GET's block — ids and labels, never a path. */
+      claudeAccounts?: ClaudeAccountsDescription;
+      /** `claude-account.add`: the id of the account that was just created. The
+       *  UI polls `claude-account.verify` with it until the browser flow lands. */
+      accountId?: string;
+      /** `claude-account.remove`: whether `claude auth logout` succeeded in that
+       *  namespace before the folder was deleted. The removal is a success either
+       *  way; this is what lets the UI say so honestly. */
+      loggedOut?: boolean;
       /** `chatgpt-oauth.signin`/`signout`: the fresh sign-in status once the flow
        *  resolves, so the chip updates without waiting for the next GET poll
        *  (mirrors the old preload bridge, which resolved with the new status). */
@@ -1627,7 +1688,11 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // (detached — the runtime does not block on the user). Returns promptly
       // with `started:true`; the UI then polls status (force re-check) until the
       // sign-in lands. `command` is the copy-paste fallback for a headless box.
-      const result = claudeLogin({
+      //
+      // IN THE SELECTED ACCOUNT'S NAMESPACE, when there is one: the chip that
+      // offers this button is describing that account (see readNabyState), so
+      // signing in anywhere else would fix nothing the user can see.
+      const result = claudeLoginForAccount(activeClaudeAccountId(store), {
         ...(typeof body.email === 'string' ? { email: body.email } : {}),
         ...(typeof body.console === 'boolean' ? { console: body.console } : {}),
       });
@@ -1655,9 +1720,128 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // the safety; see `claudeLogout`). No secret crosses this boundary. The
       // runtime resets its login cache, so the next GET (or the UI's explicit
       // re-check) reports signed-out immediately rather than a 10s-stale answer.
-      const result = await claudeLogout();
+      //
+      // Of the SELECTED account when there is one — the same namespace the chip
+      // is describing. The account itself is kept: this is "sign out", not
+      // "remove", so the folder and the row survive and a later sign-in lands
+      // back in the same place.
+      const result = await claudeLogoutForAccount(activeClaudeAccountId(store));
       if (!result.ok) return { ok: false, error: result.error };
       return { ok: true, removed: result.removed };
+    }
+
+    // -- more than one Claude subscription (claude-multi-account §5) ----------
+    //
+    // The runtime owns every one of these: it mints the id, resolves the folder,
+    // builds the environment, and runs the same `claude auth` CLI the single
+    // account path runs. This file only decides WHEN they may happen — which is
+    // where §5.4's refusal and §5.5's activity line live, because both are
+    // policy about the app's state rather than about an account.
+
+    case 'claude-account.add': {
+      // Creates the namespace, probes isolation, and spawns the browser flow —
+      // and cleans up after itself on every failure, so a refusal leaves no row.
+      const result = await addClaudeAccount(store, {
+        ...(typeof body.email === 'string' ? { email: body.email } : {}),
+        ...(typeof body.console === 'boolean' ? { console: body.console } : {}),
+      });
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: result.error,
+          // §5.3 — the machine cannot keep sign-ins apart. The verdict is already
+          // stored, so the account block in this reply says `supported:false` and
+          // the screen puts the feature away.
+          ...(result.isolationBroken ? { errorKey: 'claudeAccounts.notIsolated' } : {}),
+          ...(result.installHelp
+            ? { installHelp: result.installHelp, errorHeadline: CLAUDE_CLI_MISSING_HEADLINE }
+            : {}),
+        };
+      }
+      return {
+        ok: true,
+        started: true,
+        accountId: result.accountId,
+        command: result.command,
+        claudeAccounts: describeClaudeAccounts(store),
+      };
+    }
+
+    case 'claude-account.verify': {
+      if (!isClaudeAccountId(body.accountId)) {
+        return { ok: false, error: 'accountId is required' };
+      }
+      const result = await verifyClaudeAccount(store, body.accountId);
+      if (!result.ok) return { ok: false, error: result.error };
+      return { ok: true, claudeAccounts: describeClaudeAccounts(store) };
+    }
+
+    case 'claude-account.select': {
+      // '' is a real choice: "use the one sign-in this computer has", which is
+      // how a user gets back to single-account behaviour without deleting
+      // anything.
+      const wanted = typeof body.accountId === 'string' ? body.accountId.trim() : '';
+      if (wanted && !listClaudeAccounts(store).some((a) => a.id === wanted)) {
+        return { ok: false, error: 'unknown account' };
+      }
+      if (activeClaudeAccountId(store) !== (wanted || undefined)) {
+        // §5.4 — REFUSE MID-TURN, and the reason is honesty rather than safety.
+        // The environment is fixed into the child process at turn start, so a
+        // running turn keeps spending the account it started on; switching now
+        // would leave the screen naming one account while the answer being
+        // written belongs to another.
+        if (anyRunActive()) {
+          return {
+            ok: false,
+            error: 'A turn is still running, so the Claude account cannot be switched yet.',
+            errorKey: 'claudeAccounts.busy',
+          };
+        }
+        setActiveClaudeAccount(store, wanted || null);
+        // The next status read must not be answered from the previous account's
+        // ten-second-old entry.
+        resetClaudeLoginCache();
+        // §5.5 — the only durable record of WHICH account's limits a conversation
+        // spent. The id and the email, and deliberately NOT the config directory:
+        // the activity log is a file people read, grep and attach to bug reports.
+        const chosen = listClaudeAccounts(store).find((a) => a.id === wanted);
+        logActivity('setting_change', {
+          setting: 'claude.activeAccount',
+          accountId: wanted || null,
+          email: chosen?.email ?? null,
+        });
+      }
+      return { ok: true, claudeAccounts: describeClaudeAccounts(store) };
+    }
+
+    case 'claude-account.remove': {
+      if (!isClaudeAccountId(body.accountId)) {
+        return { ok: false, error: 'accountId is required' };
+      }
+      // Removing the ACTIVE account changes which account answers, so it is the
+      // same interruption a switch is and is refused for the same reason.
+      if (activeClaudeAccountId(store) === body.accountId && anyRunActive()) {
+        return {
+          ok: false,
+          error: 'A turn is still running, so this Claude account cannot be removed yet.',
+          errorKey: 'claudeAccounts.busy',
+        };
+      }
+      const result = await removeClaudeAccount(store, body.accountId);
+      if (!result.ok) return { ok: false, error: result.error };
+      if (result.wasActive) {
+        logActivity('setting_change', {
+          setting: 'claude.activeAccount',
+          accountId: null,
+          email: null,
+        });
+      }
+      return {
+        ok: true,
+        removed: true,
+        loggedOut: result.loggedOut,
+        claudeAccounts: describeClaudeAccounts(store),
+      };
     }
 
     case 'chatgpt-oauth.signin': {

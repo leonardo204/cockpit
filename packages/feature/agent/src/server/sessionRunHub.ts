@@ -332,6 +332,25 @@ export function isRunActive(key: string): boolean {
 }
 
 /**
+ * True while ANY session has a turn in flight.
+ *
+ * The existing `isRunActive` answers about one key, which is all the 409 guard
+ * ever needed. Switching the Claude account is the first question that is about
+ * the whole app: the environment is fixed into a child process when a turn
+ * starts, so a switch cannot reach a running turn — and an app whose header names
+ * one account while the answer still being written spends another has told the
+ * user something false (claude-multi-account §5.4). So the switch is refused
+ * while anything is running, and this is how it finds out.
+ *
+ * A run appears in the registry under each of its alias keys, so this may see the
+ * same run twice; for a boolean that is not a difference.
+ */
+export function anyRunActive(): boolean {
+  for (const r of registry.values()) if (r.status === 'running') return true;
+  return false;
+}
+
+/**
  * The engine's real sessionId for a run, once revealed via rekeyRun. Returns null
  * if the run was a plain resume (no rekey) or is no longer in the registry. Read it
  * within the post-run grace window (same reliability as getRunSnapshot).

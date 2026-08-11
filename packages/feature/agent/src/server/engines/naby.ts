@@ -61,6 +61,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
+  activeClaudeAccountId,
   AiSdkEngine,
   buildToolset,
   buildWorkspaceTools,
@@ -440,6 +441,60 @@ export function toSdkUsage(u: Usage | undefined): Record<string, number> {
   };
 }
 
+/**
+ * Runtime `rate_limit` → the `rate_limit_event` the chat client already reads
+ * (specs/claude-multi-account.md §4.3).
+ *
+ * THE CLIENT HALF OF THIS FEATURE HAS BEEN FINISHED FOR A WHILE and was never
+ * reachable: `useChatStream` has a `rate_limit_event` branch, `Chat` passes the
+ * result to `TokenUsageBar`, and the bar renders the status colour, the window
+ * name and a live reset countdown. The server sent no such event, so all of it
+ * sat dark. This function is the missing half, and it is a RENAME plus nothing
+ * else — no thresholds, no derived percentages, no decisions.
+ *
+ * IT RENAMES ONE FIELD: the runtime says `limitType` (it is already inside an
+ * event called `rate_limit`, so repeating the noun buys nothing), the client says
+ * `rateLimitType`. An adapter is the correct and only place for two vocabularies
+ * to meet — see the header of this section.
+ *
+ * `resetsAt` CROSSES UNCONVERTED, IN UNIX SECONDS. That is what the runtime
+ * contract states (runtime/engine.ts) and what the client's `formatResetTime`
+ * reads. It is the one field here that can be wrong without looking wrong:
+ * multiplying by 1000 on the way past would put the reset about fifty thousand
+ * years out, and the countdown would render a confident, enormous number rather
+ * than failing.
+ *
+ * ABSENT FIELDS STAY ABSENT rather than becoming zeros or empty strings. The
+ * client's guards are `!= null` / truthiness checks, so a defaulted `0` would
+ * turn "the backend told us nothing" into "the window resets now" — the exact
+ * class of invented number §2-3 of the spec forbids.
+ *
+ * Exported so the shape is assertable without a live subscription, which cannot
+ * be driven into a warning state on demand (nabyRateLimit.test.ts).
+ */
+export function toRateLimitRunEvent(
+  ev: Extract<EngineEvent, { kind: 'rate_limit' }>,
+  sessionId: string,
+): RunEvent {
+  return {
+    type: 'rate_limit_event',
+    session_id: sessionId,
+    rate_limit_info: {
+      status: ev.status,
+      ...(ev.resetsAt !== undefined ? { resetsAt: ev.resetsAt } : {}),
+      ...(ev.limitType !== undefined ? { rateLimitType: ev.limitType } : {}),
+      ...(ev.utilization !== undefined ? { utilization: ev.utilization } : {}),
+      ...(ev.overageStatus !== undefined ? { overageStatus: ev.overageStatus } : {}),
+      ...(ev.overageResetsAt !== undefined ? { overageResetsAt: ev.overageResetsAt } : {}),
+      ...(ev.overageDisabledReason !== undefined
+        ? { overageDisabledReason: ev.overageDisabledReason }
+        : {}),
+      ...(ev.isUsingOverage !== undefined ? { isUsingOverage: ev.isUsingOverage } : {}),
+      ...(ev.surpassedThreshold !== undefined ? { surpassedThreshold: ev.surpassedThreshold } : {}),
+    },
+  };
+}
+
 export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
   return {
     name: 'naby',
@@ -626,7 +681,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
           if (selection.engine === 'dev-claude') {
             // No key is read on this path AT ALL — that is the point of it.
-            engine = new ClaudeAgentSdkEngine();
+            //
+            // WHICH subscription, when the user keeps more than one
+            // (claude-multi-account §5.1). An id, never a path: the runtime
+            // resolves the config directory and builds the environment, so this
+            // file — and everything downstream of it — never holds one. Undefined
+            // is the ordinary case and leaves the turn byte-for-byte as it was.
+            //
+            // READ HERE, at turn start, which is exactly what §5.4 promises: the
+            // account is pinned for the whole turn, and a switch that arrives
+            // mid-turn is refused rather than silently applied to the next event.
+            const claudeAccountId = activeClaudeAccountId(store);
+            engine = new ClaudeAgentSdkEngine(
+              claudeAccountId ? { accountId: claudeAccountId } : {},
+            );
             engineId = 'dev-claude';
             costBasis = 'subscription';
             providerId = 'dev-claude';
@@ -2349,6 +2417,31 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                         }
                       : {}),
                   } satisfies RunEvent);
+                  break;
+                }
+
+                case 'rate_limit': {
+                  // HOW MUCH OF THE SUBSCRIPTION IS LEFT (specs/claude-multi-
+                  // account.md §4.3). The client half of this has been complete
+                  // for a while — `useChatStream` has a `rate_limit_event`
+                  // handler and `TokenUsageBar` renders the status colours and the
+                  // reset countdown — and the server simply never sent one, so
+                  // the display sat dark. This case is the missing wire.
+                  //
+                  // Emitted RAW and unconditionally: no dedupe and no cap, unlike
+                  // the harness case above. Those exist because a backend loop can
+                  // emit the same label thousands of times, whereas this event
+                  // fires when the limit information CHANGES — a handful of times
+                  // in a long run at most — and it is a REPLACEMENT, not an
+                  // addition. The client `setRateLimitInfo`s the newest one, so
+                  // suppressing a repeat would only ever hold back the freshest
+                  // reading, and capping it would freeze the display at whatever
+                  // was true earlier in the turn.
+                  //
+                  // The shape and the field renaming live in
+                  // `toRateLimitRunEvent`, beside `toSdkUsage`, so both are
+                  // assertable without a live subscription.
+                  ctx.emit(toRateLimitRunEvent(ev, sessionId));
                   break;
                 }
 

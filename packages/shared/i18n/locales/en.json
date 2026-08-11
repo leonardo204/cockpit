@@ -710,6 +710,19 @@
     "recheck": "Check again",
     "rechecking": "Checking…"
   },
+  "claudeAccounts": {
+    "title": "Claude accounts",
+    "body": "Keep more than one Claude subscription and choose which one answers. Signing in happens in Claude Code, in a folder of its own per account; naby never reads or stores the sign-in itself. The terminal `claude` command is unaffected.",
+    "machineDefault": "This computer's sign-in",
+    "machineDefaultHint": "The Claude Code sign-in already on this computer.",
+    "add": "Add an account",
+    "waiting": "Waiting for the browser sign-in…",
+    "remove": "Remove",
+    "notSignedIn": "Not signed in yet",
+    "signInNeeded": "sign-in not finished",
+    "busy": "An answer is still being written. Wait for it to finish, then switch accounts.",
+    "notIsolated": "This computer keeps every Claude sign-in in one place, so a second account would be the same account. Multiple accounts are not available here."
+  },
   "engineSwitcher": {
     "title": "Which model answers",
     "automatic": "Automatic",

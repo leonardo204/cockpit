@@ -3,7 +3,14 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TokenUsage, RateLimitInfo } from './types';
-import { contextGauge, formatGaugePercent, formatTokensShort, gaugeToneClass } from './contextGauge';
+import {
+  contextGauge,
+  formatGaugePercent,
+  formatRateLimitPercent,
+  formatTokensShort,
+  gaugeToneClass,
+  rateLimitResetsAtMs,
+} from './contextGauge';
 
 // ============================================
 // Token Usage Display
@@ -53,11 +60,13 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
       ? t('chat.rateLimitWarning', 'Approaching Limit')
       : null;
 
-  // Format reset time as countdown
+  // Format reset time as countdown. The seconds→milliseconds step is NOT done
+  // here: the unit is a contract (runtime/engine.ts declares UNIX seconds) and
+  // contextGauge.ts owns the single conversion, under test — see
+  // `rateLimitResetsAtMs` for why a unit error here would be invisible.
   const formatResetTime = (resetsAt?: number) => {
-    if (!resetsAt) return '';
-    // resetsAt could be seconds or milliseconds — normalize
-    const resetsAtMs = resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
+    const resetsAtMs = rateLimitResetsAtMs(resetsAt);
+    if (resetsAtMs === null) return '';
     const diffMs = resetsAtMs - now;
     if (diffMs <= 0) return '';
     const diffMin = Math.ceil(diffMs / 60000);
@@ -73,6 +82,15 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
     return type.replace(/_/g, ' ');
   };
 
+  // THE ONLY READING OF `utilization` IN THIS FILE. The percentage arithmetic was
+  // inlined at four separate points here, each repeating an assumption about a
+  // scale the SDK does not document and that has never actually been observed
+  // (specs/claude-multi-account.md §4.4, §8) — so a correction would have had to
+  // land in four places and would have landed in three. It is derived once, and
+  // `null` (no reading) is what the guards below key on, so "no number, no chip"
+  // stays structural rather than being re-remembered at each site.
+  const utilizationPercent = formatRateLimitPercent(rateLimitInfo?.utilization);
+
   return (
     <div className="px-4 py-1.5 border-t border-border bg-secondary">
       <div className="flex items-center justify-end gap-4 text-xs text-muted-foreground">
@@ -81,7 +99,7 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
           <span className={`flex items-center gap-1 ${rateLimitColor}`}
             title={[
               rateLimitInfo.rateLimitType && `Type: ${formatLimitType(rateLimitInfo.rateLimitType)}`,
-              rateLimitInfo.utilization != null && `Usage: ${(rateLimitInfo.utilization * 100).toFixed(0)}%`,
+              utilizationPercent && `Usage: ${utilizationPercent}`,
               rateLimitInfo.resetsAt && `Resets in: ${formatResetTime(rateLimitInfo.resetsAt)}`,
               rateLimitInfo.isUsingOverage && 'Using overage',
             ].filter(Boolean).join(' · ')}
@@ -97,7 +115,7 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
             )}
             <span>
               <strong>{rateLimitLabel}</strong>
-              {rateLimitInfo.utilization != null && ` ${(rateLimitInfo.utilization * 100).toFixed(0)}%`}
+              {utilizationPercent && ` ${utilizationPercent}`}
               {rateLimitInfo.resetsAt && ` · ${formatResetTime(rateLimitInfo.resetsAt)}`}
             </span>
           </span>
@@ -108,15 +126,15 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
           <span className="flex items-center gap-1.5"
             title={[
               rateLimitInfo.rateLimitType && formatLimitType(rateLimitInfo.rateLimitType),
-              rateLimitInfo.utilization != null && `Usage: ${(rateLimitInfo.utilization * 100).toFixed(0)}%`,
+              utilizationPercent && `Usage: ${utilizationPercent}`,
               `Resets in: ${formatResetTime(rateLimitInfo.resetsAt)}`,
             ].filter(Boolean).join(' · ')}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
-            {rateLimitInfo.utilization != null
-              ? <span>{(rateLimitInfo.utilization * 100).toFixed(0)}%</span>
+            {utilizationPercent
+              ? <span>{utilizationPercent}</span>
               : <span>{formatResetTime(rateLimitInfo.resetsAt)}</span>
             }
           </span>

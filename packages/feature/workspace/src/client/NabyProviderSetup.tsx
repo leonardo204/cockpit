@@ -35,7 +35,7 @@
  * or a log.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   SYSTEM_MCP_PRESETS,
@@ -796,6 +796,29 @@ type ClaudeLoginBlock = {
   installHelp: ClaudeInstallHelp | null;
 };
 
+/** One Claude subscription naby keeps, as the server describes it: an OPAQUE id
+ *  and identity labels. There is no path field and there must never be one — the
+ *  runtime owns where an account's files live (claude-multi-account §5.6). */
+type ClaudeAccountRow = {
+  id: string;
+  addedAt: number;
+  email: string | null;
+  orgName: string | null;
+  subscriptionType: string | null;
+  status: 'signed-in' | 'signed-out' | 'unknown' | string;
+  checkedAt: number | null;
+};
+
+type ClaudeAccountsBlock = {
+  /** False when this computer cannot keep sign-ins apart (§5.3) — the whole
+   *  section then disappears rather than offering a switch that would lie. */
+  supported: boolean;
+  isolation: 'ok' | 'broken' | 'unknown' | string;
+  /** null = "the one sign-in this computer has", i.e. unchanged behaviour. */
+  activeId: string | null;
+  accounts: ClaudeAccountRow[];
+};
+
 type NabyEngineState = {
   engine: { ok: boolean; id?: string; costBasis?: string; summary: string };
   settings: { enginePreference?: string; selectedProvider?: string };
@@ -803,6 +826,9 @@ type NabyEngineState = {
   /** The LOCAL Claude sign-in the Claude (subscription) engine answers on. Absent
    *  from an older server, which reads as "nothing to say" rather than a crash. */
   claudeLogin?: ClaudeLoginBlock;
+  /** The accounts to choose between. Absent from an older server — the section
+   *  then does not render, which is the same as having one account. */
+  claudeAccounts?: ClaudeAccountsBlock;
   providers: { id: string; label: string; model: string; ready: boolean }[];
   mcp: McpRow[];
   /** Every built-in System MCP preset's connection state, keyed by preset name.
@@ -834,6 +860,9 @@ async function nabyGet(recheckLogin = false): Promise<NabyEngineState | null> {
 type NabyPostResult = {
   ok: boolean;
   error?: string;
+  /** `claude-account.add`: the id of the account just created, which the caller
+   *  polls `claude-account.verify` with until the browser sign-in lands. */
+  accountId?: string;
   /** An i18n key the server offers for a refusal it knows how to phrase (a
    *  missing preset field, a bad email, a missing uvx). Preferred over `error`,
    *  which stays the English truth for logs. */
@@ -1024,6 +1053,215 @@ function ClaudeCliMissingCard({
   );
 }
 
+// ---------------------------------------------------------------------------
+// More than one Claude subscription (claude-multi-account §5)
+// ---------------------------------------------------------------------------
+//
+// WHY HERE. Which subscription answers is a property of the Claude (subscription)
+// choice above, so it sits directly under it — the one place the user is already
+// deciding what answers. It is not a new screen and not a new design language:
+// the rows are the same bordered, brand-highlighted buttons the provider choice
+// uses, because they are the same kind of choice.
+//
+// WHAT CROSSES THE WIRE. Ids and labels. The config directory each account lives
+// in is never sent (§5.6): if a path were on screen there would soon be an
+// endpoint that takes one back, and that endpoint is arbitrary path injection.
+//
+// WHAT THIS DOES NOT DO. It never switches accounts on its own — not on a rate
+// limit, not on a failure (§2.4). Every switch is this button, pressed by a
+// person.
+
+/** How the post-add poll waits for a browser sign-in to land: the same cadence
+ *  and ceiling as the chat chip's login poll, so the two behave alike. */
+const ACCOUNT_POLL_MS = 2_000;
+const ACCOUNT_POLL_MAX = 30;
+
+function ClaudeAccountsCard({
+  block,
+  onChanged,
+}: {
+  block: ClaudeAccountsBlock;
+  /** Re-read /api/naby. Called after every mutation rather than patching local
+   *  state, so this card can never disagree with the server about which account
+   *  is active — the one fact a wrong answer here would make expensive. */
+  onChanged: () => Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** The account whose browser sign-in we are waiting on, if any. */
+  const [waitingId, setWaitingId] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // A poll that outlives the screen is a poll that fires into an unmounted tree.
+  useEffect(
+    () => () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    },
+    [],
+  );
+
+  /** Ask the server who is in this account's namespace now, until it says
+   *  someone. The browser flow takes as long as the human takes, so this is a
+   *  bounded poll rather than a wait. */
+  const pollVerify = useCallback(
+    (accountId: string, tries: number) => {
+      pollRef.current = setTimeout(() => {
+        void (async () => {
+          const res = await nabyPost({ action: 'claude-account.verify', accountId });
+          await onChanged();
+          if (!res.ok || tries + 1 >= ACCOUNT_POLL_MAX) {
+            setWaitingId(null);
+            return;
+          }
+          // `onChanged` refreshed the list; the card re-renders from it. Stop as
+          // soon as the row reports an identity — the parent's next render passes
+          // a block where this id is signed in.
+          pollVerify(accountId, tries + 1);
+        })();
+      }, ACCOUNT_POLL_MS);
+    },
+    [onChanged],
+  );
+
+  // The polled account has landed: stop asking.
+  useEffect(() => {
+    if (!waitingId) return;
+    const row = block.accounts.find((a) => a.id === waitingId);
+    if (row && row.status === 'signed-in') {
+      if (pollRef.current) clearTimeout(pollRef.current);
+      setWaitingId(null);
+    }
+  }, [block.accounts, waitingId]);
+
+  const run = useCallback(
+    async (body: Record<string, unknown>) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await nabyPost(body);
+        if (!res.ok) {
+          // A refusal the server knows how to phrase (a switch during a turn, a
+          // machine that cannot keep sign-ins apart) travels as a key so it can be
+          // read in the user's own language; anything else falls back to the
+          // English truth rather than being swallowed.
+          setError(res.errorKey ? t(res.errorKey) : (res.error ?? null));
+          await onChanged();
+          return null;
+        }
+        await onChanged();
+        return res;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onChanged, t],
+  );
+
+  const add = useCallback(async () => {
+    const res = await run({ action: 'claude-account.add' });
+    if (res?.accountId) {
+      setWaitingId(res.accountId);
+      pollVerify(res.accountId, 0);
+    }
+  }, [pollVerify, run]);
+
+  /** The label for one row. The email when the CLI has reported one; otherwise a
+   *  neutral placeholder — NEVER the id, which means nothing to a reader, and
+   *  never a folder name. */
+  const rowLabel = (a: ClaudeAccountRow): string =>
+    a.email ?? (a.id === waitingId ? t('claudeAccounts.waiting') : t('claudeAccounts.notSignedIn'));
+
+  const rowHint = (a: ClaudeAccountRow): string => {
+    const parts = [a.orgName, a.subscriptionType].filter(Boolean) as string[];
+    if (a.status !== 'signed-in') parts.push(t('claudeAccounts.signInNeeded'));
+    return parts.join(' · ');
+  };
+
+  return (
+    <div className="space-y-1.5" data-testid="claude-accounts">
+      <p className="text-xs font-medium text-foreground">{t('claudeAccounts.title')}</p>
+      <p className="text-xs text-muted-foreground">{t('claudeAccounts.body')}</p>
+
+      <div className="space-y-1">
+        {/* The machine's own sign-in, always first and always selectable: it is
+            what every install had before this feature and the way back to it. */}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void run({ action: 'claude-account.select', accountId: '' })}
+          data-testid="claude-account-default"
+          className={`w-full text-left px-2 py-1.5 rounded border transition-colors ${
+            block.activeId === null
+              ? 'border-brand bg-brand/5'
+              : 'border-border hover:border-brand/50 hover:bg-accent/40'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-foreground">{t('claudeAccounts.machineDefault')}</span>
+            {block.activeId === null && (
+              <span className="text-xs text-brand">{t('providerSetup.selected')}</span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">{t('claudeAccounts.machineDefaultHint')}</p>
+        </button>
+
+        {block.accounts.map((a) => (
+          <div
+            key={a.id}
+            className={`flex items-center gap-1 rounded border transition-colors ${
+              block.activeId === a.id
+                ? 'border-brand bg-brand/5'
+                : 'border-border hover:border-brand/50'
+            }`}
+            data-testid={`claude-account-row-${a.id}`}
+          >
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run({ action: 'claude-account.select', accountId: a.id })}
+              className="flex-1 text-left px-2 py-1.5"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-foreground">{rowLabel(a)}</span>
+                {block.activeId === a.id && (
+                  <span className="text-xs text-brand">{t('providerSetup.selected')}</span>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">{rowHint(a)}</p>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void run({ action: 'claude-account.remove', accountId: a.id })}
+              className="shrink-0 px-2 py-1 mr-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+              data-testid={`claude-account-remove-${a.id}`}
+            >
+              {t('claudeAccounts.remove')}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        disabled={busy || waitingId !== null}
+        onClick={() => void add()}
+        className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+        data-testid="claude-account-add"
+      >
+        {waitingId ? t('claudeAccounts.waiting') : t('claudeAccounts.add')}
+      </button>
+
+      {error && (
+        <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="claude-account-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function NabyEngineSelector({
   isOpen,
   /** Bump to re-read /api/naby. The parent raises it when a KEY IS SAVED OR
@@ -1173,6 +1411,17 @@ export function NabyEngineSelector({
           rechecking={recheckingCli}
         />
       )}
+      {/* WHICH Claude subscription answers, when the user keeps more than one.
+          Shown only where it can be true: the dev engine must exist in this
+          build, a `claude` executable must be on the machine to sign in with, and
+          the server must not have PROVEN that this computer keeps sign-ins in one
+          shared place (§5.3 — `supported:false`). Any of those missing and the
+          section is absent, which is exactly the single-account app. */}
+      {state.devEngineAvailable &&
+        state.claudeLogin?.cliFound &&
+        state.claudeAccounts?.supported && (
+          <ClaudeAccountsCard block={state.claudeAccounts} onChanged={reload} />
+        )}
       {/* The runtime's own sentence about what will actually happen — kept as
           the single source of truth rather than re-derived in the UI. */}
       <p className={`text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-amber-500'}`}>

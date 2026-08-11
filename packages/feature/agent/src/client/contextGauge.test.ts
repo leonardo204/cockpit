@@ -2,9 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   contextGauge,
   formatGaugePercent,
+  formatRateLimitPercent,
   formatTokensShort,
   gaugeToneClass,
   modelFamily,
+  rateLimitResetsAtMs,
+  rateLimitUtilizationPercent,
   GAUGE_CRITICAL_RATIO,
   GAUGE_WARN_RATIO,
 } from './contextGauge';
@@ -206,5 +209,94 @@ describe('contextGauge', () => {
     expect(gaugeToneClass('neutral')).toBe('text-muted-foreground');
     expect(gaugeToneClass('warn')).toBe('text-yellow-500');
     expect(gaugeToneClass('critical')).toBe('text-red-500');
+  });
+});
+
+/**
+ * THE SUBSCRIPTION LIMIT'S TWO NORMALIZATIONS (specs/claude-multi-account.md
+ * §4.4, §8).
+ *
+ * Both were inline in `TokenUsageBar` — the percentage in four separate places,
+ * the seconds/milliseconds guess in one — and both encode an assumption about a
+ * number the vendor does not document. They live here now for the reason the
+ * gauge does: an assumption that is written once can be corrected once.
+ *
+ * What is asserted is the pair of rules that keep a wrong number off the screen:
+ * a missing reading renders NOTHING (never a zero), and a reading in the wrong
+ * unit renders the right instant anyway.
+ */
+describe('rateLimitUtilizationPercent', () => {
+  it('reads the value as a 0..1 fraction — the assumption, stated once', () => {
+    // ⚠️ UNVERIFIED. `utilization` has never actually been observed arriving, and
+    // the SDK types it as a bare `number` with no documented range. If a real
+    // reading ever proves it is already 0..100, THIS is the line that changes and
+    // the four former call sites in the bar are correct by construction.
+    expect(rateLimitUtilizationPercent(0.83)).toBe(83);
+    expect(rateLimitUtilizationPercent(1)).toBe(100);
+  });
+
+  it('renders nothing at all when there is no reading', () => {
+    // Spec §2-3: a limit is something the backend gives us or does not. The
+    // observed event carried no `utilization` key at all, which is the COMMON
+    // case, so this branch is the one that runs in production today.
+    expect(rateLimitUtilizationPercent(undefined)).toBeNull();
+    expect(rateLimitUtilizationPercent(null)).toBeNull();
+    expect(formatRateLimitPercent(undefined)).toBeNull();
+  });
+
+  it('distinguishes a zero READING from an absent one', () => {
+    // A freshly reset window really is at 0%, and `0` is falsy — folding it in
+    // with absence would hide a legitimate reading. Hence null, not a number.
+    expect(rateLimitUtilizationPercent(0)).toBe(0);
+    // And the formatted form stays truthy, so the bar's `utilizationPercent &&`
+    // guards still render it.
+    expect(formatRateLimitPercent(0)).toBe('0%');
+  });
+
+  it('refuses a value that is not a number', () => {
+    // `NaN%` on screen is worse than no chip.
+    expect(rateLimitUtilizationPercent(Number.NaN)).toBeNull();
+    expect(rateLimitUtilizationPercent(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+
+  it('formats what the chip prints', () => {
+    expect(formatRateLimitPercent(0.83)).toBe('83%');
+    expect(formatRateLimitPercent(0.005)).toBe('1%');
+  });
+});
+
+describe('rateLimitResetsAtMs — the unit contract', () => {
+  /** The reading actually observed from a live subscription. The runtime contract
+   *  declares this field in UNIX SECONDS and the shell adapter passes it across
+   *  unconverted; this is the number that arrives. */
+  const OBSERVED_RESETS_AT = 1_786_426_200;
+
+  it('reads the contract unit — seconds — as the instant it names', () => {
+    const ms = rateLimitResetsAtMs(OBSERVED_RESETS_AT);
+    expect(ms).toBe(1_786_426_200_000);
+    // The whole point of pinning the unit: this is a real moment in 2026, not
+    // 1970 (seconds read as ms) and not the year 58,000 (ms read as seconds).
+    expect(new Date(ms as number).toISOString()).toBe('2026-08-11T05:30:00.000Z');
+  });
+
+  it('produces a countdown of hours, not of geological ages', () => {
+    // The failure this guards is not an exception, it is a confident wrong
+    // number: the bar divides the difference by 60000 and prints hours.
+    const now = Date.UTC(2026, 7, 11, 2, 30, 0); // three hours before the reset
+    const diffHours = ((rateLimitResetsAtMs(OBSERVED_RESETS_AT) as number) - now) / 3_600_000;
+    expect(diffHours).toBe(3);
+  });
+
+  it('still lands on the right instant if a value ever arrives in milliseconds', () => {
+    // The contract says seconds; the guard means a violation of it degrades to
+    // the correct answer rather than to a wrong one.
+    expect(rateLimitResetsAtMs(1_786_426_200_000)).toBe(1_786_426_200_000);
+  });
+
+  it('renders no countdown when there is no reset', () => {
+    // The observed event omits `resetsAt` on some readings. Absent is not "now".
+    expect(rateLimitResetsAtMs(undefined)).toBeNull();
+    expect(rateLimitResetsAtMs(0)).toBeNull();
+    expect(rateLimitResetsAtMs(Number.NaN)).toBeNull();
   });
 });

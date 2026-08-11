@@ -710,6 +710,19 @@
     "recheck": "다시 확인",
     "rechecking": "확인 중…"
   },
+  "claudeAccounts": {
+    "title": "Claude 계정",
+    "body": "Claude 구독을 여러 개 두고 어느 계정이 답할지 고를 수 있습니다. 로그인은 계정마다 따로 둔 폴더에서 Claude Code가 처리하며, naby는 로그인 정보를 읽거나 저장하지 않습니다. 터미널의 `claude` 명령은 영향을 받지 않습니다.",
+    "machineDefault": "이 컴퓨터의 로그인",
+    "machineDefaultHint": "이 컴퓨터에 이미 있는 Claude Code 로그인입니다.",
+    "add": "계정 추가",
+    "waiting": "브라우저 로그인을 기다리는 중…",
+    "remove": "삭제",
+    "notSignedIn": "아직 로그인하지 않음",
+    "signInNeeded": "로그인이 끝나지 않음",
+    "busy": "아직 답변이 작성 중입니다. 끝난 뒤에 계정을 바꿔 주세요.",
+    "notIsolated": "이 컴퓨터는 Claude 로그인을 한곳에만 보관하므로 계정을 더 추가해도 같은 계정이 됩니다. 여기서는 여러 계정을 쓸 수 없습니다."
+  },
   "engineSwitcher": {
     "title": "어떤 모델이 응답할지",
     "automatic": "자동",
