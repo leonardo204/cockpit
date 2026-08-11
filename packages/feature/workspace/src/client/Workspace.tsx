@@ -21,6 +21,7 @@ import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
 import { APP_TITLE, appTitleForCwd } from '@cockpit/shared-utils';
 import { useEffectQuery } from '@cockpit/effect-react';
+import { useSessionDoneNotifications } from './useSessionDoneNotifications';
 import {
   fetchProjects,
   saveProjects as saveProjectsEffect,
@@ -116,6 +117,26 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const projectSessionIdsRef = useRef<Map<string, string>>(new Map());
   // Project index saved before screenshot; restored when screenshot completes
   const preScreenshotIndexRef = useRef<number | null>(null);
+
+  // ── "It finished" reaches the desktop, not just the sidebar ──────────────
+  //
+  // naby can now finish work AFTER the turn that started it (a background job
+  // runs on, and its ending dispatches a follow-up turn so naby can report). The
+  // user, by then, is in another app — which is why they backgrounded it. The
+  // `unread` edge on /ws/global-state is the signal that a run ended, and this
+  // turns it into one OS banner unless the user is already looking at that very
+  // session. Everything it decides is in `sessionDoneNotify.ts`, which is
+  // testable; in a plain browser the desktop bridge is absent and nothing fires.
+  //
+  // The visible session is read through a GETTER because it lives in a ref: it
+  // arrives by postMessage from the project iframe and deliberately does not
+  // re-render the workspace, so a captured value would go stale.
+  useSessionDoneNotifications({
+    getVisibleSessionId: () => {
+      const cwd = projects[activeIndex]?.cwd;
+      return cwd ? projectSessionIdsRef.current.get(cwd) : undefined;
+    },
+  });
 
   // useEffectQuery interrupts the Fiber on unmount (equivalent to AbortController) and
   // funnels all errors into AppError.

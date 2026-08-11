@@ -175,6 +175,7 @@ import { readPersonaAutonomy } from '../lib/personaAutonomy';
 import { stageInstruction } from '../lib/stageTurn';
 import { fastGrowthInstruction } from '../lib/fastGrowth';
 import { handoffInstruction } from '../lib/sessionHandoff';
+import { JOB_REPORT_SOURCE, makeJobSink } from '../lib/backgroundJobReport';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -931,6 +932,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // produces a turn that keeps trying and keeps being refused, which reads
         // as the assistant being broken rather than as the setting working (the
         // same reasoning as plan mode and the workspace tools above).
+        //
+        // THE JOB SINK is what makes "돌려놓고 끝나면 알려줄게" true, and it is
+        // injected HERE — beside the MCP, memory, check-in and delegation sinks —
+        // because background jobs are a naby-layer capability, not a stand-in for
+        // a provider that cannot run a shell. `naby_start_job` returns a job id at
+        // once and the child keeps going after this turn ends; the runtime hears it
+        // exit and hands the ending to this sink, which starts ONE ordinary turn in
+        // THIS session so naby can read the log and report. Without a sink the job
+        // would still run — the runtime says so in the tool result — but nobody
+        // would be woken, so the tool tells the model not to promise a follow-up.
+        //
+        // The sink is bound to the SESSION, not to the turn: the job outlives the
+        // turn by design, and the conversation is where the report belongs.
+        //
+        // A project directory is required, exactly as for the workspace tools: a
+        // job has to run somewhere, and the runtime never guesses a cwd. With no
+        // project open the three job tools are absent rather than present and
+        // unusable. Plan mode does NOT remove them — reporting on work already
+        // started is something a read-only turn should still do — but the gate
+        // floor below denies `naby_start_job` there, so plan mode cannot start
+        // work by calling it a job.
         const builtin = buildToolset(
           outbox,
           store,
@@ -945,6 +967,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             : undefined,
           checkinSink,
           delegationSink,
+          projectCwd ? { cwd: projectCwd, sink: makeJobSink(), sessionId } : undefined,
         );
 
         // ---- MCP tools (F1-08) -------------------------------------------
@@ -994,6 +1017,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // schema list: a tool the model can see but never use produces a turn
         // that keeps trying and keeps being refused, which reads as the assistant
         // being broken rather than as the mode working.
+        //
+        // BACKGROUND JOBS ARE NOT HERE. They were, once, as `run_command`'s
+        // `background` flag — which meant dev-claude, the engine this whole
+        // toolset is withheld from, had no background jobs at all. They are naby's
+        // own capability and are injected into `buildToolset` above.
         const workspace =
           projectCwd && engineId !== 'dev-claude'
             ? buildWorkspaceTools({
@@ -1078,8 +1106,21 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // question — and the end-of-turn report — out over Telegram. Only a routed
         // agent can opt in, so an ordinary turn is byte-for-byte unchanged (no
         // config read, no send).
+        //
+        // ONE MORE TURN GETS THE PERSONA'S CHANNEL: the background-job report.
+        //
+        // That turn is naby speaking on its OWN initiative, after the user's turn
+        // ended — nobody typed its prompt and nobody is necessarily in front of
+        // the app. It carries no `@name` (the address would be a lie about who
+        // asked), so without this line it would fall to 'inline' and the one
+        // message that exists BECAUSE the user walked away would stop at the
+        // screen they walked away from. Reading the persona's own setting is not
+        // a widening: if they chose 'inline', this is inline too.
+        const jobReportTurn = ctx.params.source === JOB_REPORT_SOURCE;
         const escalation =
-          personaDelegation?.escalation ?? routedAgent?.autonomy.escalation ?? 'inline';
+          personaDelegation?.escalation ??
+          routedAgent?.autonomy.escalation ??
+          (jobReportTurn ? readPersonaAutonomy(store).escalation : 'inline');
         const escalateToTelegram = escalation === 'telegram' || escalation === 'both';
         // A routed agent limited to `toolRefs` may call ONLY those tools; the gate
         // denies anything else (an allowlist, engine-independent). No toolRefs =
