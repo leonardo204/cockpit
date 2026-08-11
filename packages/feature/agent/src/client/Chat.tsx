@@ -19,6 +19,8 @@ import { FILE_REF_MIME, insertFileRef, osFilePath, quotePath } from './fileRefBu
 import { ToolApprovalPrompt } from './ToolApprovalPrompt';
 import { CheckinPrompt } from './CheckinPrompt';
 import { ContextLimitBanner } from './ContextLimitBanner';
+import { RunFailureNotice } from './RunFailureNotice';
+import { runFailureReducer, type RunFailure, type RunFailureEvent } from './runFailure';
 import { contextGauge } from './contextGauge';
 import { ChatInput } from './ChatInput';
 import { buildComposerHistory, sameComposerHistory } from './composerHistory';
@@ -196,6 +198,54 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     }),
     [actingAgent, engineBrand, t],
   );
+  // — THE LAST RUN'S FAILURE, HELD OUTSIDE THE TRANSCRIPT ————————————————
+  //
+  // A turn that fails says so in a `{type:'error'}` stream event, which is
+  // rendered into the assistant bubble and then wiped moments later by
+  // `onRunComplete → reconcileFromDiskRef` — the re-sync to disk, where an error
+  // never gets written (RuntimeMessage has no system role, deliberately). That
+  // is the reported "the answer appears and instantly disappears": there was no
+  // answer, only an error, erased by the reconcile.
+  //
+  // So it is kept HERE, as one record about the last run rather than as a
+  // message. The reconcile rewrites `messages`; it cannot touch this. The rules
+  // for what ends it (the next send, another session, a dismiss — never a
+  // reconcile) live in runFailure.ts and are tested there.
+  const [runFailure, setRunFailure] = useState<RunFailure | null>(null);
+  const dispatchRunFailure = useCallback(
+    (ev: RunFailureEvent) => setRunFailure((prev) => runFailureReducer(prev, ev)),
+    [],
+  );
+  // WHO was asked, read at failure time. A ref, not deps: this is a snapshot for
+  // one report, and threading engine/model/session through useChatStream's
+  // callbacks would churn a stable useCallback on every streamed chunk.
+  const failureContextRef = useRef<{ engine: string; model: string; sessionId: string | null }>({
+    engine: '',
+    model: '',
+    sessionId: null,
+  });
+  // `null` is the SEND edge (useChatStream reports it at the start of every
+  // send, the one place every send path passes through); text is a failure.
+  const handleRunError = useCallback(
+    (message: string | null) => {
+      if (message === null) {
+        dispatchRunFailure({ type: 'send' });
+        return;
+      }
+      const ctx = failureContextRef.current;
+      dispatchRunFailure({
+        type: 'run-failed',
+        message,
+        ...(ctx.engine ? { engine: ctx.engine } : {}),
+        ...(ctx.model ? { model: ctx.model } : {}),
+        sessionId: ctx.sessionId,
+        at: Date.now(),
+      });
+    },
+    [dispatchRunFailure],
+  );
+  const dismissRunFailure = useCallback(() => dispatchRunFailure({ type: 'dismiss' }), [dispatchRunFailure]);
+
   // Plan mode (per-tab): controlled by TabInfo.planMode (persisted); falls back to
   // local state when no prop (standalone use). Read-only exploration that produces a
   // plan without editing — only meaningful on a claude engine.
@@ -280,6 +330,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onRunComplete: () => reconcileFromDiskRef.current?.(),
     onEngineModel: setLiveModel,
     onActingAgent: handleActingAgent,
+    onRunError: handleRunError,
     getModel,
   });
 
@@ -376,6 +427,26 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // global-state broadcast — decides whether a run is live. This is what lets a refreshed
   // originator (or any tab) reliably resume an in-flight run.
   const liveViewerEnabled = isActive && !isLoading && !!liveSessionId;
+  // WHICH SESSION A FAILURE BELONGS TO — resolved here, where `liveSessionId` is,
+  // so the record and the "did the session change?" check read the same id.
+  // Assigned during render (not in an effect): the callbacks that read it always
+  // run after a render, and an effect would leave the first failure of a freshly
+  // loaded session tagged with a stale id.
+  failureContextRef.current = {
+    // The engine brand and the model that ACTUALLY answered (the resolved
+    // `liveModel` from this turn's system/init), falling back to the model the
+    // user picked. No "Default" placeholder: naming a model we did not resolve
+    // would point the user at the wrong settings page.
+    engine: engineBrand,
+    model: liveModel || selectedModelRef.current || '',
+    sessionId: liveSessionId ?? null,
+  };
+  // Another session is on screen now → the previous one's failure is not about
+  // what the user is reading. (Same-session re-reports are a no-op by identity.)
+  useEffect(() => {
+    dispatchRunFailure({ type: 'session', sessionId: liveSessionId ?? null });
+  }, [liveSessionId, dispatchRunFailure]);
+
   useLiveStream(liveSessionId, setMessages, liveViewerEnabled, engine, {
     // Update the ref synchronously (not just via the effect on liveRunning) so the initial
     // history load, resolving moments later, reliably sees that the live stream owns this run.
@@ -384,7 +455,14 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
       // Turn finished → reconcile from disk (replaces temp `live-…` bubbles with canonical
       // real-uuid messages).
       if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true);
+      // …and that reconcile does NOT clear the failure notice. Stated as an
+      // event rather than left implicit, so the invariant is executable.
+      dispatchRunFailure({ type: 'history-reconciled' });
     },
+    // A turn this tab merely WATCHED can fail too (a Telegram message, a
+    // scheduled task); it reconciles from disk the same way, so it needs the
+    // same out-of-transcript copy.
+    onRunError: handleRunError,
   });
   // When not viewing live, clear the running flag.
   useEffect(() => {
@@ -416,8 +494,14 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   useEffect(() => {
     reconcileFromDiskRef.current = () => {
       if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true);
+      // THE LINE THIS WHOLE FIX IS ABOUT. This reconcile is what used to erase
+      // the failed turn's error — it rewrites `messages` from disk, and the
+      // error is not on disk. The notice lives outside `messages`, and passing
+      // the reconcile through the reducer (which returns the state untouched)
+      // says so in code instead of relying on nobody noticing.
+      dispatchRunFailure({ type: 'history-reconciled' });
     };
-  }, [initialCwd, liveSessionId, loadHistoryByCwdAndSessionId]);
+  }, [initialCwd, liveSessionId, loadHistoryByCwdAndSessionId, dispatchRunFailure]);
 
   // Incrementally fetch messages when becoming active (handles external writes like scheduled tasks)
   // With limit to fetch only the last N rounds + fingerprint check + time throttle (inside useChatHistory)
@@ -719,6 +803,14 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           />
         )}
         </div>
+
+        {/* WHY THE LAST TURN PRODUCED NOTHING. Rendered here — a sibling of the
+            transcript, not a row inside it — because that is what makes it
+            outlive the post-run disk reconcile that erases everything not
+            persisted. It carries the provider's own words (a quota reply says
+            which model, which limit and for how long), and the next send
+            clears it. */}
+        <RunFailureNotice failure={runFailure} onDismiss={dismissRunFailure} />
 
         {/* Token Usage Display */}
         {tokenUsage && <TokenUsageBar tokenUsage={tokenUsage} rateLimitInfo={rateLimitInfo} />}

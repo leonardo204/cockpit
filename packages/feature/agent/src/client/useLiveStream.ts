@@ -27,7 +27,15 @@ export function useLiveStream(
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
   enabled: boolean,
   engine?: ChatEngine,
-  opts?: { onRunningChange?: (running: boolean) => void; onComplete?: () => void }
+  opts?: {
+    onRunningChange?: (running: boolean) => void;
+    onComplete?: () => void;
+    /** The viewed run FAILED, with the engine's verbatim text. Reported for the
+     *  same reason the originator reports it (useChatStream.onRunError): this
+     *  hook's `onComplete` reconciles from disk, and an error is not on disk, so
+     *  the bubble copy applyStreamEvent draws is erased seconds later. */
+    onRunError?: (message: string) => void;
+  }
 ): void {
   const curAssistantId = useRef<string | null>(null);
   const seq = useRef(0);
@@ -127,6 +135,10 @@ export function useLiveStream(
       });
       return;
     }
+    // A failed turn, viewed rather than sent. Reported up AND still rendered into
+    // the bubble below (no `return`): the bubble copy is the in-turn rendering,
+    // the report is the copy that outlives the reconcile.
+    if (ev.type === 'error' && ev.error) opts?.onRunError?.(ev.error);
     // A result ends the active turn — after it, an incoming task_notification is a background one.
     if (ev.type === 'result') turnActive.current = false;
     // content events need a current bubble (init normally comes first; be safe)

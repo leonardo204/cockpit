@@ -618,6 +618,12 @@
     "requestFailed": "Request failed",
     "cannotReadStream": "Cannot read response stream",
     "errorRetry": "An error occurred, please retry",
+    "runFailedTitle": "This turn failed",
+    "runFailedOn": "on {{origin}}",
+    "runFailedDetails": "Details",
+    "runFailedHide": "Hide details",
+    "runFailedDismiss": "Dismiss",
+    "runFailedHint": "This is what the provider replied, unedited. Your next message clears it.",
     "placeholder": "Type a message, Enter to send (Shift+Enter for new line, paste images; start a line with / (main session) or @ (subagent) for commands, multiple allowed)",
     "placeholderDisabled": "Generating... you can keep typing (ESC to cancel; if stuck, cancel and resend 'continue')",
     "imageSizeLimit": "Image is too large to load (max 25MB), current: {{size}}MB",
@@ -1882,7 +1888,7 @@
     "file": "file",
     "folder": "folder",
     "historyGroup": "Your messages in this session",
-    "historyHint": "Enter fills · Esc closes"
+    "historyHint": "↑↓ move · Enter fills · Esc closes"
   },
   "growth": {
     "stage": {

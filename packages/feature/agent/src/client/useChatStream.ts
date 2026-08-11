@@ -64,6 +64,22 @@ interface UseChatStreamOptions {
    */
   onActingAgent?: (agent: ActingAgent | null) => void;
   /**
+   * THIS RUN FAILED, and what the engine/provider said about it — reported as a
+   * RUN-LEVEL artifact rather than as a message.
+   *
+   * An error is never persisted (`RuntimeMessage` has no system role, by
+   * design), so anything about it that lives in `messages` is erased moments
+   * later by the post-run `onRunComplete` reconcile. That is the "the answer
+   * appeared and instantly disappeared" report: it was the error, wiped by the
+   * re-sync. The host keeps what arrives here outside the transcript, where the
+   * reconcile cannot reach it (see runFailure.ts).
+   *
+   * Fires with the provider's verbatim text on failure, and with `null` at the
+   * START of every send — every send path goes through handleSend, so that is
+   * the one place "a new question supersedes the failed one" can be stated once.
+   */
+  onRunError?: (message: string | null) => void;
+  /**
    * The model the user picked in the bottom-bar ModelSwitcher for the active
    * engine, read fresh at send time. Returns '' (or undefined) when no override
    * is chosen → the turn omits `model` and the engine's own default answers.
@@ -94,7 +110,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, onActingAgent, getModel }: UseChatStreamOptions
+  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, onActingAgent, onRunError, getModel }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -123,6 +139,10 @@ export function useChatStream(
   // The acting agent rides the same event and the same indirection.
   const onActingAgentRef = useRef(onActingAgent);
   onActingAgentRef.current = onActingAgent;
+  // Same indirection for the run-failure report: handleStreamEvent and handleSend
+  // are stable useCallbacks, and the host hands a fresh closure every render.
+  const onRunErrorRef = useRef(onRunError);
+  onRunErrorRef.current = onRunError;
   // Same indirection for the model getter: read the CURRENT pick at send time
   // without listing it in handleSend's deps (a switch mid-session must not
   // re-create the send closure, and the ModelSwitcher may hand a fresh getter).
@@ -368,6 +388,11 @@ export function useChatStream(
     if (eventType === 'error') {
       const errText = (event.error as string) || i18n.t('chat.errorRetry', { defaultValue: 'An error occurred. Please try again.' });
       setApiRetryInfo(null);
+      // OUT OF THE TRANSCRIPT AS WELL AS INTO IT. The bubble copy below is the
+      // in-turn rendering and is correct while the turn is on screen, but it
+      // cannot survive `onRunComplete → reconcile` — the error is not on disk
+      // and re-syncing to disk removes it. This report is the copy that lasts.
+      onRunErrorRef.current?.(errText);
       // Flush any buffered text first so the error appears after streamed content.
       if (streamFlushTimerRef.current) {
         clearTimeout(streamFlushTimerRef.current);
@@ -615,6 +640,11 @@ export function useChatStream(
       setIsLoading(true);
       // Fresh send: clear a stale retry notice from a previous turn
       setApiRetryInfo(null);
+      // …and the previous run's failure notice. A new question supersedes the
+      // one that failed, and every send path (composer, plan-card resend,
+      // ChatContext injection) reaches this line — which is why the rule lives
+      // here rather than in each caller.
+      onRunErrorRef.current?.(null);
 
       // Create assistant message placeholder
       const assistantMessageId = `assistant-${Date.now()}`;
@@ -677,6 +707,9 @@ export function useChatStream(
         if (wsWatchdogRef.current) clearTimeout(wsWatchdogRef.current);
         wsWatchdogRef.current = setTimeout(() => {
           if (activeRunRef.current && !wsAliveRef.current) {
+            onRunErrorRef.current?.(
+              i18n.t('chat.errorRetry', { defaultValue: 'An error occurred. Please try again.' })
+            );
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMessageId && !m.content
@@ -692,6 +725,7 @@ export function useChatStream(
         // (Once the run has started, completion/stop/errors all arrive over the ws stream.)
         console.error('Chat error:', error);
         const errorMsg = error instanceof Error ? error.message : i18n.t('chat.errorRetry', { defaultValue: 'An error occurred. Please try again.' });
+        onRunErrorRef.current?.(errorMsg);
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMessageId
