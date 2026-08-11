@@ -40,4 +40,20 @@ describe('test isolation — the suite writes to a throwaway store', () => {
     // not writing to it, which is the very thing to avoid.
     expect(storeDbPath()).not.toBe(realDb);
   });
+
+  // Skipped on Windows, where the pin is deliberately not set: executability
+  // lives in the extension there, so an extension-less script would resolve as
+  // "found" and then fail to spawn.
+  it.skipIf(process.platform === 'win32')('cannot spawn the developer\'s real `claude`', () => {
+    // The temp home stops the suite WRITING into ~/.naby. It does not stop it
+    // spawning something that writes there itself: `claude auth login` creates a
+    // config directory and opens a browser. `vitest.setup.ts` pins a fake, and
+    // this asserts the pin took — same reasoning as the store assertions above,
+    // for the failure with the worse blast radius.
+    const bin = process.env.NABY_CLAUDE_BIN;
+    expect(bin).toBeTruthy();
+    expect(bin!.startsWith(tmpdir())).toBe(true);
+    expect(bin!.startsWith(join(homedir(), '.naby'))).toBe(false);
+    expect(bin!.startsWith(join(homedir(), '.local'))).toBe(false);
+  });
 });

@@ -18,8 +18,11 @@ import { CLAUDE_ACCOUNTS_DIR_NAME } from '../../../../../../../dist/naby-runtime
  *   * `vitest.setup.ts` points NABY_HOME at a throwaway directory, and the whole
  *     feature resolves its folders under the naby home — so every account folder
  *     these tests create lives there and dies with it.
- *   * every test that would run the CLI pins `NABY_CLAUDE_BIN` at a FAKE `claude`
- *     script. Nothing here spawns the real one, and nothing here opens a browser.
+ *   * `NABY_CLAUDE_BIN` points at a FAKE `claude` script — by default, from
+ *     `vitest.setup.ts`, and per-case here when a case needs a different one.
+ *     Nothing here spawns the real CLI, and nothing here opens a browser. The
+ *     default matters more than the per-case pins: a case added later that
+ *     forgets to pin one still cannot reach the developer's own `claude`.
  *
  * The runtime's own behaviour (the folder layout, the environment rule, the
  * removal ORDER) is covered by `npm run spike:claude-accounts`, which drives the
@@ -80,7 +83,12 @@ afterEach(() => {
   const store = getStore();
   store.setSetting(ISOLATION_KEY, '');
   store.setSetting(ACTIVE_KEY, '');
-  delete process.env.NABY_CLAUDE_BIN;
+  // RESTORE the suite-wide fake rather than deleting the variable. Deleting it
+  // used to drop every case after this one onto whatever `claude` the machine
+  // has, which is the real CLI on a developer's laptop.
+  const fallback = process.env.NABY_TEST_FAKE_CLAUDE_BIN;
+  if (fallback) process.env.NABY_CLAUDE_BIN = fallback;
+  else delete process.env.NABY_CLAUDE_BIN;
 });
 
 describe('GET /api/naby — the Claude account block', () => {
