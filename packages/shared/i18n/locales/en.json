@@ -629,7 +629,7 @@
     "runFailedHide": "Hide details",
     "runFailedDismiss": "Dismiss",
     "runFailedHint": "This is what the provider replied, unedited. Your next message clears it.",
-    "placeholder": "Type a message, Enter to send (Shift+Enter for new line, paste images; start a line with / (main session) or @ (subagent) for commands, multiple allowed)",
+    "placeholder": "Type a message, Enter to send (Shift+Enter for new line, paste images; start a line with / (main session) or @ (subagent) to run commands, multiple allowed — a /name mid-sentence brings that skill into this turn)",
     "placeholderDisabled": "Generating... you can keep typing (ESC to cancel; if stuck, cancel and resend 'continue')",
     "imageSizeLimit": "Image is too large to load (max 25MB), current: {{size}}MB",
     "attachImage": "Attach image",

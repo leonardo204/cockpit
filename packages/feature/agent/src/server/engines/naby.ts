@@ -179,6 +179,7 @@ import { stageInstruction } from '../lib/stageTurn';
 import { fastGrowthInstruction } from '../lib/fastGrowth';
 import { handoffInstruction } from '../lib/sessionHandoff';
 import { JOB_REPORT_SOURCE, makeJobSink } from '../lib/backgroundJobReport';
+import { namedHarnessRows } from '../../shared/slashTokens';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -1199,6 +1200,26 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // Leaving the `@name` in would send the model a handle it has no reason to
         // understand, and stripping the whole line would throw the request away.
         const turnText = addressedAgent ? addressed!.taskText : ctx.prompt ?? '';
+        // ---- the harness rows this turn NAMED --------------------------------
+        //
+        // "…자동 편집 툴에 대한 조사을 /plan-review 스킬로 해봐". A `/name` written
+        // INSIDE a sentence is a request for that row, and until now it was
+        // nothing at all: the dispatcher only ever looked at the head of a line,
+        // so the token reached the model as decoration and the skill it named was
+        // injected only if its triggers happened to fire anyway. These names are
+        // handed to the runtime below, which injects those rows whatever their
+        // triggers say and budgets them first.
+        //
+        // READ FROM `ctx.params.prompt`, NOT `ctx.prompt`. The latter has already
+        // been through `resolveCommandPrompt`, so it carries the BODIES of any
+        // line-led commands — and a command template that mentions `/foo` would
+        // then name a row the user never asked for. `ctx.params.prompt` is the
+        // text the user actually typed. `namedHarnessRows` drops line-led verbs
+        // for the same reason: those were expanded already, and counting them
+        // twice would inject the same body twice.
+        const namedRows = namedHarnessRows(
+          typeof ctx.params.prompt === 'string' ? ctx.params.prompt : '',
+        );
         // ---- how much this turn is allowed to do on its own ----------------
         //
         // Phase 3 P3-M9 (G1): FOR THE PERSONA, THAT IS THE USER'S SETTING, NOT THE
@@ -2227,13 +2248,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 userId: DEFAULT_USER_ID,
                 orgId: DEFAULT_ORG_ID,
                 availableTools,
+                // Named on EVERY step of an autonomous run, for the same reason
+                // `queryText` is: the user asked for this row for the work, and
+                // step 2's stored user message is the harness saying "carry on".
+                ...(namedRows.length > 0 ? { explicitNames: namedRows } : {}),
               },
               onSkillInjection: (injected) => {
                 if (injected.skills.length > 0 || injected.excludedForTools > 0) {
                   console.log(
                     `[engine:naby] skills: injected ${injected.skills.length}` +
                       `, excluded-for-tools ${injected.excludedForTools}` +
-                      `, dropped-for-budget ${injected.droppedForBudget}`,
+                      `, dropped-for-budget ${injected.droppedForBudget}` +
+                      (namedRows.length > 0 ? `, named ${JSON.stringify(namedRows)}` : ''),
                   );
                 }
               },

@@ -33,6 +33,7 @@ import {
   type DirEntry,
   type FileRow,
 } from './palette';
+import { findSlashQuery, slashInsertion } from '../shared/slashTokens';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
@@ -357,24 +358,20 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     };
   }, [reloadCommands]);
 
-  // The line containing the caret — commands are line-led, so autocomplete keys
-  // off the current line, not the whole (possibly multi-line) input.
-  const activeLine = useMemo(() => {
-    const lineStart = caret === 0 ? 0 : input.lastIndexOf('\n', caret - 1) + 1;
-    const nl = input.indexOf('\n', caret);
-    const lineEnd = nl === -1 ? input.length : nl;
-    return { text: input.slice(lineStart, lineEnd), start: lineStart, end: lineEnd };
-  }, [input, caret]);
-
-  // The command being typed on the active line: `/` followed by a partial verb
-  // with nothing after it yet (a trailing space starts the body and dismisses the
-  // menu). `/` ONLY — `@` belongs to the agent/file palette below, and letting one
+  // The `/…` being typed at the caret — ANYWHERE in the input, not only at the
+  // head of a line.
+  //
+  // THIS USED TO BE A LINE MATCH. The rule was "the caret's whole line is
+  // `/verb`", which meant a `/plan-review` written four words into a sentence
+  // offered no completion at all, while `@` had been mid-sentence-capable since
+  // file mentions landed. Both markers now ask the same question, in the same
+  // shape, from one shared module: start-of-input-or-after-whitespace, then verb
+  // characters. That anchor is what keeps `src/foo`, `https://a/b` and `08/12`
+  // from ever opening a palette — see shared/slashTokens.ts.
+  //
+  // `/` ONLY — `@` belongs to the agent/file palette below, and letting one
   // marker mean both is what produced the `@plan` bug.
-  const commandQuery = useMemo(() => {
-    // Verb char class kept in sync with the server (slashCommands' COMMAND_LINE_RE).
-    const m = activeLine.text.match(/^\s*(\/)([a-zA-Z0-9-]*)$/);
-    return m ? { marker: m[1], verb: m[2].toLowerCase() } : null;
-  }, [activeLine.text]);
+  const commandQuery = useMemo(() => findSlashQuery(input, caret), [input, caret]);
 
   // Reload WHEN THE PALETTE OPENS, and with `fresh` (server bypasses its scan
   // throttle). The mount/focus/HarnessChanged reloads above miss exactly one
@@ -549,18 +546,24 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     // routes at every stage and narrows what the agent may DO by its stage
     // (fast-evolution §3.1). The badge below still shows the stage, so the row
     // says what it will get.
-    // A FILE MENTION replaces only its own `@…` span. Replacing the line (what a
-    // command does) would delete the sentence around it, and mentions are normally
-    // written mid-sentence. A folder inserts a trailing `/` and no space so the
-    // menu stays open for the next segment.
+    // EVERY ROW REPLACES ONLY ITS OWN SPAN — `@…` and `/…` alike. The command
+    // branch used to replace the whole LINE, which was invisible while the
+    // palette only opened on a line that was nothing but the verb (the span and
+    // the line were the same characters) and would delete the sentence the
+    // moment a `/name` could be picked mid-sentence. A folder inserts a trailing
+    // `/` and no space so the menu stays open for the next segment.
     const isMention = !!mentionQuery;
     const insert = command.file
       ? mentionInsertion(command as FileRow)
       : isMention
         ? `@${command.name.slice(1)} `
-        : `/${command.name.slice(1)} `;
-    const from = isMention ? mentionQuery!.start : activeLine.start;
-    const to = isMention ? mentionQuery!.end : activeLine.end;
+        : slashInsertion(command.name.slice(1));
+    const span = isMention ? mentionQuery! : commandQuery;
+    // Nothing is being typed at the caret (a click on a stale palette): leave the
+    // draft alone rather than splice at an arbitrary offset.
+    if (!span) return;
+    const from = span.start;
+    const to = span.end;
     const before = input.slice(0, from);
     const after = input.slice(to);
     const next = before + insert + after;
@@ -574,7 +577,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
         ta.setSelectionRange(pos, pos);
       }
     });
-  }, [input, activeLine, mentionQuery]);
+  }, [input, commandQuery, mentionQuery]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Check if IME composition is in progress (e.g., Chinese pinyin input)
