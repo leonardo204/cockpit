@@ -101,6 +101,7 @@ import {
   resolveProviderCredential,
   type NabySettings,
   runTurn,
+  seedBuiltinHarness,
   seedBuiltinPersona,
   selectEngine,
   SqliteStore,
@@ -311,6 +312,18 @@ export function getStore(): Store {
     // agent that learns the user and (P3-M2+) acts on their behalf. Idempotent:
     // seeds exactly one persona and never overwrites the user's later edits.
     seedBuiltinPersona(sharedStore);
+    // skill-hub-builtin §2.7: the built-in harness bundle (the `confluence-context`
+    // skill and the `confluence-researcher` subagent) exists as ROWS, seeded here
+    // for the same reason the persona is — one guarded, idempotent write on the way
+    // in, before any route lists harness. It seeds DISABLED and only what is
+    // ABSENT: an item the user edited, disabled or deleted is never rewritten by a
+    // later boot. Turning it on is the cic credential's job (api/naby.ts).
+    try {
+      seedBuiltinHarness(sharedStore);
+    } catch {
+      // Non-fatal, like every other boot-heal here: a store that cannot take the
+      // seed must not stop the app from opening.
+    }
   }
   return sharedStore;
 }

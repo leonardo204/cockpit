@@ -33,6 +33,8 @@
 
 import {
   runTurn,
+  parseToolRefs,
+  toolRefsAllow,
   DELEGATE_TOOL_NAME,
   type EngineEvent,
   type DelegationResult,
@@ -69,12 +71,20 @@ export function restrictToolset(
   }
   if (!spec.toolRefs) return { toolSchemas: offered, executors: runnable };
 
-  const allowed = new Set(spec.toolRefs.map((t) => t.trim()).filter(Boolean));
+  // MATCHING IS THE RUNTIME'S ANSWER, not a second one written here. A spec file
+  // spells an MCP tool `mcp__<server>__<tool>` and naby names it
+  // `<server>__<tool>`; `parseToolRefs` is what reconciles the two, and the Agent
+  // SDK engine calls the same function so a subagent is narrowed identically
+  // whichever engine ran it (runtime/delegate.ts).
+  const allowed = parseToolRefs(spec.toolRefs);
   const keptExecutors: Record<string, Executor> = {};
   for (const name of Object.keys(runnable)) {
-    if (allowed.has(name)) keptExecutors[name] = runnable[name]!;
+    if (toolRefsAllow(allowed, name)) keptExecutors[name] = runnable[name]!;
   }
-  return { toolSchemas: offered.filter((t) => allowed.has(t.name)), executors: keptExecutors };
+  return {
+    toolSchemas: offered.filter((t) => toolRefsAllow(allowed, t.name)),
+    executors: keptExecutors,
+  };
 }
 
 /**

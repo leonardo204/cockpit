@@ -1168,6 +1168,16 @@
             "placeholder": "Created at id.atlassian.com → API tokens"
           }
         }
+      },
+      "cic": {
+        "title": "CIC (Confluence index)",
+        "description": "Searches the in-house Confluence index. Paste the token you were given. Connecting it also switches on the built-in Confluence research skill and its subagent.",
+        "fields": {
+          "token": {
+            "label": "Token",
+            "placeholder": "The token CIC issued you"
+          }
+        }
       }
     }
   },

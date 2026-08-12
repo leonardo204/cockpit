@@ -5,6 +5,9 @@ import {
   ATLASSIAN_PACKAGE,
   ATLASSIAN_SERVER_NAME,
   ATLASSIAN_URL_KEY,
+  CIC_SERVER_NAME,
+  CIC_URL_KEY,
+  DEFAULT_CIC_URL,
   DEFAULT_CONFLUENCE_URL,
   DEFAULT_SKILL_HUB_URL,
   SKILL_HUB_SERVER_NAME,
@@ -45,6 +48,10 @@ function fakeStore(entries: McpEntry[] = [], settings: Record<string, string> = 
 
 const skillHub = findSystemMcpPreset(SKILL_HUB_SERVER_NAME)!;
 const atlassian = findSystemMcpPreset(ATLASSIAN_SERVER_NAME)!;
+const cic = findSystemMcpPreset(CIC_SERVER_NAME)!;
+
+/** Never a real credential — the shape is all any of these tests reads. */
+const CIC_TOKEN = 'cic_test_placeholder_token';
 
 /** Build or throw — for the cases where the build is a precondition, not the
  *  thing under test. */
@@ -62,8 +69,12 @@ const UVX = '/opt/homebrew/bin/uvx';
 const ATLASSIAN_FIELDS = { username: 'lee@altimedia.com', apiToken: 'atl_secret' };
 
 describe('the registry itself', () => {
-  it('holds both built-in presets, in display order', () => {
-    expect(SYSTEM_MCP_PRESET_NAMES).toEqual([SKILL_HUB_SERVER_NAME, ATLASSIAN_SERVER_NAME]);
+  it('holds every built-in preset, in display order', () => {
+    expect(SYSTEM_MCP_PRESET_NAMES).toEqual([
+      SKILL_HUB_SERVER_NAME,
+      ATLASSIAN_SERVER_NAME,
+      CIC_SERVER_NAME,
+    ]);
   });
 
   it('gives every preset a unique name and at least one field', () => {
@@ -299,10 +310,80 @@ describe('the atlassian preset', () => {
   });
 });
 
+describe('the cic preset', () => {
+  it('REFUSES to build without a token, naming the field', () => {
+    // An entry carrying `Authorization: Bearer ` would read as connected in the
+    // settings row and 401 on the first research turn — and, worse here, it would
+    // switch on a skill whose subagent then has no working tools.
+    const res = cic.build({ token: '   ' });
+    expect(res.ok).toBe(false);
+    expect(!res.ok && res.errorField).toBe('token');
+    expect(!res.ok && res.errorKey).toBe('systemMcp.fieldRequired');
+  });
+
+  it('assembles the whole HTTP entry from the token alone', () => {
+    const entry = built(cic, { token: CIC_TOKEN });
+    expect(entry).toEqual({
+      name: 'cic',
+      transport: 'http',
+      url: DEFAULT_CIC_URL,
+      headers: { Authorization: `Bearer ${CIC_TOKEN}` },
+      status: 'enabled',
+    });
+  });
+
+  it('is named `cic` exactly — the built-in subagent addresses its tools by it', () => {
+    // `confluence-researcher` declares `tools: mcp__cic__find_docs, ...`, which
+    // resolves to `cic__find_docs` and nothing else. Rename the server and the
+    // subagent runs with an empty toolset, reporting only its own failure.
+    expect(CIC_SERVER_NAME).toBe('cic');
+    expect(built(cic, { token: CIC_TOKEN }).name).toBe('cic');
+  });
+
+  it('prefixes Bearer exactly once, however the token was pasted', () => {
+    for (const typed of [CIC_TOKEN, `  ${CIC_TOKEN}  `, `Bearer ${CIC_TOKEN}`, `bearer ${CIC_TOKEN}`]) {
+      const entry = built(cic, { token: typed });
+      expect(entry.transport === 'http' && entry.headers?.Authorization).toBe(
+        `Bearer ${CIC_TOKEN}`,
+      );
+    }
+  });
+
+  it('takes a URL override, and defaults without one', () => {
+    const overridden = built(cic, { token: CIC_TOKEN }, { url: 'https://staging.internal/cic/mcp' });
+    expect(overridden.transport === 'http' && overridden.url).toBe(
+      'https://staging.internal/cic/mcp',
+    );
+    const blank = built(cic, { token: CIC_TOKEN }, { url: '   ' });
+    expect(blank.transport === 'http' && blank.url).toBe(DEFAULT_CIC_URL);
+  });
+
+  it('NEVER hands the token back — there is nothing non-secret to show', () => {
+    const entry = built(cic, { token: CIC_TOKEN });
+    expect(readNonSecretFields(cic, entry)).toEqual({});
+    expect(JSON.stringify(readSystemMcpStatus(fakeStore([entry])))).not.toContain(CIC_TOKEN);
+  });
+
+  it('reads its own token back on the SERVER side, so an edit does not wipe it', () => {
+    const entry = built(cic, { token: CIC_TOKEN });
+    expect(cic.readStoredFields(entry)).toEqual({ token: CIC_TOKEN });
+    expect(mergeSystemMcpFields(cic, entry, { token: '' })).toEqual({ token: CIC_TOKEN });
+  });
+
+  it('needs no launcher — it is HTTP, like skill-hub', () => {
+    expect(cic.launcher).toBeUndefined();
+    expect(built(cic, { token: CIC_TOKEN }).transport).toBe('http');
+  });
+});
+
 describe('readPresetUrl', () => {
   it('answers the built-in URL when nothing is overridden', () => {
     expect(readPresetUrl(fakeStore(), skillHub)).toBe(DEFAULT_SKILL_HUB_URL);
     expect(readPresetUrl(fakeStore(), atlassian)).toBe(DEFAULT_CONFLUENCE_URL);
+    expect(readPresetUrl(fakeStore(), cic)).toBe(DEFAULT_CIC_URL);
+    expect(readPresetUrl(fakeStore([], { [CIC_URL_KEY]: 'https://staging/cic/mcp' }), cic)).toBe(
+      'https://staging/cic/mcp',
+    );
   });
 
   it('answers each preset own override key', () => {
@@ -324,11 +405,11 @@ describe('readPresetUrl', () => {
 describe('readSystemMcpStatus', () => {
   it('answers for EVERY preset, configured or not', () => {
     // A map missing a key would render as a blank row rather than as "not
-    // connected", so absence is stated explicitly.
-    expect(readSystemMcpStatus(fakeStore())).toEqual({
-      [SKILL_HUB_SERVER_NAME]: { configured: false },
-      [ATLASSIAN_SERVER_NAME]: { configured: false },
-    });
+    // connected", so absence is stated explicitly. Derived from the REGISTRY, so a
+    // fourth preset is covered by this case without anyone remembering to add it.
+    expect(readSystemMcpStatus(fakeStore())).toEqual(
+      Object.fromEntries(SYSTEM_MCP_PRESET_NAMES.map((n) => [n, { configured: false }])),
+    );
   });
 
   it('reads enabled once an entry exists, per preset independently', () => {
@@ -384,10 +465,9 @@ describe('readSystemMcpStatus', () => {
       { name: 'filesystem', transport: 'stdio', command: 'npx' },
       { name: 'weather', transport: 'http', url: 'https://example.com/mcp' },
     ]);
-    expect(readSystemMcpStatus(store)).toEqual({
-      [SKILL_HUB_SERVER_NAME]: { configured: false },
-      [ATLASSIAN_SERVER_NAME]: { configured: false },
-    });
+    expect(readSystemMcpStatus(store)).toEqual(
+      Object.fromEntries(SYSTEM_MCP_PRESET_NAMES.map((n) => [n, { configured: false }])),
+    );
   });
 });
 

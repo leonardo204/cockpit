@@ -30,6 +30,7 @@ import { Effect } from 'effect';
 import { handler, ok, parseJsonRaw } from '@cockpit/effect-runtime/server';
 import {
   addClaudeAccount,
+  applyBuiltinHarnessActivation,
   claudeLoginForAccount,
   claudeLogoutForAccount,
   describeClaudeAccounts,
@@ -597,7 +598,14 @@ export type NabyAction =
   // config with the token REDACTED; `set` persists (a token '' is left unchanged
   // so the redacted UI never wipes it); `test` sends a live message.
   | { action: 'telegram.get' }
-  | { action: 'telegram.set'; enabled?: boolean; botToken?: string; chatId?: string }
+  | {
+      action: 'telegram.set';
+      enabled?: boolean;
+      botToken?: string;
+      chatId?: string;
+      /** telegram-chat §8.1 — unknown values leave the stored mode untouched. */
+      syncMode?: 'manual' | 'always';
+    }
   | { action: 'telegram.test' }
   // Auto-detect the chat id from the naby bot's latest message (the user messages
   // their dedicated naby bot once, then this fills the chat id in).
@@ -744,7 +752,14 @@ export type NabyActionResult =
        *  states the limit instead of letting the user discover it. */
       autonomyStepCap?: number;
       /** `telegram.get`: current config with the token REDACTED (never the secret). */
-      telegram?: { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
+      telegram?: {
+        enabled: boolean;
+        botTokenRedacted: string;
+        chatId: string;
+        /** telegram-chat §8: `manual` (escalations only) or `always` (mirror every turn). */
+        syncMode: 'manual' | 'always';
+        ready: boolean;
+      };
       /** `telegram.detectChat`: the chat id discovered from the bot's latest message. */
       chatId?: string;
       /** `growth.get`: the full trust-meter reading for one agent. */
@@ -1992,6 +2007,25 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (problems.length > 0) return { ok: false, error: problems.join('; ') };
 
       store.upsertMcpEntry(built.entry);
+
+      // THE CREDENTIAL IS THE SWITCH for a preset that owns a built-in harness
+      // bundle (skill-hub-builtin §2.7). `cic` ships with a skill and a subagent
+      // that can do nothing without it — the subagent's only tools are `cic__*` —
+      // so they are seeded disabled and come alive here, at the moment the user
+      // proves they have access. No per-preset branching: the registry says whether
+      // there is a bundle, and the runtime decides what may be flipped (it refuses
+      // to touch anything the user has moved by hand since the last automatic
+      // write, which is why re-saving a token never re-enables a skill somebody
+      // deliberately turned off).
+      if (preset.harnessBundle) {
+        try {
+          applyBuiltinHarnessActivation(store, preset.harnessBundle, true);
+        } catch {
+          // Never fail the save over the bundle: the server IS connected, and the
+          // user can still enable the two items by hand in Settings.
+        }
+      }
+
       // The status, and only the status. The secrets are now in the store and
       // have no way back out through this route.
       return { ok: true, systemMcp: readSystemMcpStatus(store) };
@@ -2018,6 +2052,19 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // Idempotent, like `mcp.remove`: removing a server that is not there is the
       // state the caller asked for, not an error.
       store.removeMcpEntry(preset.name);
+      // The other half of the switch. Without this a removed cic would leave a
+      // skill that still fires and a subagent that still runs — with no tools, so
+      // every triggered turn would end in "I could not research Confluence". The
+      // items are disabled, not deleted: reconnecting brings them back, and a user
+      // who enabled them by hand keeps them (the runtime only touches what its own
+      // last write left behind).
+      if (preset.harnessBundle) {
+        try {
+          applyBuiltinHarnessActivation(store, preset.harnessBundle, false);
+        } catch {
+          /* removing the server is what was asked for; the bundle is best-effort */
+        }
+      }
       return { ok: true, systemMcp: readSystemMcpStatus(store) };
     }
 

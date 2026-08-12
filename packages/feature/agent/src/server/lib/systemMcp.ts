@@ -33,6 +33,7 @@
 // grade as the Telegram bot token; vault promotion is out of scope (spec §2.5) and
 // belongs with app.db encryption.
 
+import { CIC_HARNESS_BUNDLE_ID } from '../../../../../../../dist/naby-runtime.mjs';
 import type { McpEntry, Store } from '../../../../../../../dist/naby-runtime.mjs';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,18 @@ export type SystemMcpPreset = {
    *  The override is never shown in the UI — it exists for in-house staging. */
   readonly defaultUrl: string;
   readonly urlSettingKey: string;
+  /**
+   * The BUILT-IN HARNESS BUNDLE this credential switches (skill-hub-builtin §2.7).
+   *
+   * Some in-house servers ship with harness that is useless without them: the
+   * `confluence-context` skill delegates to a subagent whose only tools come from
+   * `cic`, so with no cic entry it can do nothing but announce its own failure.
+   * Naming the bundle here makes "saving the token is the opt-in" a REGISTRY FACT,
+   * so the save/remove actions stay free of per-preset branching — they ask the
+   * preset, and the runtime (`applyBuiltinHarnessActivation`) decides what may be
+   * flipped and what the user has since claimed as theirs.
+   */
+  readonly harnessBundle?: string;
   /** Assemble the entry. PURE. */
   build(fields: Record<string, string>, opts?: SystemMcpBuildOptions): SystemMcpBuildResult;
   /** Read the field values back OUT of a stored entry — including secret ones.
@@ -279,6 +292,77 @@ const ATLASSIAN_PRESET: SystemMcpPreset = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// cic — HTTP + Bearer, and the switch for the built-in Confluence bundle
+// ---------------------------------------------------------------------------
+//
+// CIC is the in-house Confluence index: `find_docs` locates pages, `read_section`
+// pulls one section's body, `search_cql` is the fallback when the index is not
+// built yet, `submit_feedback` closes the rating loop. Transport-wise it is the
+// same shape as skill-hub — HTTP plus a bearer token — which is why this preset is
+// a near-copy and not a new mechanism.
+//
+// THE SERVER NAME IS LOAD-BEARING: IT MUST BE `cic`.
+//
+// The built-in `confluence-researcher` subagent (src/runtime/harness-assets/agents/
+// confluence-researcher.md) declares `tools: mcp__cic__find_docs, ...`, and naby
+// namespaces every MCP tool as `<server>__<tool>` (src/runtime/mcp.ts
+// `qualifiedToolName`). So the subagent's allow-list only resolves to real tools
+// while THIS ENTRY IS NAMED `cic`. Rename the preset and the subagent silently runs
+// with an EMPTY toolset — it still answers, it just answers "I could not research
+// Confluence", which is the failure mode hardest to trace back to a name. The
+// shell's `restrictToolset` (lib/delegation.ts) is what bridges Claude's
+// `mcp__<server>__<tool>` spelling to naby's `<server>__<tool>`; it does not, and
+// must not, guess at the server half.
+//
+// SAVING A TOKEN HERE IS ALSO THE OPT-IN FOR THE BUILT-IN HARNESS BUNDLE — see
+// `harnessBundle` below and src/runtime/harness-seed.ts.
+
+export const CIC_SERVER_NAME = 'cic';
+export const DEFAULT_CIC_URL = 'https://skills.altimedia.com/cic/mcp';
+export const CIC_URL_KEY = 'cic.url';
+
+const CIC_PRESET: SystemMcpPreset = {
+  name: CIC_SERVER_NAME,
+  titleKey: 'systemMcp.presets.cic.title',
+  descriptionKey: 'systemMcp.presets.cic.description',
+  defaultUrl: DEFAULT_CIC_URL,
+  urlSettingKey: CIC_URL_KEY,
+  // The bundle this credential switches on. Declared HERE so `api/naby.ts` keeps
+  // its no-per-preset-branching property: it asks the registry whether the preset
+  // it just saved owns a bundle, and never asks "is this cic".
+  harnessBundle: CIC_HARNESS_BUNDLE_ID,
+  fields: [
+    {
+      id: 'token',
+      labelKey: 'systemMcp.presets.cic.fields.token.label',
+      placeholderKey: 'systemMcp.presets.cic.fields.token.placeholder',
+      secret: true,
+    },
+  ],
+  build(fields, opts) {
+    const token = normalizeBearerToken(fields.token ?? '');
+    if (!token) return missing('token');
+    return {
+      ok: true,
+      entry: {
+        name: CIC_SERVER_NAME,
+        transport: 'http',
+        url: (opts?.url ?? '').trim() || DEFAULT_CIC_URL,
+        headers: { Authorization: `Bearer ${token}` },
+        status: 'enabled',
+      },
+    };
+  },
+  readStoredFields(entry) {
+    if (entry.transport === 'stdio') return {};
+    const token = normalizeBearerToken(entry.headers?.Authorization ?? '');
+    const out: Record<string, string> = {};
+    if (token) out.token = token;
+    return out;
+  },
+};
+
 /** "This field has no value" — one shape for every preset, so the UI renders the
  *  same sentence with the field's own label whichever preset raised it. */
 function missing(field: string): SystemMcpBuildResult {
@@ -295,7 +379,11 @@ function missing(field: string): SystemMcpBuildResult {
 // ---------------------------------------------------------------------------
 
 /** Every built-in preset, in the order the UI stacks them. */
-export const SYSTEM_MCP_PRESETS: readonly SystemMcpPreset[] = [SKILL_HUB_PRESET, ATLASSIAN_PRESET];
+export const SYSTEM_MCP_PRESETS: readonly SystemMcpPreset[] = [
+  SKILL_HUB_PRESET,
+  ATLASSIAN_PRESET,
+  CIC_PRESET,
+];
 
 /** The names a preset owns — what the general MCP list filters out, so a preset's
  *  entry is never shown twice (once with the URL and header block the preset

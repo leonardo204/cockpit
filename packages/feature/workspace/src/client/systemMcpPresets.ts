@@ -70,6 +70,23 @@ export const SYSTEM_MCP_PRESETS: readonly SystemMcpPresetView[] = [
       },
     ],
   },
+  {
+    // `cic` — the name is not cosmetic. The built-in `confluence-researcher`
+    // subagent's tool allow-list is `mcp__cic__*`, which only resolves while the
+    // server is called `cic` (see the server registry's header). Nothing in this
+    // file depends on that, but a rename here would rename it there.
+    name: 'cic',
+    titleKey: 'systemMcp.presets.cic.title',
+    descriptionKey: 'systemMcp.presets.cic.description',
+    fields: [
+      {
+        id: 'token',
+        labelKey: 'systemMcp.presets.cic.fields.token.label',
+        placeholderKey: 'systemMcp.presets.cic.fields.token.placeholder',
+        secret: true,
+      },
+    ],
+  },
 ];
 
 /** The names the general MCP list must filter out, so a preset's entry is never
