@@ -33,7 +33,10 @@
 // grade as the Telegram bot token; vault promotion is out of scope (spec §2.5) and
 // belongs with app.db encryption.
 
-import { CIC_HARNESS_BUNDLE_ID } from '../../../../../../../dist/naby-runtime.mjs';
+import {
+  ATLASSIAN_HARNESS_BUNDLE_ID,
+  CIC_HARNESS_BUNDLE_ID,
+} from '../../../../../../../dist/naby-runtime.mjs';
 import type { McpEntry, Store } from '../../../../../../../dist/naby-runtime.mjs';
 
 // ---------------------------------------------------------------------------
@@ -223,6 +226,15 @@ const ATLASSIAN_PRESET: SystemMcpPreset = {
   defaultUrl: DEFAULT_CONFLUENCE_URL,
   urlSettingKey: ATLASSIAN_URL_KEY,
   launcher: ATLASSIAN_LAUNCHER,
+  // The built-in harness bundle this credential switches: the `confluence-upload`
+  // skill (skill-hub-builtin §2.7). It belongs HERE rather than on `cic` because
+  // its three environment variables — base URL, account email, API token — are the
+  // three values this preset already collects. Configuring atlassian is the proof
+  // that the user has a Confluence account they can WRITE to; cic only proves they
+  // can read the index. naby does not forward the stored values to the skill (they
+  // reach the mcp-atlassian process and nothing else) — the preset is the opt-in
+  // signal, not the credential channel.
+  harnessBundle: ATLASSIAN_HARNESS_BUNDLE_ID,
   fields: [
     {
       id: 'username',
@@ -425,6 +437,26 @@ export function readNonSecretFields(
  * sibling of the `isClaudeAgentSdkAvailable` duplication the project already paid
  * for: two answers to one question, with the UI trusting the wrong one.
  */
+/**
+ * The harness bundles whose preset is ALREADY CONFIGURED — what the boot seed needs
+ * so a built-in that ships in a later release still arrives switched on for a user
+ * who saved the credential months ago (skill-hub-builtin §2.7, `activeBundles`).
+ *
+ * Registry-driven like everything else here: it asks each preset whether it owns a
+ * bundle and whether it is configured, and branches on no preset name. A `proposed`
+ * entry counts as configured for the same reason `readSystemMcpStatus` reports it as
+ * configured — the credential is in the store; what is pending is the human approval
+ * of an AGENT-added server, and the harness rows are independently reviewable.
+ */
+export function configuredHarnessBundles(store: Pick<Store, 'listMcpEntries'>): string[] {
+  const names = new Set(store.listMcpEntries().map((e) => e.name));
+  const out: string[] = [];
+  for (const preset of SYSTEM_MCP_PRESETS) {
+    if (preset.harnessBundle && names.has(preset.name)) out.push(preset.harnessBundle);
+  }
+  return out;
+}
+
 export function readSystemMcpStatus(
   store: Pick<Store, 'listMcpEntries'>,
 ): Record<string, SystemMcpStatus> {

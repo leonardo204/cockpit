@@ -151,6 +151,7 @@ import { resolveContextWindow as resolveRunContextWindow } from '../lib/contextW
 import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
+import { configuredHarnessBundles } from '../lib/systemMcp';
 import { kickReflectionSweep } from '../lib/reflection';
 import { createVoicePort, readVoiceStats } from '../lib/voice';
 import type { JudgeBackend } from '../lib/reflection';
@@ -215,9 +216,28 @@ const DEFAULT_ORG_ID = 'default';
  *  turn can never hang forever on an unanswered prompt (Phase 2 M2). */
 const APPROVAL_TTL_MS = 10 * 60 * 1000;
 
-/** Per-turn hard cap on injected skill instructions (M3). Enough for a few
- *  focused skills; over-budget candidates are dropped and counted, never silent. */
-const SKILL_TOKEN_BUDGET = 2000;
+/**
+ * Per-turn hard cap on injected skill instructions (M3). Over-budget candidates are
+ * dropped and counted, never silent.
+ *
+ * RAISED FROM 2000 TO 3000 WHEN `confluence-upload` SHIPPED (skill-hub-builtin
+ * §2.7). naby now carries two built-in skills that legitimately fire on the SAME
+ * turn — `confluence-context` (1722 tokens) triages a wiki question, and
+ * `confluence-upload` (1106) uploads a markdown file — and both declare
+ * `confluence`/`컨플루언스` as triggers, because both are about Confluence. At 2000
+ * their sum (2828) did not fit, so a turn like "이 md 컨플루언스에 올려줘" injected
+ * ONLY the research skill and dropped the upload one: the model would then reach for
+ * `mcp-atlassian`'s create_page, which does no Markdown→Storage conversion, and the
+ * user would get a silently mangled page. Ranking is scope-then-recency
+ * (skill-inject.ts) with no relevance signal, so which of the two survives is
+ * decided by seed order — not by what the turn asked for.
+ *
+ * A BUDGET IS A CEILING, NOT AN ALLOCATION. Raising it costs zero tokens on every
+ * turn where less than 2000 tokens of skills match — which is nearly all of them,
+ * since both built-ins are trigger-gated. It spends the extra ~800 only on the turns
+ * that named Confluence, which are precisely the turns that want both.
+ */
+const SKILL_TOKEN_BUDGET = 3000;
 
 /** Per-turn hard cap on injected memory tokens (Phase 3 P3-M2). The runtime
  *  already implements retrieval+injection under this budget; the shell just wires
@@ -312,14 +332,24 @@ export function getStore(): Store {
     // agent that learns the user and (P3-M2+) acts on their behalf. Idempotent:
     // seeds exactly one persona and never overwrites the user's later edits.
     seedBuiltinPersona(sharedStore);
-    // skill-hub-builtin §2.7: the built-in harness bundle (the `confluence-context`
-    // skill and the `confluence-researcher` subagent) exists as ROWS, seeded here
-    // for the same reason the persona is — one guarded, idempotent write on the way
-    // in, before any route lists harness. It seeds DISABLED and only what is
-    // ABSENT: an item the user edited, disabled or deleted is never rewritten by a
-    // later boot. Turning it on is the cic credential's job (api/naby.ts).
+    // skill-hub-builtin §2.7: the built-in harness bundles (`cic` — the
+    // `confluence-context` skill and the `confluence-researcher` subagent; and
+    // `atlassian` — the `confluence-upload` skill) exist as ROWS, seeded here for
+    // the same reason the persona is — one guarded, idempotent write on the way in,
+    // before any route lists harness. It seeds only what is ABSENT: an item the
+    // user edited, disabled or deleted is never rewritten by a later boot. Turning
+    // it on is normally the credential's job (api/naby.ts systemMcp.set/remove).
+    //
+    // `activeBundles` covers the case that save/remove cannot: a skill that ships
+    // in a LATER release than its preset. The atlassian preset has existed since
+    // 0.2.0, so an existing user has already saved that credential and will never
+    // save it again — without this, `confluence-upload` would seed disabled and sit
+    // there forever. Reading the registry here (rather than in the runtime) keeps
+    // "is this preset configured" in the one module that owns the presets.
     try {
-      seedBuiltinHarness(sharedStore);
+      seedBuiltinHarness(sharedStore, {
+        activeBundles: configuredHarnessBundles(sharedStore),
+      });
     } catch {
       // Non-fatal, like every other boot-heal here: a store that cannot take the
       // seed must not stop the app from opening.
