@@ -19,7 +19,14 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import { SettingsDetails } from './SettingsDetails';
 
-type TelegramView = { enabled: boolean; botTokenRedacted: string; chatId: string; ready: boolean };
+type TelegramSyncMode = 'always' | 'manual';
+type TelegramView = {
+  enabled: boolean;
+  botTokenRedacted: string;
+  chatId: string;
+  syncMode: TelegramSyncMode;
+  ready: boolean;
+};
 
 async function tgAction(body: Record<string, unknown>): Promise<
   { ok: true; telegram?: TelegramView; chatId?: string } | { ok: false; error: string }
@@ -46,6 +53,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
   const [tokenMask, setTokenMask] = useState('');
   const [tokenInput, setTokenInput] = useState(''); // blank = keep stored
   const [chatId, setChatId] = useState('');
+  const [syncMode, setSyncMode] = useState<TelegramSyncMode>('manual');
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -55,6 +63,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
       setEnabled(res.telegram.enabled);
       setTokenMask(res.telegram.botTokenRedacted);
       setChatId(res.telegram.chatId);
+      setSyncMode(res.telegram.syncMode === 'always' ? 'always' : 'manual');
       setReady(res.telegram.ready);
       setTokenInput('');
     }
@@ -70,6 +79,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
       action: 'telegram.set',
       enabled,
       chatId,
+      syncMode,
       ...(tokenInput.trim() ? { botToken: tokenInput.trim() } : {}),
     });
     setBusy(false);
@@ -81,7 +91,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
     } else {
       toast(res.ok ? '' : res.error, 'error');
     }
-  }, [enabled, chatId, tokenInput, t]);
+  }, [enabled, chatId, syncMode, tokenInput, t]);
 
   const detect = useCallback(async () => {
     setBusy(true);
@@ -105,6 +115,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
       action: 'telegram.set',
       enabled,
       chatId,
+      syncMode,
       ...(tokenInput.trim() ? { botToken: tokenInput.trim() } : {}),
     });
     const res = await tgAction({ action: 'telegram.test' });
@@ -112,7 +123,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
     if (res.ok) toast(t('telegramSettings.testSent', { defaultValue: 'Test message sent — check Telegram.' }), 'success');
     else toast(res.ok ? '' : res.error, 'error');
     void load();
-  }, [enabled, chatId, tokenInput, t, load]);
+  }, [enabled, chatId, syncMode, tokenInput, t, load]);
 
   return (
     <div className="space-y-3">
@@ -172,6 +183,49 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
           {t('telegramSettings.detectHint', { defaultValue: 'Message your naby bot once, then tap Detect.' })}
         </span>
       </label>
+
+      {/* Delivery mode (telegram-chat §8.1): manual is everything the channel
+          did before; always additionally mirrors every finished desktop turn so
+          work stays followable — and answerable, by reply — from the phone. */}
+      <fieldset className="flex flex-col gap-1">
+        <legend className="text-[0.714rem] text-muted-foreground">
+          {t('telegramSettings.syncMode', { defaultValue: 'Delivery mode' })}
+        </legend>
+        <label className="flex items-start gap-2 text-xs text-foreground">
+          <input
+            type="radio"
+            name="telegram-sync-mode"
+            className="mt-0.5"
+            checked={syncMode === 'manual'}
+            onChange={() => setSyncMode('manual')}
+          />
+          <span className="flex flex-col">
+            {t('telegramSettings.syncManual', { defaultValue: 'On demand' })}
+            <span className="text-[0.714rem] text-muted-foreground">
+              {t('telegramSettings.syncManualHint', {
+                defaultValue: 'Only escalations, check-ins and final reports — the current behavior.',
+              })}
+            </span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2 text-xs text-foreground">
+          <input
+            type="radio"
+            name="telegram-sync-mode"
+            className="mt-0.5"
+            checked={syncMode === 'always'}
+            onChange={() => setSyncMode('always')}
+          />
+          <span className="flex flex-col">
+            {t('telegramSettings.syncAlways', { defaultValue: 'Always sync' })}
+            <span className="text-[0.714rem] text-muted-foreground">
+              {t('telegramSettings.syncAlwaysHint', {
+                defaultValue: 'Mirror every finished turn (request + answer) to Telegram; reply to one to continue that session.',
+              })}
+            </span>
+          </span>
+        </label>
+      </fieldset>
 
       <div className="flex gap-2">
         <button

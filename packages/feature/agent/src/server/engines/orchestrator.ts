@@ -10,6 +10,7 @@ import {
   releaseRun,
 } from '../sessionRunHub';
 import { snapshotOnRunStart, snapshotOnRunEvent } from '../snapshot/hook';
+import { mirrorTurn } from '../lib/telegramSync';
 import { resolveCommandPrompt } from '../lib/slashCommands';
 import { createTranscriptRecorder } from '../state/transcriptRecorder';
 import { getStore } from './naby';
@@ -138,7 +139,7 @@ export async function dispatchChat(
   // spares the engine interface a reporting channel it would otherwise need.
   let emittedEvents = 0;
   let autonomySteps = 0;
-  let runResult: { isError?: boolean; numTurns?: number } | undefined;
+  let runResult: { isError?: boolean; numTurns?: number; text?: string } | undefined;
   if (cwd && sessionId) {
     updateGlobalState(cwd, sessionId, 'loading', undefined, promptText).catch(() => {});
   }
@@ -174,6 +175,10 @@ export async function dispatchChat(
         runResult = {
           isError: event.is_error === true,
           ...(typeof event.num_turns === 'number' ? { numTurns: event.num_turns } : {}),
+          // The answer itself, for the Telegram mirror (telegram-chat §8.2) —
+          // the same "last terminal result" the chat path reads from the run
+          // snapshot, captured here so the teardown needs no snapshot lookup.
+          ...(typeof event.result === 'string' && event.result ? { text: event.result } : {}),
         };
       } else if (event.type === 'system' && event.harness_subtype === 'autonomy') {
         // One marker per completed autonomy step (naby's own loop emits it).
@@ -202,6 +207,26 @@ export async function dispatchChat(
     currentKey() {
       return currentKey;
     },
+  };
+
+  /**
+   * Telegram mirror (telegram-chat §8) — fire-and-forget, from the completed and
+   * failed teardowns only (an abort is something the user did at the desktop).
+   * Every mode/source/duplicate guard lives inside `mirrorTurn`; in the default
+   * `manual` mode this is a config read and an early return.
+   */
+  const mirrorRunEnd = (outcome: { ok: boolean; error?: string }): void => {
+    mirrorTurn(getStore(), {
+      source,
+      sessionId: actualSessionId ?? currentKey,
+      ...(promptText ? { prompt: promptText } : {}),
+      ok: outcome.ok,
+      ...(runResult?.text ? { text: runResult.text } : {}),
+      ...(outcome.error ? { error: outcome.error } : {}),
+      durationMs: Date.now() - runStartedAt,
+      ...(runResult?.numTurns !== undefined ? { numTurns: runResult.numTurns } : {}),
+      ...(autonomySteps > 0 ? { steps: autonomySteps } : {}),
+    }).catch((e) => console.warn('[telegram] mirror failed:', e));
   };
 
   /** The closing record, written on every teardown path exactly once. */
@@ -252,6 +277,9 @@ export async function dispatchChat(
       logRunEnd('run_failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+      // A remote user must hear about a failure too — a turn that dies silently
+      // reads as a turn still running (telegram-chat §8.2).
+      mirrorRunEnd({ ok: false, error: error instanceof Error ? error.message : String(error) });
       // Best-effort teardown of global state even on failure.
       if (cwd && actualSessionId) {
         const title = await getSessionTitle(cwd, actualSessionId).catch(() => undefined);
@@ -273,6 +301,10 @@ export async function dispatchChat(
     isClosed = true;
     markRunIdle(currentKey, 'idle');
     logRunEnd('run_completed');
+    mirrorRunEnd({
+      ok: runResult?.isError !== true,
+      ...(runResult?.isError === true && runResult.text ? { error: runResult.text } : {}),
+    });
   })();
 
   return { ok: true, runKey: currentKey, sessionId: actualSessionId ?? null };

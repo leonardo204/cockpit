@@ -14,6 +14,8 @@ import {
   sendTelegramMessage,
   pollTelegramUpdates,
   detectChatId,
+  readTelegramConfig,
+  writeTelegramConfig,
 } from './telegram';
 
 describe('telegram — approval callback data (P3-M3)', () => {
@@ -116,6 +118,33 @@ describe('telegram — config helpers', () => {
     expect(isTelegramReady({ enabled: false, botToken: 't', chatId: 'c' })).toBe(false);
     expect(isTelegramReady({ enabled: true, botToken: '', chatId: 'c' })).toBe(false);
     expect(isTelegramReady({ enabled: true, botToken: 't', chatId: '' })).toBe(false);
+  });
+
+  // Delivery mode (telegram-chat §8.1): default manual, round-trip, and an
+  // unknown stored value must read as manual — a typo or a downgrade can only
+  // ever switch mirroring OFF.
+  it('syncMode defaults to manual and round-trips', () => {
+    const map = new Map<string, string>();
+    const store = {
+      getSetting: (k: string) => map.get(k),
+      setSetting: (k: string, v: string) => void map.set(k, v),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    expect(readTelegramConfig(store).syncMode).toBe('manual');
+    writeTelegramConfig(store, { syncMode: 'always' });
+    expect(readTelegramConfig(store).syncMode).toBe('always');
+    writeTelegramConfig(store, { syncMode: 'manual' });
+    expect(readTelegramConfig(store).syncMode).toBe('manual');
+  });
+
+  it('an unknown stored syncMode reads as manual', () => {
+    const map = new Map<string, string>([['telegram.syncMode', 'sometimes']]);
+    const store = {
+      getSetting: (k: string) => map.get(k),
+      setSetting: (k: string, v: string) => void map.set(k, v),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    expect(readTelegramConfig(store).syncMode).toBe('manual');
   });
 });
 

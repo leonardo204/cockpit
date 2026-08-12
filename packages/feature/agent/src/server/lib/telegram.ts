@@ -27,12 +27,31 @@ import type { Store } from '../../../../../../../dist/naby-runtime.mjs';
 export const TELEGRAM_ENABLED_KEY = 'telegram.enabled';
 export const TELEGRAM_TOKEN_KEY = 'telegram.botToken';
 export const TELEGRAM_CHAT_KEY = 'telegram.chatId';
+/** telegram-chat §8.1 — the delivery mode. */
+export const TELEGRAM_SYNC_MODE_KEY = 'telegram.syncMode';
+
+/**
+ * The delivery mode (telegram-chat §8.1).
+ *
+ * `manual` (the default) is everything the channel did before v0.2: escalations,
+ * check-ins and — per the agent's escalation setting — the final report. `always`
+ * additionally MIRRORS every finished desktop turn (the user's request + the
+ * final answer) to the chat, so a user away from the desk sees the work move.
+ */
+export type TelegramSyncMode = 'always' | 'manual';
 
 export type TelegramConfig = {
   enabled: boolean;
   botToken: string;
   chatId: string;
+  syncMode: TelegramSyncMode;
 };
+
+/** An unknown stored value reads as `manual` — a typo or a downgrade must never
+ *  switch mirroring ON, only ever off (telegram-chat §8.1). */
+function normalizeSyncMode(raw: string | undefined): TelegramSyncMode {
+  return raw === 'always' ? 'always' : 'manual';
+}
 
 /** Read naby's Telegram config from the store. Missing = empty/disabled. */
 export function readTelegramConfig(store: Store): TelegramConfig {
@@ -40,6 +59,7 @@ export function readTelegramConfig(store: Store): TelegramConfig {
     enabled: (store.getSetting(TELEGRAM_ENABLED_KEY) ?? 'false') === 'true',
     botToken: store.getSetting(TELEGRAM_TOKEN_KEY) ?? '',
     chatId: store.getSetting(TELEGRAM_CHAT_KEY) ?? '',
+    syncMode: normalizeSyncMode(store.getSetting(TELEGRAM_SYNC_MODE_KEY)),
   };
 }
 
@@ -48,10 +68,11 @@ export function writeTelegramConfig(store: Store, patch: Partial<TelegramConfig>
   if (patch.enabled !== undefined) store.setSetting(TELEGRAM_ENABLED_KEY, patch.enabled ? 'true' : 'false');
   if (patch.botToken !== undefined) store.setSetting(TELEGRAM_TOKEN_KEY, patch.botToken.trim());
   if (patch.chatId !== undefined) store.setSetting(TELEGRAM_CHAT_KEY, patch.chatId.trim());
+  if (patch.syncMode !== undefined) store.setSetting(TELEGRAM_SYNC_MODE_KEY, normalizeSyncMode(patch.syncMode));
 }
 
 /** True when the config can actually send (enabled + both credentials present). */
-export function isTelegramReady(cfg: TelegramConfig): boolean {
+export function isTelegramReady(cfg: Pick<TelegramConfig, 'enabled' | 'botToken' | 'chatId'>): boolean {
   return cfg.enabled && cfg.botToken.length > 0 && cfg.chatId.length > 0;
 }
 

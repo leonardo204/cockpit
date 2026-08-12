@@ -16,12 +16,14 @@ import {
   pauseTelegramListener,
   rememberChatMessage,
   resetBotCommandRegistration,
+  resetSentMapForRestartTest,
   resumeTelegramListener,
   sendFinalReport,
   sessionForChatMessage,
   stopTelegramListener,
   telegramListenerRunning,
   TELEGRAM_OFFSET_KEY,
+  TELEGRAM_SENT_MAP_KEY,
 } from './telegramEscalation';
 import { registerApproval, hasPendingApproval } from './approvalRegistry';
 import { registerCheckin, hasPendingCheckin } from './checkinRegistry';
@@ -606,5 +608,36 @@ describe('telegramEscalation — reply routing map (telegram-chat §1.3)', () =>
     // The oldest fell off; the newest is still there.
     expect(sessionForChatMessage(10_001)).toBeUndefined();
     expect(sessionForChatMessage(10_060)).toBe('s60');
+  });
+});
+
+describe('telegramEscalation — always mode (telegram-chat §8)', () => {
+  it('sendFinalReport yields to the mirror in always mode (§8.3)', async () => {
+    const { calls } = stubTelegram([[]]);
+    const store = fakeStore({ ...CHAT_READY, 'telegram.syncMode': 'always' });
+    await sendFinalReport(store, { ok: true, text: 'done', sessionId: 'sess-dup' });
+    // The mirror carries the same formatFinalReport skeleton — sending here
+    // would put the identical answer on the phone twice.
+    expect(calls.some((c) => c.url.includes('/sendMessage'))).toBe(false);
+  });
+
+  it('the reply-routing map survives a restart when a store is in hand (§8.5)', () => {
+    const store = fakeStore({ ...CHAT_READY });
+    rememberChatMessage(20_001, 'sess-persist', store);
+    // A restart forgets the in-memory map and the hydration mark…
+    resetSentMapForRestartTest();
+    expect(sessionForChatMessage(20_001)).toBeUndefined();
+    // …but a lookup WITH the store re-reads what the previous process wrote.
+    expect(sessionForChatMessage(20_001, store)).toBe('sess-persist');
+  });
+
+  it('the persisted map keeps the LRU bound', () => {
+    const store = fakeStore({ ...CHAT_READY });
+    for (let i = 1; i <= 60; i += 1) rememberChatMessage(30_000 + i, `s${i}`, store);
+    const persisted = JSON.parse(store.getSetting(TELEGRAM_SENT_MAP_KEY)!) as Array<[number, string]>;
+    expect(persisted.length).toBeLessThanOrEqual(50);
+    // Newest survives, oldest fell off — on disk exactly as in memory.
+    expect(persisted.some(([id]) => id === 30_060)).toBe(true);
+    expect(persisted.some(([id]) => id === 30_001)).toBe(false);
   });
 });

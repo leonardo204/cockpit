@@ -433,7 +433,12 @@
     "save": "Save",
     "saved": "Telegram settings saved.",
     "test": "Send test message",
-    "testSent": "Test message sent — check Telegram."
+    "testSent": "Test message sent — check Telegram.",
+    "syncMode": "Delivery mode",
+    "syncManual": "On demand",
+    "syncManualHint": "Only escalations, check-ins and final reports — the current behavior.",
+    "syncAlways": "Always sync",
+    "syncAlwaysHint": "Mirror every finished turn (request + answer) to Telegram; reply to one to continue that session."
   },
   "policyManager": {
     "title": "Permissions",

@@ -322,6 +322,11 @@ type BridgeState = {
    *  Bounded: a reply to a message older than this is answered by the LINK, which
    *  is the same thing the user would get from a fresh message. */
   sentBySession: Map<number, string>;
+  /** Whether `sentBySession` was re-read from the store this process
+   *  (telegram-chat §8.5). Hydrated lazily, on the first lookup that has a
+   *  store in hand — a fresh process must not answer "unknown message" for a
+   *  reply the previous process could still route. */
+  sentMapHydrated: boolean;
   /** Sessions with a Telegram-originated turn in flight. Two jobs: the busy
    *  notice (§4), and suppressing the engine's own final report for a turn whose
    *  answer the chat path is already going to send. */
@@ -332,6 +337,13 @@ type BridgeState = {
 
 /** How many sent messages stay routable by reply. */
 const SENT_MAP_MAX = 50;
+
+/** Store setting persisting the reply-routing map (telegram-chat §8.5): a JSON
+ *  array of `[messageId, sessionId]` pairs, oldest first, capped at
+ *  `SENT_MAP_MAX`. In `manual` mode losing the map on restart was a rare
+ *  annoyance; in `always` mode most recent phone messages are mirror messages,
+ *  so a restart would sever every one of them from its session. */
+export const TELEGRAM_SENT_MAP_KEY = 'telegram.sentMap';
 
 const g = globalThis as unknown as { __nabyTelegramBridge?: BridgeState };
 const state: BridgeState =
@@ -346,28 +358,68 @@ const state: BridgeState =
     paused: false,
     stopRequested: false,
     sentBySession: new Map(),
+    sentMapHydrated: false,
     chatTurns: new Set(),
     commandsRegistered: false,
   });
 
 // -- what the chat half needs from the bridge --------------------------------
 
+/** Re-read the persisted reply-routing map, once per process, UNDER whatever is
+ *  already in memory — an entry recorded live this process wins over the disk. */
+function hydrateSentMap(store: Store): void {
+  if (state.sentMapHydrated) return;
+  state.sentMapHydrated = true;
+  const raw = store.getSetting(TELEGRAM_SENT_MAP_KEY);
+  if (!raw) return;
+  try {
+    const entries = JSON.parse(raw) as Array<[number, string]>;
+    if (!Array.isArray(entries)) return;
+    const live = new Map(state.sentBySession);
+    state.sentBySession.clear();
+    for (const pair of entries) {
+      if (!Array.isArray(pair) || typeof pair[0] !== 'number' || typeof pair[1] !== 'string') continue;
+      if (!live.has(pair[0])) state.sentBySession.set(pair[0], pair[1]);
+    }
+    for (const [id, sess] of live) state.sentBySession.set(id, sess);
+  } catch {
+    // A corrupt setting means "no persisted map", never a crashed poll loop.
+  }
+}
+
+/** Write the map back out. Bounded at `SENT_MAP_MAX` pairs, so the payload is
+ *  a few kilobytes at worst — cheap enough to do on every remember. */
+function persistSentMap(store: Store): void {
+  try {
+    store.setSetting(TELEGRAM_SENT_MAP_KEY, JSON.stringify([...state.sentBySession.entries()]));
+  } catch {
+    // Persistence is an upgrade, not a dependency — in-memory routing still works.
+  }
+}
+
 /** Remember which session a bot message came out of, so a REPLY to it routes
  *  back there (telegram-chat §1.3). Oldest entries fall off — the map is a
- *  convenience, not a record. */
-export function rememberChatMessage(messageId: number, sessionId: string): void {
+ *  convenience, not a record. With a `store` in hand the map also survives a
+ *  restart (telegram-chat §8.5). */
+export function rememberChatMessage(messageId: number, sessionId: string, store?: Store): void {
   if (!messageId) return;
+  if (store) hydrateSentMap(store);
   state.sentBySession.set(messageId, sessionId);
   while (state.sentBySession.size > SENT_MAP_MAX) {
     const oldest = state.sentBySession.keys().next();
     if (oldest.done) break;
     state.sentBySession.delete(oldest.value);
   }
+  if (store) persistSentMap(store);
 }
 
 /** The session a replied-to bot message belongs to, or undefined when it is
- *  older than the map or from a previous process. */
-export function sessionForChatMessage(messageId: number): string | undefined {
+ *  older than the map. A `store` lets a fresh process consult what the previous
+ *  one persisted (telegram-chat §8.5). */
+export function sessionForChatMessage(messageId: number, store?: Store): string | undefined {
+  const hit = state.sentBySession.get(messageId);
+  if (hit !== undefined || !store) return hit;
+  hydrateSentMap(store);
   return state.sentBySession.get(messageId);
 }
 
@@ -635,6 +687,10 @@ export async function finishCheckinEscalation(opts: {
 export async function sendFinalReport(store: Store, report: FinalReport): Promise<void> {
   const cfg = readTelegramConfig(store);
   if (!isTelegramReady(cfg)) return;
+  // In `always` mode the MIRROR is the reporting channel (telegram-chat §8.3):
+  // every finished turn is mirrored with the same formatFinalReport skeleton, so
+  // this report would be the identical answer a second time.
+  if (cfg.syncMode === 'always') return;
   // A turn the CHAT started reports itself (telegram-chat §4): the chat path
   // waits for the run and sends the answer, so letting the engine also report
   // would put the same answer on the phone twice.
@@ -655,7 +711,7 @@ export async function sendFinalReport(store: Store, report: FinalReport): Promis
     return;
   }
   // A report is a reply target too: answering it continues THAT session.
-  if (report.sessionId) rememberChatMessage(sent.messageId, report.sessionId);
+  if (report.sessionId) rememberChatMessage(sent.messageId, report.sessionId, store);
 }
 
 // -- the polling loop ---------------------------------------------------------
@@ -838,6 +894,13 @@ export function resetBotCommandRegistration(): void {
   state.commandsRegistered = false;
 }
 
+/** Forget the in-memory reply-routing map AND its hydration mark — what a process
+ *  restart does. For tests of the §8.5 persistence round-trip. */
+export function resetSentMapForRestartTest(): void {
+  state.sentBySession.clear();
+  state.sentMapHydrated = false;
+}
+
 /** Publish the menu now, for the Settings save path. */
 export async function registerTelegramCommands(store: Store): Promise<void> {
   const cfg = readTelegramConfig(store);
@@ -1004,8 +1067,8 @@ function routeToChat(store: Store, cfg: TelegramConfig, update: TelegramUpdate):
         {
           store,
           send: (text: string) => sendTelegramMessage(cfg, text),
-          rememberMessage: rememberChatMessage,
-          sessionForMessage: sessionForChatMessage,
+          rememberMessage: (messageId, sessionId) => rememberChatMessage(messageId, sessionId, store),
+          sessionForMessage: (messageId) => sessionForChatMessage(messageId, store),
           now: () => Date.now(),
           isBusy: (sessionId: string) => runtime.isBusy(sessionId) || isChatTurnInFlight(sessionId),
           runTurn: async (opts) => {

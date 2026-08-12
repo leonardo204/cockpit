@@ -1314,6 +1314,7 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           enabled: cfg.enabled,
           botTokenRedacted: redactToken(cfg.botToken),
           chatId: cfg.chatId,
+          syncMode: cfg.syncMode,
           ready: isTelegramReady(cfg),
         },
       };
@@ -1326,6 +1327,9 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // secret because the form showed a mask. A non-blank value replaces it.
       if (typeof body.botToken === 'string' && body.botToken.trim()) patch.botToken = body.botToken.trim();
       if (typeof body.chatId === 'string') patch.chatId = body.chatId.trim();
+      // Delivery mode (telegram-chat §8.1). Only the two known values are
+      // accepted; anything else leaves the stored mode untouched.
+      if (body.syncMode === 'always' || body.syncMode === 'manual') patch.syncMode = body.syncMode;
       // A NEW TOKEN IS A NEW BOT: its command menu is empty until we publish one,
       // so the once-per-process guard has to be lifted here or the menu would
       // only appear after a restart.
@@ -1350,6 +1354,7 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           enabled: cfg.enabled,
           botTokenRedacted: redactToken(cfg.botToken),
           chatId: cfg.chatId,
+          syncMode: cfg.syncMode,
           ready: isTelegramReady(cfg),
         },
       };
