@@ -1,0 +1,214 @@
+/**
+ * handleFileWatch — Effect-based WebSocket handler for /ws/fs-watch.
+ *
+ * WHAT IT IS FOR. The file browser panel used to refresh only after its OWN
+ * mutations, so anything the agent wrote, a build produced, or a terminal
+ * created stayed invisible until someone pressed refresh. This channel reports
+ * "these directories changed" for ONE open project; the panel bumps exactly
+ * those directories through the per-directory refresh nonce it already has.
+ *
+ * It follows globalStateHandler beat for beat, because it is the same shape:
+ *   - `acquireRelease` wraps the `fs.watch` subscription, so the Scope — and
+ *     therefore the socket — owns its lifetime. Closing the app, switching
+ *     projects, or dropping the connection cannot leak a watcher.
+ *   - `Stream.groupedWithin` coalesces a burst into one message per window.
+ *   - `Schedule.spaced` drives the heartbeat.
+ *   - Failures flow as Tagged Errors (WSError); no bare try/catch, no
+ *     setInterval.
+ *
+ * IT COALESCES RATHER THAN DEBOUNCES. `Stream.debounce` keeps only the LAST
+ * event of a burst, which is right for a trigger that means "rebuild the whole
+ * snapshot" (what globalStateHandler does) and wrong here: each event names a
+ * different directory, and dropping the others would drop those refreshes.
+ * `groupedWithin` keeps the whole window and `coalesceChangedDirs` reduces it
+ * to one entry per directory.
+ *
+ * WHAT IT REFUSES. `cwd` arrives from the client, so it is the same trust
+ * boundary `/api/fs-op` guards — see `resolveWatchRoot`. A refusal is not an
+ * error: the client is told the watcher is unavailable and the panel keeps
+ * working exactly as it did before this channel existed.
+ */
+import { watch, statSync, type FSWatcher } from "fs"
+import { isAbsolute, resolve } from "path"
+import { Chunk, Duration, Effect, Queue, Schedule, Scope, Stream } from "effect"
+import type { WebSocket } from "ws"
+import type { WSError } from "@cockpit/effect-core"
+import type { WSConnection } from "@cockpit/effect-services"
+import { fromWebSocket } from "@cockpit/effect-runtime/server"
+import { getStore } from "@cockpit/feature-agent/server/engines/naby"
+import {
+  WATCH_BATCH_MAX,
+  WATCH_COALESCE_MS,
+  coalesceChangedDirs,
+  supportsRecursiveWatch,
+} from "../fsWatchScope"
+
+const HEARTBEAT = Schedule.spaced("30 seconds")
+
+/** Why no watcher is running. The client only needs to know that it is on its
+ *  own; the distinction is for the log and for a future settings hint. */
+type UnavailableReason = "invalid-cwd" | "unsupported"
+
+/**
+ * The directory this connection is allowed to watch, or null.
+ *
+ * `cwd` IS CLIENT INPUT. An arbitrary absolute path must never become a watch
+ * target: watching is a standing resource on the server, and the change
+ * messages would leak the names of files outside any project the user opened.
+ * Three conditions, cheapest first — absolute, an existing directory, and a
+ * project the app actually has open.
+ *
+ * The last check reads the same `projects` table `/api/projects` serves, via
+ * `getStore()`. That is not a new dependency for the WS layer: this bundle
+ * already loads the store through globalStateHandler's snapshot, so the check
+ * costs one indexed read on connect and nothing after. Comparison is on
+ * `resolve()`d strings rather than realpaths — a project reached through a
+ * symlink simply falls back to manual refresh instead of being watched under a
+ * name the client never used.
+ *
+ * A project that is open in the UI but not yet persisted (the beat between
+ * "create" and its save) also lands here as null, and gets the manual refresh
+ * button until it is saved. Refusing to watch is always the safe answer.
+ */
+const resolveWatchRoot = (cwd: string): Effect.Effect<string | null> =>
+  Effect.try({
+    try: (): string | null => {
+      const raw = cwd.trim()
+      if (!raw || !isAbsolute(raw)) return null
+      const root = resolve(raw)
+      if (!statSync(root).isDirectory()) return null
+      const known = getStore()
+        .listProjects()
+        .some((p) => resolve(p.cwd) === root)
+      return known ? root : null
+    },
+    catch: () => null,
+  }).pipe(Effect.orElseSucceed(() => null))
+
+/** Close a watcher without caring whether it was already closed. */
+const closeQuietly = (watcher: FSWatcher | null): Effect.Effect<void> =>
+  Effect.try({
+    try: () => {
+      watcher?.close()
+    },
+    catch: () => null,
+  }).pipe(Effect.ignore)
+
+/**
+ * Start one recursive watcher over the project tree, or answer null.
+ *
+ * TWO GUARDS, DELIBERATELY. `supportsRecursiveWatch` is a claim about the
+ * platform (macOS and Windows always; Linux only on Node 20.13+/22+) and
+ * `Effect.try` is the fact — a host that throws
+ * ERR_FEATURE_UNAVAILABLE_ON_PLATFORM, or hits an inotify watch limit, must
+ * degrade rather than take the panel down with it.
+ *
+ * The 'error' listener CLOSES the watcher instead of leaving it armed. When the
+ * project tree is deleted or renamed out from under us the OS keeps reporting
+ * the failure, and a watcher that re-fires forever is the spin this feature must
+ * never become. The socket stays up on its heartbeat and the panel keeps its
+ * manual refresh.
+ */
+const openWatcher = (
+  root: string,
+  events: Queue.Queue<string>,
+): Effect.Effect<FSWatcher | null> => {
+  if (!supportsRecursiveWatch(process.platform, process.version)) {
+    return Effect.succeed(null)
+  }
+  return Effect.try({
+    try: (): FSWatcher =>
+      watch(root, { recursive: true }, (_event, filename) => {
+        // Buffer filenames (no encoding given) and the null the platform sends
+        // when it cannot name the entry are both dropped here rather than
+        // guessed at; fsWatchScope explains why an unattributable event is
+        // worse than a missed one.
+        if (typeof filename === "string") {
+          Effect.runFork(Queue.offer(events, filename))
+        }
+      }),
+    catch: () => null,
+  }).pipe(
+    Effect.tap((watcher) =>
+      Effect.sync(() => {
+        watcher.on("error", () => Effect.runSync(closeQuietly(watcher)))
+      }),
+    ),
+    Effect.orElseSucceed(() => null),
+  )
+}
+
+/** The watcher as a scoped resource: true when one is running. */
+const watchTree = (
+  root: string,
+  events: Queue.Queue<string>,
+): Effect.Effect<boolean, never, Scope.Scope> =>
+  Effect.acquireRelease(openWatcher(root, events), closeQuietly).pipe(
+    Effect.map((watcher) => watcher !== null),
+  )
+
+/**
+ * Tell the client it is on its own, then park.
+ *
+ * PARK, DO NOT RETURN. Ending the program would close the socket, the client's
+ * shared-connection pool would reconnect, and an unwatchable project would
+ * become a reconnect loop — the exact spin the degradation path exists to
+ * avoid. Parked, the connection costs one heartbeat and is released with the
+ * Scope when the panel closes.
+ */
+const parkUnavailable = (
+  conn: WSConnection,
+  reason: UnavailableReason,
+): Effect.Effect<never, WSError> =>
+  conn.send({ type: "fs-watch-unavailable", reason }).pipe(Effect.zipRight(Effect.never))
+
+export const handleFileWatch = (
+  conn: WSConnection,
+  cwd: string,
+): Effect.Effect<void, WSError, Scope.Scope> =>
+  Effect.gen(function* () {
+    yield* Effect.forkScoped(Effect.repeat(conn.send({ type: "ping" }), HEARTBEAT))
+
+    const root = yield* resolveWatchRoot(cwd)
+    if (root === null) return yield* parkUnavailable(conn, "invalid-cwd")
+
+    const events = yield* Queue.unbounded<string>()
+    const watching = yield* watchTree(root, events)
+    if (!watching) return yield* parkUnavailable(conn, "unsupported")
+
+    yield* conn.send({ type: "fs-watch-ready" })
+
+    yield* Stream.fromQueue(events).pipe(
+      Stream.groupedWithin(WATCH_BATCH_MAX, Duration.millis(WATCH_COALESCE_MS)),
+      Stream.map((batch) => coalesceChangedDirs(Chunk.toReadonlyArray(batch))),
+      // A window that was entirely node_modules churn has nothing to say.
+      Stream.filter((dirs) => dirs.length > 0),
+      Stream.mapEffect((dirs) => conn.send({ type: "fs-change", dirs })),
+      Stream.runDrain,
+    )
+  }).pipe(Effect.withSpan("ws.handleFileWatch"))
+
+// ─────────────────────────────────────────────────────────
+// Bridge for wsServer.ts
+// ─────────────────────────────────────────────────────────
+
+/** Run a raw WebSocket as an Effect program. Closing the WS releases the Scope,
+ *  which closes the watcher and interrupts the heartbeat. */
+export const runFileWatchHandler = (ws: WebSocket, cwd: string): void => {
+  const program = Effect.scoped(
+    Effect.gen(function* () {
+      const conn = yield* fromWebSocket(ws, "watch")
+      yield* handleFileWatch(conn, cwd ?? "")
+    }),
+  ).pipe(
+    Effect.catchAll((e) =>
+      Effect.logError("[ws/fs-watch]").pipe(
+        Effect.annotateLogs("error", JSON.stringify(e)),
+      ),
+    ),
+  )
+  const fiber = Effect.runFork(program)
+  ws.on("close", () => {
+    Effect.runFork(fiber.interruptAsFork(fiber.id()))
+  })
+}

@@ -27,7 +27,14 @@ const outside = join(root, 'outside');
 
 let route: typeof import('./route');
 
-type Res = { ok: boolean; reason?: string; rel?: string };
+type Res = {
+  ok: boolean;
+  reason?: string;
+  rel?: string;
+  content?: string;
+  truncated?: boolean;
+  size?: number;
+};
 
 const post = async (body: unknown): Promise<Res> => {
   const res = await route.POST(
@@ -271,6 +278,90 @@ describe('open / reveal', () => {
       ok: false,
       reason: 'not-found',
     });
+  });
+});
+
+describe('read', () => {
+  // The only action that returns file CONTENT, so its refusals are the ones
+  // that decide what the in-app viewer can be pointed at.
+
+  it('returns the file text, untruncated', async () => {
+    const r = await post({ cwd, action: 'read', rel: 'README.md' });
+    expect(r).toEqual({ ok: true, rel: 'README.md', content: 'hello', truncated: false, size: 5 });
+  });
+
+  it('reads a nested file', async () => {
+    const r = await post({ cwd, action: 'read', rel: 'src/nested/deep.txt' });
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe('deep');
+  });
+
+  it('preserves multi-byte content byte-for-byte when it fits', async () => {
+    // The truncation path trims a dangling U+FFFD; an intact file must not be
+    // touched by that, or every Korean document would lose its last character
+    // the day one legitimately ends in a replacement char.
+    writeFileSync(join(cwd, 'ko.md'), '# 제목\n\n본문입니다.\n');
+    const r = await post({ cwd, action: 'read', rel: 'ko.md' });
+    expect(r.content).toBe('# 제목\n\n본문입니다.\n');
+    expect(r.truncated).toBe(false);
+  });
+
+  it('refuses a directory — a folder has no text to show', async () => {
+    expect(await post({ cwd, action: 'read', rel: 'src' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+  });
+
+  it('refuses the project root, which is a directory by definition', async () => {
+    expect(await post({ cwd, action: 'read', rel: '' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+  });
+
+  it('refuses to read anything outside the project', async () => {
+    // The containment guard is the point: `read` is the one action that could
+    // otherwise EXFILTRATE a file rather than merely fail to touch it.
+    expect(await post({ cwd, action: 'read', rel: '../outside/secret.txt' })).toEqual({
+      ok: false,
+      reason: 'escape',
+    });
+  });
+
+  it('reports a target that is not there', async () => {
+    expect(await post({ cwd, action: 'read', rel: 'ghost.md' })).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
+  });
+
+  it('refuses a file past the hard ceiling instead of returning a fragment', async () => {
+    // 33 MiB — over MAX_READ_BYTES, where a leading slice stops being a usable
+    // stand-in for the file. Written as a sparse-ish single write so the test
+    // does not spend seconds on it.
+    const huge = join(cwd, 'huge.md');
+    writeFileSync(huge, Buffer.alloc(33 * 1024 * 1024, 0x61));
+    expect(await post({ cwd, action: 'read', rel: 'huge.md' })).toEqual({
+      ok: false,
+      reason: 'too-large',
+    });
+    rmSync(huge, { force: true });
+  });
+
+  it('truncates honestly between the two ceilings', async () => {
+    // 3 MiB — over PREVIEW_BYTES (2 MiB), under MAX_READ_BYTES. The response
+    // says so and reports the REAL size, so the UI can tell the user it is
+    // showing a head rather than quietly presenting a prefix as the document.
+    const big = join(cwd, 'big.md');
+    const size = 3 * 1024 * 1024;
+    writeFileSync(big, Buffer.alloc(size, 0x62));
+    const r = await post({ cwd, action: 'read', rel: 'big.md' });
+    expect(r.ok).toBe(true);
+    expect(r.truncated).toBe(true);
+    expect(r.size).toBe(size);
+    expect(r.content?.length).toBe(2 * 1024 * 1024);
+    rmSync(big, { force: true });
   });
 });
 

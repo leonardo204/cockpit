@@ -5,6 +5,7 @@ import {
   createParentOf,
   escapeHtml,
   failureKey,
+  fsChangeDirs,
   isCommittableName,
   renameSelection,
   stripTransTags,
@@ -133,5 +134,36 @@ describe('failureKey', () => {
   it('falls back to the per-action message for everything else', () => {
     expect(failureKey('delete', 'failed')).toBe('fileBrowser.deleteError');
     expect(failureKey('duplicate', undefined)).toBe('fileBrowser.duplicateError');
+  });
+});
+
+describe('fsChangeDirs', () => {
+  it('reads the directories out of a change message', () => {
+    expect(fsChangeDirs({ type: 'fs-change', dirs: ['src/a', ''] })).toEqual(['src/a', '']);
+  });
+
+  it('says nothing for the channel’s other messages', () => {
+    // Both are legitimate traffic; neither is a refresh.
+    expect(fsChangeDirs({ type: 'fs-watch-ready' })).toEqual([]);
+    expect(fsChangeDirs({ type: 'fs-watch-unavailable', reason: 'unsupported' })).toEqual([]);
+  });
+
+  it('says nothing for anything malformed', () => {
+    expect(fsChangeDirs(null)).toEqual([]);
+    expect(fsChangeDirs(undefined)).toEqual([]);
+    expect(fsChangeDirs('fs-change')).toEqual([]);
+    expect(fsChangeDirs({ type: 'fs-change' })).toEqual([]);
+    expect(fsChangeDirs({ type: 'fs-change', dirs: 'src' })).toEqual([]);
+  });
+
+  it('drops entries the tree could never render', () => {
+    // Defence in depth — the server scopes these already, but a nonce keyed on
+    // a path outside the project would just sit there forever.
+    expect(
+      fsChangeDirs({
+        type: 'fs-change',
+        dirs: ['src', '/etc', '../up', 'a\\b', 42, null, 'ok/dir'],
+      }),
+    ).toEqual(['src', 'ok/dir']);
   });
 });

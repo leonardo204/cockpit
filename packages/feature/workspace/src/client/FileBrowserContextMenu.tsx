@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { isMacClient, isWindowsClient } from '@cockpit/shared-utils';
+import { isMacClient, isMarkdownFile, isWindowsClient } from '@cockpit/shared-utils';
 import type { MenuTarget } from './fileBrowserOps';
 
 /**
@@ -32,9 +32,14 @@ import type { MenuTarget } from './fileBrowserOps';
  * WHAT IS OFFERED DEPENDS ON WHERE THE CLICK LANDED:
  *   • the panel BODY (`target.rel === ''`) is the project root — it can only be
  *     created into, never renamed, duplicated or deleted.
- *   • "Open" is limited to FILES, and sits first — it is what a double-click
- *     on the row already does, and the menu should name the default action
- *     rather than leave it undiscoverable.
+ *   • "Preview" is limited to MARKDOWN files and sits first, above "Open", for
+ *     exactly the reason "Open" sits first on everything else: on a `.md` row
+ *     the in-app viewer IS what a double-click does, and the menu names the
+ *     default action rather than leave it undiscoverable. "Open" and "Open
+ *     With…" stay on markdown rows too — previewing replaces no escape hatch,
+ *     and handing a `.md` to one's own editor must remain one click away.
+ *   • "Open" is limited to FILES — it is what a double-click on a non-markdown
+ *     row does. A folder has no "open with"; it expands.
  *   • "Open" and "Reveal" are no longer gated on the Electron bridge: the panel
  *     falls back to `/api/fs-op`, which runs on the same machine as the files,
  *     so the host can always perform them. Gating on the bridge was read as
@@ -54,6 +59,7 @@ interface FileBrowserContextMenuProps {
   onClose: () => void;
   onOpen: (target: MenuTarget) => void;
   onOpenWith: (target: MenuTarget) => void;
+  onPreview: (target: MenuTarget) => void;
   onNewFile: (target: MenuTarget) => void;
   onNewFolder: (target: MenuTarget) => void;
   onRename: (target: MenuTarget) => void;
@@ -73,6 +79,7 @@ export function FileBrowserContextMenu({
   onClose,
   onOpen,
   onOpenWith,
+  onPreview,
   onNewFile,
   onNewFolder,
   onRename,
@@ -156,6 +163,23 @@ export function FileBrowserContextMenu({
           folder has no "open with" — it expands. */}
       {!isRoot && !state.isDir && (
         <>
+          {/* Above Open, because on a markdown row this is the double-click
+              action. Gated on the shared predicate, so the item and the
+              double-click can never disagree about what markdown is. */}
+          {isMarkdownFile(state.name) && (
+            <button
+              role="menuitem"
+              data-testid="file-menu-preview"
+              className={item}
+              onClick={run(() => onPreview(target))}
+            >
+              <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              {t('fileBrowser.preview')}
+            </button>
+          )}
           <button
             role="menuitem"
             data-testid="file-menu-open"

@@ -24,6 +24,8 @@ import { join } from 'node:path';
 const DIR = __dirname;
 const MENU = join(DIR, 'FileBrowserContextMenu.tsx');
 const PANEL = join(DIR, 'FileBrowserPanel.tsx');
+const PREVIEW = join(DIR, 'MarkdownPreviewModal.tsx');
+const PREVIEW_OPS = join(DIR, 'markdownPreviewOps.ts');
 const LOCALES = join(DIR, '..', '..', '..', '..', 'shared', 'i18n', 'locales');
 
 describe('file browser menu — it escapes the panel it opens from', () => {
@@ -68,6 +70,28 @@ describe('file browser menu — it escapes the panel it opens from', () => {
     expect(src).toContain('{!isRoot && !state.isDir && (');
   });
 
+  it('offers "Preview" only for markdown, above Open', () => {
+    const src = readFileSync(MENU, 'utf8');
+    // Gated on the SHARED predicate, not a local extension list: the item and
+    // the row's double-click must never disagree about what markdown is.
+    expect(src).toContain('isMarkdownFile');
+    expect(src).toContain('isMarkdownFile(state.name) && (');
+    expect(src).toContain("'fileBrowser.preview'");
+    // Order matters — on a .md row Preview is the default action, so it names
+    // itself first, the way Open does everywhere else.
+    expect(src.indexOf("'fileBrowser.preview'")).toBeLessThan(src.indexOf("'fileBrowser.open'"));
+  });
+
+  it('keeps the OS hand-off available on markdown rows too', () => {
+    const src = readFileSync(MENU, 'utf8');
+    // The in-app viewer replaces no escape hatch: a user must still be able to
+    // send a .md to their own editor. Both items live in the same file-only
+    // gate as before, with no markdown exclusion around either.
+    expect(src).not.toMatch(/!isMarkdownFile[^\n]*fileBrowser\.open/);
+    expect(src).toContain("'fileBrowser.open'");
+    expect(src).toContain("'fileBrowser.openWith'");
+  });
+
   it('offers "Open With…" only where the OS has a chooser', () => {
     const src = readFileSync(MENU, 'utf8');
     // Inside the file-only gate above, further limited to macOS/Windows
@@ -106,6 +130,70 @@ describe('file browser rows — double-click opens a file with the OS', () => {
     expect(src).toContain('fileBrowser.confirmDeleteMessage');
     expect(src).toContain('fileBrowser.confirmDeletePermanent');
   });
+
+  it('routes the double-click through the shared activation rule', () => {
+    // Not an inline extension check in the row: the menu item and the
+    // double-click branch on the same predicate, via the same function.
+    expect(src).toContain('rowActivation');
+    expect(src).toContain("if (action === 'preview') previewFile(target);");
+    expect(src).toContain("else if (action === 'os-open') openFile(target);");
+  });
+
+  it('no longer documents the policy the code stopped following', () => {
+    // The header used to state the OPPOSITE rule ("Deliberately NOT an in-app
+    // viewer"). A comment that contradicts the code is worse than none: it is
+    // the thing the next reader trusts. This pins the retraction, since nothing
+    // else in the build can see a stale sentence.
+    expect(src).not.toContain('Deliberately\n *     NOT an in-app viewer');
+    expect(src).not.toContain('NOT an in-app viewer');
+    expect(src).toContain('MARKDOWN IS THE ONE EXTENSION THE APP OPENS ITSELF');
+  });
+});
+
+describe('markdown preview modal — it is an assembly, not a second renderer', () => {
+  const src = readFileSync(PREVIEW, 'utf8');
+
+  it('escapes the panel that clips, like every other overlay here', () => {
+    // Same rule as the context menu above: FileBrowserPanel is
+    // `overflow-hidden` and the shell wraps it in a translateX container.
+    expect(src).toContain('<Portal>');
+    expect(src).toContain('fixed inset-0');
+  });
+
+  it('reuses the orphaned shared-ui pieces rather than rebuilding them', () => {
+    // MarkdownRenderer + TocSidebar + rehypeSourceLines are one wired system:
+    // the plugin stamps data-source-start, the sidebar looks headings up by it.
+    // Re-implementing any of them is the duplication CLAUDE.md warns about.
+    expect(src).toContain("from '@cockpit/shared-ui'");
+    expect(src).toContain('<MarkdownRenderer');
+    expect(src).toContain('<TocSidebar');
+    expect(src).toContain('rehypePlugins={REHYPE_PLUGINS}');
+    expect(src).toContain('const REHYPE_PLUGINS = [rehypeSourceLines]');
+  });
+
+  it('turns math ON, unlike chat', () => {
+    // In a conversation a `$` is nearly always money; in a document `$…$` is
+    // what the author meant, and chat's MessageBubble opts out explicitly.
+    // Read off the ELEMENT, not the whole file — the header comment names the
+    // chat setting it is contrasting with.
+    const element = /<MarkdownRenderer[\s\S]*?\/>/.exec(src)?.[0];
+    expect(element, 'MarkdownRenderer element not found — did the markup change?').toBeDefined();
+    expect(element).toContain('enableMath');
+    expect(element).not.toContain('enableMath={false}');
+  });
+
+  it('closes on Escape through the shared hook', () => {
+    expect(src).toContain('useEscToClose(onClose)');
+  });
+
+  it('never lets an unresolvable link navigate the app', () => {
+    // The default is consume-and-drop. Returning false for a bare relative
+    // href would resolve it against the app's own origin and navigate the
+    // single-page shell away from the live chat session.
+    expect(src).toContain('classifyMarkdownLink');
+    expect(src).toContain("if (target.kind === 'external') return false;");
+    expect(src).toContain('return true;');
+  });
 });
 
 describe('file browser menu — every label is translated in both locales', () => {
@@ -118,14 +206,21 @@ describe('file browser menu — every label is translated in both locales', () =
       return undefined;
     }, dict);
 
-  /** Every `fileBrowser.*` / `fileContextMenu.*` key mentioned in the source. */
+  /** Every menu/viewer translation key mentioned in the source. */
   const keysIn = (file: string): string[] => {
     const src = readFileSync(file, 'utf8');
-    const found = src.match(/'(?:fileBrowser|fileContextMenu|common|confirm)\.[A-Za-z0-9_]+'/g) ?? [];
+    const found =
+      src.match(
+        /'(?:fileBrowser|fileContextMenu|markdownPreview|common|confirm)\.[A-Za-z0-9_]+'/g,
+      ) ?? [];
     return [...new Set(found.map((s) => s.slice(1, -1)))];
   };
 
-  const keys = [...new Set([...keysIn(MENU), ...keysIn(PANEL)])];
+  // The viewer's own strings are checked here too: it is opened from this menu,
+  // and its status line and error sentences reach a Korean user the same way.
+  const keys = [
+    ...new Set([...keysIn(MENU), ...keysIn(PANEL), ...keysIn(PREVIEW), ...keysIn(PREVIEW_OPS)]),
+  ];
 
   it('finds the keys it is supposed to be checking', () => {
     // A regex that silently matches nothing would make every assertion below
@@ -134,6 +229,9 @@ describe('file browser menu — every label is translated in both locales', () =
     expect(keys).toContain('fileBrowser.revealInFinder');
     expect(keys).toContain('fileBrowser.open');
     expect(keys).toContain('fileBrowser.openError');
+    expect(keys).toContain('fileBrowser.preview');
+    expect(keys).toContain('markdownPreview.readingTimeUnderMinute');
+    expect(keys).toContain('markdownPreview.tooLarge');
   });
 
   it.each(keys)('%s exists in en.json', (key) => {

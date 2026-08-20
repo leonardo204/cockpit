@@ -1,7 +1,7 @@
 /**
  * /api/fs-op — the OS-side half of the chat file browser: create, rename,
- * duplicate and delete, plus open-with-default-app and reveal-in-file-manager,
- * inside one project working tree.
+ * duplicate and delete, plus open-with-default-app, reveal-in-file-manager and
+ * read-file-text, inside one project working tree.
  *
  * SCOPE & SAFETY. Same shape as /api/list-dir and /api/copy-into: `cwd` is the
  * project root the user already opened and `rel` names an entry relative to it.
@@ -32,6 +32,22 @@
  * this fallback the menu simply omitted both items wherever the bridge was
  * dark (a plain browser tab, and Windows builds where the subframe bridge does
  * not surface), which read as "Windows has no Open".
+ *
+ * READ IS THE ONLY ACTION THAT RETURNS FILE CONTENT, AND IT IS BOUNDED TWICE.
+ * It exists so the in-app markdown viewer has a text source; it lives here
+ * rather than in a route of its own so the containment guard above is not
+ * written a second time. Two ceilings, because they answer different questions:
+ * `PREVIEW_BYTES` is how much text a viewer may be handed at once (past it the
+ * response carries `truncated:true` and the real `size`, so the UI can say so
+ * instead of quietly showing a prefix as if it were the document), and
+ * `MAX_READ_BYTES` is the point where a prefix stops being a useful stand-in
+ * for the file at all and the honest answer is `too-large`. A directory is
+ * refused: `readFile` on one throws EISDIR, and a folder has no text to show.
+ *
+ * READ DOES NOT SNIFF FOR BINARY. Deciding what is renderable belongs to the
+ * caller — the file browser only asks for extensions it already knows are
+ * markdown — and a byte-level heuristic here would just be a second, weaker
+ * copy of that judgement.
  */
 import { execFile, spawn } from "child_process"
 import { cp, mkdir, open, readdir, rename, rm, stat } from "fs/promises"
@@ -43,8 +59,16 @@ import { copySiblingName, isSafeSegment, withinCwd } from "../../../lib/fsScope"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const ACTIONS = ["mkdir", "mkfile", "rename", "duplicate", "delete", "open", "reveal", "openWith"] as const
+const ACTIONS = ["mkdir", "mkfile", "rename", "duplicate", "delete", "open", "reveal", "openWith", "read"] as const
 type Action = (typeof ACTIONS)[number]
+
+/** The most text one `read` ever returns. Beyond this the response is marked
+ *  `truncated` — a viewer that renders 2 MiB of markdown is already past the
+ *  point where anyone is reading it. */
+const PREVIEW_BYTES = 2 * 1024 * 1024
+/** Past this, a leading slice is no longer a usable stand-in for the file, so
+ *  `read` refuses instead of handing back a misleading fragment. */
+const MAX_READ_BYTES = 32 * 1024 * 1024
 
 /**
  * Hand `abs` to the OS default application for its type. Resolves `false` when
@@ -155,6 +179,7 @@ type Reason =
   | "escape"
   | "exists"
   | "not-found"
+  | "too-large"
   | "failed"
 
 const fail = (reason: Reason) => ok({ ok: false as const, reason })
@@ -324,6 +349,49 @@ export const POST = handler((req) =>
         }).pipe(Effect.orElseSucceed(() => false))
         if (!done) return fail("failed")
         return ok({ ok: true as const, rel })
+      }
+
+      // -- read (the in-app viewer's text source) ----------------------------
+      case "read": {
+        if (!rel) return fail("invalid-target") // the project root is a directory
+        const info = yield* Effect.tryPromise({
+          try: () => stat(target),
+          catch: () => null,
+        }).pipe(Effect.orElseSucceed(() => null))
+        if (!info) return fail("not-found")
+        if (info.isDirectory()) return fail("invalid-target")
+        if (info.size > MAX_READ_BYTES) return fail("too-large")
+
+        const truncated = info.size > PREVIEW_BYTES
+        const text = yield* Effect.tryPromise({
+          // A POSITIONAL read, not `readFile`: the cap has to bound what is
+          // pulled off disk, not merely what is sent, or a 30 MiB file would
+          // still be materialised in full to hand back 2 MiB of it.
+          try: async () => {
+            const fh = await open(target, "r")
+            try {
+              const cap = Math.min(info.size, PREVIEW_BYTES)
+              const buf = Buffer.alloc(cap)
+              const { bytesRead } = await fh.read(buf, 0, cap, 0)
+              return buf.subarray(0, bytesRead).toString("utf8")
+            } finally {
+              await fh.close()
+            }
+          },
+          catch: () => null,
+        }).pipe(Effect.orElseSucceed(() => null))
+        if (text === null) return fail("failed")
+
+        return ok({
+          ok: true as const,
+          rel,
+          // A cut at a byte offset can land mid-codepoint, and Node renders that
+          // dangling tail as U+FFFD. Dropping it only in the truncated case
+          // keeps an intact file byte-for-byte what it is on disk.
+          content: truncated ? text.replace(/\uFFFD+$/, "") : text,
+          truncated,
+          size: info.size,
+        })
       }
 
       case "reveal": {

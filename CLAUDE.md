@@ -69,8 +69,11 @@ framework boot. See `MODULES.md` for the dependency rules.
 
 - `/src/app/` - Next.js routing only (page.tsx + layout.tsx + one-line
   `route.ts` shims that re-export from feature packages)
-- `/src/lib/` - Server bootstrap: `wsServer.ts` (WS server),
-  `fileWatcher.ts` (fs watcher)
+- `/src/lib/` - Server bootstrap: `wsServer.ts` (WS upgrade + route
+  dispatch), `effect/` (the WS handlers themselves — global state, session
+  stream, and `fileWatchHandler.ts` for `/ws/fs-watch`), `fsScope.ts` /
+  `fsWatchScope.ts` (the pure containment and watch-filter rules the fs routes
+  and the watcher share), `auth.ts`
 - `/packages/feature/` - Self-contained domain features:
   - `agent/` - Chat domain (Claude/Ollama/Codex/Kimi/DeepSeek), scheduled
     tasks, slash commands, sidebar panels, tool-call snapshots (shadow git

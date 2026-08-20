@@ -1,14 +1,15 @@
 /**
- * fileBrowserOps.ts — the decisions behind the file browser's right-click menu,
- * as pure functions.
+ * fileBrowserOps.ts — the decisions behind the file browser's right-click menu
+ * and its refresh, as pure functions.
  *
  * WHY THEY LIVE OUTSIDE THE COMPONENT. This repo has no component-render
  * harness, so anything expressed only as JSX is untested by construction. The
  * parts of these operations that can be wrong in a way a user would notice —
  * which directory a "New File" lands in, what a rename actually asks the server
- * for, which part of a name is preselected for editing, and how a file name
- * reaches an innerHTML confirm dialog — are decided here and pinned by
- * fileBrowserOps.test.ts. The component is left with wiring.
+ * for, which part of a name is preselected for editing, how a file name reaches
+ * an innerHTML confirm dialog, and which watcher messages are worth a refresh —
+ * are decided here and pinned by fileBrowserOps.test.ts. The component is left
+ * with wiring.
  */
 
 /** One entry as the tree knows it. */
@@ -108,6 +109,33 @@ export function escapeHtml(value: string): string {
  */
 export function stripTransTags(message: string): string {
   return message.replace(/<\/?file>/g, '');
+}
+
+/**
+ * The directories a `/ws/fs-watch` message says to refresh, or none.
+ *
+ * The panel bumps whatever comes back, so this is the only place that decides
+ * what counts as a change message — a shape check the component would otherwise
+ * do inline, where nothing could test it. Anything that is not an `fs-change`
+ * carrying an array of strings yields `[]`, which is what the channel's other
+ * messages (`fs-watch-ready`, `fs-watch-unavailable`) are meant to do here.
+ *
+ * The path filter is defence in depth, not the real guard: the server already
+ * scopes every entry to the project and drops the ignored trees. It is here so
+ * a malformed entry cannot become a refresh nonce keyed on a path the tree can
+ * never render.
+ */
+export function fsChangeDirs(message: unknown): string[] {
+  if (!message || typeof message !== 'object') return [];
+  const msg = message as { type?: unknown; dirs?: unknown };
+  if (msg.type !== 'fs-change' || !Array.isArray(msg.dirs)) return [];
+  return msg.dirs.filter(
+    (dir): dir is string =>
+      typeof dir === 'string' &&
+      !dir.startsWith('/') &&
+      !dir.includes('\\') &&
+      !dir.split('/').includes('..'),
+  );
 }
 
 /** Which i18n key explains a failed `/api/fs-op` response. `exists` is the one

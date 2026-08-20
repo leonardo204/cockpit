@@ -470,6 +470,7 @@
     "copyError": "Could not copy the files.",
     "open": "Open",
     "openWith": "Open With…",
+    "preview": "Preview",
     "openError": "Could not open that file.",
     "createFolder": "New Folder",
     "rename": "Rename",
@@ -674,7 +675,13 @@
     "stop": "Stop",
     "stopHint": "Stop this turn (or press Esc)",
     "thinkingBlock": "Reasoning",
-    "thinkingChars": "({{count}} chars)"
+    "thinkingChars": "({{count}} chars)",
+    "turnDuration": {
+      "seconds": "{{value}}s",
+      "minutes": "{{minutes}}m {{seconds}}s",
+      "hours": "{{hours}}h {{minutes}}m"
+    },
+    "turnFinishedAt": "Finished at {{time}}"
   },
   "claudeAccount": {
     "signedIn": "Claude: signed in",
@@ -1635,6 +1642,15 @@
   "markdown": {
     "copied": "✓ Copied",
     "copy": "Copy"
+  },
+  "markdownPreview": {
+    "back": "Back",
+    "words": "{{count}} words",
+    "readingTime": "About {{count}} min read",
+    "readingTimeUnderMinute": "Less than a minute",
+    "truncated": "This file is long — only the beginning is shown.",
+    "tooLarge": "This file is too large to preview.",
+    "loadError": "Could not read this file."
   },
   "imagePreview": {
     "previewImage": "Preview image",

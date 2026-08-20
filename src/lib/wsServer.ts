@@ -5,14 +5,20 @@
  * upgrade, route dispatch, and the broadcast helper.
  *
  * F1-03 chat-first trim: /ws/terminal, /ws/bash, /ws/browser, /ws/terminal-follow
- * and /ws/jupyter belonged to @cockpit/feature-console; /ws/watch backed the
- * Explorer file tree and the git-branch indicators. All were deleted with their
- * features, leaving the two chat channels:
+ * and /ws/jupyter belonged to @cockpit/feature-console; the old /ws/watch backed
+ * the Explorer file tree and the git-branch indicators. All were deleted with
+ * their features, leaving the chat channels plus one that came back:
  *
  *   /ws/global-state   — cross-project session list push (sidebar / recents)
  *   /ws/session-stream — live tail of an in-flight chat run
+ *   /ws/fs-watch       — per-project filesystem changes for the file browser
  *
- * Handler implementations: src/lib/effect/{globalStateHandler,sessionStreamHandler}.ts
+ * /ws/fs-watch is a NEW, narrower channel, not the deleted /ws/watch restored:
+ * it carries only "these directories changed" for one project — no git status,
+ * no whole-tree payload — and it is named apart so nothing can mistake the two
+ * protocols for each other.
+ *
+ * Handler implementations: src/lib/effect/{globalStateHandler,sessionStreamHandler,fileWatchHandler}.ts
  */
 import { IncomingMessage } from 'http';
 import { Duplex } from 'stream';
@@ -20,6 +26,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { parse } from 'url';
 import { runGlobalStateHandler } from './effect/globalStateHandler';
 import { runSessionStreamHandler } from './effect/sessionStreamHandler';
+import { runFileWatchHandler } from './effect/fileWatchHandler';
 // globalStateClients + broadcastToGlobalState live in a side-effect-free module so API
 // routes can broadcast without importing this server.
 import { globalStateClients, broadcastToGlobalState } from './globalStateBroadcast';
@@ -41,7 +48,7 @@ const g_ws = globalThis as unknown as {
   __cockpitWss?: WebSocketServer;
 };
 
-const WS_ROUTES: readonly string[] = ['/ws/global-state', '/ws/session-stream'];
+const WS_ROUTES: readonly string[] = ['/ws/global-state', '/ws/session-stream', '/ws/fs-watch'];
 
 const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
   const server = new WebSocketServer({ noServer: true });
@@ -59,6 +66,11 @@ const wss: WebSocketServer = g_ws.__cockpitWss ?? (() => {
       runGlobalStateHandler(ws);
     } else if (pathname === '/ws/session-stream') {
       runSessionStreamHandler(ws, query.sessionId as string);
+    } else if (pathname === '/ws/fs-watch') {
+      // `cwd` is client input and is validated by the handler, not here — see
+      // resolveWatchRoot: absolute, an existing directory, and a project the
+      // app actually has open.
+      runFileWatchHandler(ws, (query.cwd as string) ?? '');
     }
   });
 

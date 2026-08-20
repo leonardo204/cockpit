@@ -12,11 +12,22 @@
  *   • DROP OS files onto a folder     → the files are COPIED into that folder
  *     (Finder/Explorer → project), then that folder refreshes.
  *   • plain click on a folder         → expand/collapse (files: no-op).
- *   • DOUBLE-CLICK a file row         → the OS default application for that
- *     extension opens it (Electron only; a no-op in a browser). Deliberately
- *     NOT an in-app viewer — the user's own tools already win that argument.
+ *   • DOUBLE-CLICK a MARKDOWN row     → the in-app viewer (MarkdownPreviewModal).
+ *   • DOUBLE-CLICK any other file row → the OS default application for that
+ *     extension opens it.
  *   • RIGHT-CLICK a row (or the body) → the Finder-basic operations menu:
- *     open, new file, new folder, rename, duplicate, delete, copy path, reveal.
+ *     preview, open, open with, new file, new folder, rename, duplicate,
+ *     delete, copy path, reveal.
+ *
+ * MARKDOWN IS THE ONE EXTENSION THE APP OPENS ITSELF, and the rule is narrow on
+ * purpose. For every other type the user's own tools win the argument, so the
+ * hand-off to the OS is still the default and both "Open" and "Open With…"
+ * remain on the menu for markdown too — this replaces no escape hatch. Markdown
+ * is the exception because the app already renders it better than a hand-off
+ * can: the same GFM/math/TOC pipeline the chat uses, plus relative `.md` links
+ * that open in place, which turns a folder of documents into something
+ * browsable instead of a queue of editor windows. `rowActivation`
+ * (markdownPreviewOps.ts) is where the choice is made.
  *
  * REFERENCE SAFETY. Reference paths are relative to the project root and folders
  * carry a trailing "/". A `/` or `.` immediately after the name makes the chat
@@ -29,6 +40,15 @@
  * recoverable, and falls back to the route's permanent `rm` only in a plain
  * browser — where the confirmation says so, rather than promising a trash that
  * does not exist. Nothing mutates without a confirmation or an explicit name.
+ *
+ * LIVE REFRESH. The tree used to update only after its OWN writes, so a file the
+ * agent created, a folder made in a terminal, or anything a build produced stayed
+ * invisible until someone pressed refresh. `/ws/fs-watch` now reports which
+ * directories changed and those are bumped through the same per-directory nonce
+ * the mutations use. The watcher ignores `node_modules`, `.git` and build output
+ * (see src/lib/fsWatchScope.ts) — without that one `npm install` would emit tens
+ * of thousands of events — and it is unavailable on platforms that cannot watch
+ * recursively, which is why the manual refresh button is still here.
  *
  * The menu itself is FIXED-positioned (see FileBrowserContextMenu): this panel's
  * root is `overflow-hidden`, so an absolutely positioned menu would be clipped.
@@ -49,20 +69,23 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { confirm, toast } from '@cockpit/shared-ui';
+import { confirm, toast, useWebSocket } from '@cockpit/shared-ui';
 import { FILE_REF_MIME, insertFileRef, osFilePath } from '@cockpit/feature-agent';
 import { FileBrowserContextMenu, type FileMenuState } from './FileBrowserContextMenu';
+import { MarkdownPreviewModal } from './MarkdownPreviewModal';
 import {
   absolutePathOf,
   childRel,
   createParentOf,
   escapeHtml,
   failureKey,
+  fsChangeDirs,
   isCommittableName,
   renameSelection,
   stripTransTags,
   type MenuTarget,
 } from './fileBrowserOps';
+import { rowActivation } from './markdownPreviewOps';
 
 interface Entry {
   name: string;
@@ -77,6 +100,9 @@ type CopyResponse =
   | { ok: true; copied: string[]; skipped: string[]; failed: string[] }
   | { ok: false; reason: string };
 
+// `read` is deliberately absent: it is the only action that returns a body, so
+// it is issued by MarkdownPreviewModal with its own response type rather than
+// forced through the `{ok, rel}` shape every mutating op shares.
 type FsOpAction = 'mkdir' | 'mkfile' | 'rename' | 'duplicate' | 'delete' | 'open' | 'reveal' | 'openWith';
 
 type FsOpResponse =
@@ -99,8 +125,10 @@ const RefreshContext = createContext<{ nonceOf: (rel: string) => number; bump: (
  *  input, and they only move on an explicit user action. */
 const FileOpsContext = createContext<{
   openMenu: (e: React.MouseEvent, target: MenuTarget) => void;
-  /** Hand a file to the OS default app. A no-op outside Electron. */
+  /** Hand a file to the OS default app. */
   openFile: (target: MenuTarget) => void;
+  /** Open a markdown file in the in-app viewer. */
+  previewFile: (target: MenuTarget) => void;
   /** The row currently being renamed, if any; its label becomes an input. */
   renamingRel: string | null;
   commitRename: (target: MenuTarget, next: string) => void;
@@ -112,6 +140,7 @@ const FileOpsContext = createContext<{
 }>({
   openMenu: () => {},
   openFile: () => {},
+  previewFile: () => {},
   renamingRel: null,
   commitRename: () => {},
   cancelRename: () => {},
@@ -303,7 +332,7 @@ const TreeNode = memo(function TreeNode({
 }) {
   const { t } = useTranslation();
   const { bump } = useContext(RefreshContext);
-  const { openMenu, openFile, renamingRel, commitRename, cancelRename, creating } =
+  const { openMenu, openFile, previewFile, renamingRel, commitRename, cancelRename, creating } =
     useContext(FileOpsContext);
   const [open, setOpen] = useState(false);
   const [dropOver, setDropOver] = useState(false);
@@ -341,7 +370,8 @@ const TreeNode = memo(function TreeNode({
   );
 
   /**
-   * Double-click a FILE row → the OS default application for its extension.
+   * Double-click a FILE row → the in-app viewer for markdown, the OS default
+   * application for everything else (`rowActivation` decides which).
    *
    * It does not fight the single-click handler. A plain click on a file row is
    * already a no-op (only folders toggle), so the two clicks React delivers
@@ -355,9 +385,14 @@ const TreeNode = memo(function TreeNode({
   const onDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       if (entry.isDir || e.metaKey || e.ctrlKey) return;
-      openFile({ rel, parentRel, name: entry.name, isDir: entry.isDir });
+      const target = { rel, parentRel, name: entry.name, isDir: entry.isDir };
+      // Primitive deps, not `entry`: the row is memo'd and a fresh object
+      // identity from a parent re-render would rebuild this callback for nothing.
+      const action = rowActivation(target);
+      if (action === 'preview') previewFile(target);
+      else if (action === 'os-open') openFile(target);
     },
-    [entry.isDir, entry.name, openFile, rel, parentRel],
+    [entry.isDir, entry.name, openFile, previewFile, rel, parentRel],
   );
 
   const onContextMenu = useCallback(
@@ -559,16 +594,56 @@ export function FileBrowserPanel({
 }) {
   const { t } = useTranslation();
   // Per-directory refresh nonces (bumped after a copy lands files in a folder,
-  // or after any fs-op mutation).
+  // after any fs-op mutation, and when the watcher reports a change made from
+  // outside the panel).
   const [nonces, setNonces] = useState<Record<string, number>>({});
   const nonceOf = useCallback((rel: string) => nonces[rel] ?? 0, [nonces]);
-  const bump = useCallback((rel: string) => {
-    setNonces((prev) => ({ ...prev, [rel]: (prev[rel] ?? 0) + 1 }));
+  /** Bump several directories in ONE state update. A watcher window that
+   *  touched four folders must be four re-fetches, not four renders of the
+   *  whole tree. */
+  const bumpMany = useCallback((rels: readonly string[]) => {
+    if (rels.length === 0) return;
+    setNonces((prev) => {
+      const next = { ...prev };
+      for (const rel of rels) next[rel] = (next[rel] ?? 0) + 1;
+      return next;
+    });
   }, []);
+  const bump = useCallback((rel: string) => bumpMany([rel]), [bumpMany]);
+
+  /**
+   * CHANGES MADE FROM OUTSIDE THIS PANEL — the agent writing a file, a build,
+   * a `mkdir` in a terminal — arrive here.
+   *
+   * IT ADDS NO SECOND REFRESH PATH. A watcher event is turned into the same
+   * `bump(dir)` the panel's own mutations use, so a folder re-fetches only if
+   * it is expanded (a collapsed one is unmounted and re-reads on expand
+   * anyway), and the rest of the tree is left alone.
+   *
+   * The connection is keyed by `cwd`, and @cockpit/shared-ui pools by URL: a
+   * project switch (this panel is mounted per project) drops the old socket,
+   * which is what closes the old watcher on the server. Closing the panel
+   * unmounts this hook and stops watching entirely.
+   *
+   * IT IS AN ADDITION, NOT A REPLACEMENT. The manual refresh button stays: a
+   * platform where recursive watching is unavailable answers
+   * `fs-watch-unavailable` and sends nothing further, and no watcher catches
+   * every event on every filesystem.
+   */
+  const onWatchMessage = useCallback(
+    (data: unknown) => bumpMany(fsChangeDirs(data)),
+    [bumpMany],
+  );
+  useWebSocket({
+    url: `/ws/fs-watch?cwd=${encodeURIComponent(cwd)}`,
+    onMessage: onWatchMessage,
+  });
 
   // -- the operations menu -------------------------------------------------
 
   const [menu, setMenu] = useState<FileMenuState | null>(null);
+  /** The markdown file the in-app viewer is showing, if any. */
+  const [previewRel, setPreviewRel] = useState<string | null>(null);
   const [renamingRel, setRenamingRel] = useState<string | null>(null);
   const [creating, setCreating] = useState<{ parentRel: string; isDir: boolean } | null>(null);
 
@@ -739,6 +814,19 @@ export function FileBrowserPanel({
     [cwd, t],
   );
 
+  /**
+   * Open a markdown file in the in-app viewer.
+   *
+   * NO BRIDGE AND NO OS INVOLVED — this is the one "open" that stays inside the
+   * app, so it is just state. Folders are excluded here as well as at both call
+   * sites: `rowActivation` never returns 'preview' for one, and the menu item
+   * is gated on the same predicate.
+   */
+  const onPreview = useCallback((target: MenuTarget) => {
+    if (target.isDir) return;
+    setPreviewRel(target.rel);
+  }, []);
+
   const onReveal = useCallback(
     (target: MenuTarget) => {
       const reveal = fsBridge()?.reveal;
@@ -759,6 +847,7 @@ export function FileBrowserPanel({
     () => ({
       openMenu,
       openFile: onOpen,
+      previewFile: onPreview,
       renamingRel,
       commitRename,
       cancelRename: () => setRenamingRel(null),
@@ -766,7 +855,7 @@ export function FileBrowserPanel({
       commitCreate,
       cancelCreate: () => setCreating(null),
     }),
-    [openMenu, onOpen, renamingRel, commitRename, creating, commitCreate],
+    [openMenu, onOpen, onPreview, renamingRel, commitRename, creating, commitCreate],
   );
 
   // Dropping OS files on the panel body (not on a folder row) copies into the
@@ -859,12 +948,23 @@ export function FileBrowserPanel({
           </div>
         </FileOpsContext.Provider>
       </RefreshContext.Provider>
+      {/* Keyed on the file so a preview opened from a different row starts with
+          a clean back history instead of inheriting the last one's. */}
+      {previewRel !== null && (
+        <MarkdownPreviewModal
+          key={previewRel}
+          cwd={cwd}
+          rel={previewRel}
+          onClose={() => setPreviewRel(null)}
+        />
+      )}
       {menu && (
         <FileBrowserContextMenu
           state={menu}
           onClose={closeMenu}
           onOpen={onOpen}
           onOpenWith={onOpenWith}
+          onPreview={onPreview}
           onNewFile={(target) => setCreating({ parentRel: createParentOf(target), isDir: false })}
           onNewFolder={(target) => setCreating({ parentRel: createParentOf(target), isDir: true })}
           onRename={(target) => setRenamingRel(target.rel)}

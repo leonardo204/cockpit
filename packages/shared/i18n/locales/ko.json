@@ -470,6 +470,7 @@
     "copyError": "파일을 복사하지 못했습니다.",
     "open": "열기",
     "openWith": "연결 프로그램...",
+    "preview": "미리보기",
     "openError": "그 파일을 열지 못했습니다.",
     "createFolder": "새 폴더",
     "rename": "이름 변경",
@@ -674,7 +675,13 @@
     "stop": "중단",
     "stopHint": "이 턴을 중단합니다 (Esc를 눌러도 됩니다)",
     "thinkingBlock": "사고과정",
-    "thinkingChars": "({{count}}자)"
+    "thinkingChars": "({{count}}자)",
+    "turnDuration": {
+      "seconds": "{{value}}초",
+      "minutes": "{{minutes}}분 {{seconds}}초",
+      "hours": "{{hours}}시간 {{minutes}}분"
+    },
+    "turnFinishedAt": "{{time}}에 완료"
   },
   "claudeAccount": {
     "signedIn": "Claude: 로그인됨",
@@ -1635,6 +1642,15 @@
   "markdown": {
     "copied": "✓ 복사됨",
     "copy": "복사"
+  },
+  "markdownPreview": {
+    "back": "뒤로",
+    "words": "{{count}}단어",
+    "readingTime": "약 {{count}}분 분량",
+    "readingTimeUnderMinute": "1분 미만",
+    "truncated": "파일이 길어 앞부분만 표시합니다.",
+    "tooLarge": "이 파일은 너무 커서 미리볼 수 없습니다.",
+    "loadError": "이 파일을 읽지 못했습니다."
   },
   "imagePreview": {
     "previewImage": "이미지 미리보기",
