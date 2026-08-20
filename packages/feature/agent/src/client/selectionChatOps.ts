@@ -344,6 +344,292 @@ export function popupSize(
 }
 
 // ─────────────────────────────────────────────────────────
+// Resizing
+// ─────────────────────────────────────────────────────────
+
+/** Panel-local geometry: where the popup is AND how big it is. */
+export interface PopupBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * THE FLOOR, counted against what is actually inside the popup rather than
+ * picked as a round number.
+ *
+ * Vertically the popup is mostly chrome: the header/title bar (~33px), the
+ * quoted-context strip (up to 96px — `max-h-24` — and never less than ~45px for
+ * one line plus its label), the throwaway hint bar (~20px) and the composer with
+ * its toolbar row (~100px). That is ~200px before a single message is shown, so
+ * a 240px popup is two lines of transcript and a 100px one is none at all.
+ * 320px leaves roughly 120px of conversation, which is the smallest box in which
+ * the thing is still a chat rather than a tooltip.
+ *
+ * Horizontally the header alone needs the title, "세션으로 변경" and the ✕ side
+ * by side (~230px at Korean widths) before it wraps into two rows and stops
+ * reading as a title bar, and a reply containing a code block is unreadable much
+ * below that. 320px is that plus room for the bubble padding.
+ *
+ * WHEN THE FRAME CANNOT HOLD THE FLOOR the floor still wins and the popup ends
+ * up larger than its frame — the same trade `popupSize` already makes with its
+ * own 240px floor, and the same one the app window's `fitIntoWorkArea` makes
+ * against `MIN_WINDOW_SIZE`. `clampPopupWithinFrame` then parks it at the
+ * frame's top-left, so the header (drag handle and both controls) is the part
+ * that stays on screen. A popup too big for a tiny window is recoverable; a
+ * 100px chat is not usable at any window size.
+ */
+export const POPUP_MIN_WIDTH = 320;
+export const POPUP_MIN_HEIGHT = 320;
+
+/** Clamp to `[min, available]`, with the FLOOR winning when the two invert. */
+function fitAxis(value: number, min: number, available: number): number {
+  return Math.max(min, Math.min(value, available));
+}
+
+export interface PopupSizeClampInput {
+  width: number;
+  height: number;
+  frameWidth: number;
+  frameHeight: number;
+  margin?: number;
+}
+
+/**
+ * A size the popup is allowed to have in this frame.
+ *
+ * The ceiling is the same box the drag is bounded to (`clampPopupWithinFrame`),
+ * so a popup can never be resized into a shape it cannot then be dragged back
+ * from: at most `frame - 2 × margin` on each axis, which is exactly the widest
+ * position range the clamp permits.
+ *
+ * This is also what a REMEMBERED size goes through. A size stored in a maximised
+ * window and reopened in a small one is trimmed to fit rather than honoured into
+ * a popup hanging off the panel.
+ */
+export function clampPopupSize({
+  width,
+  height,
+  frameWidth,
+  frameHeight,
+  margin = 16,
+}: PopupSizeClampInput): { width: number; height: number } {
+  return {
+    width: fitAxis(width, POPUP_MIN_WIDTH, frameWidth - margin * 2),
+    height: fitAxis(height, POPUP_MIN_HEIGHT, frameHeight - margin * 2),
+  };
+}
+
+/**
+ * How big this popup opens: the remembered size if there is one and it still
+ * fits, otherwise the preferred box.
+ *
+ * `null` means "never resized" — not "resized to nothing" — so the popup keeps
+ * opening at `popupSize`'s conversation-shaped default until the user says
+ * otherwise. Only the SIZE is ever remembered; the position is anchored to the
+ * selection every time, because reopening a popup where the user is not looking
+ * is worse than reopening it at the wrong size.
+ */
+export function resolvePopupSize(
+  stored: { width: number; height: number } | null | undefined,
+  frameWidth: number,
+  frameHeight: number,
+  margin = 16,
+): { width: number; height: number } {
+  if (!stored) return popupSize(frameWidth, frameHeight, margin);
+  return clampPopupSize({ ...stored, frameWidth, frameHeight, margin });
+}
+
+/**
+ * Which grip is being dragged.
+ *
+ * THE BOTTOM BAND ONLY, and the omissions are the design:
+ *
+ *   no top edge   — the top edge IS the drag handle. A resize strip there would
+ *                   fight the title bar for the same few pixels and could shrink
+ *                   the popup out from under the pointer that meant to move it.
+ *   no side strips— a full-height strip down the right edge sits exactly on top
+ *                   of the transcript's scrollbar, so grabbing the scrollbar
+ *                   would resize the window instead of scrolling it.
+ *
+ * What is left covers every intent: `se` for the ordinary "make it bigger",
+ * `s` for height alone, and `sw` for widening a popup that has been pushed
+ * against the right edge of the panel — where `se` has nothing left to grow into.
+ */
+export type PopupResizeDirection = 's' | 'se' | 'sw';
+
+export interface PopupResizeInput {
+  direction: PopupResizeDirection;
+  /** The popup's PANEL-LOCAL box when the gesture started. */
+  start: PopupBox;
+  /** VIEWPORT pointer position when the gesture started. */
+  startPointer: { x: number; y: number };
+  /** VIEWPORT pointer position now. */
+  pointer: { x: number; y: number };
+  frame: PopupFrame;
+  margin?: number;
+}
+
+/**
+ * The popup's new panel-local box for one pointer move of a resize.
+ *
+ * SAME SPACE, SAME FRAME, SAME MARGIN AS THE DRAG. The two gestures share
+ * `clampPopupWithinFrame`'s bounds by construction — a resize can only reach the
+ * frame edge the drag can reach — so resizing a popup that has been dragged into
+ * a corner does not teleport it, and dragging one that has been resized is
+ * clamped against its new size.
+ *
+ * `sw` MOVES THE ORIGIN as well as the size, which is the one calculation here
+ * that can strand the user. It is expressed as "the RIGHT edge is nailed down":
+ * the width grows leftward until `x` would cross the margin, and the low bound
+ * on `x` wins over the width when a floor-sized popup no longer fits. `y` is
+ * never touched by any handle, so the header row cannot move vertically at all —
+ * the two ways a resize could push the title bar out of reach are both closed.
+ */
+export function popupResizeBox({
+  direction,
+  start,
+  startPointer,
+  pointer,
+  frame,
+  margin = 16,
+}: PopupResizeInput): PopupBox {
+  const dx = pointer.x - startPointer.x;
+  const dy = pointer.y - startPointer.y;
+
+  // The frame offset cancels in the delta, so this needs no conversion — but the
+  // frame's SIZE is still the ceiling, and the caller re-reads it every move so
+  // a panel that changes size mid-gesture is respected.
+  let { x, width, height } = start;
+  const y = start.y;
+
+  if (direction.includes('e')) {
+    width = fitAxis(start.width + dx, POPUP_MIN_WIDTH, frame.width - margin - x);
+  }
+  if (direction.includes('w')) {
+    const right = start.x + start.width;
+    width = fitAxis(start.width - dx, POPUP_MIN_WIDTH, right - margin);
+    x = Math.max(margin, right - width);
+  }
+  if (direction.includes('s')) {
+    height = fitAxis(start.height + dy, POPUP_MIN_HEIGHT, frame.height - margin - y);
+  }
+
+  return { x, y, width, height };
+}
+
+// ─────────────────────────────────────────────────────────
+// Remembering the size
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Where the remembered size is kept — in BOTH stores, which is one mechanism and
+ * not two.
+ *
+ * THE HAZARD THIS AVOIDS is the one `shared-utils/bootTheme.ts` documents: the
+ * desktop shell boots Next on an EPHEMERAL port (`electron/next-server.ts` calls
+ * `server.listen(0)`) and `localStorage` is scoped per ORIGIN, port included, so
+ * every launch is a brand new store. A size kept only there would reset on every
+ * restart — the same irritation as an app window that forgets how big it was,
+ * one layer down.
+ *
+ * SO THE THEME'S RESOLUTION IS THE POPUP'S, verbatim:
+ *
+ *   `settings.json`  the durable copy, under a stable `COCKPIT_HOME`. Written
+ *                    through on every resize, read once when the fast path is
+ *                    empty (i.e. once per launch).
+ *   `localStorage`   the SYNCHRONOUS fast path. It is what the popup is placed
+ *                    from, because a placement that waited on a request would
+ *                    open at the default and then jump. A value here WINS: within
+ *                    a run it is the newer of the two.
+ *
+ * One key names both, exactly as `THEME_STORAGE_KEY` does: the `localStorage`
+ * key and the `settings.json` field.
+ */
+export const POPUP_SIZE_STORAGE_KEY = 'selectionPopupSize';
+
+/**
+ * SIZE ONLY, rounded — the one place both stores get their value from.
+ *
+ * The fields are picked out one at a time rather than spread, so a caller that
+ * hands over a whole `PopupBox` cannot persist the position with it: the popup is
+ * anchored to the selection on every open, and a remembered position would put
+ * it somewhere the user is not looking. Rounding is for the sub-pixel values a
+ * trackpad produces.
+ */
+function popupSizeOnly(size: { width: number; height: number }): {
+  width: number;
+  height: number;
+} {
+  return { width: Math.round(size.width), height: Math.round(size.height) };
+}
+
+/** What goes into `localStorage` under `POPUP_SIZE_STORAGE_KEY`. */
+export function serializePopupSize(size: { width: number; height: number }): string {
+  return JSON.stringify(popupSizeOnly(size));
+}
+
+/**
+ * What goes into `settings.json` — the same value under the same key, as a patch
+ * for the merge-update `PUT /api/settings` performs. Built here rather than at
+ * the call site so the durable copy cannot drift from the fast one, in key or in
+ * shape.
+ */
+export function popupSizeSettingsPatch(size: {
+  width: number;
+  height: number;
+}): Record<string, { width: number; height: number }> {
+  return { [POPUP_SIZE_STORAGE_KEY]: popupSizeOnly(size) };
+}
+
+/**
+ * Narrow an untrusted value — a `settings.json` field or a parsed `localStorage`
+ * string — into a size, or `null`.
+ *
+ * ONE RULE FOR BOTH STORES, which is the point: a hand-edited settings file and
+ * a stale `localStorage` entry are the same hazard and must not be judged by two
+ * different pieces of code. A size that is merely too big for today's window is
+ * NOT rejected here — that is `clampPopupSize`'s job, and trimming it is
+ * friendlier than forgetting it.
+ */
+export function normalizePopupSize(value: unknown): { width: number; height: number } | null {
+  if (!value || typeof value !== 'object') return null;
+  const { width, height } = value as { width?: unknown; height?: unknown };
+  if (typeof width !== 'number' || typeof height !== 'number') return null;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+/**
+ * Read back the remembered size from the `localStorage` string.
+ *
+ * Total: hand-edited, half-written and stale-shape values all fall back to the
+ * default box rather than throwing while the popup is being PLACED.
+ */
+export function parseStoredPopupSize(
+  raw: string | null | undefined,
+): { width: number; height: number } | null {
+  if (!raw) return null;
+  try {
+    return normalizePopupSize(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read back the remembered size from a whole `settings.json` payload — the seed
+ * used when this origin's `localStorage` is empty, which after an app restart it
+ * always is.
+ */
+export function popupSizeFromSettings(settings: unknown): { width: number; height: number } | null {
+  if (!settings || typeof settings !== 'object') return null;
+  return normalizePopupSize((settings as Record<string, unknown>)[POPUP_SIZE_STORAGE_KEY]);
+}
+
+// ─────────────────────────────────────────────────────────
 // Closing
 // ─────────────────────────────────────────────────────────
 

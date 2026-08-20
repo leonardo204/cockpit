@@ -635,6 +635,8 @@
     "runFailedHint": "This is what the provider replied, unedited. Your next message clears it.",
     "placeholder": "Type a message, Enter to send (Shift+Enter for new line, paste images; start a line with / (main session) or @ (subagent) to run commands, multiple allowed — a /name mid-sentence brings that skill into this turn)",
     "placeholderDisabled": "Generating... you can keep typing (ESC to cancel; if stuck, cancel and resend 'continue')",
+    "placeholderCompact": "Type a message, Enter to send (Shift+Enter for a new line)",
+    "placeholderDisabledCompact": "Generating... you can keep typing (ESC to cancel)",
     "imageSizeLimit": "Image is too large to load (max 25MB), current: {{size}}MB",
     "attachImage": "Attach image",
     "dropImage": "Drop image to attach",
@@ -1652,7 +1654,9 @@
     "tooLarge": "This file is too large to preview.",
     "loadError": "Could not read this file.",
     "imageMissing": "Image not found",
-    "imagesUnresolved": "{{count}} images could not be shown"
+    "imagesUnresolved": "{{count}} images could not be shown",
+    "openInTab": "Open as a tab",
+    "openInTabHint": "Keep this document open in a tab while you work"
   },
   "imagePreview": {
     "previewImage": "Preview image",
@@ -1848,6 +1852,7 @@
   "selectionChat": {
     "title": "Quick ask",
     "dragHint": "Drag this bar to move the window",
+    "resizeHint": "Drag to resize the window. The size is remembered.",
     "contextLabel": "About this",
     "promote": "Promote to session",
     "promoteHint": "Keep this conversation as a normal tab",

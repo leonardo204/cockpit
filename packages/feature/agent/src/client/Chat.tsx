@@ -23,6 +23,7 @@ import { RunFailureNotice } from './RunFailureNotice';
 import { runFailureReducer, type RunFailure, type RunFailureEvent } from './runFailure';
 import { contextGauge } from './contextGauge';
 import { ChatInput } from './ChatInput';
+import type { ComposerViewport } from './composerHeight';
 import { buildComposerHistory, sameComposerHistory } from './composerHistory';
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
 // In-package siblings (chat-only)
@@ -119,9 +120,23 @@ interface ChatProps {
    * the caller can order a delete after it.
    */
   onStopHandle?: (stop: (() => Promise<void>) | null) => void;
+  /**
+   * THIS CHAT DOES NOT FILL THE WINDOW — here is the box it fills instead.
+   *
+   * The composer's ceiling is a fraction of the column it shares with the
+   * transcript (composerHeight.ts). A chat in a tab fills the window, so the
+   * window is that column and this prop is left off; a chat inside the selection
+   * popup is a ~320px box, and without this its composer would size itself
+   * against a window it is not in and eat the conversation.
+   *
+   * Passed straight through to ChatInput, and it is a reader plus a change
+   * signal rather than a number so the popup can keep its box in a ref — see
+   * SelectionChatPopup's header for why that matters.
+   */
+  composerViewport?: ComposerViewport;
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onDiscardSession, onOpenSessionBrowser, onOpenSettings, ephemeral, quotedContext, onStopHandle }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onDiscardSession, onOpenSessionBrowser, onOpenSettings, ephemeral, quotedContext, onStopHandle, composerViewport }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -803,6 +818,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
         onLoadingChange={w.onLoadingChange}
         onTitleChange={w.onTitleChange}
         onStopHandle={w.onStopHandle}
+        // The popup's own box, so the composer in here is capped against THIS
+        // column and not the window it happens to float over.
+        composerViewport={w.composerViewport}
       />
     ),
     [initialCwd, engine],
@@ -974,6 +992,17 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           onShowUserMessages={handleShowUserMessages}
           onOpenNote={onOpenNote}
           onCreateScheduledTask={handleCreateScheduledTask}
+          // Undefined in a tab, which means "the window is the column" — the
+          // behaviour every chat has always had.
+          composerViewport={composerViewport}
+          // A POPUP GETS THE SHORT PLACEHOLDER. The full one documents `/`, `@`
+          // and mid-sentence skills — three lines in a tab, more in a narrow box
+          // — and the composer's floor exists to keep it unclipped, so in a
+          // 320px popup that hint alone is what makes the input greedy. The
+          // popup is one throwaway question about a selection, not a session
+          // that runs commands, so it asks a shorter thing and the floor has
+          // less to defend. `ephemeral` IS "this is the popup".
+          compactPlaceholder={ephemeral}
         />
       </div>
 

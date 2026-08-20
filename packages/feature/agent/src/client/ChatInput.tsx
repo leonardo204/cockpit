@@ -9,7 +9,7 @@ import { ScheduleTaskPopover } from './ScheduleTaskPopover';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSlashCommands } from './effect/agentClient';
 import { isHarnessChangedMessage } from './harnessSignal';
-import { composerHeight } from './composerHeight';
+import { composerHeight, type ComposerViewport } from './composerHeight';
 import {
   FILE_REF_MIME,
   setActiveFileRefInserter,
@@ -160,6 +160,26 @@ interface ChatInputProps {
     activeTo?: string;
     cron?: string;
   }) => void;
+  /**
+   * THE COLUMN THIS COMPOSER IS IN, when it is not the window.
+   *
+   * The height cap is partly a fraction of the column the composer shares with
+   * the transcript (composerHeight.ts), and this input is also mounted inside
+   * the ~320px selection popup. Measuring that fraction against
+   * `window.innerHeight` there sized the box for a window it is not in, and the
+   * rule that exists to protect a short column did nothing in the one place a
+   * column is genuinely short.
+   *
+   * OMITTED IN A TAB, deliberately: a tab's chat fills the window, so the
+   * fallback (`window.innerHeight`) is the same number and every existing caller
+   * keeps the behaviour it has today.
+   */
+  composerViewport?: ComposerViewport;
+  /** Ask the shorter placeholder. The full hint is a multi-line description of
+   *  `/`, `@` and mid-sentence skills; in a narrow popup it wraps far enough
+   *  that the floor which keeps it unclipped is itself what squeezes the
+   *  transcript. Set by the popup, which is one question and not a session. */
+  compactPlaceholder?: boolean;
 }
 
 /** A row the palette can show: a harness command, a naby agent, or a file/folder
@@ -175,7 +195,7 @@ const GROWTH_GLYPH: Record<'egg' | 'larva' | 'pupa' | 'butterfly', string> = {
   butterfly: '🦋',
 };
 
-export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, history = EMPTY_COMPOSER_HISTORY, onShowUserMessages, onOpenNote, onCreateScheduledTask }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, history = EMPTY_COMPOSER_HISTORY, onShowUserMessages, onOpenNote, onCreateScheduledTask, composerViewport, compactPlaceholder }: ChatInputProps) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
   // Caret offset into `input`; drives line-aware command autocomplete.
@@ -283,16 +303,26 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   // column (Chat.tsx), so every pixel this box grows is a pixel the
   // conversation loses. The arithmetic that decides how many it may take lives
   // in composerHeight.ts (floor ~3 lines, ceiling ~10 lines AND never more than
-  // a fraction of the window); here we only measure and obey.
+  // a fraction of the COLUMN); here we only measure and obey.
+  //
+  // WHICH COLUMN. `composerViewport` when a host gave us one — the selection
+  // popup, whose box is the column and is nothing like the window. Otherwise the
+  // window, because a chat in a tab fills it. An unmeasurable answer (0, SSR, a
+  // popup not laid out yet) is passed through as-is: composerHeight reads it as
+  // "unknown" and keeps the absolute cap rather than guessing "tiny".
   const adjustTextareaHeight = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
+    const available = composerViewport
+      ? composerViewport.getAvailableHeight()
+      : typeof window === 'undefined'
+        ? 0
+        : window.innerHeight;
     // Reset height to get the correct scrollHeight
     textarea.style.height = 'auto';
-    const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
-    textarea.style.height = `${composerHeight(textarea.scrollHeight, viewportHeight)}px`;
-  }, []);
+    textarea.style.height = `${composerHeight(textarea.scrollHeight, available)}px`;
+  }, [composerViewport]);
 
   // Adjust height when input changes (useLayoutEffect: runs synchronously before paint to avoid double-paint flicker)
   useLayoutEffect(() => {
@@ -306,6 +336,21 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     window.addEventListener('resize', adjustTextareaHeight);
     return () => window.removeEventListener('resize', adjustTextareaHeight);
   }, [adjustTextareaHeight]);
+
+  // …and when the HOST'S BOX changes, which is the same sentence one level down:
+  // a popup dragged smaller that left its composer at the old height would be
+  // the identical bug in a new place. Text is not the only thing that moves this
+  // box.
+  //
+  // A LAYOUT EFFECT, so the subscription is in place before the popup's own
+  // layout effect runs — child effects run first, and the popup's first
+  // placement is what turns an unmeasurable 1×1 frame into a real column. Miss
+  // that notification and the composer would keep the absolute cap it chose
+  // while there was nothing to measure.
+  useLayoutEffect(() => {
+    if (!composerViewport) return;
+    return composerViewport.subscribe(adjustTextareaHeight);
+  }, [composerViewport, adjustTextareaHeight]);
 
   // Load command list: in-process builtins merged with Naby-owned enabled
   // commands (Phase 1.6 HP-02). Passing `cwd` includes this project's
@@ -987,7 +1032,17 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
             onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={disabled ? t('chat.placeholderDisabled') : t('chat.placeholder')}
+            // SHORTER IN A SMALL HOST, not clipped there. The floor exists so
+            // the placeholder is never cut off, which means the placeholder is
+            // what sets the floor's cost; in the selection popup the full hint
+            // (commands, subagents, mid-sentence skills) would charge a 320px
+            // box for a session's worth of instructions. So the popup asks a
+            // shorter question. See composerHeight.ts.
+            placeholder={
+              disabled
+                ? t(compactPlaceholder ? 'chat.placeholderDisabledCompact' : 'chat.placeholderDisabled')
+                : t(compactPlaceholder ? 'chat.placeholderCompact' : 'chat.placeholder')
+            }
             rows={3}
             className="w-full resize-none px-4 pt-3 pb-1 bg-transparent border-0 focus:outline-none text-foreground placeholder-slate-9"
           />

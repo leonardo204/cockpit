@@ -31,6 +31,19 @@
  * conversation, and re-rendering it on every pointer move would re-render that
  * transcript sixty times a second. The maths is in selectionChatOps.
  *
+ * AND RESIZABLE FROM ITS BOTTOM EDGE, under the same discipline for the same
+ * reason: the box is a ref written straight to the element, never state. What
+ * the box IS, though, the composer inside has to know — its ceiling is a
+ * fraction of the column it sits in, and that column is this popup, not the
+ * window (composerHeight.ts). It learns it through `ComposerViewport`: a reader
+ * plus a change signal, which is what lets the value cross without becoming
+ * state and re-rendering the transcript once per pixel.
+ *
+ * THE SIZE is remembered across popups — `localStorage` for the synchronous read the
+ * placement needs, `settings.json` for the copy that survives a restart, which is
+ * the pair bootTheme.ts documents — and the POSITION deliberately is not: it is
+ * anchored to wherever the selection is, every time.
+ *
  * A SECOND CONCURRENT STREAM IS ALREADY SUPPORTED. Nothing in useChatStream /
  * useLiveStream / applyStreamEvent holds module-level mutable state, the WS
  * connection is shared per-URL with the run key inside the URL, and the server's
@@ -49,7 +62,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
+import { Effect } from 'effect';
 import { useTranslation } from 'react-i18next';
+import { BrowserRuntime } from '@cockpit/effect-runtime';
 import {
   Portal,
   confirm,
@@ -60,17 +75,90 @@ import {
 import {
   clampPopupPosition,
   clampPopupWithinFrame,
+  parseStoredPopupSize,
   planPopupClose,
   popupDragPosition,
   popupFrameBounds,
   popupGrabOffset,
+  popupResizeBox,
   popupSessionTitle,
-  popupSize,
+  popupSizeFromSettings,
+  popupSizeSettingsPatch,
   quotePreview,
+  resolvePopupSize,
+  serializePopupSize,
   shouldStartPopupDrag,
+  POPUP_SIZE_STORAGE_KEY,
+  type PopupBox,
   type PopupFrame,
+  type PopupResizeDirection,
   type PressPathNode,
 } from './selectionChatOps';
+import type { ComposerViewport } from './composerHeight';
+import { loadAgentSettings, saveAgentSettings } from './effect/agentClient';
+
+/**
+ * THE REMEMBERED SIZE, IN BOTH STORES — the pair `shared-utils/bootTheme.ts`
+ * documents, applied one preference later.
+ *
+ * The desktop shell boots Next on an ephemeral port, so `localStorage` is scoped
+ * to an origin that dies with the process: a size kept only there resets on
+ * every restart, which is exactly the complaint the app window's own size just
+ * had. So `settings.json` holds the durable copy under a stable `COCKPIT_HOME`,
+ * and `localStorage` stays the SYNCHRONOUS fast path the popup is actually
+ * placed from — a placement that waited on a request would open at the default
+ * and then jump.
+ *
+ * This is all the IO in this file, and it is deliberately dumb: WHAT counts as a
+ * valid size, which key it lives under and what shape it takes are all decided in
+ * selectionChatOps (pure, tested).
+ *
+ * Every one of them is total. `localStorage` throws on mere ACCESS when storage
+ * is disabled (Safari private mode, a locked-down embedder) and the settings
+ * request can simply fail; a popup that failed to open because it could not
+ * remember how big it was last time would be an absurd way to lose the feature.
+ */
+function readStoredPopupSize(): { width: number; height: number } | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return parseStoredPopupSize(window.localStorage.getItem(POPUP_SIZE_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPopupSize(size: { width: number; height: number }): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(POPUP_SIZE_STORAGE_KEY, serializePopupSize(size));
+  } catch {
+    // Storage disabled or full: the durable copy below still holds, and the next
+    // popup of this run pays one request to find it.
+  }
+}
+
+/**
+ * The durable write-through, fire-and-forget in exactly the shape `persistTheme`
+ * and `persistFonts` use (Providers.tsx): a failed preference write must never
+ * interrupt the UI, and `localStorage` has already taken the change for this
+ * origin. `PUT /api/settings` is a locked merge-update, so a patch carrying one
+ * field cannot clobber the theme or the fonts beside it.
+ */
+function persistPopupSize(size: { width: number; height: number }): void {
+  BrowserRuntime.runFork(
+    saveAgentSettings(popupSizeSettingsPatch(size)).pipe(Effect.orElse(() => Effect.void)),
+  );
+}
+
+/**
+ * The durable read, used ONLY to seed an empty fast path — which, after a
+ * restart, is every first popup of the run. Placement never waits on it.
+ */
+async function loadPersistedPopupSize(): Promise<{ width: number; height: number } | null> {
+  const exit = await BrowserRuntime.runPromiseExit(loadAgentSettings());
+  if (exit._tag !== 'Success') return null;
+  return popupSizeFromSettings(exit.value);
+}
 
 /** Distinct per popup instance, so the chat inside registers under an id that
  *  can never collide with a real tab's. */
@@ -88,6 +176,12 @@ export interface SelectionChatPopupWiring {
   /** The inner chat hands up a stop function for its own in-flight run. Null on
    *  unmount. Without it, closing mid-stream would leave the detached run going. */
   onStopHandle: (stop: (() => Promise<void>) | null) => void;
+  /** How much column the composer inside actually has. The popup is a ~320px
+   *  box hosting a whole chat, and a composer that sized itself against the
+   *  WINDOW took a share of a column it was not in — the transcript here is the
+   *  one that cannot afford it. A reader plus a signal, not a number, because
+   *  the box lives in a ref on purpose (see the header). */
+  composerViewport: ComposerViewport;
 }
 
 export interface SelectionChatPopupProps {
@@ -120,10 +214,6 @@ function SelectionChatPopupInner({
   const { t } = useTranslation();
   const tabIdRef = useRef<string>('');
   if (!tabIdRef.current) tabIdRef.current = `selection-popup-${++popupSeq}`;
-
-  /** The measured box SIZE only. The popup's POSITION is deliberately not state
-   *  — see `posRef` / `applyPosition` below. */
-  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
 
   // THE POPUP'S OWN CONVERSATION STATE, and the only reason it is here rather
   // than inside the inner chat: closing is the host's decision, and it needs all
@@ -158,16 +248,55 @@ function SelectionChatPopupInner({
   const panelTarget = usePanelPortalTarget();
   const frameRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<HTMLDivElement | null>(null);
+  /** The conversation column — the flex child between the quote block and the
+   *  hint row, which is what the chat inside is actually given. The composer's
+   *  ceiling is a fraction of THIS, so it is measured rather than derived from
+   *  the popup's height minus a guess at the chrome around it. */
+  const columnRef = useRef<HTMLDivElement | null>(null);
   /** The popup's live panel-local position. THE source of truth, and not state:
    *  a streamed delta re-renders this component many times a second, and a
    *  position that lived in state would be re-committed from a stale render
    *  mid-drag. */
   const posRef = useRef<{ x: number; y: number } | null>(null);
+  /** The popup's live box, in the same space and under the same discipline as
+   *  `posRef`: a resize writes width/height to the element, never to state. */
   const sizeRef = useRef<{ width: number; height: number } | null>(null);
+  /** The size the user WANTS, which is not always the size they can have: a
+   *  remembered 900px popup in a 600px panel is clamped for as long as the panel
+   *  is small and springs back when it is not. Kept apart from `sizeRef` so a
+   *  temporary window shrink does not overwrite the preference. */
+  const desiredSizeRef = useRef<{ width: number; height: number } | null>(null);
+  /** Lazy one-shot read of the remembered size — the same pattern `tabIdRef`
+   *  uses. SYNCHRONOUS, and it must land BEFORE the first `place()`, which runs
+   *  in a layout effect, or the popup would open at the default and then jump.
+   *  The durable copy in `settings.json` is only consulted when this comes back
+   *  empty (see the seed effect below). */
+  const sizeLoadedRef = useRef(false);
+  if (!sizeLoadedRef.current) {
+    sizeLoadedRef.current = true;
+    desiredSizeRef.current = readStoredPopupSize();
+  }
+  /** At most one settings read per popup, whatever the effect's deps do. */
+  const seedRequestedRef = useRef(false);
+  /** Unmount, not "this effect run" — a re-run of the seed effect must not
+   *  cancel the request the first run has in flight. */
+  const mountedRef = useRef(true);
   /** The user has picked the popup up at least once. From then on the popup
-   *  stays where it was PUT: the initial anchoring never runs again. */
+   *  stays where it was PUT: the initial anchoring never runs again. A resize
+   *  sets it too — `sw` moves the origin, and even a pure `se` grow is the user
+   *  choosing this box here, which a re-anchor would throw away. */
   const movedRef = useRef(false);
   const dragRef = useRef<{ pointerId: number; grabX: number; grabY: number } | null>(null);
+  /** The live resize gesture. It carries the element it captured on, because
+   *  there are three grips and the unmount cleanup must hand the pointer back to
+   *  whichever one has it. */
+  const resizeRef = useRef<{
+    pointerId: number;
+    direction: PopupResizeDirection;
+    start: PopupBox;
+    startPointer: { x: number; y: number };
+    element: Element;
+  } | null>(null);
 
   const readFrame = useCallback((): PopupFrame => {
     const rect = panelTarget?.getBoundingClientRect();
@@ -190,10 +319,73 @@ function SelectionChatPopupInner({
     el.style.top = `${pos.y}px`;
   }, []);
 
+  /** The ONLY writer of the frame's width/height, and it exists for exactly the
+   *  reason `applyPosition` does: a resize that re-rendered would re-render the
+   *  live transcript inside on every pointer move. The style prop carries a
+   *  constant 1×1 placeholder and nothing else. */
+  const applySize = useCallback(() => {
+    const el = frameRef.current;
+    const box = sizeRef.current;
+    if (!el || !box) return;
+    el.style.width = `${box.width}px`;
+    el.style.height = `${box.height}px`;
+  }, []);
+
+  /** Both halves at once, for the callers that change both (placement, and the
+   *  `sw` grip, which moves the origin as it resizes). */
+  const applyGeometry = useCallback(() => {
+    applySize();
+    applyPosition();
+  }, [applySize, applyPosition]);
+
+  // ── What the composer inside is allowed to take ───────────────────────
+  //
+  // THE BUG THIS FIXES. `composerHeight` caps the textarea at a fraction of its
+  // column so the transcript keeps the majority of it — and the composer used to
+  // measure that fraction against `window.innerHeight`. In a full-height tab the
+  // window IS the column and the rule worked; in this popup it is a ~320px box
+  // inside a large window, so the protection evaporated in the one place a
+  // column is genuinely short, and the composer ate the little conversation
+  // there was.
+  //
+  // WHY A READER AND A SIGNAL RATHER THAN A PROP. The box lives in `sizeRef` and
+  // is written straight to the element precisely so a resize does not re-render
+  // the streaming transcript (see the header). Handing the height down as a
+  // number would force it into state and undo exactly that. So the composer
+  // PULLS the current value when told the box moved: it measures one element and
+  // restyles one textarea, rendering nothing.
+  const viewportListenersRef = useRef(new Set<() => void>());
+  /** Called after the box changes — the resize gesture and every `place()`,
+   *  which covers the first placement, a window resize and the seeded size. */
+  const notifyComposerViewport = useCallback(() => {
+    for (const listener of viewportListenersRef.current) listener();
+  }, []);
+  /** Created once and never replaced: the chat inside is `memo`'d, and a fresh
+   *  object per render would defeat that on every streamed delta. */
+  const composerViewport = useMemo<ComposerViewport>(
+    () => ({
+      // Read live, never cached. `clientHeight` is 0 before the first layout
+      // (and always, in jsdom), which composerHeight reads as "unknown" and
+      // answers with the absolute cap — the same thing a plain tab gets.
+      getAvailableHeight: () => columnRef.current?.clientHeight ?? 0,
+      subscribe: (listener: () => void) => {
+        const listeners = viewportListenersRef.current;
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    }),
+    [],
+  );
+
   const place = useCallback(() => {
     if (typeof window === 'undefined') return;
     const frame = readFrame();
-    const { width, height } = popupSize(frame.width, frame.height);
+    // The remembered size wins over the preferred box — but only as far as this
+    // frame allows it to. A size stored in a big window and reopened in a small
+    // one is trimmed to fit, never honoured into a popup hanging off the panel.
+    const { width, height } = resolvePopupSize(desiredSizeRef.current, frame.width, frame.height);
 
     if (movedRef.current && posRef.current) {
       // ALREADY MOVED — never re-anchor. The user put it here. A resize may only
@@ -223,11 +415,12 @@ function SelectionChatPopupInner({
     }
 
     sizeRef.current = { width, height };
-    // Referentially stable when nothing changed, so a resize that does not
-    // change the box does not re-render the conversation.
-    setSize((prev) => (prev && prev.width === width && prev.height === height ? prev : { width, height }));
-    applyPosition();
-  }, [anchor.x, anchor.y, readFrame, applyPosition]);
+    applyGeometry();
+    // The column just changed height, and the composer's ceiling is a fraction
+    // of it. This covers the FIRST placement too: the frame is 1×1 off-screen
+    // until now, so the composer's own mount measured an unmeasurable column.
+    notifyComposerViewport();
+  }, [anchor.x, anchor.y, readFrame, applyGeometry, notifyComposerViewport]);
 
   useLayoutEffect(() => {
     place();
@@ -235,12 +428,49 @@ function SelectionChatPopupInner({
 
   // AFTER EVERY RENDER, on purpose (no dependency array). The popup re-renders
   // on every streamed delta of its own conversation; this is what guarantees the
-  // dragged position survives all of them instead of snapping back.
+  // dragged position and the resized box survive all of them instead of
+  // snapping back to whatever the last render's props described.
   useLayoutEffect(applyPosition);
+  useLayoutEffect(applySize);
 
   useEffect(() => {
     window.addEventListener('resize', place);
     return () => window.removeEventListener('resize', place);
+  }, [place]);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  // SEED FROM THE DURABLE COPY, and only when the fast path had nothing.
+  //
+  // `localStorage` dies with this origin's port, so the first popup after a
+  // restart finds it empty; `settings.json` outlives the process. The read is
+  // asynchronous and the PLACEMENT NEVER WAITS ON IT — the popup is already on
+  // screen at the default box by the time this resolves, and adopting the
+  // remembered size mirrors it into `localStorage` so this costs one request per
+  // app launch rather than one per popup.
+  //
+  // A `localStorage` value, when there is one, WINS: within a run it is the
+  // newer of the two (the same precedence ThemeProvider states).
+  useEffect(() => {
+    if (seedRequestedRef.current || desiredSizeRef.current) return;
+    seedRequestedRef.current = true;
+    void (async () => {
+      const stored = await loadPersistedPopupSize();
+      if (!mountedRef.current || !stored) return;
+      // THE USER GOT THERE FIRST. A box they chose in the few milliseconds this
+      // took outranks the one on disk, and a popup that resized itself under a
+      // live gesture would be worse than not remembering at all.
+      if (desiredSizeRef.current || movedRef.current || resizeRef.current) return;
+      desiredSizeRef.current = stored;
+      writeStoredPopupSize(stored);
+      // Re-place, which re-clamps the seeded size against the CURRENT frame
+      // exactly as a localStorage one is clamped — a size stored on a big
+      // monitor is trimmed, not honoured — and re-anchors to the selection,
+      // because the popup has not been moved.
+      place();
+    })();
   }, [place]);
 
   // POINTER EVENTS WITH CAPTURE, not mouse events with document listeners: a
@@ -310,6 +540,93 @@ function SelectionChatPopupInner({
     }
   }, []);
 
+  // ── Resizing ──────────────────────────────────────────────────────────
+  //
+  // THE SAME DISCIPLINE AS THE DRAG, for the same reason. The box lives in
+  // `sizeRef` and is written straight to the element; a `setState` per pointer
+  // move would re-render a streaming transcript sixty times a second, which is
+  // precisely what this design exists to avoid (React Performance Conventions).
+  // The maths — floor, frame ceiling, and the origin-moving `sw` grip — is in
+  // selectionChatOps.
+  //
+  // ONE HANDLER FOR THREE GRIPS. The direction rides on the element as a data
+  // attribute rather than in a closure, so the three handles share one stable
+  // callback identity instead of allocating three arrow functions on every
+  // streamed delta.
+  const handleResizeDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const pos = posRef.current;
+    const box = sizeRef.current;
+    const direction = e.currentTarget.dataset.resizeDir as PopupResizeDirection | undefined;
+    if (!pos || !box || !direction) return;
+
+    resizeRef.current = {
+      pointerId: e.pointerId,
+      direction,
+      // The box AT PRESS, held for the whole gesture: every move is computed
+      // from it and the pointer delta, so a clamped move cannot accumulate
+      // drift the way per-move increments would.
+      start: { ...pos, ...box },
+      startPointer: { x: e.clientX, y: e.clientY },
+      element: e.currentTarget,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    // A resize that also selects the transcript behind the grip is neither.
+    e.preventDefault();
+  }, []);
+
+  const handleResizeMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const resize = resizeRef.current;
+      if (!resize || resize.pointerId !== e.pointerId) return;
+      const next = popupResizeBox({
+        direction: resize.direction,
+        start: resize.start,
+        startPointer: resize.startPointer,
+        pointer: { x: e.clientX, y: e.clientY },
+        // Re-read per move, exactly as the drag does: the panel can change size
+        // mid-gesture and the ceiling has to follow it.
+        frame: readFrame(),
+      });
+      posRef.current = { x: next.x, y: next.y };
+      sizeRef.current = { width: next.width, height: next.height };
+      desiredSizeRef.current = { width: next.width, height: next.height };
+      // This box, here, is now the user's choice — the anchored placement must
+      // never run again and undo it.
+      movedRef.current = true;
+      // NO setState. Resize the frame, not the content.
+      applyGeometry();
+      // …and tell the composer the column moved, or it would keep the height it
+      // was given for the old box — the same "sized for a window it is not in"
+      // bug, one gesture later. Still no setState: the listener measures and
+      // restyles a textarea (composerHeight.ts).
+      notifyComposerViewport();
+    },
+    [readFrame, applyGeometry, notifyComposerViewport],
+  );
+
+  const handleResizeEnd = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    const resize = resizeRef.current;
+    if (!resize || resize.pointerId !== e.pointerId) return;
+    resizeRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    // REMEMBERED AT THE END OF THE GESTURE, not during it: one write per resize
+    // rather than one per pixel. Size only — the position is anchored to the
+    // selection on every open, so remembering it would reopen the popup
+    // somewhere the user is not looking.
+    //
+    // BOTH STORES, in that order: `localStorage` is what the next popup of this
+    // run is placed from, and `settings.json` is what survives the restart that
+    // takes this origin's port with it.
+    const box = sizeRef.current;
+    if (box) {
+      writeStoredPopupSize(box);
+      persistPopupSize(box);
+    }
+  }, []);
+
   useEffect(
     () => () => {
       // Unmounted mid-drag (Esc, promote, the confirm dialog): drop the gesture
@@ -319,6 +636,12 @@ function SelectionChatPopupInner({
       dragRef.current = null;
       if (drag && handle?.hasPointerCapture(drag.pointerId)) {
         handle.releasePointerCapture(drag.pointerId);
+      }
+      // Same for a resize in flight, on whichever grip captured the pointer.
+      const resize = resizeRef.current;
+      resizeRef.current = null;
+      if (resize?.element.hasPointerCapture(resize.pointerId)) {
+        resize.element.releasePointerCapture(resize.pointerId);
       }
     },
     [],
@@ -346,8 +669,9 @@ function SelectionChatPopupInner({
       onLoadingChange: handleLoading,
       onTitleChange: handleTitle,
       onStopHandle: handleStopHandle,
+      composerViewport,
     }),
-    [selectedText, handleSessionId, handleLoading, handleTitle, handleStopHandle],
+    [selectedText, handleSessionId, handleLoading, handleTitle, handleStopHandle, composerViewport],
   );
 
   // ── Closing ───────────────────────────────────────────────────────────
@@ -438,21 +762,24 @@ function SelectionChatPopupInner({
           and the user is expected to keep reading the main chat while asking
           about it here. Closing is the ✕ or Esc, both of which confirm.
 
-          DRAGGABLE BY ITS HEADER, not resizable. The header reads as a title
-          bar, so it behaves like one; the size is still `popupSize`'s. */}
+          DRAGGABLE BY ITS HEADER, RESIZABLE FROM ITS BOTTOM. The header reads as
+          a title bar, so it behaves like one; the grips along the bottom edge
+          change the box, which is remembered for the next popup. */}
       <div
         ref={frameRef}
         data-testid="selection-chat-popup"
         className="fixed z-[200] flex flex-col rounded-lg border border-border bg-card shadow-2xl overflow-hidden"
-        style={
-          // LEFT/TOP ARE NOT HERE. They are written by `applyPosition` alone, so
-          // a re-render can never re-commit a stale position over a dragged one;
-          // this constant pair is only what keeps the popup off-screen until it
-          // has been measured, instead of flashing at 0,0.
-          size
-            ? { left: -9999, top: -9999, width: size.width, height: size.height }
-            : { left: -9999, top: -9999, width: 1, height: 1 }
-        }
+        style={{
+          // NO GEOMETRY HERE AT ALL. `left`/`top` are written by `applyPosition`
+          // and `width`/`height` by `applySize`, so a re-render can never
+          // re-commit a stale box over a dragged or resized one; this constant
+          // is only what keeps the popup off-screen and unmeasured on the very
+          // first render, instead of flashing at 0,0.
+          left: -9999,
+          top: -9999,
+          width: 1,
+          height: 1,
+        }}
       >
         <div
           ref={handleRef}
@@ -516,10 +843,68 @@ function SelectionChatPopupInner({
           </pre>
         </div>
 
-        <div className="min-h-0 flex-1">{children(wiring)}</div>
+        {/* THE CONVERSATION COLUMN, and the thing the composer inside is capped
+            against. `columnRef` is measured rather than computed, so adding or
+            removing chrome around it (the quote block, the hint row) cannot
+            leave the composer sizing itself against a stale idea of the box. */}
+        <div ref={columnRef} className="min-h-0 flex-1">{children(wiring)}</div>
 
-        <div className="shrink-0 border-t border-border px-3 py-1 text-[0.65rem] text-muted-foreground/70">
+        {/* `pr-6` keeps the hint from running under the corner grip below. */}
+        <div className="shrink-0 border-t border-border px-3 py-1 pr-6 text-[0.65rem] text-muted-foreground/70">
           {t('selectionChat.throwawayHint')}
+        </div>
+
+        {/* RESIZE GRIPS — the bottom band only, and the omissions are the
+            design (see PopupResizeDirection): the top edge is the drag handle
+            and would fight it for the same pixels, and a full-height side strip
+            would sit on top of the transcript's scrollbar.
+
+            SIBLINGS OF THE HEADER, not children of it, so a press on one never
+            reaches the drag handle's pointerdown and the two gestures can never
+            both be live. The corners come LAST in DOM order so they hit-test
+            above the edge strip they overlap. */}
+        <div
+          data-testid="selection-chat-resize-s"
+          data-resize-dir="s"
+          onPointerDown={handleResizeDown}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeEnd}
+          onPointerCancel={handleResizeEnd}
+          title={t('selectionChat.resizeHint')}
+          className="absolute inset-x-0 bottom-0 h-1.5 cursor-ns-resize touch-none select-none"
+        />
+        <div
+          data-testid="selection-chat-resize-sw"
+          data-resize-dir="sw"
+          onPointerDown={handleResizeDown}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeEnd}
+          onPointerCancel={handleResizeEnd}
+          title={t('selectionChat.resizeHint')}
+          className="absolute bottom-0 left-0 h-3.5 w-3.5 cursor-nesw-resize touch-none select-none"
+        />
+        {/* THE VISIBLE ONE. The drag handle had to be given `cursor-move` before
+            anyone knew the header could be grabbed; a resize that is only a
+            cursor change is the same problem, so the corner is drawn. */}
+        <div
+          data-testid="selection-chat-resize-se"
+          data-resize-dir="se"
+          onPointerDown={handleResizeDown}
+          onPointerMove={handleResizeMove}
+          onPointerUp={handleResizeEnd}
+          onPointerCancel={handleResizeEnd}
+          title={t('selectionChat.resizeHint')}
+          className="absolute bottom-0 right-0 flex h-3.5 w-3.5 cursor-nwse-resize touch-none select-none items-end justify-end p-0.5 text-muted-foreground/60"
+        >
+          <svg className="h-2.5 w-2.5" viewBox="0 0 10 10" aria-hidden="true">
+            <path
+              d="M9 2 L2 9 M9 6 L6 9"
+              stroke="currentColor"
+              strokeWidth={1.2}
+              strokeLinecap="round"
+              fill="none"
+            />
+          </svg>
         </div>
       </div>
     </Portal>
