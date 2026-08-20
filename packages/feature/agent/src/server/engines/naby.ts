@@ -129,6 +129,7 @@ import {
   type SessionRef,
   type Store,
   type ToolSchema,
+  type TurnStats,
   type Usage,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
@@ -606,6 +607,44 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         }
         if (projectCwd) store.touchProject(projectCwd);
 
+        /**
+         * THE TURN MEASURING ITSELF — one clock reading, spent in two places.
+         *
+         * The chat shows the length and the finishing time on the same line, so
+         * they cannot come from two `Date.now()` calls: two readings can straddle
+         * a millisecond and print an end time that does not add up to the
+         * duration. Both are the ENGINE's clock, never the browser's — the client
+         * must not subtract timestamps of its own, because the stream can arrive
+         * late (a viewer joining, a snapshot replay) and would then be timing the
+         * delivery instead of the turn.
+         *
+         * IT WRITES BEFORE IT RETURNS, and that order is the point. The client
+         * puts the number on the bubble when `result` lands and then reconciles
+         * its tail from disk (`Chat.tsx`, reconcileFromDiskRef) — so a stamp that
+         * landed after the event could lose that race, and the duration would
+         * appear and then vanish, which reads as the app forgetting. Stamping
+         * first makes the disk copy already correct whenever the reload asks.
+         *
+         * Declared HERE, below the session it writes under, and not beside
+         * `startedAt`: every result emit is after this point, and a helper that
+         * closes over a `sessionId` not yet assigned would fail as a temporal
+         * dead-zone crash the first time somebody added an earlier one.
+         *
+         * Never throws: the live turn is the contract and the transcript copy is
+         * the convenience, so a store fault costs the reload's number and not the
+         * answer.
+         */
+        const measureTurn = (): { duration_ms: number; ended_at: number } => {
+          const endedAt = Date.now();
+          const turn: TurnStats = { durationMs: endedAt - startedAt, endedAt };
+          try {
+            store.stampTurnEnd(sessionId, turn);
+          } catch (e) {
+            console.log(`[engine:naby] turn stamp failed: ${e instanceof Error ? e.message : String(e)}`);
+          }
+          return { duration_ms: turn.durationMs, ended_at: endedAt };
+        };
+
         // ---- may this turn LEARN? (Phase 3, P3-M10 — memory-hygiene §3) ----
         //
         // TWO SWITCHES, ONE ANSWER. `memory.learningEnabled` is the app-wide
@@ -717,7 +756,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               result: selection.message,
               usage: toSdkUsage(undefined),
               total_cost_usd: 0,
-              duration_ms: Date.now() - startedAt,
+              ...measureTurn(),
               num_turns: 0,
             });
             return;
@@ -774,7 +813,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 result: message,
                 usage: toSdkUsage(undefined),
                 total_cost_usd: 0,
-                duration_ms: Date.now() - startedAt,
+                ...measureTurn(),
                 num_turns: 0,
               });
               return;
@@ -818,7 +857,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 result: message,
                 usage: toSdkUsage(undefined),
                 total_cost_usd: 0,
-                duration_ms: Date.now() - startedAt,
+                ...measureTurn(),
                 num_turns: 0,
               });
               return;
@@ -2584,7 +2623,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     // absence is what the client's fallback keys on, and a 0
                     // would be a number rather than an absence.
                     ...gaugeFields(),
-                    duration_ms: Date.now() - startedAt,
+                    ...measureTurn(),
                     num_turns: turns,
                   });
                   break;
@@ -2649,7 +2688,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // A stopped or failed run still filled the window with whatever it
             // managed to send, so the last measured reading is reported here too.
             ...gaugeFields(),
-            duration_ms: Date.now() - startedAt,
+            ...measureTurn(),
             num_turns: turns,
           });
         }

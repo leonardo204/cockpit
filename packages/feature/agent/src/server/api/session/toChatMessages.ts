@@ -20,6 +20,14 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp?: string;
+  /** HOW LONG THE TURN TOOK, as the engine measured it (ms). Assistant bubbles
+   *  only, and only on turns recorded after this existed — absent everywhere
+   *  else, which is what the view keys on to show nothing at all. */
+  durationMs?: number;
+  /** WHEN THE TURN ENDED (ISO). Deliberately not `timestamp`, which is the
+   *  bubble's creation time: on a four-minute turn the two are four minutes
+   *  apart, and the user is asking when the answer ARRIVED. */
+  completedAt?: string;
   /** WHAT HAPPENED IN WHAT ORDER — text runs and tool-call runs, in the order
    *  the rows were written. Built with the SAME pure helpers the live reducer
    *  uses (`shared/turnSegments.ts`), so a reloaded turn renders as the
@@ -115,6 +123,12 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
       // A tool-call-only row folds into the assistant bubble it continues —
       // appending its calls at the END of that bubble's order, which is where
       // they happened relative to whatever the bubble already holds.
+      // The turn's measurement, written back onto its LAST assistant row when
+      // the turn ended (Store.stampTurnEnd). Kept in one place so the merge
+      // branch below and the new-bubble branch cannot drift.
+      const turn = m.turn
+        ? { durationMs: m.turn.durationMs, completedAt: new Date(m.turn.endedAt).toISOString() }
+        : undefined;
       const previous = out[out.length - 1];
       const isToolCallOnly = m.content.trim() === '' && toolCalls.length > 0;
       if (isToolCallOnly && previous && previous.role === 'assistant') {
@@ -122,6 +136,10 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         let segments = previous.segments;
         for (const tc of toolCalls) segments = appendToolCallSegment(segments, tc.id);
         previous.segments = segments;
+        // A turn that ended ON a tool call carries the stamp on a row that folds
+        // into the bubble above it — so the stamp has to fold with it, or the
+        // closing line would be dropped for exactly those turns.
+        if (turn) Object.assign(previous, turn);
         return;
       }
       let segments = appendTextSegment(undefined, m.content);
@@ -132,6 +150,7 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         content: m.content,
         ...(toolCalls.length ? { toolCalls } : {}),
         ...(segments.length ? { segments } : {}),
+        ...(turn ?? {}),
       });
     }
     // role === 'tool' is consumed above (folded into its assistant call).

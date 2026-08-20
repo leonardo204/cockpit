@@ -327,3 +327,77 @@ describe('toChatMessages — the turn’s order survives a reload', () => {
     expect(toChatMessages(rows)).toEqual(toChatMessages(rows));
   });
 });
+
+/**
+ * A RELOADED TURN STILL KNOWS HOW LONG IT TOOK.
+ *
+ * The number reaches the live bubble on the `result` event — and a completed run
+ * immediately reconciles its tail from disk (`Chat.tsx`, reconcileFromDiskRef),
+ * so anything not written down is gone within a second of appearing. A duration
+ * that shows and then vanishes reads as the app forgetting, which is worse than
+ * never showing one. The runtime writes the pair onto the turn's LAST assistant
+ * row (Store.stampTurnEnd); this is the mapper that has to carry it back out.
+ */
+describe('toChatMessages — the turn’s measurement survives a reload', () => {
+  const ENDED_AT = Date.UTC(2026, 7, 19, 5, 15, 30);
+  const stamped = (row: RuntimeMessage, durationMs: number): RuntimeMessage => ({
+    ...row,
+    turn: { durationMs, endedAt: ENDED_AT },
+  });
+
+  it('carries duration and end time onto the bubble the turn ended on', () => {
+    const out = toChatMessages([
+      { role: 'user', content: 'q' },
+      stamped(assistantText('the answer'), 12_345),
+    ]);
+    const assistant = out[1]!;
+    expect(assistant.durationMs).toBe(12_345);
+    expect(assistant.completedAt).toBe(new Date(ENDED_AT).toISOString());
+  });
+
+  it('folds the stamp with the row when the turn ENDED on a tool call', () => {
+    // A tool-call-only row merges into the bubble above it. The stamp lands on
+    // that row, so without folding it too, exactly the turns that finished on a
+    // tool would lose their closing line.
+    const out = toChatMessages([
+      assistantText('let me check'),
+      stamped(toolCallRow('c1', 'Read'), 4_000),
+      toolResultRow('c1', 'Read', 'contents'),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.durationMs).toBe(4_000);
+    expect(out[0]!.completedAt).toBe(new Date(ENDED_AT).toISOString());
+  });
+
+  it('leaves both fields ABSENT on rows written before the stamp existed', () => {
+    // No migration was run and none is needed: an old row simply has no `turn`
+    // key. The view renders nothing at all for these — not `undefined초`.
+    const out = toChatMessages([
+      { role: 'user', content: 'q' },
+      assistantText('an older answer'),
+    ]);
+    expect(out[1]!).not.toHaveProperty('durationMs');
+    expect(out[1]!).not.toHaveProperty('completedAt');
+  });
+
+  it('stamps only the turn that was measured, not the turns before it', () => {
+    const out = toChatMessages([
+      { role: 'user', content: 'first' },
+      assistantText('first answer'),
+      { role: 'user', content: 'second' },
+      stamped(assistantText('second answer'), 900),
+    ]);
+    expect(out[1]!.durationMs).toBeUndefined();
+    expect(out[3]!.durationMs).toBe(900);
+  });
+
+  it('never puts a measurement on a USER bubble', () => {
+    const out = toChatMessages([
+      { role: 'user', content: 'q' },
+      stamped(assistantText('a'), 500),
+    ]);
+    expect(out[0]!.role).toBe('user');
+    expect(out[0]!.durationMs).toBeUndefined();
+    expect(out[0]!.completedAt).toBeUndefined();
+  });
+});

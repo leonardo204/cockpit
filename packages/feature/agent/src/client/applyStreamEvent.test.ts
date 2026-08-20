@@ -316,3 +316,68 @@ describe('applyStreamEvent — subagent attribution + lifecycle absorption', () 
     expect(out.find((m) => m.id === ID)?.subagents).toBeUndefined();
   });
 });
+
+// HOW LONG THE TURN TOOK, AND WHEN IT ENDED.
+//
+// Both numbers are the ENGINE's — the reducer copies them off the `result`
+// event and computes neither. The point of the tests below is that it stays
+// that way: a reducer that reached for `Date.now()` here would time the
+// DELIVERY of the event, and a replayed or late-joined stream delivers the
+// event long after the turn it describes.
+describe('applyStreamEvent — the turn’s own account of itself', () => {
+  it('captures duration and end time from the result event, onto that turn’s bubble', () => {
+    const endedAt = Date.UTC(2026, 7, 19, 5, 15, 30);
+    const out = reduce(seed(), [
+      delta('answer'),
+      { type: 'result', duration_ms: 12_345, ended_at: endedAt },
+    ]);
+    expect(out[0].durationMs).toBe(12_345);
+    expect(out[0].completedAt).toBe(new Date(endedAt).toISOString());
+  });
+
+  it('puts them on the CURRENT turn only, never on messages beside it', () => {
+    const msgs: ChatMessage[] = [
+      { id: 'user-1', role: 'user', content: 'q' },
+      { id: 'asst-0', role: 'assistant', content: 'an older turn' },
+      ...seed(),
+    ];
+    const out = reduce(msgs, [{ type: 'result', duration_ms: 900, ended_at: 1_700_000_000_000 }]);
+    expect(out[0].durationMs).toBeUndefined();
+    expect(out[1].durationMs).toBeUndefined();
+    expect(out[2].durationMs).toBe(900);
+  });
+
+  it('the end time is the TURN’s end, not the bubble’s creation', () => {
+    // A four-minute turn: creation and end are four minutes apart, and the
+    // bubble must report the second. This is the case that makes reusing
+    // `timestamp` (documented as creation time) wrong rather than merely loose.
+    const created = Date.UTC(2026, 7, 19, 5, 0, 0);
+    const ended = created + 4 * 60_000;
+    const start: ChatMessage[] = [
+      { id: ID, role: 'assistant', content: '', isStreaming: true, timestamp: new Date(created).toISOString() },
+    ];
+    const out = reduce(start, [{ type: 'result', duration_ms: 4 * 60_000, ended_at: ended }]);
+    expect(out[0].timestamp).toBe(new Date(created).toISOString());
+    expect(out[0].completedAt).toBe(new Date(ended).toISOString());
+    expect(new Date(out[0].completedAt!).getTime() - new Date(out[0].timestamp!).getTime()).toBe(4 * 60_000);
+  });
+
+  it('a result that reports neither leaves both absent — nothing is invented', () => {
+    const out = reduce(seed(), [delta('answer'), { type: 'result' }]);
+    expect(out[0].isStreaming).toBe(false);
+    expect(out[0].durationMs).toBeUndefined();
+    expect(out[0].completedAt).toBeUndefined();
+  });
+
+  it('a duration without an end time keeps the duration and invents no clock', () => {
+    const out = reduce(seed(), [{ type: 'result', duration_ms: 4_000 }]);
+    expect(out[0].durationMs).toBe(4_000);
+    expect(out[0].completedAt).toBeUndefined();
+  });
+
+  it('a still-streaming turn has nothing to report yet', () => {
+    const out = reduce(seed(), [delta('half an ans')]);
+    expect(out[0].isStreaming).toBe(true);
+    expect(out[0].durationMs).toBeUndefined();
+  });
+});

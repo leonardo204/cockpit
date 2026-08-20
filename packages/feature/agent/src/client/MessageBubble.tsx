@@ -10,6 +10,7 @@ import { BackgroundJobBlock } from './BackgroundJobBlock';
 import { groupSubagentCalls } from './subagentGroups';
 import { partitionBackgroundJobs } from './backgroundJobs';
 import { buildRenderSegments, lastTextSegmentId } from './turnSegments';
+import { formatTurnEndTime, formatTurnMeta } from './elapsed';
 import { filterDisplayToolCalls, shouldGroupUnderHeader } from './toolCallDisplay';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
 import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
@@ -300,7 +301,7 @@ interface MessageBubbleProps {
 
 // Use memo optimization — only re-render when message or cwd changes
 export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true, onResendMessage }: MessageBubbleProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
   const [showEventDetail, setShowEventDetail] = useState(false);
@@ -477,6 +478,37 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   };
 
   const timeStr = formatTime(message.timestamp);
+
+  // WHAT A FINISHED TURN COST, AND WHEN IT LANDED — `12.3초 · 오후 2:15`.
+  //
+  // NOT HOVER-ONLY, unlike the creation timestamp above it: this is the thing
+  // the user came back to the tab to read, and information you have to go
+  // looking for with the mouse is information the app has decided you do not
+  // need.
+  //
+  // FOUR REASONS IT DRAWS NOTHING, each deliberate: a user message (which has no
+  // duration to report), a turn still streaming (a number that ticks and then
+  // settles is noise — the running clock lives in MessageList), a turn recorded
+  // before this existed, and a turn whose end time never arrived. The last one
+  // is why the separator is built here rather than written into JSX: `· ` with
+  // nothing after it is the tell that a field was missing.
+  //
+  // MEMOISED because this component is `memo`'d and every open tab stays
+  // mounted (shell/CLAUDE.md): `toLocaleTimeString` on every bubble on every
+  // render of the list is exactly the O(list) per-render work those conventions
+  // are about. `i18n.language` is a dep because both halves are localised.
+  const turnMeta = useMemo(() => {
+    if (isUser || message.isStreaming) return null;
+    const text = formatTurnMeta(message.durationMs, message.completedAt);
+    if (!text) return null;
+    const endTime = formatTurnEndTime(message.completedAt);
+    return {
+      text,
+      title: endTime
+        ? t('chat.turnFinishedAt', { defaultValue: 'Finished at {{time}}', time: endTime })
+        : undefined,
+    };
+  }, [isUser, message.isStreaming, message.durationMs, message.completedAt, i18n.language, t]);
 
   // Attachments. Drawn at the TOP of the turn's first balloon, where they always
   // were — they came with the message, not with whatever it ended on.
@@ -798,6 +830,18 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
               <span>{t('chat.viewQuestions')}</span>
             </button>
           </div>
+        )}
+        {/* The turn's closing line: how long it took and when it finished.
+            Last, because it is the one thing that is only true once everything
+            above it has happened. */}
+        {turnMeta && (
+          <span
+            data-testid="turn-meta"
+            title={turnMeta.title}
+            className="text-[0.786rem] text-muted-foreground mt-0.5 px-1"
+          >
+            {turnMeta.text}
+          </span>
         )}
       </div>
 

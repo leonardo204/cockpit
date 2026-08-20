@@ -85,6 +85,13 @@ export interface StreamEvent {
   harness_task_status?: 'completed' | 'failed' | 'stopped';
   /** When the RUNTIME observed this edge (epoch ms) — the elapsed clock's origin. */
   harness_task_at?: number;
+  /** `result` only: how long the whole turn took, measured by the engine. */
+  duration_ms?: number;
+  /** `result` only: when the turn ENDED (epoch ms), read from the same clock at
+   *  the same instant as `duration_ms`. Absent on a result event emitted by
+   *  anything that predates the pair — the bubble then keeps no closing line
+   *  rather than borrowing a time from somewhere else. */
+  ended_at?: number;
 }
 
 export function applyStreamEvent(
@@ -288,9 +295,20 @@ export function applyStreamEvent(
       // hold it while the segment list, which is what gets rendered, stayed
       // empty and showed nothing.
       const base = !m.content && resultText ? withAssistantText(m, resultText) : m;
+      // HOW LONG IT TOOK AND WHEN IT LANDED — the turn's own account of itself,
+      // taken straight off the event. Both are kept only when the event actually
+      // carries them: a result from anything that does not report them leaves the
+      // fields absent, which is what the view reads as "say nothing" (an
+      // `undefined` rendered would read as `undefined초`). Nothing is derived
+      // here — `Date.now()` at this point would time the DELIVERY of the event,
+      // which for a replayed or late-joined stream is not the turn at all.
       return {
         ...base,
         isStreaming: false,
+        ...(typeof ev.duration_ms === 'number' ? { durationMs: ev.duration_ms } : {}),
+        ...(typeof ev.ended_at === 'number'
+          ? { completedAt: new Date(ev.ended_at).toISOString() }
+          : {}),
         toolCalls: base.toolCalls?.map((tc) => ({ ...tc, isLoading: false })),
       };
     });

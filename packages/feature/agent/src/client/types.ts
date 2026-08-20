@@ -51,6 +51,21 @@ export interface ChatMessage {
    *  and it is never part of what gets stored as the answer. */
   thinking?: string;
   timestamp?: string;  // Message creation time (ISO format)
+  /** HOW LONG THE TURN TOOK (ms), as the ENGINE measured it — never recomputed
+   *  here. The client's clock and the engine's are different clocks, and the
+   *  stream can arrive late (a viewer joining mid-run, a snapshot replay), so a
+   *  client-side subtraction would time the delivery rather than the turn.
+   *
+   *  ASSISTANT turns only, and only once the turn has ENDED: a number that ticks
+   *  and then settles is noise. Absent on turns recorded before this existed —
+   *  the view draws nothing at all then, separator included. */
+  durationMs?: number;
+  /** WHEN THE TURN ENDED (ISO). Deliberately NOT `timestamp`, which is when the
+   *  bubble was CREATED: on a four-minute turn the two are four minutes apart,
+   *  and "when did the answer arrive" is the question being asked. Set from the
+   *  engine's own reading at the same instant as `durationMs`, so the pair can
+   *  never disagree. */
+  completedAt?: string;
   // Set on role:'system' rows — a harness event rendered as a muted one-line bar
   // (not a conversation bubble). `task-notification` shows the <summary> line;
   // `meta` covers skill image annotations / compact-summary notices.
