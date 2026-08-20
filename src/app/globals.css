@@ -977,3 +977,64 @@ mark.chat-search-current { background: rgba(217, 119, 6, 0.6); color: inherit; b
 .xterm-renderer .xterm-screen {
   background-color: transparent !important;
 }
+
+/* ============================================
+   Markdown document images (MarkdownPreviewModal + rehypeMarkdownImages)
+   ============================================ */
+
+:root {
+  /* The reading-width cap for document images. NOT a resampling target —
+     nothing downscales the user's file; this is the only place the picture is
+     made smaller, and only visually.
+
+     MUST EQUAL `IMAGE_MAX_WIDTH_PX` in markdownPreviewOps.ts, which is what the
+     2x "promote to full width instead of shrinking" rule is measured against.
+     If the two drift, images between the CSS cap and the TS cap are shrunk by
+     one rule while the other still calls them normal. markdownImageCap.test.ts
+     pins them together, because only the source can show it. */
+  --md-img-max-width: 680px;
+}
+
+/* MANDATORY WHEREVER DIMENSIONS ARE INJECTED. The injected `width`/`height`
+   are the image's INTRINSIC size, present to reserve the box before a lazy
+   image loads. The moment `max-width` shrinks such an image, a fixed `height`
+   attribute would hold the old height and the aspect ratio would break — a
+   squashed screenshot. Scoped to the attribute pair exactly so that an author
+   who wrote raw `<img height="28">` still wins: that path renders through
+   MarkdownRenderer's inline-style branch, and an inline style outranks this. */
+.markdown-body img[width][height] {
+  height: auto;
+}
+
+/* Images the viewer owns (data-md-image), sized by CSS rather than by pixels
+   pinned inline. Block, because a document image is a figure — a diagram
+   sitting on the text baseline with a descender gap under it is not what
+   anybody wrote `![](./diagram.png)` for. */
+.markdown-body .md-img {
+  display: block;
+  max-width: var(--md-img-max-width);
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 0.75em 0;
+}
+
+/* Wider than twice the cap: a screenshot or an architecture diagram, which is
+   unreadable at 680px. Promoted to the pane, never resampled down. */
+.markdown-body .md-img.md-img-wide {
+  max-width: 100%;
+}
+
+/* The diagnostic that replaces an image we could not resolve. INLINE, because
+   the image it stands in for sits inside a paragraph. It names the file and the
+   path that was actually tried, since the usual cause is a relative path
+   written against a different directory — a broken-image icon would say only
+   "something is wrong", which the reader already knew. */
+.markdown-body .md-img-missing {
+  display: inline;
+  padding: 0 0.35em;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.875em;
+  word-break: break-all;
+}

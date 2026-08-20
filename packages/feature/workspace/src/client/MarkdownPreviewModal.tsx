@@ -31,6 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { PluggableList } from 'unified';
 import {
   MarkdownRenderer,
   Portal,
@@ -45,11 +46,12 @@ import {
   previewErrorKey,
   readingTimeMinutes,
 } from './markdownPreviewOps';
-
-/** Module scope so the array identity never changes: a fresh array on every
- *  render would make ReactMarkdown rebuild its whole plugin pipeline and tear
- *  the DOM down with it (see the memo notes in shell/CLAUDE.md). */
-const REHYPE_PLUGINS = [rehypeSourceLines];
+import {
+  rehypeMarkdownImages,
+  type MarkdownImageOptions,
+  type MarkdownImageScan,
+  type MarkdownImageSize,
+} from './rehypeMarkdownImages';
 
 interface Doc {
   content: string;
@@ -80,6 +82,44 @@ async function readFile(cwd: string, rel: string): Promise<ReadResponse> {
   }
 }
 
+/** Probed intrinsic sizes by project-relative path; `null` means "asked, and
+ *  there is no answer". */
+type SizeMap = Record<string, MarkdownImageSize | null>;
+
+type ProbeResponse =
+  | { ok: true; sizes: SizeMap }
+  | { ok: false; reason: string };
+
+/**
+ * One batch header-probe for every image the document just referenced.
+ *
+ * ALWAYS ANSWERS FOR EVERY REL IT WAS ASKED ABOUT, even when the request fails
+ * outright — a rel with no key would look "not yet probed" to the effect that
+ * drives this, and it would ask again on the next render, forever. `null` is
+ * the honest and terminating answer; the image still renders, just without a
+ * reserved box.
+ *
+ * A plain `fetch`, matching `readFile` directly above it and `fsOp` in
+ * FileBrowserPanel — the transport contract this component already speaks.
+ */
+async function probeImageSizes(cwd: string, rels: string[]): Promise<SizeMap> {
+  const blank: SizeMap = {};
+  for (const rel of rels) blank[rel] = null;
+  try {
+    const res = await fetch('/api/fs-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd, rels }),
+    });
+    if (!res.ok) return blank;
+    const data = (await res.json()) as ProbeResponse;
+    if (!data.ok) return blank;
+    return { ...blank, ...data.sizes };
+  } catch {
+    return blank;
+  }
+}
+
 export function MarkdownPreviewModal({
   cwd,
   rel,
@@ -106,6 +146,18 @@ export function MarkdownPreviewModal({
    */
   const anchorRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  /**
+   * What the image rewriter found in the tree it just walked: which local
+   * images the document referenced, and how many could not be resolved.
+   *
+   * A REF, because the plugin fills it from INSIDE ReactMarkdown's render and a
+   * `setState` from there would be a state update during another component's
+   * render. It is refilled from scratch on every run, so a StrictMode double
+   * render produces the same contents rather than double-counting.
+   */
+  const scanRef = useRef<MarkdownImageScan>({ rels: [], missing: 0 });
+  const [sizes, setSizes] = useState<SizeMap>({});
+  const [unresolved, setUnresolved] = useState(0);
 
   useEscToClose(onClose);
 
@@ -113,6 +165,16 @@ export function MarkdownPreviewModal({
     let alive = true;
     setDoc(null);
     setFailure(null);
+    // The scan belongs to the document that produced it. Left alone, the
+    // loading state would still be reporting the previous file's broken images.
+    //
+    // CLEARED IN PLACE, NEVER REPLACED. `imageOptions` below captures this
+    // object once and the plugin writes through that capture; swapping in a
+    // fresh object here would leave the rewriter filling the old one while this
+    // effect read the new, empty one — images would render but never get
+    // probed, so no document would ever reserve a box.
+    scanRef.current.rels = [];
+    scanRef.current.missing = 0;
     void readFile(cwd, current).then((res) => {
       if (!alive) return;
       if (res.ok) setDoc({ content: res.content, truncated: res.truncated, size: res.size });
@@ -171,6 +233,65 @@ export function MarkdownPreviewModal({
     setCurrent(previous);
   }, [trail]);
 
+  /**
+   * The image rewriter's settings for THIS document.
+   *
+   * `fromRel` is `current`, not the `rel` the modal was opened with: the viewer
+   * navigates between markdown files, so `./diagram.png` means something
+   * different after a link has been followed into a subdirectory. The plugin
+   * resolves through the same containment-checked walker the links use.
+   */
+  const imageOptions = useMemo<MarkdownImageOptions>(
+    () => ({
+      cwd,
+      fromRel: current,
+      sizes,
+      scan: scanRef.current,
+      missingPrefix: t('markdownPreview.imageMissing'),
+    }),
+    [cwd, current, sizes, t],
+  );
+
+  /**
+   * Rebuilt only when the options above change — which is once when the
+   * document loads and once when its probe comes back, not on every render.
+   *
+   * THE PIPELINE IS DELIBERATELY REBUILT ON THAT SECOND CHANGE. Dimensions are
+   * only discoverable after a first walk has told us WHICH images the document
+   * contains, so the first pass renders them with a src and no reserved box and
+   * the second stamps the boxes in. The gap is one local round trip — the
+   * probe reads headers only, never pixels — and it happens while the reader is
+   * still at the top of a document that has just opened.
+   */
+  const rehypePlugins = useMemo<PluggableList>(
+    () => [rehypeSourceLines, [rehypeMarkdownImages, imageOptions]],
+    [imageOptions],
+  );
+
+  /**
+   * After each rendered pass: probe whatever the walk saw and we have not asked
+   * about, and publish the unresolved count.
+   *
+   * `sizes` is both a dependency and what the effect writes, which terminates
+   * because `probeImageSizes` answers for every rel it was given — the second
+   * run finds nothing pending and stops. Setting `unresolved` to the value it
+   * already holds is a no-op re-render in React, so no guard is needed there.
+   */
+  useEffect(() => {
+    const scan = scanRef.current;
+    setUnresolved(scan.missing);
+    const pending = scan.rels.filter((rel) => !(rel in sizes));
+    if (pending.length === 0) return;
+    let alive = true;
+    void probeImageSizes(cwd, pending).then((probed) => {
+      if (!alive) return;
+      setSizes((prev) => ({ ...prev, ...probed }));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [cwd, doc, sizes]);
+
   // O(document) work, so never inline in JSX — this modal re-renders on every
   // scroll-spy tick inside TocSidebar's subtree.
   const words = useMemo(() => (doc ? countWords(doc.content) : 0), [doc]);
@@ -212,7 +333,7 @@ export function MarkdownPreviewModal({
           <MarkdownRenderer
             content={doc.content}
             enableMath
-            rehypePlugins={REHYPE_PLUGINS}
+            rehypePlugins={rehypePlugins}
             onLinkClick={onLinkClick}
           />
         </div>
@@ -269,6 +390,14 @@ export function MarkdownPreviewModal({
                 ? t('markdownPreview.readingTimeUnderMinute')
                 : t('markdownPreview.readingTime', { count: minutes })}
             </span>
+            {/* Only when there is something to report. Each one also carries its
+                own placeholder in the text; this is the "and there were N of
+                them" the reader needs before they start scrolling to count. */}
+            {unresolved > 0 && (
+              <span data-testid="markdown-preview-unresolved-images">
+                {t('markdownPreview.imagesUnresolved', { count: unresolved })}
+              </span>
+            )}
           </div>
         </div>
       </div>

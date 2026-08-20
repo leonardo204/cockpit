@@ -167,8 +167,23 @@ describe('markdown preview modal — it is an assembly, not a second renderer', 
     expect(src).toContain("from '@cockpit/shared-ui'");
     expect(src).toContain('<MarkdownRenderer');
     expect(src).toContain('<TocSidebar');
-    expect(src).toContain('rehypePlugins={REHYPE_PLUGINS}');
-    expect(src).toContain('const REHYPE_PLUGINS = [rehypeSourceLines]');
+    expect(src).toContain('rehypePlugins={rehypePlugins}');
+    // The pipeline is now TWO plugins: the outline seam plus the image
+    // rewriter. Both must be in the same list — a second ReactMarkdown pass
+    // for images would be the duplication this test exists to catch.
+    expect(src).toMatch(
+      /useMemo(?:<[^>]+>)?\(\s*\(\)\s*=>\s*\[rehypeSourceLines,\s*\[rehypeMarkdownImages/,
+    );
+  });
+
+  it('memoises the plugin list instead of building it inline', () => {
+    // A fresh array on every render makes ReactMarkdown rebuild its whole
+    // pipeline and tear the DOM down with it (see the memo notes in
+    // shell/CLAUDE.md). The list may change when the probed sizes arrive —
+    // once per document — and at no other time.
+    expect(src).toMatch(
+      /const rehypePlugins = useMemo(?:<[^>]+>)?\([\s\S]*?\[imageOptions\],\s*\);/,
+    );
   });
 
   it('turns math ON, unlike chat', () => {

@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyMarkdownLink,
   countWords,
+  formatMissingImage,
+  IMAGE_MAX_WIDTH_PX,
+  IMAGE_WIDE_FACTOR,
+  isWideImage,
+  markdownImageUrl,
+  planMarkdownImage,
   previewErrorKey,
   readingTimeMinutes,
   rowActivation,
@@ -235,5 +241,167 @@ describe('rowActivation — which "open" a double-click means', () => {
   it('does nothing for a folder — a double-click there is two expand toggles', () => {
     expect(rowActivation({ name: 'docs', isDir: true })).toBe('none');
     expect(rowActivation({ name: 'weird.md', isDir: true })).toBe('none');
+  });
+});
+
+/**
+ * The image rules carry the same two kinds of weight the link rules do. A
+ * source that escapes the project must never become a request — a markdown file
+ * is a document the user may not have written, and it must not be a way to read
+ * `../../.ssh/id_rsa` — and a source the viewer cannot serve must become a
+ * placeholder that explains itself rather than a broken-image icon.
+ */
+describe('planMarkdownImage — where the bytes come from', () => {
+  it('resolves relative to the current document, not the project root', () => {
+    expect(planMarkdownImage('docs/guide/setup.md', './diagram.png')).toEqual({
+      kind: 'local',
+      rel: 'docs/guide/diagram.png',
+    });
+    expect(planMarkdownImage('README.md', 'diagram.png')).toEqual({
+      kind: 'local',
+      rel: 'diagram.png',
+    });
+  });
+
+  it('walks `..` out of the document folder and back into the project', () => {
+    expect(planMarkdownImage('docs/guide/setup.md', '../img/logo.svg')).toEqual({
+      kind: 'local',
+      rel: 'docs/img/logo.svg',
+    });
+    expect(planMarkdownImage('docs/guide/setup.md', '../../assets/hero.webp')).toEqual({
+      kind: 'local',
+      rel: 'assets/hero.webp',
+    });
+  });
+
+  it('percent-decodes each segment, so a space in a folder name still resolves', () => {
+    expect(planMarkdownImage('docs/a.md', 'my%20images/shot%201.png')).toEqual({
+      kind: 'local',
+      rel: 'docs/my images/shot 1.png',
+    });
+  });
+
+  it('drops a cache-busting query and a fragment before resolving', () => {
+    expect(planMarkdownImage('docs/a.md', 'x.png?v=2')).toEqual({ kind: 'local', rel: 'docs/x.png' });
+    expect(planMarkdownImage('docs/a.md', 'x.png#frag')).toEqual({ kind: 'local', rel: 'docs/x.png' });
+  });
+
+  it('REFUSES a path that climbs above the project root', () => {
+    const plan = planMarkdownImage('docs/guide/setup.md', '../../../etc/passwd.png');
+    expect(plan.kind).toBe('missing');
+    // The attempted path is shown so the user can see WHY, and it is the path
+    // that was tried rather than a sanitised one.
+    expect(plan).toMatchObject({ attempted: 'docs/guide/../../../etc/passwd.png' });
+  });
+
+  it('REFUSES an absolute path — markdown has no notion of the project root', () => {
+    expect(planMarkdownImage('docs/a.md', '/etc/hosts.png').kind).toBe('missing');
+    expect(planMarkdownImage('docs/a.md', 'C:/Windows/win.png').kind).toBe('missing');
+    expect(planMarkdownImage('docs/a.md', 'C:\\Windows\\win.png').kind).toBe('missing');
+  });
+
+  it('passes data:, http: and https: through untouched', () => {
+    expect(planMarkdownImage('a.md', 'https://example.com/x.png')).toEqual({ kind: 'passthrough' });
+    expect(planMarkdownImage('a.md', 'HTTP://example.com/x.png')).toEqual({ kind: 'passthrough' });
+    expect(planMarkdownImage('a.md', 'data:image/png;base64,AAAA')).toEqual({ kind: 'passthrough' });
+    // Protocol-relative is remote too.
+    expect(planMarkdownImage('a.md', '//cdn.example.com/x.png')).toEqual({ kind: 'passthrough' });
+  });
+
+  it('does NOT pass other schemes through — they are not ours to fetch', () => {
+    expect(planMarkdownImage('a.md', 'file:///etc/passwd.png').kind).toBe('missing');
+    expect(planMarkdownImage('a.md', 'vscode://x.png').kind).toBe('missing');
+  });
+
+  it('honours the shared whitelist, and heic is not on it', () => {
+    expect(planMarkdownImage('a.md', 'shot.avif')).toEqual({ kind: 'local', rel: 'shot.avif' });
+    expect(planMarkdownImage('a.md', 'chart.TIFF')).toEqual({ kind: 'local', rel: 'chart.TIFF' });
+    // Chromium cannot decode HEIC. Serving it would paint a blank frame; the
+    // placeholder at least says what happened. See shared-utils/imageFile.ts.
+    expect(planMarkdownImage('a.md', 'IMG_0001.heic')).toEqual({
+      kind: 'missing',
+      label: 'IMG_0001.heic',
+      attempted: 'IMG_0001.heic',
+    });
+    expect(planMarkdownImage('a.md', 'notes.md').kind).toBe('missing');
+    expect(planMarkdownImage('a.md', 'archive.zip').kind).toBe('missing');
+  });
+
+  it('reports an empty source rather than emitting an image with no src', () => {
+    expect(planMarkdownImage('a.md', '')).toEqual({ kind: 'missing', label: '', attempted: '' });
+    expect(planMarkdownImage('a.md', '   ').kind).toBe('missing');
+  });
+});
+
+describe('markdownImageUrl', () => {
+  it('encodes both halves, so a path with & or # cannot cut the query in two', () => {
+    expect(markdownImageUrl('/Users/me/proj & co', 'docs/a#b.png')).toBe(
+      '/api/fs-image?cwd=%2FUsers%2Fme%2Fproj%20%26%20co&rel=docs%2Fa%23b.png',
+    );
+  });
+});
+
+/**
+ * The promotion rule: an image more than TWICE the cap is a screenshot or a
+ * diagram, and shrinking one of those to 680px does not make it smaller, it
+ * makes it unreadable. Pinned at, below and above the threshold because "wider
+ * than 2x" and "at least 2x" differ by exactly one pixel and only a test says
+ * which one this is.
+ */
+describe('isWideImage — the 2x promotion threshold', () => {
+  const threshold = IMAGE_MAX_WIDTH_PX * IMAGE_WIDE_FACTOR;
+
+  it('is 1360px, from a 680px cap and a 2x factor', () => {
+    expect(IMAGE_MAX_WIDTH_PX).toBe(680);
+    expect(IMAGE_WIDE_FACTOR).toBe(2);
+    expect(threshold).toBe(1360);
+  });
+
+  it('below the threshold is not wide', () => {
+    expect(isWideImage(threshold - 1)).toBe(false);
+    expect(isWideImage(IMAGE_MAX_WIDTH_PX)).toBe(false);
+    expect(isWideImage(1)).toBe(false);
+  });
+
+  it('exactly the threshold is not wide — the rule is "exceeds"', () => {
+    expect(isWideImage(threshold)).toBe(false);
+  });
+
+  it('above the threshold is wide', () => {
+    expect(isWideImage(threshold + 1)).toBe(true);
+    expect(isWideImage(3840)).toBe(true);
+  });
+
+  it('an unprobed image is never wide — it renders under the ordinary cap', () => {
+    expect(isWideImage(undefined)).toBe(false);
+    expect(isWideImage(null)).toBe(false);
+    expect(isWideImage(Number.NaN)).toBe(false);
+    expect(isWideImage(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+});
+
+describe('formatMissingImage', () => {
+  it('names the file AND the path that was tried', () => {
+    expect(formatMissingImage('Image not found', 'diagram.png', 'docs/diagram.png')).toBe(
+      'Image not found: diagram.png (docs/diagram.png)',
+    );
+  });
+
+  it('does not repeat itself when the file is at the path', () => {
+    expect(formatMissingImage('Image not found', 'x.heic', 'x.heic')).toBe(
+      'Image not found: x.heic',
+    );
+  });
+
+  it('carries hostile filenames through as PLAIN TEXT, unescaped and unparsed', () => {
+    // The escaping is structural: this string goes into a hast TEXT node, which
+    // the DOM escapes. Any escaping done HERE would be double-escaping that the
+    // reader would see as literal `&lt;`. What this pins is that the function
+    // does not mangle the name — rehypeMarkdownImages.test.ts pins that it
+    // really lands in a text node rather than raw HTML.
+    const evil = '<img src=x onerror=alert(1)>.png';
+    expect(formatMissingImage('Image not found', evil, `docs/${evil}`)).toBe(
+      `Image not found: ${evil} (docs/${evil})`,
+    );
   });
 });

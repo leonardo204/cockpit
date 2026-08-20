@@ -1,7 +1,7 @@
 {
   "name": "@surething/cockpit",
   "version": "1.0.245",
-  "description": "The open-source Claude Code GUI \u2014 an IDE-like workbench for parallel AI coding. Drive Claude (default), Codex, DeepSeek, Kimi, or local Ollama in tabs. Terminal, browser & DB bubbles, code review. Self-host on a shared dev box \u2014 a seat for every teammate. Local-first, MIT.",
+  "description": "The open-source Claude Code GUI — an IDE-like workbench for parallel AI coding. Drive Claude (default), Codex, DeepSeek, Kimi, or local Ollama in tabs. Terminal, browser & DB bubbles, code review. Self-host on a shared dev box — a seat for every teammate. Local-first, MIT.",
   "author": "Robert",
   "license": "MIT",
   "repository": {
@@ -106,6 +106,7 @@
     "ai": "^6.0.154",
     "fast-glob": "^3.3.3",
     "i18next": "^25.10.9",
+    "image-size": "^2.0.2",
     "js-yaml": "^4.2.0",
     "lucide-react": "^0.564.0",
     "next": "^16.2.6",

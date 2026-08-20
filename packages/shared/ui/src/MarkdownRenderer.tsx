@@ -382,6 +382,32 @@ function createMarkdownComponents(
     ),
     hr: ({ node: _node, ...rest }: ComponentPropsWithoutRef<'hr'> & ExtraProps) => <hr className="my-4 border-border" {...rest} />,
     img: ({ src, alt, node: _node, height, width, style, ...props }: ComponentPropsWithoutRef<'img'> & ExtraProps) => {
+      // Document images the markdown VIEWER owns (stamped by
+      // rehypeMarkdownImages in @cockpit/feature-workspace). Their width/height
+      // are INTRINSIC dimensions injected to reserve a box before a lazy image
+      // loads — not a request to paint at exactly that size — so sizing is left
+      // to CSS (`.md-img`, plus `img[width][height] { height:auto }` in
+      // globals.css) instead of being pinned as inline pixels the way the
+      // raw-HTML branch below does it. Without this branch, an injected size
+      // would fall into that branch and every diagram would render at its full
+      // intrinsic width with the aspect ratio frozen.
+      //
+      // Chat never sets this attribute, so nothing about message rendering
+      // changes; the check is on the data attribute rather than on "does it
+      // have dimensions" precisely so the two cases stay distinguishable.
+      const owned = (props as Record<string, unknown>)['data-md-image'];
+      if (owned === 'doc' || owned === 'wide') {
+        return (
+          <img
+            {...props}
+            src={src}
+            alt={alt || ''}
+            width={width}
+            height={height}
+            className={owned === 'wide' ? 'md-img md-img-wide' : 'md-img'}
+          />
+        );
+      }
       // HTML <img> with explicit dimensions (e.g. <img height="28">): preserve original size, display inline
       // height/width must be converted to inline style, otherwise overridden by Tailwind preflight's img { height: auto }
       const hasExplicitSize = height || width || style;

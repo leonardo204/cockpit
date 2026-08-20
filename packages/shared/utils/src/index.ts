@@ -13,6 +13,9 @@ export * from './shortId';
 // The one answer to "is this markdown?" — see markdownFile.ts on why it is not
 // re-derived at each call site.
 export * from './markdownFile';
+// The ONE image-format whitelist. The markdown rewriter and /api/fs-image both
+// import it; two copies would break images silently. See imageFile.ts.
+export * from './imageFile';
 export * from './platform';
 export * from './paths';
 export * from './ollamaEnv';
