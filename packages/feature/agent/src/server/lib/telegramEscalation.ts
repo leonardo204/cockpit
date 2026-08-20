@@ -51,6 +51,7 @@ import {
   buildCheckinKeyboard,
   classifyNumericReply,
   classifyTextReply,
+  editTelegramMessage,
   isTelegramReady,
   parseCallbackData,
   parseCheckinCallbackData,
@@ -61,7 +62,8 @@ import {
   type TelegramConfig,
   type TelegramUpdate,
 } from './telegram';
-import { BOT_COMMANDS } from './telegramChatStrings';
+import { BOT_COMMANDS, projectHeader } from './telegramChatStrings';
+import { projectDisplayName } from './projectDisplayName';
 
 /** Store setting holding the getUpdates watermark (see the header note). */
 export const TELEGRAM_OFFSET_KEY = 'telegram.updateOffset';
@@ -95,15 +97,27 @@ export function truncate(text: string, max: number): string {
 
 /** The escalation message: who is asking, what they want to run, and what the
  *  buttons mean. Plain text (no Markdown) — a tool input can contain any
- *  characters, and an unescaped `_`/`*` would make Telegram reject the send. */
+ *  characters, and an unescaped `_`/`*` would make Telegram reject the send.
+ *
+ *  THE FULL PATH STAYS, next to the project name (telegram-chat §0). Everywhere
+ *  else the absolute cwd is noise on a phone, but this is the one message that
+ *  authorises a mutating command: two worktrees of the same repo carry the SAME
+ *  project name, and approving `rm -rf build` in the wrong one is not
+ *  recoverable by reading the next message. The name is for scanning, the path
+ *  is for judging. */
 export function formatApprovalMessage(opts: {
   toolName: string;
   input?: unknown;
   agentName?: string;
   cwd?: string;
+  /** Resolved project name; '' when the session has none. Omit when the caller
+   *  cannot resolve one — the header is then left off entirely. */
+  project?: string;
 }): string {
   const who = opts.agentName ? `@${opts.agentName}` : 'naby';
-  const lines = [`🔐 ${who} needs approval`, '', `Tool: ${opts.toolName}`];
+  const lines: string[] = [];
+  if (opts.project !== undefined) lines.push(projectHeader(opts.project));
+  lines.push(`🔐 ${who} needs approval`, '', `Tool: ${opts.toolName}`);
   if (opts.cwd) lines.push(`Dir: ${opts.cwd}`);
   const input = formatInputPreview(opts.input);
   if (input) lines.push('', input);
@@ -122,9 +136,14 @@ export function formatCheckinMessage(opts: {
   options: readonly string[];
   agentName?: string;
   cwd?: string;
+  /** Resolved project name; '' when the session has none, omitted when the
+   *  caller cannot resolve one. */
+  project?: string;
 }): string {
   const who = opts.agentName ? `@${opts.agentName}` : 'naby';
-  const lines = [`🤔 ${who} is asking how to proceed`, '', truncate(opts.question, INPUT_PREVIEW_CHARS)];
+  const lines: string[] = [];
+  if (opts.project !== undefined) lines.push(projectHeader(opts.project));
+  lines.push(`🤔 ${who} is asking how to proceed`, '', truncate(opts.question, INPUT_PREVIEW_CHARS));
   if (opts.cwd) lines.push('', `Dir: ${opts.cwd}`);
   lines.push('');
   opts.options.forEach((o, i) => lines.push(`${i + 1}. ${truncate(o, INPUT_PREVIEW_CHARS)}`));
@@ -169,6 +188,12 @@ export type FinalReport = {
    *  message REPLYABLE (telegram-chat §1.3) and what tells a chat-started turn
    *  apart from an escalated one (§4). */
   sessionId?: string;
+  /** WHICH PROJECT this turn belongs to (telegram-chat §0), already resolved:
+   *  the user's `Project.title` or the folder name, '' for a session with no
+   *  directory. Undefined means the caller did not resolve one and the header is
+   *  left off — the mirror does that on purpose, because it prints its own
+   *  project line above the report it embeds. */
+  project?: string;
 };
 
 export function formatFinalReport(opts: FinalReport): string {
@@ -181,7 +206,9 @@ export function formatFinalReport(opts: FinalReport): string {
     if (opts.stopReason && opts.stopReason !== 'done-marker') meta.push(opts.stopReason);
   }
   if (opts.numTurns != null) meta.push(`${opts.numTurns} turns`);
-  const lines = [meta.length > 0 ? `${head} (${meta.join(', ')})` : head];
+  const lines: string[] = [];
+  if (opts.project !== undefined) lines.push(projectHeader(opts.project));
+  lines.push(meta.length > 0 ? `${head} (${meta.join(', ')})` : head);
   const body = opts.ok ? (opts.text ?? '').trim() : (opts.error ?? '').trim();
   if (body) lines.push('', truncate(body, REPORT_PREVIEW_CHARS));
   return lines.join('\n');
@@ -540,6 +567,7 @@ export async function escalateApproval(opts: {
       input: opts.input,
       ...(opts.agentName ? { agentName: opts.agentName } : {}),
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      project: projectDisplayName(opts.store, opts.cwd),
     }),
     { replyMarkup: buildApprovalKeyboard(ref) },
   );
@@ -631,6 +659,7 @@ export async function escalateCheckin(opts: {
       options: opts.options,
       ...(opts.agentName ? { agentName: opts.agentName } : {}),
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      project: projectDisplayName(opts.store, opts.cwd),
     }),
     { replyMarkup: buildCheckinKeyboard(ref, opts.options.length) },
   );
@@ -695,7 +724,15 @@ export async function sendFinalReport(store: Store, report: FinalReport): Promis
   // waits for the run and sends the answer, so letting the engine also report
   // would put the same answer on the phone twice.
   if (report.sessionId && state.chatTurns.has(report.sessionId)) return;
-  const sent = await sendTelegramMessage(cfg, formatFinalReport(report));
+  // §0 — the report names its project. The caller has a sessionId, not a cwd,
+  // so the session is the hop between them; a report with no session (or a
+  // session already deleted) resolves to '' and prints the "no project" marker,
+  // which is still an answer where a blank line would look like a bug.
+  const cwd = report.sessionId ? store.getSession?.(report.sessionId)?.cwd : undefined;
+  const sent = await sendTelegramMessage(
+    cfg,
+    formatFinalReport({ project: projectDisplayName(store, cwd), ...report }),
+  );
   logActivity('escalation', {
     channel: 'telegram',
     subject: 'final_report',
@@ -1062,10 +1099,19 @@ function routeToChat(store: Store, cfg: TelegramConfig, update: TelegramUpdate):
   void (async () => {
     try {
       const chat = await import('./telegramChat');
-      const runtime = await chat.chatRuntimeDeps();
+      // The progress channel (telegram-chat §4.1) is handed in HERE and nowhere
+      // else, which is what scopes live progress to telegram-originated turns:
+      // a desktop turn reaches the phone through the mirror, which has no
+      // reporter and must not grow one.
+      const runtime = await chat.chatRuntimeDeps({
+        send: (text: string) => sendTelegramMessage(cfg, text),
+        edit: (messageId: number, text: string) => editTelegramMessage(cfg, messageId, text),
+        now: () => Date.now(),
+      });
       await chat.handleChatUpdate(
         {
           store,
+          ...(runtime.liveProgress ? { liveProgress: true } : {}),
           send: (text: string) => sendTelegramMessage(cfg, text),
           rememberMessage: (messageId, sessionId) => rememberChatMessage(messageId, sessionId, store),
           sessionForMessage: (messageId) => sessionForChatMessage(messageId, store),

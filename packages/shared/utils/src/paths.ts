@@ -89,6 +89,27 @@ export function encodePath(path: string): string {
   return path.replace(/[/.]/g, '-');
 }
 
+/**
+ * The folder name of a working directory — what a project is called when nobody
+ * has renamed it.
+ *
+ * ONE implementation, importable from both the server and the browser, because
+ * there were FOUR: the Naby scope picker, the Telegram bot's command labels and
+ * two inline `cwd.split('/').pop()` in Workspace. Two of them ignored Windows
+ * separators and one returned the whole cwd when the path ended in a slash, so
+ * the same directory could be named differently in two places on one screen.
+ *
+ * Returns '' rather than undefined for "no name": a caller that wants to print a
+ * marker instead of a blank has to make that choice explicitly, and `||` gives it
+ * to them without a null check. Trailing separators are stripped first, so
+ * `/a/b/` and `/a/b` are the same project.
+ */
+export function projectNameFromCwd(cwd: string | undefined | null): string {
+  if (!cwd) return '';
+  const parts = cwd.replace(/[/\\]+$/, '').split(/[/\\]/);
+  return parts[parts.length - 1] ?? '';
+}
+
 // ============================================
 // Cockpit Project Paths (~/.cockpit/projects/<encoded-cwd>/...)
 // ============================================

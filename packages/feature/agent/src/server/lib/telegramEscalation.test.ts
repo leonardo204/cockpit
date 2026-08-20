@@ -28,6 +28,7 @@ import {
 import { registerApproval, hasPendingApproval } from './approvalRegistry';
 import { registerCheckin, hasPendingCheckin } from './checkinRegistry';
 import type { TelegramUpdate } from './telegram';
+import { STR } from './telegramChatStrings';
 
 // ---------------------------------------------------------------------------
 // pure helpers
@@ -639,5 +640,118 @@ describe('telegramEscalation — always mode (telegram-chat §8)', () => {
     // Newest survives, oldest fell off — on disk exactly as in memory.
     expect(persisted.some(([id]) => id === 30_060)).toBe(true);
     expect(persisted.some(([id]) => id === 30_001)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// every outbound message names its project (telegram-chat §0)
+// ---------------------------------------------------------------------------
+
+describe('telegramEscalation — the project line', () => {
+  it('opens the approval message with the project and still shows the full path', () => {
+    const msg = formatApprovalMessage({
+      toolName: 'Bash',
+      input: { command: 'rm -rf build' },
+      cwd: '/Users/me/work/naby',
+      project: 'naby',
+    });
+    expect(msg.split('\n')[0]).toBe('📁 naby');
+    // Two worktrees of one repo share a project name; only the absolute path
+    // tells them apart, and this is the message that authorises the command.
+    expect(msg).toContain('Dir: /Users/me/work/naby');
+  });
+
+  it('opens the check-in message with the project', () => {
+    const msg = formatCheckinMessage({
+      question: '어느 쪽으로 갈까?',
+      options: ['A', 'B'],
+      cwd: '/Users/me/work/naby',
+      project: '나비',
+    });
+    expect(msg.split('\n')[0]).toBe('📁 나비');
+  });
+
+  it('opens the final report with the project', () => {
+    const msg = formatFinalReport({ ok: true, text: '끝났다', project: 'naby' });
+    expect(msg.split('\n')[0]).toBe('📁 naby');
+    expect(msg).toContain('✅ naby finished');
+  });
+
+  it('prints the no-project marker rather than a blank line', () => {
+    expect(formatFinalReport({ ok: true, project: '' }).split('\n')[0]).toBe(`📁 ${STR.noProject}`);
+    expect(formatApprovalMessage({ toolName: 'Bash', project: '' }).split('\n')[0])
+      .toBe(`📁 ${STR.noProject}`);
+    expect(formatCheckinMessage({ question: 'q', options: ['a'], project: '' }).split('\n')[0])
+      .toBe(`📁 ${STR.noProject}`);
+  });
+
+  it('leaves the line off entirely when the caller resolved no project at all', () => {
+    // Undefined is "I did not look", which is what the mirror does — it prints
+    // its own project line above the report it embeds.
+    expect(formatFinalReport({ ok: true }).split('\n')[0]).toBe('✅ naby finished');
+  });
+});
+
+describe('telegramEscalation — sendFinalReport resolves the project itself', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function storeWith(opts: {
+    cwd?: string;
+    title?: string;
+  }): Parameters<typeof sendFinalReport>[0] {
+    const settings = new Map<string, string>([
+      ['telegram.enabled', 'true'],
+      ['telegram.botToken', 'TOKEN'],
+      ['telegram.chatId', 'CHAT'],
+    ]);
+    return {
+      getSetting: (k: string) => settings.get(k),
+      setSetting: (k: string, v: string) => void settings.set(k, v),
+      getSession: (id: string) =>
+        id === 's1' ? { sessionId: 's1', ...(opts.cwd ? { cwd: opts.cwd } : {}) } : undefined,
+      listProjects: () =>
+        opts.cwd && opts.title ? [{ cwd: opts.cwd, title: opts.title }] : [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+  }
+
+  function captureSend(): { texts: string[] } {
+    const texts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (_url: unknown, init: { body: string }) => {
+        texts.push(JSON.parse(init.body).text);
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 9 } }) };
+      }),
+    );
+    return { texts };
+  }
+
+  it("names the session's project by its folder name", async () => {
+    const cap = captureSend();
+    await sendFinalReport(storeWith({ cwd: '/Users/me/work/naby' }), {
+      ok: true,
+      text: '끝',
+      sessionId: 's1',
+    });
+    expect(cap.texts[0]!.split('\n')[0]).toBe('📁 naby');
+  });
+
+  it('lets a title the user set beat the folder name', async () => {
+    const cap = captureSend();
+    await sendFinalReport(storeWith({ cwd: '/Users/me/work/dash-v2', title: '고객 대시보드' }), {
+      ok: true,
+      text: '끝',
+      sessionId: 's1',
+    });
+    expect(cap.texts[0]!.split('\n')[0]).toBe('📁 고객 대시보드');
+  });
+
+  it('marks a session with no directory as having no project', async () => {
+    const cap = captureSend();
+    await sendFinalReport(storeWith({}), { ok: true, text: '끝', sessionId: 's1' });
+    expect(cap.texts[0]!.split('\n')[0]).toBe(`📁 ${STR.noProject}`);
   });
 });

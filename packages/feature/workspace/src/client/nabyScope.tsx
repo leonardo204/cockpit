@@ -25,6 +25,7 @@
 
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 // ---------------------------------------------------------------------------
 // Org UI gate. Flip to `true` when in-house organization infrastructure lands;
@@ -87,14 +88,10 @@ function descKey(scope: NabyScopeId): string {
   return scope === 'user' ? 'scope.globalDesc' : `scope.${scope}Desc`;
 }
 
-/** The folder name of an open project, used to name the `project` scope. Pure
- *  basename of the cwd; empty/undefined cwd yields no name (caller falls back to
- *  the "no project" copy). */
-export function projectName(cwd: string | undefined): string {
-  if (!cwd) return '';
-  const parts = cwd.replace(/[/\\]+$/, '').split(/[/\\]/);
-  return parts[parts.length - 1] ?? '';
-}
+/** The folder name of an open project, used to name the `project` scope. Kept as
+ *  a named re-export so the scope panels' imports do not have to change; the
+ *  implementation is shared with the server (see `projectNameFromCwd`). */
+export const projectName = projectNameFromCwd;
 
 /** Drop `org` from a scope list while it is UI-gated. Keeps every other scope in
  *  its given order. */

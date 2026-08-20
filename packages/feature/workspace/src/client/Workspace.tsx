@@ -19,7 +19,7 @@ import { NabyOnboardingWizard } from './NabyProviderSetup';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
-import { APP_TITLE, appTitleForCwd } from '@cockpit/shared-utils';
+import { APP_TITLE, appTitleForCwd, projectNameFromCwd } from '@cockpit/shared-utils';
 import { useEffectQuery } from '@cockpit/effect-react';
 import { useSessionDoneNotifications } from './useSessionDoneNotifications';
 import {
@@ -308,7 +308,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         // Only show toast for projects other than the currently visible one (the user can already see the completion state for the active project)
         const currentProject = projects[activeIndex];
         if (currentProject?.cwd !== cwd) {
-          const projectName = cwd.split('/').pop() || cwd;
+          const projectName = projectNameFromCwd(cwd) || cwd;
           showSessionCompleteToast({ projectName, message: lastUserMessage, cwd, sessionId });
         }
       }
@@ -817,7 +817,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         isOpen={isNoteOpen}
         onClose={() => { setIsNoteOpen(false); setNoteProjectCwd(null); }}
         projectCwd={noteProjectCwd}
-        projectName={noteProjectCwd ? noteProjectCwd.split('/').pop() : null}
+        projectName={noteProjectCwd ? projectNameFromCwd(noteProjectCwd) : null}
       />
 
       {/* Bottom-left session complete notification */}

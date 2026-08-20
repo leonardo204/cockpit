@@ -109,7 +109,30 @@ export const STR = {
   dispatchFailed: (why: string): string => `⚠️ 턴을 시작하지 못했다: ${why}`,
 
   textOnly: '지금은 텍스트만 받는다. 사진이나 파일은 아직 지원하지 않는다.',
+
+  /** Stands in for the project name when the session has no working directory.
+   *  A blank there reads as a rendering bug; this reads as an answer. */
+  noProject: '(프로젝트 없음)',
+
+  /** The progress message while a Telegram-started turn works (§4.1). Edited in
+   *  place, so this is the shape rather than one fixed string. */
+  progress: (opts: { elapsed: string; tools: number; lines: readonly string[]; done: boolean }): string =>
+    [
+      opts.done
+        ? `✅ 작업 마무리 중… (${opts.elapsed}, 툴 ${opts.tools}회)`
+        : `⏳ 작업 중… (${opts.elapsed}, 툴 ${opts.tools}회)`,
+      ...opts.lines,
+    ].join('\n'),
 } as const;
+
+/**
+ * The project line every outbound message about a session opens with
+ * (telegram-chat §0). ONE renderer so the phone can scan the same first line in
+ * a mirror, an answer, an approval and a check-in.
+ */
+export function projectHeader(name: string | undefined): string {
+  return `📁 ${name?.trim() || STR.noProject}`;
+}
 
 /** The command menu as `setMyCommands` takes it. Descriptions are Korean; the
  *  commands themselves are the literal tokens Telegram autocompletes. */

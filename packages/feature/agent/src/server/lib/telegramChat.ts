@@ -25,9 +25,12 @@
 // update from any other chat is dropped before a single character of it is read
 // as a command, because a turn here is arbitrary work on the user's machine.
 
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import type { SessionRef, Store } from '../../../../../../../dist/naby-runtime.mjs';
 import { formatFinalReport, truncate } from './telegramEscalation';
+import { projectDisplayName, projectDisplayNames } from './projectDisplayName';
+import { startProgressReporter, type ProgressIo } from './telegramProgress';
 import type { TelegramConfig, TelegramUpdate } from './telegram';
 import { BOT_COMMANDS, formatAge, STR, type ProjectLine, type SessionLine } from './telegramChatStrings';
 
@@ -252,12 +255,16 @@ export function parseIndexArg(args: readonly string[]): number | undefined {
 
 // -- rendering (pure) ---------------------------------------------------------
 
-/** The project label: the directory's own name. A full path is unreadable on a
- *  phone and identical for every session in the same tree. */
+/** The project label for a LIST ROW: the folder name, or undefined so the row
+ *  can leave the ` · project` suffix off entirely. A full path is unreadable on
+ *  a phone and identical for every session in the same tree.
+ *
+ *  The basename itself is `projectNameFromCwd` — one implementation shared with
+ *  the client — and the undefined is this function's only remaining job. Where
+ *  the store is in hand, prefer `projectDisplayName`, which lets a project the
+ *  user renamed answer by its own name. */
 export function projectLabel(cwd: string | undefined): string | undefined {
-  if (!cwd) return undefined;
-  const parts = cwd.split('/').filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : cwd;
+  return projectNameFromCwd(cwd) || undefined;
 }
 
 /** A session's display title: its own, or a short id so the line is still
@@ -267,14 +274,24 @@ export function sessionTitle(s: Pick<SessionRef, 'sessionId' | 'title'>): string
   return t.length > 0 ? truncate(t, 48) : `(제목 없음) ${s.sessionId.slice(0, 8)}`;
 }
 
-export function renderSessionList(sessions: readonly SessionRef[], now: number): string {
+/** `labelFor` lets the caller hand in the store-aware namer so a renamed project
+ *  reads the same here as it does in every other message. It defaults to the
+ *  folder name, which keeps this function pure and testable on its own. */
+export function renderSessionList(
+  sessions: readonly SessionRef[],
+  now: number,
+  labelFor: (cwd: string | undefined) => string = (cwd) => projectNameFromCwd(cwd),
+): string {
   if (sessions.length === 0) return STR.noSessions;
-  const lines: SessionLine[] = sessions.map((s, i) => ({
-    n: i + 1,
-    title: sessionTitle(s),
-    ...(projectLabel(s.cwd) ? { project: projectLabel(s.cwd)! } : {}),
-    age: formatAge(Math.max(0, now - s.lastUsedAt)),
-  }));
+  const lines: SessionLine[] = sessions.map((s, i) => {
+    const project = labelFor(s.cwd).trim();
+    return {
+      n: i + 1,
+      title: sessionTitle(s),
+      ...(project ? { project } : {}),
+      age: formatAge(Math.max(0, now - s.lastUsedAt)),
+    };
+  });
   return STR.sessionList(lines);
 }
 
@@ -334,10 +351,14 @@ export function extractRunAnswer(events: readonly unknown[]): TurnResult {
 
 /** The chat's version of the final report. Same 1200-char cap and the same
  *  success/failure framing as the escalation report — it IS `formatFinalReport`,
- *  minus the autonomy fields a chat turn does not report. */
-export function formatChatAnswer(result: TurnResult): string {
+ *  minus the autonomy fields a chat turn does not report.
+ *
+ *  `project` is passed through so the answer opens with the same project line as
+ *  every other outbound message (§0). Undefined omits the line. */
+export function formatChatAnswer(result: TurnResult, project?: string): string {
   return formatFinalReport({
     ok: result.ok,
+    ...(project !== undefined ? { project } : {}),
     ...(result.text ? { text: truncate(result.text, ANSWER_PREVIEW_CHARS) } : {}),
     ...(result.error ? { error: result.error } : {}),
     ...(result.durationMs != null ? { durationMs: result.durationMs } : {}),
@@ -352,8 +373,15 @@ export type ChatDeps = {
   /** Sends to the configured chat and reports the message_id back, which is what
    *  makes a later reply routable to this session. */
   send: (text: string) => Promise<{ ok: true; messageId: number } | { ok: false; error: string }>;
-  /** Start a turn and resolve when it has ended. */
-  runTurn: (opts: { sessionId: string; cwd?: string; text: string }) => Promise<TurnResult>;
+  /** Start a turn and resolve when it has ended. `project` is the already-resolved
+   *  display name, handed down so the progress reporter can print it without a
+   *  second store lookup per turn. */
+  runTurn: (opts: {
+    sessionId: string;
+    cwd?: string;
+    text: string;
+    project?: string;
+  }) => Promise<TurnResult>;
   /** Is a run live on this session right now (the 409 guard's question)? */
   isBusy: (sessionId: string) => boolean;
   /** Remember which session a bot message belongs to (reply routing, §1.3). */
@@ -363,6 +391,12 @@ export type ChatDeps = {
   now: () => number;
   /** Overridable for tests; production waits the full minute. */
   interimMs?: number;
+  /** `runTurn` reports its own progress live (§4.1), so the one-shot interim
+   *  message below is redundant and would be a second "still working" balloon a
+   *  minute into a turn the user is already watching. Set by the production deps
+   *  that wire the reporter; absent everywhere else, which keeps the interim as
+   *  the fallback for a deps set with no live channel. */
+  liveProgress?: boolean;
 };
 
 /** What the handler did — returned for the loop's log and the tests, never sent. */
@@ -463,7 +497,8 @@ async function handleCommand(deps: ChatDeps, command: ParsedCommand): Promise<Ch
       const sessions = listSessions(deps.store);
       if (sessions.length === 0) return reply(deps, STR.noSessions, 'command');
       writeList(deps.store, TELEGRAM_SESSION_LIST_KEY, sessions.map((s) => s.sessionId));
-      return reply(deps, renderSessionList(sessions, now), 'command');
+      // One projects read for the whole screen — see `projectDisplayNames`.
+      return reply(deps, renderSessionList(sessions, now, projectDisplayNames(deps.store)), 'command');
     }
 
     case 'projects': {
@@ -507,7 +542,11 @@ async function handleUse(deps: ChatDeps, args: string[], now: number): Promise<C
     // numbers that are true right now, and let the user pick again.
     if (sessions.length === 0) return reply(deps, STR.noSessions, 'command');
     writeList(deps.store, TELEGRAM_SESSION_LIST_KEY, sessions.map((s) => s.sessionId));
-    return reply(deps, `${STR.staleList}\n\n${renderSessionList(sessions, now)}`, 'command');
+    return reply(
+      deps,
+      `${STR.staleList}\n\n${renderSessionList(sessions, now, projectDisplayNames(deps.store))}`,
+      'command',
+    );
   }
   const session = deps.store.getSession(picked.id);
   if (!session) {
@@ -515,7 +554,11 @@ async function handleUse(deps: ChatDeps, args: string[], now: number): Promise<C
     return reply(deps, STR.sessionGone, 'command');
   }
   linkSession(deps, session, now);
-  return reply(deps, STR.linked(sessionTitle(session), projectLabel(session.cwd)), 'command');
+  return reply(
+    deps,
+    STR.linked(sessionTitle(session), projectDisplayName(deps.store, session.cwd) || undefined),
+    'command',
+  );
 }
 
 async function handleNew(deps: ChatDeps, args: string[], now: number): Promise<ChatOutcome> {
@@ -545,7 +588,11 @@ async function handleNew(deps: ChatDeps, args: string[], now: number): Promise<C
   // it records whoever actually answers, on the first turn.
   const session = deps.store.createSession('', undefined, cwd);
   linkSession(deps, session, now);
-  return reply(deps, STR.created(sessionTitle(session), projectLabel(session.cwd ?? cwd)), 'command');
+  return reply(
+    deps,
+    STR.created(sessionTitle(session), projectDisplayName(deps.store, session.cwd ?? cwd) || undefined),
+    'command',
+  );
 }
 
 async function handleStatus(deps: ChatDeps, now: number): Promise<ChatOutcome> {
@@ -564,7 +611,9 @@ async function handleStatus(deps: ChatDeps, now: number): Promise<ChatOutcome> {
     deps,
     STR.statusLinked({
       title: sessionTitle(session),
-      ...(projectLabel(session.cwd) ? { project: projectLabel(session.cwd)! } : {}),
+      ...(projectDisplayName(deps.store, session.cwd)
+        ? { project: projectDisplayName(deps.store, session.cwd) }
+        : {}),
       idle: formatAge(Math.max(0, now - link.lastActivityAt)),
       running: deps.isBusy(link.sessionId),
     }),
@@ -618,12 +667,19 @@ async function startTurn(deps: ChatDeps, sessionId: string, text: string): Promi
     return reply(deps, STR.sessionGone, 'notice');
   }
 
+  // §0 — resolved ONCE per turn and used twice: the live progress message and
+  // the answer. Both must name the same project, and a turn is the unit over
+  // which a rename cannot happen mid-flight in any way the user would notice.
+  const project = projectDisplayName(deps.store, session.cwd);
+
   // The one interim message, cancelled the moment the turn ends so a fast turn
-  // never sends it.
-  let interim: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-    interim = undefined;
-    void deps.send(STR.working);
-  }, deps.interimMs ?? TELEGRAM_INTERIM_MS);
+  // never sends it. Skipped entirely when the turn reports itself live (§4.1).
+  let interim: ReturnType<typeof setTimeout> | undefined = deps.liveProgress
+    ? undefined
+    : setTimeout(() => {
+        interim = undefined;
+        void deps.send(STR.working);
+      }, deps.interimMs ?? TELEGRAM_INTERIM_MS);
 
   try {
     console.log(`[telegram] chat turn → session ${sessionId} (from Telegram)`);
@@ -631,8 +687,9 @@ async function startTurn(deps: ChatDeps, sessionId: string, text: string): Promi
       sessionId,
       ...(session.cwd ? { cwd: session.cwd } : {}),
       text,
+      project,
     });
-    const answer = formatChatAnswer(result);
+    const answer = formatChatAnswer(result, project);
     const sent = await deps.send(answer);
     if (sent.ok) {
       // The answer is now a reply target: replying to it comes back HERE (§1.3).
@@ -668,7 +725,9 @@ async function startTurn(deps: ChatDeps, sessionId: string, text: string): Promi
  * runtime (and its database) into contexts that only ever wanted to send a
  * message.
  */
-export async function chatRuntimeDeps(): Promise<Pick<ChatDeps, 'runTurn' | 'isBusy'>> {
+export async function chatRuntimeDeps(
+  progressIo?: ProgressIo,
+): Promise<Pick<ChatDeps, 'runTurn' | 'isBusy' | 'liveProgress'>> {
   const [{ dispatchChat }, { nabySpec }, hub] = await Promise.all([
     import('../engines/orchestrator'),
     import('../engines/naby'),
@@ -676,7 +735,8 @@ export async function chatRuntimeDeps(): Promise<Pick<ChatDeps, 'runTurn' | 'isB
   ]);
   return {
     isBusy: (sessionId: string) => hub.isRunActive(sessionId),
-    runTurn: async ({ sessionId, cwd, text }) => {
+    ...(progressIo ? { liveProgress: true } : {}),
+    runTurn: async ({ sessionId, cwd, text, project }) => {
       const outcome = await dispatchChat(nabySpec, {
         // Descriptive only — it is what the activity log stamps on the turn so a
         // line in the file says the phone asked, not the app.
@@ -694,17 +754,52 @@ export async function chatRuntimeDeps(): Promise<Pick<ChatDeps, 'runTurn' | 'isB
         return { ok: false, error: `${outcome.error} (${outcome.status})` };
       }
       const key = outcome.runKey;
-      const deadline = Date.now() + TELEGRAM_TURN_DEADLINE_MS;
-      while (hub.isRunActive(key) && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 500));
+
+      // LIVE PROGRESS (§4.1). The wait below is a poll — it only asks whether the
+      // run is still alive — so the reporter rides the event STREAM instead:
+      // `addRunListener` is the same fan-out an attached browser tab consumes.
+      //
+      // Subscribed BEFORE the snapshot is read, then fed whatever the snapshot
+      // already held, deduped by object identity (the hub hands back the very
+      // same event objects). Doing it the other way round would drop anything the
+      // run emitted in the gap between the two calls.
+      const reporter = progressIo
+        ? startProgressReporter(progressIo, { project: project ?? '' })
+        : undefined;
+      let unsubscribe: (() => void) | undefined;
+      if (reporter) {
+        const seen = new Set<unknown>();
+        unsubscribe = hub.addRunListener(key, (ev) => {
+          if (seen.has(ev.message)) return;
+          seen.add(ev.message);
+          reporter.onEvent(ev.message);
+        });
+        for (const message of hub.getRunSnapshot(key)?.events ?? []) {
+          if (seen.has(message)) continue;
+          seen.add(message);
+          reporter.onEvent(message);
+        }
       }
-      if (hub.isRunActive(key)) {
-        hub.requestStop(key);
-        return { ok: false, error: 'turn timed out after 30m' };
+
+      try {
+        const deadline = Date.now() + TELEGRAM_TURN_DEADLINE_MS;
+        while (hub.isRunActive(key) && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        if (hub.isRunActive(key)) {
+          hub.requestStop(key);
+          return { ok: false, error: 'turn timed out after 30m' };
+        }
+        const snap = hub.getRunSnapshot(key);
+        if (!snap) return { ok: false, error: 'the run left no result' };
+        return extractRunAnswer(snap.events);
+      } finally {
+        // Both, on every path including the timeout: an orphaned listener would
+        // keep feeding a reporter whose turn is over, and a progress message
+        // left saying "작업 중" under a finished answer is worse than none.
+        unsubscribe?.();
+        await reporter?.finish();
       }
-      const snap = hub.getRunSnapshot(key);
-      if (!snap) return { ok: false, error: 'the run left no result' };
-      return extractRunAnswer(snap.events);
     },
   };
 }

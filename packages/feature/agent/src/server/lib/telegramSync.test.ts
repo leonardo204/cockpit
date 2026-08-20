@@ -12,13 +12,19 @@ import {
   type MirrorTurn,
 } from './telegramSync';
 import { markChatTurn } from './telegramEscalation';
+import { STR } from './telegramChatStrings';
 
-function fakeStore(settings: Record<string, string>, sessions: Record<string, { title?: string }> = {}) {
+function fakeStore(
+  settings: Record<string, string>,
+  sessions: Record<string, { title?: string; cwd?: string }> = {},
+  projects: Array<{ cwd: string; title?: string }> = [],
+) {
   const map = new Map(Object.entries(settings));
   return {
     getSetting: (k: string) => map.get(k),
     setSetting: (k: string, v: string) => void map.set(k, v),
     getSession: (id: string) => (sessions[id] ? { sessionId: id, ...sessions[id] } : undefined),
+    listProjects: () => projects,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
 }
@@ -163,5 +169,53 @@ describe('telegramSync — mirrorTurn', () => {
     expect(out.mirrored).toBe(true);
     expect(sent[0]).toContain('stopped');
     expect(sent[0]).toContain('boom');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// the mirror names its project (telegram-chat §0)
+// ---------------------------------------------------------------------------
+
+describe('telegramSync — the project line', () => {
+  it('opens the mirror with the project, above the session title', () => {
+    const text = formatMirrorMessage('리팩터 작업', turn(), 'naby');
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('📁 naby');
+    expect(lines[1]).toContain('🔁 리팩터 작업');
+    // The embedded report must not repeat it.
+    expect(text.split('📁').length - 1).toBe(1);
+  });
+
+  it('prints the no-project marker rather than a gap', () => {
+    expect(formatMirrorMessage('제목', turn(), '').split('\n')[0]).toBe(`📁 ${STR.noProject}`);
+  });
+
+  it('leaves the line off when the caller passed no project at all', () => {
+    expect(formatMirrorMessage('제목', turn()).split('\n')[0]).toContain('🔁');
+  });
+
+  it("resolves the project from the mirrored session's cwd", async () => {
+    const store = fakeStore(ALWAYS, { 'sess-1': { title: '제목', cwd: '/Users/me/work/naby' } });
+    const f = fakeIo();
+    await mirrorTurn(store, turn(), f.io);
+    expect(f.sent[0]!.split('\n')[0]).toBe('📁 naby');
+  });
+
+  it('lets the title the user set beat the folder name', async () => {
+    const store = fakeStore(
+      ALWAYS,
+      { 'sess-1': { title: '제목', cwd: '/Users/me/work/dash-v2' } },
+      [{ cwd: '/Users/me/work/dash-v2', title: '고객 대시보드' }],
+    );
+    const f = fakeIo();
+    await mirrorTurn(store, turn(), f.io);
+    expect(f.sent[0]!.split('\n')[0]).toBe('📁 고객 대시보드');
+  });
+
+  it('marks a session with no directory as having no project', async () => {
+    const store = fakeStore(ALWAYS, { 'sess-1': { title: '제목' } });
+    const f = fakeIo();
+    await mirrorTurn(store, turn(), f.io);
+    expect(f.sent[0]!.split('\n')[0]).toBe(`📁 ${STR.noProject}`);
   });
 });

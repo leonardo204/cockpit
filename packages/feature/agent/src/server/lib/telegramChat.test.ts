@@ -24,7 +24,7 @@ import {
   type ChatDeps,
   type TurnResult,
 } from './telegramChat';
-import { BOT_COMMANDS } from './telegramChatStrings';
+import { BOT_COMMANDS, STR } from './telegramChatStrings';
 import type { TelegramUpdate } from './telegram';
 
 // ---------------------------------------------------------------------------
@@ -272,6 +272,7 @@ function harness(opts?: {
   busy?: (sessionId: string) => boolean;
   turn?: (o: { sessionId: string; text: string; cwd?: string }) => Promise<TurnResult>;
   interimMs?: number;
+  liveProgress?: boolean;
 }): Harness {
   const sent: string[] = [];
   const turns: { sessionId: string; text: string; cwd?: string }[] = [];
@@ -294,6 +295,7 @@ function harness(opts?: {
     sessionForMessage: (id: number) => remembered.get(id),
     now: () => opts?.now ?? 1_000_000,
     ...(opts?.interimMs !== undefined ? { interimMs: opts.interimMs } : {}),
+    ...(opts?.liveProgress ? { liveProgress: true } : {}),
   };
   return { deps, sent, turns, remembered, store };
 }
@@ -446,7 +448,11 @@ describe('telegramChat — plain text is a turn (§4)', () => {
     const h = harness({ store });
     const out = await handleChatUpdate(h.deps, CHAT, incoming('테스트 좀 돌려줘'));
     expect(out.kind).toBe('turn');
-    expect(h.turns).toEqual([{ sessionId: 's1', cwd: '/x/proj', text: '테스트 좀 돌려줘' }]);
+    // `project` rides along so the progress reporter can name it without a
+    // second store read (§0).
+    expect(h.turns).toEqual([
+      { sessionId: 's1', cwd: '/x/proj', text: '테스트 좀 돌려줘', project: 'proj' },
+    ]);
     expect(h.sent[0]).toContain('답변이다');
     // The answer is now a reply target for §1.3 routing.
     expect([...h.remembered.values()]).toEqual(['s1']);
@@ -584,5 +590,97 @@ describe('telegramChat — the production deps', () => {
     expect(typeof deps.runTurn).toBe('function');
     // Nothing is running in a fresh test process.
     expect(deps.isBusy('nobody')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// every answer names its project (telegram-chat §0)
+// ---------------------------------------------------------------------------
+
+describe('telegramChat — the project line', () => {
+  it('opens the chat answer with the project', () => {
+    const answer = formatChatAnswer({ ok: true, text: '끝났다' }, 'naby');
+    expect(answer.split('\n')[0]).toBe('📁 naby');
+  });
+
+  it('prints the no-project marker rather than a gap', () => {
+    expect(formatChatAnswer({ ok: true, text: '끝' }, '').split('\n')[0]).toBe(`📁 ${STR.noProject}`);
+  });
+
+  it('leaves the line off when no project was resolved at all', () => {
+    expect(formatChatAnswer({ ok: true, text: '끝' }).split('\n')[0]).toContain('✅');
+  });
+
+  it('names the project in the answer to a linked-session turn', async () => {
+    const store = fakeStore({
+      sessions: [session('s1', { cwd: '/Users/me/work/naby', lastUsedAt: 1_000_000 })],
+    });
+    writeLink(store, { sessionId: 's1', linkedAt: 0, lastActivityAt: 1_000_000 });
+    const h = harness({ store });
+    await handleChatUpdate(h.deps, CHAT, incoming('해줘'));
+    expect(h.sent[0]!.split('\n')[0]).toBe('📁 naby');
+  });
+
+  it('lets a title the user set beat the folder name, in the answer and in /use', async () => {
+    const store = fakeStore({
+      sessions: [session('s1', { cwd: '/Users/me/work/dash-v2', lastUsedAt: 1_000_000 })],
+      projects: [{ cwd: '/Users/me/work/dash-v2', title: '고객 대시보드' }],
+    });
+    writeLink(store, { sessionId: 's1', linkedAt: 0, lastActivityAt: 1_000_000 });
+    const h = harness({ store });
+    await handleChatUpdate(h.deps, CHAT, incoming('/sessions'));
+    expect(h.sent[0]).toContain('고객 대시보드');
+    await handleChatUpdate(h.deps, CHAT, incoming('/use 1'));
+    expect(h.sent[1]).toContain('고객 대시보드');
+    await handleChatUpdate(h.deps, CHAT, incoming('/status'));
+    expect(h.sent[2]).toContain('고객 대시보드');
+    await handleChatUpdate(h.deps, CHAT, incoming('해줘'));
+    expect(h.sent[3]!.split('\n')[0]).toBe('📁 고객 대시보드');
+  });
+
+  it('marks a session with no directory as having no project', async () => {
+    const store = fakeStore({ sessions: [session('s1', { lastUsedAt: 1_000_000 })] });
+    writeLink(store, { sessionId: 's1', linkedAt: 0, lastActivityAt: 1_000_000 });
+    const h = harness({ store });
+    await handleChatUpdate(h.deps, CHAT, incoming('해줘'));
+    expect(h.sent[0]!.split('\n')[0]).toBe(`📁 ${STR.noProject}`);
+  });
+
+  it('falls back to the folder name in a list when nobody renamed the project', () => {
+    const list = renderSessionList([session('s1', { cwd: '/Users/me/work/naby', lastUsedAt: 0 })], 0);
+    expect(list).toContain('naby');
+  });
+});
+
+describe('telegramChat — live progress replaces the one-shot interim (§4.1)', () => {
+  it('sends no "작업 중" message when the turn reports itself live', async () => {
+    const store = fakeStore({ sessions: [session('s1', { lastUsedAt: 1_000_000 })] });
+    writeLink(store, { sessionId: 's1', linkedAt: 0, lastActivityAt: 1_000_000 });
+    const h = harness({
+      store,
+      liveProgress: true,
+      interimMs: 1,
+      turn: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return { ok: true, text: '끝' };
+      },
+    });
+    await handleChatUpdate(h.deps, CHAT, incoming('해줘'));
+    expect(h.sent.some((t) => t === STR.working)).toBe(false);
+  });
+
+  it('still sends it when there is no live channel (regression)', async () => {
+    const store = fakeStore({ sessions: [session('s1', { lastUsedAt: 1_000_000 })] });
+    writeLink(store, { sessionId: 's1', linkedAt: 0, lastActivityAt: 1_000_000 });
+    const h = harness({
+      store,
+      interimMs: 1,
+      turn: async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        return { ok: true, text: '끝' };
+      },
+    });
+    await handleChatUpdate(h.deps, CHAT, incoming('해줘'));
+    expect(h.sent.some((t) => t === STR.working)).toBe(true);
   });
 });

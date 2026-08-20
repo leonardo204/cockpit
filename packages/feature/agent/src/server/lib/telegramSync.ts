@@ -37,6 +37,8 @@ import {
   truncate,
   type FinalReport,
 } from './telegramEscalation';
+import { projectHeader } from './telegramChatStrings';
+import { projectDisplayName } from './projectDisplayName';
 
 /** How much of the user's request the mirror quotes. Enough to recognize the
  *  ask on a phone; the full text is in the app (and the transcript). */
@@ -68,15 +70,24 @@ export type MirrorIo = {
 };
 
 /**
- * The mirror message (§8.2): ONE message per turn — a session-title header, the
- * quoted request, then the exact `formatFinalReport` skeleton the escalation
- * report uses, so the phone reads the same shape whichever path delivered it.
+ * The mirror message (§8.2): ONE message per turn — the project line, a
+ * session-title header, the quoted request, then the exact `formatFinalReport`
+ * skeleton the escalation report uses, so the phone reads the same shape
+ * whichever path delivered it.
+ *
+ * The project is the mirror's OWN first line rather than a field on the embedded
+ * report: a mirror already carries a title and a quoted request above the
+ * report, and printing the project down there would bury the one thing the
+ * reader scans for (§0).
  */
 export function formatMirrorMessage(
   sessionTitle: string | undefined,
   turn: MirrorTurn,
+  project?: string,
 ): string {
-  const lines: string[] = [`🔁 ${sessionTitle?.trim() || turn.sessionId}`];
+  const lines: string[] = [];
+  if (project !== undefined) lines.push(projectHeader(project));
+  lines.push(`🔁 ${sessionTitle?.trim() || turn.sessionId}`);
   const prompt = (turn.prompt ?? '').trim();
   if (prompt) lines.push(`🙋 ${truncate(prompt, MIRROR_PROMPT_PREVIEW_CHARS)}`);
   const report: FinalReport = {
@@ -114,7 +125,7 @@ export async function mirrorTurn(
   if (isChatTurnInFlight(turn.sessionId)) return { mirrored: false, reason: 'telegram-turn' };
 
   const session = store.getSession?.(turn.sessionId);
-  const text = formatMirrorMessage(session?.title, turn);
+  const text = formatMirrorMessage(session?.title, turn, projectDisplayName(store, session?.cwd));
   const realIo: MirrorIo = io ?? {
     send: (t) => sendTelegramMessage(cfg, t),
     remember: (messageId, sessionId) => rememberChatMessage(messageId, sessionId, store),

@@ -278,6 +278,66 @@ export async function sendTelegramMessage(
 }
 
 /**
+ * Rewrite a message already in the chat (`editMessageText`).
+ *
+ * WHY EDIT AND NOT SEND. The progress reporter (telegram-chat §4.1) refreshes
+ * one message every few seconds while a turn works. As sends, that is a new
+ * balloon per refresh and a scroll the user cannot read; as edits it is one line
+ * that changes in place, and the answer that follows is still the last thing on
+ * the screen.
+ *
+ * "MESSAGE IS NOT MODIFIED" IS SUCCESS. Telegram rejects an edit whose text is
+ * byte-identical to what is already there, and a progress refresh lands in that
+ * state routinely (nothing happened in the last interval). Treating it as a
+ * failure would make the caller — which stops editing on the first failure, by
+ * design — go silent for the rest of a turn that is merely quiet.
+ *
+ * NO `telegram_out` ACTIVITY RECORD, deliberately. `sendTelegramMessage` writes
+ * one per call because each is a message the user received and must be
+ * accountable for; an edit is the SAME message saying the same thing later, and
+ * at one every four seconds a ten-minute turn would put 150 near-identical rows
+ * in the activity log for one balloon. The message's own record is written when
+ * it is sent; its edits are transport noise.
+ */
+export async function editTelegramMessage(
+  cfg: Pick<TelegramConfig, 'botToken' | 'chatId'>,
+  messageId: number,
+  text: string,
+  opts?: { replyMarkup?: unknown; signal?: AbortSignal },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/bot${cfg.botToken}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: cfg.chatId,
+        message_id: messageId,
+        text,
+        ...(opts?.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+      }),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    });
+    const json = (await res.json().catch(() => null)) as
+      | { ok: boolean; description?: string }
+      | null;
+    if (!res.ok || !json?.ok) {
+      const error = json?.description ?? `telegram editMessageText failed (${res.status})`;
+      if (isNotModified(error)) return { ok: true };
+      return { ok: false, error };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: describeFetchError(e) };
+  }
+}
+
+/** Telegram's wording for "your edit changes nothing" — see above. Matched on
+ *  the substring because the description carries a trailing explanation. */
+export function isNotModified(description: string): boolean {
+  return description.toLowerCase().includes('message is not modified');
+}
+
+/**
  * EVERY OUTBOUND MESSAGE, logged at the transport (naby-activity-log §3).
  *
  * Here rather than at the callers because there are six of them — a chat reply,

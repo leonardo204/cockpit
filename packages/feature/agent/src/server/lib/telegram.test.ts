@@ -14,6 +14,8 @@ import {
   sendTelegramMessage,
   pollTelegramUpdates,
   detectChatId,
+  editTelegramMessage,
+  isNotModified,
   readTelegramConfig,
   writeTelegramConfig,
 } from './telegram';
@@ -329,5 +331,62 @@ describe('telegram — detectChatId tells a network failure from an empty inbox'
     const res = await detectChatId({ botToken: '' });
     expect(res).toEqual({ ok: false, error: 'Set the bot token first.' });
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// editMessageText — the progress reporter's transport (telegram-chat §4.1)
+// ---------------------------------------------------------------------------
+
+describe('telegram — editing a message in place', () => {
+  it('calls editMessageText with the chat, the message and the new text', async () => {
+    const spy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ ok: true }) });
+    vi.stubGlobal('fetch', spy);
+    expect(await editTelegramMessage(CFG, 77, 'still working')).toEqual({ ok: true });
+    const [url, init] = spy.mock.calls[0]!;
+    expect(String(url)).toContain('/editMessageText');
+    expect(JSON.parse(init.body)).toEqual({ chat_id: '4242', message_id: 77, text: 'still working' });
+  });
+
+  it('treats "message is not modified" as success', async () => {
+    // A progress refresh lands here routinely — nothing happened in the last
+    // interval — and the caller stops editing on the first failure by design.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          ok: false,
+          description: 'Bad Request: message is not modified: specified new message content...',
+        }),
+      }),
+    );
+    expect(await editTelegramMessage(CFG, 77, 'same text')).toEqual({ ok: true });
+    expect(isNotModified('Bad Request: message is not modified')).toBe(true);
+    expect(isNotModified('Bad Request: message to edit not found')).toBe(false);
+  });
+
+  it('reports a real API refusal', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ ok: false, description: 'Bad Request: message to edit not found' }),
+      }),
+    );
+    expect(await editTelegramMessage(CFG, 77, 'x')).toEqual({
+      ok: false,
+      error: 'Bad Request: message to edit not found',
+    });
+  });
+
+  it('names the network code on a transport failure, like the send path', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(fetchFailed('ETIMEDOUT')));
+    const res = await editTelegramMessage(CFG, 77, 'x');
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error('unreachable');
+    expect(res.error).toContain('ETIMEDOUT');
   });
 });
