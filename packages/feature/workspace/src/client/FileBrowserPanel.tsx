@@ -77,7 +77,7 @@ type CopyResponse =
   | { ok: true; copied: string[]; skipped: string[]; failed: string[] }
   | { ok: false; reason: string };
 
-type FsOpAction = 'mkdir' | 'mkfile' | 'rename' | 'duplicate' | 'delete';
+type FsOpAction = 'mkdir' | 'mkfile' | 'rename' | 'duplicate' | 'delete' | 'open' | 'reveal' | 'openWith';
 
 type FsOpResponse =
   | { ok: true; rel: string }
@@ -189,11 +189,12 @@ interface FsOpsBridge {
   trash(target: { cwd: string; rel: string }): Promise<BridgeResult>;
 }
 
-/** The Electron file bridge, or null in a plain browser. Feature-detected the
- *  same way DevModePanel/UpdatePanel detect theirs — the panel must work in
- *  both hosts, so this decides whether "Open" and "Reveal in Finder" are
- *  offered at all, whether a double-click does anything, and whether delete can
- *  be a recoverable trash. */
+/** The Electron file bridge, or null where it is not visible (a plain browser,
+ *  and Windows builds where the subframe bridge does not surface). Feature-
+ *  detected the same way DevModePanel/UpdatePanel detect theirs — the panel
+ *  must work in both hosts. It decides whether delete can be a recoverable
+ *  trash, and which transport Open / Reveal use; the menu offers them either
+ *  way, because `/api/fs-op` covers both when the bridge is dark. */
 function fsBridge(): FsOpsBridge | null {
   if (typeof window === 'undefined') return null;
   const w = window as unknown as { naby?: { fsOps?: FsOpsBridge } };
@@ -570,10 +571,6 @@ export function FileBrowserPanel({
   const [menu, setMenu] = useState<FileMenuState | null>(null);
   const [renamingRel, setRenamingRel] = useState<string | null>(null);
   const [creating, setCreating] = useState<{ parentRel: string; isDir: boolean } | null>(null);
-  // Resolved once per render rather than per menu item; in Electron it is the
-  // same object for the life of the window.
-  const bridge = fsBridge();
-  const hasOsBridge = bridge !== null;
 
   const openMenu = useCallback((e: React.MouseEvent, target: MenuTarget) => {
     // Opening the menu cancels an inline edit in progress — two focused inputs
@@ -688,9 +685,12 @@ export function FileBrowserPanel({
   /**
    * Hand a file to the OS default application.
    *
-   * OUTSIDE ELECTRON THIS IS A NO-OP, silently. A browser tab cannot launch a
-   * local application, and there is nothing useful to say about it on every
-   * double-click; the menu simply does not offer "Open" there.
+   * BRIDGE FIRST, SERVER SECOND. The Electron bridge is preferred where it is
+   * visible, but its absence no longer means "do nothing": the shell's server
+   * runs on the same machine as the files, so `/api/fs-op` can launch the OS
+   * handler itself. That fallback is what puts "Open" on the menu in a plain
+   * browser tab — and on Windows builds where the subframe bridge does not
+   * surface, which used to lose the item entirely.
    *
    * Folders are excluded here as well as at the call site, because `openPath`
    * on a directory would spring a Finder window on someone who double-clicked
@@ -700,12 +700,37 @@ export function FileBrowserPanel({
     (target: MenuTarget) => {
       if (target.isDir) return;
       const open = fsBridge()?.open;
-      if (!open) return;
-      void open({ cwd, rel: target.rel }).then(
+      // `shell.openPath` (and the server twin) reports "no handler for this
+      // file type" as a failed Result rather than a rejection, so the resolved
+      // branch is the one that actually fires for an unknown extension.
+      const launched = open
+        ? open({ cwd, rel: target.rel }).then((res) => res.ok)
+        : fsOp(cwd, 'open', target.rel).then((res) => res.ok);
+      void launched.then(
+        (ok) => {
+          if (!ok) toast(t('fileBrowser.openError'), 'error');
+        },
+        () => toast(t('fileBrowser.openError'), 'error'),
+      );
+    },
+    [cwd, t],
+  );
+
+  /**
+   * Spring the OS "Open with…" chooser — the escape hatch for a file whose
+   * default association launches the wrong application, which is precisely the
+   * case a plain "Open" cannot help with.
+   *
+   * SERVER ONLY, unlike its two siblings: the Electron bridge has no open-with
+   * channel (Electron's `shell` offers none), and the server spawns the same
+   * OS chooser either way. The menu offers this only on macOS/Windows clients —
+   * Linux has no standard chooser, and the server refuses it there.
+   */
+  const onOpenWith = useCallback(
+    (target: MenuTarget) => {
+      if (target.isDir) return;
+      void fsOp(cwd, 'openWith', target.rel).then(
         (res) => {
-          // `shell.openPath` reports "no handler for this file type" as a
-          // failed Result rather than a rejection, so this branch is the one
-          // that actually fires for an unknown extension.
           if (!res.ok) toast(t('fileBrowser.openError'), 'error');
         },
         () => toast(t('fileBrowser.openError'), 'error'),
@@ -717,10 +742,12 @@ export function FileBrowserPanel({
   const onReveal = useCallback(
     (target: MenuTarget) => {
       const reveal = fsBridge()?.reveal;
-      if (!reveal) return;
-      void reveal({ cwd, rel: target.rel }).then(
-        (res) => {
-          if (!res.ok) toast(t('fileBrowser.revealError'), 'error');
+      const shown = reveal
+        ? reveal({ cwd, rel: target.rel }).then((res) => res.ok)
+        : fsOp(cwd, 'reveal', target.rel).then((res) => res.ok);
+      void shown.then(
+        (ok) => {
+          if (!ok) toast(t('fileBrowser.revealError'), 'error');
         },
         () => toast(t('fileBrowser.revealError'), 'error'),
       );
@@ -836,8 +863,8 @@ export function FileBrowserPanel({
         <FileBrowserContextMenu
           state={menu}
           onClose={closeMenu}
-          hasOsBridge={hasOsBridge}
           onOpen={onOpen}
+          onOpenWith={onOpenWith}
           onNewFile={(target) => setCreating({ parentRel: createParentOf(target), isDir: false })}
           onNewFolder={(target) => setCreating({ parentRel: createParentOf(target), isDir: true })}
           onRename={(target) => setRenamingRel(target.rel)}

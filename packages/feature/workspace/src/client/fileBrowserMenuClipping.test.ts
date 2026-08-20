@@ -47,19 +47,34 @@ describe('file browser menu — it escapes the panel it opens from', () => {
     expect(src).toContain('overflow-hidden');
   });
 
-  it('renders the Finder item only when the Electron bridge is there', () => {
+  it('offers Reveal without an Electron gate, with a per-platform label', () => {
     const src = readFileSync(MENU, 'utf8');
-    // Gated by a boolean, not merely disabled: an action the host cannot
-    // perform should not be advertised.
-    expect(src).toContain('{hasOsBridge && (');
+    // The bridge no longer gates the item — `/api/fs-op` covers the hosts
+    // where the bridge is dark (a plain browser, and Windows builds where the
+    // subframe bridge does not surface; gating there read as "Windows has no
+    // Open"). The label must name the user's actual file manager: "Reveal in
+    // Finder" on a Windows machine reads as someone else's menu.
+    expect(src).not.toContain('hasOsBridge');
+    expect(src).toContain("'fileBrowser.revealInFinder'");
+    expect(src).toContain("'fileBrowser.revealInExplorer'");
+    expect(src).toContain("'fileBrowser.revealInFileManager'");
   });
 
-  it('renders "Open" only for a FILE, and only in Electron', () => {
+  it('renders "Open" only for a FILE', () => {
     const src = readFileSync(MENU, 'utf8');
-    // Three conditions in one gate: the bridge, not the project root, not a
-    // folder. `shell.openPath` on a directory would spring a Finder window on
-    // someone who meant to expand it.
-    expect(src).toContain('{hasOsBridge && !isRoot && !state.isDir && (');
+    // Two conditions in one gate: not the project root, not a folder — opening
+    // a directory would spring a file-manager window on someone who meant to
+    // expand it. The server route refuses directories for the same reason.
+    expect(src).toContain('{!isRoot && !state.isDir && (');
+  });
+
+  it('offers "Open With…" only where the OS has a chooser', () => {
+    const src = readFileSync(MENU, 'utf8');
+    // Inside the file-only gate above, further limited to macOS/Windows
+    // clients: Linux has no standard open-with chooser, and an item that can
+    // never work is worse than no item.
+    expect(src).toContain('{(isMacClient() || isWindowsClient()) && (');
+    expect(src).toContain("'fileBrowser.openWith'");
   });
 });
 
@@ -77,10 +92,13 @@ describe('file browser rows — double-click opens a file with the OS', () => {
     expect(src).toContain('if (entry.isDir || e.metaKey || e.ctrlKey) return;');
   });
 
-  it('is silent rather than noisy when there is no bridge', () => {
-    // A browser tab cannot launch a local app; saying so on every double-click
-    // would be nagging about something the user cannot change.
-    expect(src).toMatch(/const open = fsBridge\(\)\?\.open;\s*\n\s*if \(!open\) return;/);
+  it('falls back to the server when there is no bridge', () => {
+    // The bridge is preferred where it exists, but its absence must not eat
+    // the action: the server runs on the same machine as the files, so
+    // `/api/fs-op` can launch the OS handler itself. This is what makes Open
+    // and Reveal work on hosts where the bridge is dark.
+    expect(src).toContain("fsOp(cwd, 'open', target.rel)");
+    expect(src).toContain("fsOp(cwd, 'reveal', target.rel)");
   });
 
   it('tells the truth about delete: trash when it can, permanent when it cannot', () => {

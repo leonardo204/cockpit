@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { isMacClient, isWindowsClient } from '@cockpit/shared-utils';
 import type { MenuTarget } from './fileBrowserOps';
 
 /**
@@ -28,16 +29,19 @@ import type { MenuTarget } from './fileBrowserOps';
  * The placement itself is TabContextMenu's: put it at the pointer, measure once
  * mounted, then clamp inside the window.
  *
- * WHAT IS OFFERED DEPENDS ON WHERE THE CLICK LANDED, and on what the host can
- * actually do:
+ * WHAT IS OFFERED DEPENDS ON WHERE THE CLICK LANDED:
  *   • the panel BODY (`target.rel === ''`) is the project root — it can only be
  *     created into, never renamed, duplicated or deleted.
- *   • "Open" and "Reveal in Finder" are rendered ONLY when the Electron bridge
- *     is present. In a plain browser they are not disabled items, they are not
- *     items at all; an action the app cannot perform should not be advertised.
- *   • "Open" is further limited to FILES, and sits first — it is what a
- *     double-click on the row already does, and the menu should name the
- *     default action rather than leave it undiscoverable.
+ *   • "Open" is limited to FILES, and sits first — it is what a double-click
+ *     on the row already does, and the menu should name the default action
+ *     rather than leave it undiscoverable.
+ *   • "Open" and "Reveal" are no longer gated on the Electron bridge: the panel
+ *     falls back to `/api/fs-op`, which runs on the same machine as the files,
+ *     so the host can always perform them. Gating on the bridge was read as
+ *     "Windows has no Open" wherever the subframe bridge did not surface.
+ *   • the Reveal label names the user's actual file manager — Finder, File
+ *     Explorer, or the generic fallback — because "Reveal in Finder" on a
+ *     Windows machine reads as someone else's menu.
  */
 
 export interface FileMenuState extends MenuTarget {
@@ -49,6 +53,7 @@ interface FileBrowserContextMenuProps {
   state: FileMenuState;
   onClose: () => void;
   onOpen: (target: MenuTarget) => void;
+  onOpenWith: (target: MenuTarget) => void;
   onNewFile: (target: MenuTarget) => void;
   onNewFolder: (target: MenuTarget) => void;
   onRename: (target: MenuTarget) => void;
@@ -56,9 +61,6 @@ interface FileBrowserContextMenuProps {
   onDelete: (target: MenuTarget) => void;
   onCopyPath: (target: MenuTarget, absolute: boolean) => void;
   onReveal: (target: MenuTarget) => void;
-  /** True only in Electron (`window.naby.fsOps`); gates the two items that need
-   *  the OS — Open and Reveal in Finder — entirely. */
-  hasOsBridge: boolean;
 }
 
 /** Keeps the menu on screen when the click lands near an edge. */
@@ -70,6 +72,7 @@ export function FileBrowserContextMenu({
   state,
   onClose,
   onOpen,
+  onOpenWith,
   onNewFile,
   onNewFolder,
   onRename,
@@ -77,7 +80,6 @@ export function FileBrowserContextMenu({
   onDelete,
   onCopyPath,
   onReveal,
-  hasOsBridge,
 }: FileBrowserContextMenuProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
@@ -149,10 +151,10 @@ export function FileBrowserContextMenu({
       className="fixed z-[80] min-w-48 py-1 bg-popover border border-border rounded-md shadow-lg"
       style={{ left: pos.left, top: pos.top }}
     >
-      {/* FIRST, and only for a file in Electron: it is what a double-click on
-          the row does, and a menu should name the default action rather than
-          hide it. A folder has no "open with" — it expands. */}
-      {hasOsBridge && !isRoot && !state.isDir && (
+      {/* FIRST, and only for a file: it is what a double-click on the row does,
+          and a menu should name the default action rather than hide it. A
+          folder has no "open with" — it expands. */}
+      {!isRoot && !state.isDir && (
         <>
           <button
             role="menuitem"
@@ -167,6 +169,27 @@ export function FileBrowserContextMenu({
             </svg>
             {t('fileBrowser.open')}
           </button>
+          {/* The escape hatch for a WRONG default association — the OS's own
+              "Open with…" chooser. macOS and Windows only: Linux has no
+              standard chooser, and an item that can never work is worse than
+              no item. */}
+          {(isMacClient() || isWindowsClient()) && (
+            <button
+              role="menuitem"
+              data-testid="file-menu-open-with"
+              className={item}
+              onClick={run(() => onOpenWith(target))}
+            >
+              <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <path d="M17.5 14v7" />
+                <path d="M14 17.5h7" />
+              </svg>
+              {t('fileBrowser.openWith')}
+            </button>
+          )}
           <div className="my-1 border-t border-border" />
         </>
       )}
@@ -254,22 +277,28 @@ export function FileBrowserContextMenu({
         {t('fileContextMenu.copyAbsolutePath')}
       </button>
 
-      {/* Electron only. Absent — not disabled — in a browser: an item that can
-          never work is worse than no item. */}
-      {hasOsBridge && (
-        <button
-          role="menuitem"
-          data-testid="file-menu-reveal"
-          className={item}
-          onClick={run(() => onReveal(target))}
-        >
-          <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-            <path d="M9 13l3 3 3-3" />
-          </svg>
-          {t('fileBrowser.revealInFinder')}
-        </button>
-      )}
+      {/* Always offered — the panel routes it over the Electron bridge or the
+          local server, whichever is there. The label names the file manager the
+          user actually has; the literal keys are spelled out so the locale
+          source-assertion test can see every one of them. */}
+      <button
+        role="menuitem"
+        data-testid="file-menu-reveal"
+        className={item}
+        onClick={run(() => onReveal(target))}
+      >
+        <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+          <path d="M9 13l3 3 3-3" />
+        </svg>
+        {t(
+          isMacClient()
+            ? 'fileBrowser.revealInFinder'
+            : isWindowsClient()
+              ? 'fileBrowser.revealInExplorer'
+              : 'fileBrowser.revealInFileManager',
+        )}
+      </button>
 
       {!isRoot && (
         <>

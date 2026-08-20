@@ -1,6 +1,7 @@
 /**
- * /api/fs-op — the mutating half of the chat file browser: create, rename,
- * duplicate and delete, inside one project working tree.
+ * /api/fs-op — the OS-side half of the chat file browser: create, rename,
+ * duplicate and delete, plus open-with-default-app and reveal-in-file-manager,
+ * inside one project working tree.
  *
  * SCOPE & SAFETY. Same shape as /api/list-dir and /api/copy-into: `cwd` is the
  * project root the user already opened and `rel` names an entry relative to it.
@@ -22,7 +23,17 @@
  * trash and is recoverable. `action:'delete'` here is `fs.rm` — permanent — and
  * exists for the plain-browser shell where no trash bridge is available. The
  * project ROOT itself can never be the target of a delete.
+ *
+ * OPEN AND REVEAL ARE FALLBACKS OF THE SAME KIND. The Electron bridge
+ * (`naby.fsOps.open/reveal`) is preferred where it is visible, but the server
+ * runs on the same machine as the files — this is a purely local app — so it
+ * can hand a file to the OS default application or spring the file manager
+ * itself, the way /api/pick-folder already runs the OS folder chooser. Without
+ * this fallback the menu simply omitted both items wherever the bridge was
+ * dark (a plain browser tab, and Windows builds where the subframe bridge does
+ * not surface), which read as "Windows has no Open".
  */
+import { execFile, spawn } from "child_process"
 import { cp, mkdir, open, readdir, rename, rm, stat } from "fs/promises"
 import { dirname, isAbsolute, join, resolve } from "path"
 import { Effect } from "effect"
@@ -32,8 +43,102 @@ import { copySiblingName, isSafeSegment, withinCwd } from "../../../lib/fsScope"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const ACTIONS = ["mkdir", "mkfile", "rename", "duplicate", "delete"] as const
+const ACTIONS = ["mkdir", "mkfile", "rename", "duplicate", "delete", "open", "reveal", "openWith"] as const
 type Action = (typeof ACTIONS)[number]
+
+/**
+ * Hand `abs` to the OS default application for its type. Resolves `false` when
+ * the OS reports it could not — a missing handler, mostly.
+ *
+ * Windows goes through PowerShell rather than `cmd /c start`: `start` treats
+ * its first QUOTED argument as a window title, so a path with spaces becomes
+ * the title of nothing. `Invoke-Item -LiteralPath` takes the path literally and
+ * exits non-zero when no application is associated, which is exactly the truth
+ * the caller wants to report. (/api/pick-folder leans on PowerShell the same
+ * way.) Single quotes in the path are doubled — that is PS's own escape for a
+ * literal quote inside a single-quoted string.
+ */
+function openWithOs(abs: string): Promise<boolean> {
+  return new Promise((done) => {
+    if (process.platform === "win32") {
+      const literal = abs.replace(/'/g, "''")
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", `Invoke-Item -LiteralPath '${literal}'`],
+        (err) => done(!err),
+      )
+      return
+    }
+    const [file, args] =
+      process.platform === "darwin" ? ["open", [abs]] : ["xdg-open", [abs]]
+    execFile(file, args as string[], (err) => done(!err))
+  })
+}
+
+/**
+ * Open the OS file manager with `abs` selected — or its parent folder where
+ * selection is not a thing (xdg-open has no select flag).
+ *
+ * FIRE-AND-FORGET, like the Electron bridge's `fs:reveal`: whether the user
+ * then closes the window is not ours to report. It also cannot be awaited
+ * honestly on Windows — `explorer.exe` exits 1 out of habit even when the
+ * window opened, so an exit code here is noise, not a result. The 'error'
+ * listener only swallows a missing binary (ENOENT) so nothing rejects.
+ */
+/**
+ * Spring the OS's own "Open with…" chooser for `abs` — the escape hatch for a
+ * file whose DEFAULT association is wrong, which is exactly when `open` above
+ * launches the wrong thing.
+ *
+ * Returns `false` on a platform that has no such chooser (Linux has no
+ * standard one), so the route can refuse honestly; the menu hides the item on
+ * those clients anyway.
+ *
+ * FIRE-AND-FORGET past that point, same contract as `revealInOs`: the chooser
+ * belongs to the user now, and "they pressed cancel" is not a failure to
+ * report. Windows' rundll32 has no meaningful exit code, and osascript exits
+ * non-zero on cancel — awaiting either would only manufacture false errors.
+ * There is deliberately NO Electron-bridge twin for this: `shell` has no
+ * open-with API, so main would spawn these same commands; the server is
+ * equally local and already holds the containment check.
+ */
+function openWithChooser(abs: string): boolean {
+  if (process.platform === "win32") {
+    // The classic "How do you want to open this file?" dialog, association
+    // checkbox included. Arguments as an array, so a path with spaces is one
+    // argument and never becomes two.
+    const child = spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", abs], { stdio: "ignore" })
+    child.on("error", () => {})
+    child.unref()
+    return true
+  }
+  if (process.platform === "darwin") {
+    // Finder's "Open With…", reconstructed: `choose application` is the OS
+    // application picker (prompt left off so the OS localizes it), and Finder's
+    // `open … using` is the canonical open-with verb. Backslashes and quotes in
+    // the path are escaped for the AppleScript string literal; the path itself
+    // was contained by `withinCwd` before this is ever built.
+    const literal = abs.replace(/[\\"]/g, "\\$&")
+    const script = `tell application "Finder" to open (POSIX file "${literal}" as alias) using (choose application)`
+    const child = spawn("osascript", ["-e", script], { stdio: "ignore" })
+    child.on("error", () => {})
+    child.unref()
+    return true
+  }
+  return false
+}
+
+function revealInOs(abs: string): void {
+  const [file, args] =
+    process.platform === "win32"
+      ? ["explorer.exe", [`/select,${abs}`]]
+      : process.platform === "darwin"
+        ? ["open", ["-R", abs]]
+        : ["xdg-open", [dirname(abs)]]
+  const child = spawn(file, args as string[], { stdio: "ignore" })
+  child.on("error", () => {})
+  child.unref()
+}
 
 interface Body {
   readonly cwd?: string
@@ -189,6 +294,43 @@ export const POST = handler((req) =>
           catch: () => false,
         }).pipe(Effect.orElseSucceed(() => false))
         if (!done) return fail("failed")
+        return ok({ ok: true as const, rel })
+      }
+
+      // -- open / openWith / reveal (fallbacks; Electron prefers the bridge) --
+      case "open":
+      case "openWith": {
+        if (!rel) return fail("invalid-target") // "open the root" is what reveal is for
+        const info = yield* Effect.tryPromise({
+          try: () => stat(target),
+          catch: () => null,
+        }).pipe(Effect.orElseSucceed(() => null))
+        if (!info) return fail("not-found")
+        // A directory never reaches the OS from here: `open` on a folder would
+        // spring a file-manager window on someone who meant to expand the row,
+        // and a folder has no application association to re-pick.
+        // Same rule as the menu and the double-click handler.
+        if (info.isDirectory()) return fail("invalid-target")
+
+        if (action === "openWith") {
+          const sprung = yield* Effect.sync(() => openWithChooser(target))
+          if (!sprung) return fail("failed") // no chooser on this OS
+          return ok({ ok: true as const, rel })
+        }
+
+        const done = yield* Effect.tryPromise({
+          try: () => openWithOs(target),
+          catch: () => false,
+        }).pipe(Effect.orElseSucceed(() => false))
+        if (!done) return fail("failed")
+        return ok({ ok: true as const, rel })
+      }
+
+      case "reveal": {
+        // The root IS revealable — "show me this project in the file manager"
+        // — so no `!rel` refusal here, unlike every mutating action above.
+        if (!(yield* exists(target))) return fail("not-found")
+        yield* Effect.sync(() => revealInOs(target))
         return ok({ ok: true as const, rel })
       }
     }

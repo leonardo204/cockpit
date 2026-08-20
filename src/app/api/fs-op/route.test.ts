@@ -215,6 +215,65 @@ describe('delete', () => {
   });
 });
 
+describe('open / reveal', () => {
+  // ONLY THE REFUSALS. A passing success case would literally launch an
+  // application (or spring a Finder window) on whoever runs the tests, so the
+  // pinned behaviour is everything that must be refused BEFORE the OS is asked.
+
+  it('refuses to open a directory — double-click there means expand', async () => {
+    expect(await post({ cwd, action: 'open', rel: 'src' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+    // A folder has no application association to re-pick either.
+    expect(await post({ cwd, action: 'openWith', rel: 'src' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+  });
+
+  it('refuses to open the project root', async () => {
+    expect(await post({ cwd, action: 'open', rel: '' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+    expect(await post({ cwd, action: 'openWith', rel: '' })).toEqual({
+      ok: false,
+      reason: 'invalid-target',
+    });
+  });
+
+  it('refuses to open or reveal anything outside the project', async () => {
+    expect(await post({ cwd, action: 'open', rel: '../outside/secret.txt' })).toEqual({
+      ok: false,
+      reason: 'escape',
+    });
+    expect(await post({ cwd, action: 'openWith', rel: '../outside/secret.txt' })).toEqual({
+      ok: false,
+      reason: 'escape',
+    });
+    expect(await post({ cwd, action: 'reveal', rel: '../outside/secret.txt' })).toEqual({
+      ok: false,
+      reason: 'escape',
+    });
+  });
+
+  it('reports a target that is not there', async () => {
+    expect(await post({ cwd, action: 'open', rel: 'ghost.md' })).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
+    expect(await post({ cwd, action: 'openWith', rel: 'ghost.md' })).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
+    expect(await post({ cwd, action: 'reveal', rel: 'ghost.md' })).toEqual({
+      ok: false,
+      reason: 'not-found',
+    });
+  });
+});
+
 describe('request validation', () => {
   it('refuses an unknown action before touching the disk', async () => {
     expect(await post({ cwd, action: 'chmod', rel: 'README.md' })).toEqual({

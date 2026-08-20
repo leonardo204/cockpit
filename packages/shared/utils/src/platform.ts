@@ -34,6 +34,13 @@ export function isMacClient(): boolean {
     || ((navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform === 'macOS');
 }
 
+/** Whether the client is Windows (browser environment) */
+export function isWindowsClient(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Win/.test(navigator.platform || '')
+    || ((navigator as unknown as { userAgentData?: { platform?: string } }).userAgentData?.platform === 'Windows');
+}
+
 /** Modifier key label: macOS → '⌘', others → 'Ctrl+' */
 export function modKey(): string {
   return isMacClient() ? '⌘' : 'Ctrl+';
