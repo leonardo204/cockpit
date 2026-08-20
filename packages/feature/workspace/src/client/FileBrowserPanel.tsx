@@ -27,7 +27,11 @@
  * can: the same GFM/math/TOC pipeline the chat uses, plus relative `.md` links
  * that open in place, which turns a folder of documents into something
  * browsable instead of a queue of editor windows. `rowActivation`
- * (markdownPreviewOps.ts) is where the choice is made.
+ * (markdownPreviewOps.ts) is where the choice is made. The preview opens as a
+ * MODAL, which is right for a document you glance at and wrong for one you keep
+ * referring to — its header offers to promote it into a tab, and this panel
+ * passes that request up to the tab host (`onOpenInTab`) rather than growing a
+ * second way to open one.
  *
  * REFERENCE SAFETY. Reference paths are relative to the project root and folders
  * carry a trailing "/". A `/` or `.` immediately after the name makes the chat
@@ -583,6 +587,7 @@ export function FileBrowserPanel({
   onClose,
   width = FILES_DEFAULT_WIDTH,
   resizing = false,
+  onOpenInTab,
 }: {
   cwd: string;
   onClose: () => void;
@@ -591,6 +596,13 @@ export function FileBrowserPanel({
   /** True mid-drag: suppresses the width transition so the panel tracks the
    *  pointer instead of easing toward it a beat late. */
   resizing?: boolean;
+  /**
+   * Attach the previewed document to the tab strip — passed straight through to
+   * the viewer's header control, which supplies the document the reader is
+   * actually on rather than the one they double-clicked. The panel does not
+   * open tabs itself; the tab host does, and it is the one that has a tab strip.
+   */
+  onOpenInTab?: (rel: string) => void;
 }) {
   const { t } = useTranslation();
   // Per-directory refresh nonces (bumped after a copy lands files in a folder,
@@ -956,6 +968,7 @@ export function FileBrowserPanel({
           cwd={cwd}
           rel={previewRel}
           onClose={() => setPreviewRel(null)}
+          onOpenInTab={onOpenInTab}
         />
       )}
       {menu && (

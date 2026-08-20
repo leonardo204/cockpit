@@ -13,7 +13,10 @@ import { join } from 'node:path';
  */
 
 const DIR = __dirname;
-const MODAL = readFileSync(join(DIR, 'MarkdownPreviewModal.tsx'), 'utf8');
+// The VIEWER, not its window. The modal was split when the same viewer had to
+// serve a tab as well (MarkdownDocument's header explains why there is only
+// one); every rule below belongs to the reading pane, which moved with it.
+const MODAL = readFileSync(join(DIR, 'MarkdownDocument.tsx'), 'utf8');
 
 describe('markdown preview — the image scan survives the memo', () => {
   /**

@@ -3,6 +3,15 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { usePageVisible, useWebSocket } from '@cockpit/shared-ui';
 import { applyTitleUpdate } from './titleLock';
+import {
+  acceptsChatState,
+  closableSessionId,
+  documentTabTitle,
+  findDocumentTab,
+  isMarkdownTab,
+  openSessionIds,
+  type TabKind,
+} from './tabKinds';
 import type { ChatEngine } from '@cockpit/feature-agent';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
@@ -21,7 +30,21 @@ import {
 
 export interface TabInfo {
   id: string;
+  /**
+   * WHAT THIS TAB HOLDS — a conversation, or a document held open beside one.
+   *
+   * Absent means `chat`, which is what every tab was before markdown documents
+   * could be promoted out of their modal. The discrimination and every rule
+   * that follows from it live in ./tabKinds, so the tab host, this hook's
+   * persistence and close paths, and the right-click menu cannot disagree about
+   * what a tab is; the fields below `title` are all chat concepts and a
+   * `markdown` tab carries none of them.
+   */
+  kind?: TabKind;
   cwd?: string;
+  /** `markdown` tabs only: the document, relative to `cwd`. Both halves are
+   *  needed — images and relative links are resolved against the project. */
+  rel?: string;
   sessionId?: string;
   title: string;
   isLoading?: boolean;
@@ -161,9 +184,11 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   useEffect(() => {
     if (isInitializingRef.current || !initialCwd) return;
 
-    const sessionIds = tabs
-      .map(tab => tab.sessionId)
-      .filter((id): id is string => !!id);
+    // Chat tabs only — a document tab names no session, so it contributes
+    // nothing here and is therefore not re-seeded on the next open. That is the
+    // whole of "markdown tabs do not survive a restart", and it matches the rule
+    // right above (a fresh open starts a new session) rather than excepting it.
+    const sessionIds = openSessionIds(tabs);
 
     const activeTab = tabs.find(t => t.id === activeTabId);
     const activeSessionId = activeTab?.sessionId;
@@ -234,6 +259,13 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     if (isInitializingRef.current || !initialCwd) return;
 
     const activeTab = tabs.find(t => t.id === activeTabId);
+    // A DOCUMENT TAB HAS NO OPINION ABOUT THE SESSION. It names none, so the
+    // code below would read that as "no session is active" and strip the id from
+    // the URL — after which an in-iframe reload while reading a document would
+    // drop the conversation the reader means to come back to. Reading a document
+    // is not leaving the session, so the URL is left exactly as the last chat
+    // tab set it.
+    if (activeTab && isMarkdownTab(activeTab)) return;
     const sessionId = activeTab?.sessionId;
 
     // Keep the iframe's own URL in sync with the active tab so a reload restores
@@ -347,8 +379,16 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   const closeTab = useCallback((tabId: string) => {
     // Record an explicit close so the next save removes it from the shared union (and the
     // broadcast tells other browser tabs to remove exactly this session).
+    //
+    // A DOCUMENT TAB QUEUES NOTHING, and that is the safety argument for
+    // markdown tabs: this queue is the ONLY channel that removes a session from
+    // the persisted union (and, downstream, deletes it), so a tab that names no
+    // session cannot delete anything by being closed. Stated in ./tabKinds
+    // rather than as an `if` here, because nothing in a build can see a close
+    // that removed something it should not have.
     const closing = tabsRef.current.find((t) => t.id === tabId);
-    if (closing?.sessionId) pendingClosedRef.current.add(closing.sessionId);
+    const closingSessionId = closing ? closableSessionId(closing) : undefined;
+    if (closingSessionId) pendingClosedRef.current.add(closingSessionId);
     setTabs((prev) => {
       const newTabs = prev.filter((t) => t.id !== tabId);
       if (tabId === activeTabId && newTabs.length > 0) {
@@ -385,6 +425,43 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     }
   }, [tabs, initialCwd, addTab]);
 
+  /**
+   * OPEN A DOCUMENT AS A TAB — the markdown viewer's promotion out of its modal.
+   *
+   * Deliberately shaped like `handleSelectSession` directly above: an already-open
+   * one is FOCUSED, never stacked, because a second identical tab is not what
+   * anyone reaching for a document meant and closing the wrong one of a pair is a
+   * small avoidable annoyance. Identity is (cwd, rel) — two projects can each
+   * hold a `README.md` and they are not the same document.
+   *
+   * Appended to the END, like a session opened from the sidebar: the document
+   * did not come out of the conversation the user is in the middle of, so it has
+   * no business landing next to it.
+   *
+   * `cwd` is required, not optional. Without it the viewer cannot resolve an
+   * image or a relative link — it would render the prose and silently lose
+   * everything else.
+   */
+  const openMarkdownTab = useCallback((cwd: string, rel: string) => {
+    // Read through the ref so this callback's identity never changes: it is
+    // passed down to the file browser, which sits on the always-mounted panel
+    // side, and a churning prop there defeats the memo it relies on.
+    const existing = findDocumentTab(tabsRef.current, cwd, rel);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const newTab: TabInfo = {
+      id: `tab-${Date.now()}`,
+      kind: 'markdown',
+      cwd,
+      rel,
+      title: documentTabTitle(rel),
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+  }, []);
+
   // Create new blank tab (appended to end). Naby has a single runtime engine —
   // the engine picker was removed, so every new tab is a default tab (engine
   // undefined → the Naby `claude` path → /api/chat → nabySpec). dev/prod is
@@ -419,6 +496,14 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   }) => {
     setTabs((prev) => {
       const oldTab = prev.find(t => t.id === tabId);
+      // THIS IS THE CHAT'S CHANNEL, and a document tab is not on it. isLoading,
+      // sessionId and the title derived from the conversation are all chat
+      // concepts; the one that would be visible is the title, because a chat tab
+      // re-derives its own on every turn (which is why `titleLocked` exists) and
+      // a document's title is its file name. Nothing routes a document tab here
+      // today — it renders no ChatPanel — so this is a guard rather than a fix,
+      // stated where the rule can be asserted (./tabKinds) instead of trusted.
+      if (oldTab && !acceptsChatState(oldTab)) return prev;
       if (oldTab?.isLoading && updates.isLoading === false) {
         // User "is watching" requires all 3 conditions:
         // 1. Is the current active tab
@@ -563,6 +648,7 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     handleSelectSession,
     handleNewTab,
     handleOpenSession,
+    openMarkdownTab,
     updateTabState,
     updateTabPlanMode,
 

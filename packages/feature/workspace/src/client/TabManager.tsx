@@ -23,6 +23,8 @@ import { TabBar } from './TabBar';
 import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
 import { useNoLearnSessions } from './useNoLearnSessions';
 import { orderTabs, planDrop, pinRankOf } from './tabOrder';
+import { isMarkdownTab } from './tabKinds';
+import { MarkdownDocument } from './MarkdownDocument';
 import { deleteSession } from './projectSessionTree';
 import {
   FileBrowserPanel,
@@ -60,6 +62,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     handleSelectSession,
     handleNewTab,
     handleOpenSession,
+    openMarkdownTab,
     updateTabState,
     updateTabPlanMode,
     handleTabDragStart,
@@ -243,6 +246,15 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
 
   const openTabMenu = useCallback((tabId: string, x: number, y: number) => {
     const tab = tabs.find((t) => t.id === tabId);
+    // A DOCUMENT TAB HAS NO MENU, because this menu has nothing to offer it.
+    // Every item is a per-SESSION action — pin, rename, temporary-session, and
+    // continue-in-a-new-tab all key off `sessionId`, and a document names none —
+    // so on a markdown tab the menu would open with four controls that either do
+    // nothing (pin, rename: both early-return without a session) or are disabled.
+    // Four dead items read as a broken menu; no menu reads as "not a thing you do
+    // to a document", which is the truth. Closing the tab is still the ✕ on it
+    // and still Cmd/Ctrl+W, neither of which goes through here.
+    if (tab && isMarkdownTab(tab)) return;
     setMenu({
       tabId,
       x,
@@ -305,6 +317,21 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       cancelled = true;
     };
   }, []);
+
+  // ── Promote a previewed document into a tab ───────────────────────────────
+  //
+  // The file browser owns the preview modal, so the request arrives from there
+  // with the document the reader is ACTUALLY on (they may have followed relative
+  // links out of the file they double-clicked). The project cwd is supplied
+  // here, because it is this host that knows it and the viewer cannot resolve an
+  // image or a relative link without one.
+  //
+  // Referentially stable — an unstable callback into the file browser would
+  // defeat the memo its tree relies on (shell/CLAUDE.md, React conventions).
+  const handleOpenDocumentInTab = useCallback((rel: string) => {
+    if (!initialCwd) return;
+    openMarkdownTab(initialCwd, rel);
+  }, [initialCwd, openMarkdownTab]);
 
   const handleFilesResize = useCallback((next: number) => {
     setIsResizingFiles(true);
@@ -509,28 +536,70 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                   onContinueInNewTab={handleContinueInNewTab}
                 />
               )}
+              {/* ── WHERE `sendMessage` GOES WHILE A DOCUMENT TAB IS ACTIVE ──
+                  A DECISION, NOT AN ACCIDENT. `ChatContext.setActiveTab` is a
+                  last-writer-wins ref that every `chatCtx.sendMessage` /
+                  `useAIBridge()` caller resolves through, and only Chat writes
+                  it — on the rising edge of its own `isActive`. A markdown tab
+                  renders no Chat, so nothing writes it, and the ref keeps
+                  pointing at the chat tab the user was last in.
+
+                  THAT IS THE INTENDED BEHAVIOUR AND IT IS DELIBERATE. A document
+                  tab is a reference surface, not a conversation; someone who
+                  triggers "ask about this" while reading means the conversation
+                  they came from, and that conversation is still open, still
+                  mounted and one click away — they will see the message land.
+                  This is NOT the hazard the selection popup had to close: there
+                  the target was a throwaway session that may already have been
+                  deleted, so a message could vanish entirely. Here the target is
+                  a live tab.
+
+                  The alternative — warn and drop — was rejected because it turns
+                  a working affordance into silence for no gain. The markdown
+                  branch below therefore touches ChatContext not at all; if a
+                  future document-side action ever needs to CHOOSE a chat, it
+                  must name one rather than inherit this default. */}
               <div className="flex-1 overflow-hidden relative">
                 {tabs.map((tab) => (
                   <div
                     key={tab.id}
                     className={`h-full ${tab.id === activeTabId ? 'block' : 'hidden'}`}
                   >
-                    <ChatPanel
-                      tabId={tab.id}
-                      cwd={tab.cwd}
-                      sessionId={tab.sessionId}
-                      engine={tab.engine}
-                      planMode={tab.planMode}
-                      onPlanModeChange={updateTabPlanMode}
-                      isActive={tab.id === activeTabId}
-                      refreshSignal={sessionRefresh}
-                      onStateChange={updateTabState}
-                      onOpenNote={initialCwd ? handleOpenNote : undefined}
-                      onCreateScheduledTask={createScheduledTask}
-                      onOpenSession={handleOpenSession}
-                      onDiscardSession={handleDiscardSession}
-                      onOpenSettings={handleOpenSettings}
-                    />
+                    {/* THE ONE PLACE A TAB'S KIND IS DISPATCHED ON. This map used
+                        to render <ChatPanel> unconditionally — tabs were chats by
+                        construction — and everything else about markdown tabs
+                        follows from making that a choice. Both branches stay
+                        MOUNTED while hidden, like every tab here, so a document
+                        keeps its scroll and its outline while the user works in
+                        the conversation next to it. That is the point of the
+                        promotion; re-fetching the file on every switch would be a
+                        modal with extra steps. */}
+                    {isMarkdownTab(tab) ? (
+                      <MarkdownDocument
+                        // No `onOpenInTab`: it IS the tab. The modal's promote
+                        // control is the entry point, and offering it here would
+                        // be a button that re-opens what you are looking at.
+                        cwd={tab.cwd || initialCwd || ''}
+                        rel={tab.rel || ''}
+                      />
+                    ) : (
+                      <ChatPanel
+                        tabId={tab.id}
+                        cwd={tab.cwd}
+                        sessionId={tab.sessionId}
+                        engine={tab.engine}
+                        planMode={tab.planMode}
+                        onPlanModeChange={updateTabPlanMode}
+                        isActive={tab.id === activeTabId}
+                        refreshSignal={sessionRefresh}
+                        onStateChange={updateTabState}
+                        onOpenNote={initialCwd ? handleOpenNote : undefined}
+                        onCreateScheduledTask={createScheduledTask}
+                        onOpenSession={handleOpenSession}
+                        onDiscardSession={handleDiscardSession}
+                        onOpenSettings={handleOpenSettings}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
@@ -560,6 +629,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
             onClose={() => setIsFilesOpen(false)}
             width={filesWidth}
             resizing={isResizingFiles}
+            onOpenInTab={handleOpenDocumentInTab}
           />
         </>
       )}

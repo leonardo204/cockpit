@@ -25,6 +25,9 @@ const DIR = __dirname;
 const MENU = join(DIR, 'FileBrowserContextMenu.tsx');
 const PANEL = join(DIR, 'FileBrowserPanel.tsx');
 const PREVIEW = join(DIR, 'MarkdownPreviewModal.tsx');
+/** The viewer ITSELF, which the modal above is now only a window around — the
+ *  same component the tab host renders. See MarkdownDocument's header. */
+const DOCUMENT = join(DIR, 'MarkdownDocument.tsx');
 const PREVIEW_OPS = join(DIR, 'markdownPreviewOps.ts');
 const LOCALES = join(DIR, '..', '..', '..', '..', 'shared', 'i18n', 'locales');
 
@@ -150,7 +153,7 @@ describe('file browser rows — double-click opens a file with the OS', () => {
   });
 });
 
-describe('markdown preview modal — it is an assembly, not a second renderer', () => {
+describe('markdown preview modal — the window, not the viewer', () => {
   const src = readFileSync(PREVIEW, 'utf8');
 
   it('escapes the panel that clips, like every other overlay here', () => {
@@ -159,6 +162,24 @@ describe('markdown preview modal — it is an assembly, not a second renderer', 
     expect(src).toContain('<Portal>');
     expect(src).toContain('fixed inset-0');
   });
+
+  it('closes on Escape through the shared hook', () => {
+    // A property of the WINDOW, not of the viewer: the tab host has no Escape
+    // behaviour to give, because there is nothing there to dismiss.
+    expect(src).toContain('useEscToClose(onClose)');
+  });
+
+  it('hosts the shared viewer instead of rendering a document itself', () => {
+    // The modal must stay chrome. The moment it grows its own MarkdownRenderer
+    // there are two viewers, and the tab is the one that stops getting fixes.
+    expect(src).toContain('<MarkdownDocument');
+    expect(src).not.toContain('<MarkdownRenderer');
+    expect(src).not.toContain('<TocSidebar');
+  });
+});
+
+describe('markdown viewer — it is an assembly, not a second renderer', () => {
+  const src = readFileSync(DOCUMENT, 'utf8');
 
   it('reuses the orphaned shared-ui pieces rather than rebuilding them', () => {
     // MarkdownRenderer + TocSidebar + rehypeSourceLines are one wired system:
@@ -197,10 +218,6 @@ describe('markdown preview modal — it is an assembly, not a second renderer', 
     expect(element).not.toContain('enableMath={false}');
   });
 
-  it('closes on Escape through the shared hook', () => {
-    expect(src).toContain('useEscToClose(onClose)');
-  });
-
   it('never lets an unresolvable link navigate the app', () => {
     // The default is consume-and-drop. Returning false for a bare relative
     // href would resolve it against the app's own origin and navigate the
@@ -234,7 +251,13 @@ describe('file browser menu — every label is translated in both locales', () =
   // The viewer's own strings are checked here too: it is opened from this menu,
   // and its status line and error sentences reach a Korean user the same way.
   const keys = [
-    ...new Set([...keysIn(MENU), ...keysIn(PANEL), ...keysIn(PREVIEW), ...keysIn(PREVIEW_OPS)]),
+    ...new Set([
+      ...keysIn(MENU),
+      ...keysIn(PANEL),
+      ...keysIn(PREVIEW),
+      ...keysIn(DOCUMENT),
+      ...keysIn(PREVIEW_OPS),
+    ]),
   ];
 
   it('finds the keys it is supposed to be checking', () => {
@@ -247,6 +270,10 @@ describe('file browser menu — every label is translated in both locales', () =
     expect(keys).toContain('fileBrowser.preview');
     expect(keys).toContain('markdownPreview.readingTimeUnderMinute');
     expect(keys).toContain('markdownPreview.tooLarge');
+    // The promotion control's own label, which is the newest way for a raw key
+    // path to reach a Korean user.
+    expect(keys).toContain('markdownPreview.openInTab');
+    expect(keys).toContain('markdownPreview.openInTabHint');
   });
 
   it.each(keys)('%s exists in en.json', (key) => {
