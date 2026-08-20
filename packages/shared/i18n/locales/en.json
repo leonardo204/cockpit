@@ -1650,7 +1650,9 @@
     "readingTimeUnderMinute": "Less than a minute",
     "truncated": "This file is long — only the beginning is shown.",
     "tooLarge": "This file is too large to preview.",
-    "loadError": "Could not read this file."
+    "loadError": "Could not read this file.",
+    "imageMissing": "Image not found",
+    "imagesUnresolved": "{{count}} images could not be shown"
   },
   "imagePreview": {
     "previewImage": "Preview image",
@@ -1842,6 +1844,19 @@
     "addComment": "Add Comment",
     "sendToAI": "Send to AI",
     "search": "Search"
+  },
+  "selectionChat": {
+    "title": "Quick ask",
+    "dragHint": "Drag this bar to move the window",
+    "contextLabel": "About this",
+    "promote": "Promote to session",
+    "promoteHint": "Keep this conversation as a normal tab",
+    "close": "Discard",
+    "closeHint": "Close and discard this conversation",
+    "throwawayHint": "Not kept. Close to discard, or promote it to a session.",
+    "discardTitle": "Discard this conversation?",
+    "discardMessage": "This side conversation about “{{preview}}” will be deleted, along with everything asked in it. This cannot be undone.",
+    "discardConfirm": "Discard"
   },
   "searchResults": {
     "title": "Search Results",

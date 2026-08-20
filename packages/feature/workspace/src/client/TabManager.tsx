@@ -23,6 +23,7 @@ import { TabBar } from './TabBar';
 import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
 import { useNoLearnSessions } from './useNoLearnSessions';
 import { orderTabs, planDrop, pinRankOf } from './tabOrder';
+import { deleteSession } from './projectSessionTree';
 import {
   FileBrowserPanel,
   FILES_DEFAULT_WIDTH,
@@ -440,6 +441,26 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     );
   }, []);
 
+  // THROW A SESSION AWAY. The selection popup's discard-on-close, and nothing
+  // else — a popup conversation the user did not keep should leave no trace.
+  //
+  // Deliberately the EXISTING deleteSession, which is the same
+  // `closedSessionIds` route a tab close already takes: the server runs
+  // `store.deleteSession(sid)`, dropping the session and everything keyed to it,
+  // then broadcasts `project-state-changed`. A second delete path would be a
+  // second answer to one question.
+  const handleDiscardSession = useCallback((sessionId: string) => {
+    if (!initialCwd) return;
+    BrowserRuntime.runFork(
+      deleteSession(initialCwd, sessionId).pipe(
+        Effect.tapError((e) =>
+          Effect.sync(() => console.error('Failed to discard popup session:', e))
+        ),
+        Effect.catchAll(() => Effect.void)
+      )
+    );
+  }, [initialCwd]);
+
   return (
     <ChatProvider>
     <div className="flex h-screen bg-card">
@@ -507,6 +528,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                       onOpenNote={initialCwd ? handleOpenNote : undefined}
                       onCreateScheduledTask={createScheduledTask}
                       onOpenSession={handleOpenSession}
+                      onDiscardSession={handleDiscardSession}
                       onOpenSettings={handleOpenSettings}
                     />
                   </div>

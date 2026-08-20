@@ -99,7 +99,13 @@ interface UseChatStreamReturn {
     images?: ImageInfo[],
     overrides?: { permissionMode?: 'plan' | null }
   ) => Promise<void>;
-  handleStop: () => void;
+  /**
+   * Stop the current turn. RESOLVES WHEN THE SERVER HAS BEEN TOLD, which is
+   * what lets a caller order something after it — the selection popup must not
+   * delete its session until the detached run it is stopping has been reached.
+   * Every other caller (Esc, the Stop button) ignores the promise.
+   */
+  handleStop: () => Promise<void>;
   abortControllerRef: React.RefObject<AbortController | null>;
 }
 
@@ -250,14 +256,24 @@ export function useChatStream(
 
   // Stop generation: the run is detached server-side, so closing a socket won't stop it —
   // hit the explicit stop endpoint. Send both keys (sessionId once known, else runId).
-  const handleStop = useCallback(() => {
+  const handleStop = useCallback((): Promise<void> => {
     const ar = activeRunRef.current;
-    fetch('/api/chat/stop', {
+    // The POST is RETURNED, not just fired: a caller that has to act after the
+    // run is actually stopped (the selection popup, which then deletes the
+    // session) cannot get that ordering from a fire-and-forget call — two
+    // un-awaited fetches can reach the server in either order. Local UI state is
+    // still torn down synchronously below, so nothing waits on the network to
+    // look stopped.
+    const posted = fetch('/api/chat/stop', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId: sessionIdRef.current, runId: ar?.runKey }),
-    }).catch(() => {});
+    }).then(
+      () => undefined,
+      () => undefined,
+    );
     endRun();
+    return posted;
   }, [endRun]);
 
   // SSE event handling

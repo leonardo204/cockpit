@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
-import { useChatContextOptional } from './ChatContext';
 import { formatElapsed } from './elapsed';
 import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './types';
 import { MessageBubble } from './MessageBubble';
@@ -16,20 +15,7 @@ import {
   type StickEvent,
 } from './stickToBottom';
 import { ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
-import { SendToAIInput } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
-
-/**
- * Quote-reply formatter — inlined from the removed `@cockpit/feature-comments`
- * `buildAIMessage()` (F1-03 chat-first trim). The persistent code-annotation
- * store is gone; the only surviving path is "select text in a reply, ask a
- * question about it", which needs nothing more than markdown blockquoting.
- */
-function buildQuotedMessage(selectedText: string, question: string): string {
-  const quoted = selectedText.split('\n').map(l => `> ${l}`).join('\n');
-  const q = question.trim();
-  return q ? `${quoted}\n\n${q}` : quoted;
-}
 
 // Migrated from src/components/project/MessageList.tsx.
 
@@ -72,6 +58,16 @@ interface MessageListProps {
    *  signal that this list is an interactive chat — absent, the resend/edit
    *  controls do not render at all. */
   onResendMessage?: (message: ChatMessage) => void;
+  /** The user selected text in a reply and pressed "Send to AI". The HOST opens
+   *  the throwaway popup conversation — this list only reports the gesture and
+   *  where it happened (viewport coordinates, for a portaled popup).
+   *
+   *  Absent → the selection toolbar is not rendered at all. That is how the
+   *  popup's own transcript is kept from spawning popups of its own. */
+  onAskSelection?: (ask: { text: string; anchor: { x: number; y: number } }) => void;
+  /** A popup is already open. The toolbar stands down: one throwaway
+   *  conversation at a time (see the note in Chat.tsx). */
+  askOpen?: boolean;
 }
 
 // Methods exposed to parent component
@@ -80,7 +76,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop, sendNonce, onResendMessage },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop, sendNonce, onResendMessage, onAskSelection, askOpen },
   ref
 ) {
   const { t } = useTranslation();
@@ -117,16 +113,24 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     searchInputRef,
     handleSearchKeyDown,
   } = useChatSearch(outerRef);
-  const chatCtx = useChatContextOptional();
-
-  // --- Selection toolbar (quote-reply / search) ---
+  // --- Selection toolbar → the throwaway popup conversation ---
+  //
+  // NO ChatContext HERE ANY MORE. This list used to reach the app-wide sender
+  // (`chatCtx.sendMessage`) to inject a quoted question into the CURRENT
+  // session, which is the behaviour the popup replaces. It also used the
+  // context's `isLoading` to disable the "Send to AI" button while the chat was
+  // streaming — a rule the popup makes wrong: the popup asks in its OWN
+  // session, so there is no 409 to avoid and no reason to make the user wait
+  // out an answer before asking about it.
   const floatingToolbarRef = useRef<ToolbarData | null>(null);
   const bumpToolbarRef = useRef<() => void>(() => {});
-  const [sendAIInput, setSendAIInput] = useState<{ x: number; y: number; text: string } | null>(null);
 
   // Selection detection — text selection within the message area
   const handleSelectionMouseUp = useCallback((e: React.MouseEvent) => {
-    if (sendAIInput) return;
+    // A popup is open: it owns the screen until the user finishes with it, and
+    // selecting inside it (React routes portal events through THIS component
+    // tree) must not raise the host's toolbar.
+    if (askOpen) return;
 
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
@@ -158,9 +162,15 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       lineSnapshot: text,
     };
     bumpToolbarRef.current();
-  }, [sendAIInput]);
+  }, [askOpen]);
 
-  // Clear the toolbar on mousedown (unless clicking the toolbar/card itself)
+  // Clear the toolbar on mousedown (unless clicking the toolbar or the popup).
+  //
+  // THE `z-[200]` MATCH IS A CONTRACT, not a coincidence. React dispatches
+  // events through the COMPONENT tree, so a click inside the portaled selection
+  // popup still bubbles to this handler; `SelectionChatPopup`'s root carries
+  // `z-[200]` precisely so that clicking into its composer is not read as
+  // "the user clicked away".
   const handleSelectionMouseDown = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest('.floating-toolbar') || target.closest('[class*="z-[200]"]')) return;
@@ -170,30 +180,18 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     }
   }, []);
 
-  // Toolbar button callbacks
+  // Toolbar button callback. Hands the gesture up and gets out of the way: the
+  // host owns the popup, its session and everything that happens to it.
+  // `tb.x/tb.y` are the pointer's VIEWPORT coordinates (they came straight off
+  // the mouse event), which is what a portaled `fixed` popup needs.
   const handleSendToAI = useCallback(() => {
     const tb = floatingToolbarRef.current;
     if (!tb) return;
-    setSendAIInput({ x: tb.x, y: tb.y, text: tb.selectedText });
     floatingToolbarRef.current = null;
     bumpToolbarRef.current();
     window.getSelection()?.removeAllRanges();
-  }, []);
-
-  // Quote-reply: send the selected text back into the chat as a blockquote
-  // plus the user's question. Purely local formatting — no persistence.
-  const sendSelectionToAI = useCallback((selectedText: string, question: string) => {
-    if (!chatCtx) return;
-    chatCtx.sendMessage(buildQuotedMessage(selectedText, question));
-  }, [chatCtx]);
-
-  // The card closes itself on submit — deliberately NO trailing state reset
-  // after the send (a late set(null) could clobber a card the user opened in
-  // the meantime).
-  const handleSendAISubmit = useCallback((question: string) => {
-    if (!sendAIInput) return;
-    sendSelectionToAI(sendAIInput.text, question);
-  }, [sendAIInput, sendSelectionToAI]);
+    onAskSelection?.({ text: tb.selectedText, anchor: { x: tb.x, y: tb.y } });
+  }, [onAskSelection]);
 
   // Deduplicate messages (prevent duplicate key warnings)
   const uniqueMessages = useMemo(() => {
@@ -698,28 +696,16 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         </button>
       ) : null}
 
-      {/* Selection toolbar */}
-      {outerEl && (
+      {/* Selection toolbar. Rendered only where a selection can actually go
+          somewhere — no handler, no toolbar (see `onAskSelection`). No
+          `isChatLoading`: the question opens its own session, so a streaming
+          answer is no longer a reason to refuse to take one. */}
+      {outerEl && onAskSelection && (
         <ToolbarRenderer
           floatingToolbarRef={floatingToolbarRef}
           bumpRef={bumpToolbarRef}
           container={outerEl}
           onSendToAI={handleSendToAI}
-          isChatLoading={chatCtx?.isLoading}
-        />
-      )}
-
-      {/* Send to AI card (standalone, from toolbar) */}
-      {sendAIInput && outerEl && (
-        <SendToAIInput
-          x={sendAIInput.x}
-          y={sendAIInput.y}
-          range={{ start: 0, end: 0 }}
-          lineSnapshot={sendAIInput.text}
-          container={outerEl}
-          onSubmit={handleSendAISubmit}
-          onClose={() => setSendAIInput(null)}
-          isChatLoading={chatCtx?.isLoading}
         />
       )}
     </div>

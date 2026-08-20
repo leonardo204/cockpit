@@ -35,6 +35,8 @@ import { modelScopeFor, modelLabel } from './modelCatalog';
 import { AllowChangesToggle } from './AllowChangesToggle';
 import { deriveEngineName, accountChipForEngine } from './engineName';
 import { ASSUMED_ACTING_AGENT, thinkingDisplayName, type ActingAgent } from './actingAgent';
+import { SelectionChatPopup, type SelectionChatPopupWiring } from './SelectionChatPopup';
+import { attachQuotedContext } from './selectionChatOps';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/Chat.tsx.
@@ -72,14 +74,54 @@ interface ChatProps {
     activeTo?: string;
     cron?: string;
   }) => void;
-  /** Host hook to open a session in a new tab. Currently unused — its only caller
-   *  was the removed fork button; a DB-backed fork would use it again. */
+  /** Host hook to open a session in a new tab. Used by the selection popup's
+   *  "promote to session" control — the popup's own session, handed to a real tab. */
   onOpenSession?: (sessionId: string, title?: string) => void;
+  /** Host hook to DELETE a session, through the same `closedSessionIds` route a
+   *  tab close takes. Used only by the selection popup's discard-on-close. The
+   *  Effect that performs it lives in feature-workspace, which feature-agent
+   *  must not depend on — hence a callback rather than an import. */
+  onDiscardSession?: (sessionId: string) => void;
   onOpenSessionBrowser?: () => void; // Host-handled: open the cross-engine session browser
   onOpenSettings?: () => void; // Host-handled: open the app settings modal
+  /**
+   * THIS CHAT IS THE THROWAWAY SELECTION POPUP, not a tab.
+   *
+   * It changes exactly two things, and both are about a registry it must not
+   * capture: the popup NEVER marks itself the active tab and never publishes its
+   * loading state app-wide. `ChatContext` is a tab-keyed map of senders plus an
+   * `activeTabIdRef` with last-writer-wins semantics; anything reaching
+   * `chatCtx.sendMessage` (or `useAIBridge`, which is the same value) sends to
+   * whichever tab wrote that ref last. A popup that marked itself active would
+   * hijack every one of those call sites app-wide — and would keep doing so
+   * after it was closed and discarded. It still REGISTERS under its own id,
+   * which is harmless: nothing looks a sender up except through the active id.
+   *
+   * It also suppresses the selection toolbar inside its own transcript: one
+   * throwaway conversation at a time, no popups out of popups.
+   */
+  ephemeral?: boolean;
+  /**
+   * The selected text this conversation is ABOUT. Quoted into the FIRST send and
+   * never again — re-quoting every turn would reproduce, one level down, the
+   * exact fault the popup exists to fix. See selectionChatOps.attachQuotedContext.
+   */
+  quotedContext?: string;
+  /**
+   * Hands the host a way to stop THIS chat's in-flight run (null on unmount).
+   *
+   * The run is DETACHED server-side: unmounting the component or closing the
+   * socket does not stop it. A popup closed mid-answer must therefore stop the
+   * turn explicitly before it deletes the session, or the machine keeps working
+   * on a conversation nobody will ever read and the delete races the run.
+   *
+   * The handed-out function RESOLVES once the stop has reached the server, so
+   * the caller can order a delete after it.
+   */
+  onStopHandle?: (stop: (() => Promise<void>) | null) => void;
 }
 
-export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onOpenSessionBrowser, onOpenSettings }: ChatProps) {
+export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: planModeProp, onPlanModeChange, hideHeader, hideSidebar, isActive = true, refreshSignal, onLoadingChange, onSessionIdChange, onTitleChange, onOpenNote, onCreateScheduledTask, onOpenSession, onDiscardSession, onOpenSessionBrowser, onOpenSettings, ephemeral, quotedContext, onStopHandle }: ChatProps) {
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -344,6 +386,17 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   const [sendNonce, setSendNonce] = useState(0);
   const bumpSend = useCallback(() => setSendNonce((n) => n + 1), []);
 
+  // THE SELECTION THIS CONVERSATION IS ABOUT, attached to the FIRST dispatched
+  // turn and never again. A latch rather than a message count: `/plan` and
+  // `/plan off` are consumed locally and dispatch nothing, so counting sends
+  // would burn the quote on a turn that never happened.
+  const quoteAttachedRef = useRef(false);
+  const withQuotedContext = useCallback((content: string) => {
+    const out = attachQuotedContext(quotedContext, content, quoteAttachedRef.current);
+    if (quotedContext) quoteAttachedRef.current = true;
+    return out;
+  }, [quotedContext]);
+
   // ! prefix: first line is command, subsequent lines are user notes, supports images
   const wrappedHandleSend = useCallback(async (content: string, images?: ImageInfo[]) => {
     const firstLine = content.split('\n')[0];
@@ -369,7 +422,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           // Explicit override: setPlanMode(true) above won't be reflected in handleSend's
           // closure this tick (React state is async), so force plan mode for this send.
           bumpSend();
-          handleSend(rest, images, { permissionMode: 'plan' });
+          handleSend(withQuotedContext(rest), images, { permissionMode: 'plan' });
         }
         // `/plan` and `/plan off` are consumed locally and dispatch NO turn, so
         // they are not sends and must not move the viewport.
@@ -378,8 +431,8 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     }
 
     bumpSend();
-    handleSend(content, images);
-  }, [handleSend, initialCwd, t, isClaudeEngine, setPlanMode, bumpSend]);
+    handleSend(withQuotedContext(content), images);
+  }, [handleSend, initialCwd, t, isClaudeEngine, setPlanMode, bumpSend, withQuotedContext]);
 
   // Plan-card "approve & run": the user's approval for the presented plan. Persistent off —
   // the Plan toggle visibly turns off and stays off for subsequent turns (mirrors native
@@ -598,11 +651,15 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
 
   // Sync loading state to ChatContext: only sync for the active tab
   // isActive change on tab switch also triggers this, ensuring the new active tab overrides the old value
+  //
+  // NOT FROM THE POPUP. `isLoading` here is the app-wide "the chat is busy"
+  // flag; a throwaway conversation streaming in a popup must not make the real
+  // tab look busy, and must not still be reported busy after it is discarded.
   useEffect(() => {
-    if (isActive) {
+    if (isActive && !ephemeral) {
       chatContext?.setIsLoading(isLoading);
     }
-  }, [isLoading, isActive, chatContext]);
+  }, [isLoading, isActive, ephemeral, chatContext]);
 
   // Register with ChatContext (used to send messages from CodeViewer)
   useEffect(() => {
@@ -617,12 +674,29 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     };
   }, [tabId, chatContext]);
 
-  // Notify ChatContext when tab becomes active
+  // Notify ChatContext when tab becomes active.
+  //
+  // THE ONE LINE THE POPUP MUST NOT RUN. `setActiveTab` writes a
+  // last-writer-wins ref that every `chatCtx.sendMessage` / `useAIBridge()`
+  // caller in the app resolves through. If the popup claimed it, messages meant
+  // for the real tab would land in a throwaway conversation — one that may
+  // already have been closed and deleted, in which case they land nowhere at
+  // all. The popup's own composer is unaffected: it calls the inner chat's
+  // `handleSend` directly and never goes through this registry.
   useEffect(() => {
-    if (tabId && isActive && chatContext) {
+    if (tabId && isActive && chatContext && !ephemeral) {
       chatContext.setActiveTab(tabId);
     }
-  }, [tabId, isActive, chatContext]);
+  }, [tabId, isActive, ephemeral, chatContext]);
+
+  // Hand the host a stop function for this chat's in-flight run. The run is
+  // detached server-side, so the popup that owns this chat cannot rely on
+  // unmounting to end it — see ChatProps.onStopHandle.
+  useEffect(() => {
+    if (!onStopHandle) return;
+    onStopHandle(handleStop);
+    return () => onStopHandle(null);
+  }, [onStopHandle, handleStop]);
 
   // Update handleSendRef for ChatContext to call
   useEffect(() => {
@@ -685,6 +759,55 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     };
   }, [onCreateScheduledTask, initialCwd, tabId, sessionId, engine]);
 
+  // -- THE SELECTION POPUP ------------------------------------------------
+  //
+  // Select text in a reply → "Send to AI" → a THROWAWAY conversation with its
+  // own session, opened next to the selection. It used to be a one-line card
+  // that injected a quoted question into THIS session, where the side question
+  // then lived forever and rode along in the context of every later turn.
+  //
+  // ONE AT A TIME. While a popup is open the host transcript stops offering the
+  // selection toolbar (`askOpen` below), so a second selection cannot stack a
+  // second throwaway conversation on top of the first: the second popup would
+  // have to negotiate the first one's discard confirmation, and two overlapping
+  // ephemeral chats is a worse answer than making the user finish one.
+  const [selectionAsk, setSelectionAsk] = useState<{ text: string; anchor: { x: number; y: number } } | null>(null);
+  const handleAskSelection = useCallback(
+    (ask: { text: string; anchor: { x: number; y: number } }) => setSelectionAsk(ask),
+    [],
+  );
+  const closeSelectionAsk = useCallback(() => setSelectionAsk(null), []);
+
+  // The popup's conversation surface. A render prop rather than an import, so
+  // SelectionChatPopup never has to import Chat back — this is Chat rendering
+  // itself, which is not a module cycle. Stable identity because the popup is
+  // memoized and this chat re-renders on every streamed delta.
+  const renderPopupChat = useCallback(
+    (w: SelectionChatPopupWiring) => (
+      <Chat
+        tabId={w.tabId}
+        // Same project, so tools resolve against the same tree the host is
+        // talking about.
+        initialCwd={initialCwd}
+        engine={engine}
+        hideHeader
+        hideSidebar
+        // `isActive` here means "on screen and measurable" — MessageList refuses
+        // to measure a hidden tab (every box metric reads 0 there). A popup is
+        // always on screen while it is mounted. It is `ephemeral` that stops it
+        // claiming the app-wide active-tab slot; the two are separate questions.
+        isActive
+        ephemeral
+        quotedContext={w.quotedContext}
+        onSessionIdChange={w.onSessionIdChange}
+        onLoadingChange={w.onLoadingChange}
+        onTitleChange={w.onTitleChange}
+        onStopHandle={w.onStopHandle}
+      />
+    ),
+    [initialCwd, engine],
+  );
+
   return (
     <div className={`flex ${hideHeader && hideSidebar ? 'h-full' : 'h-screen'} bg-card`}>
       {/* Main Content */}
@@ -714,7 +837,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             quick-switch: <EngineSwitcher/> lists the configured providers and
             switches the engine in place (selectEngine re-reads settings each turn,
             so a pick takes effect on the next message — no reload). */}
-        {isClaudeEngine && (
+        {/* NOT IN THE POPUP. This row is host-level configuration — the engine
+            and model pickers, the account chip, plan mode, and `AllowChangesToggle`,
+            which is an APP-WIDE gate policy rather than a per-chat one. A throwaway
+            side question is not where any of that is decided, and the row does not
+            fit across a popup anyway. The popup inherits whatever the app is set to. */}
+        {isClaudeEngine && !ephemeral && (
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50">
             <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} onEngineName={handleEngineName} onActiveEngine={handleActiveEngine} onUserSelect={handleUserSwitch} />
             {/* The model chip sits BETWEEN the engine and the account chip — it
@@ -800,6 +928,11 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             // follows the answer from there, wherever they had scrolled to.
             sendNonce={sendNonce}
             onResendMessage={handleResendMessage}
+            // The selection toolbar. Omitted inside a popup — one throwaway
+            // conversation at a time, no popups out of popups — and suppressed
+            // while one is already open.
+            onAskSelection={ephemeral ? undefined : handleAskSelection}
+            askOpen={!!selectionAsk}
           />
         )}
         </div>
@@ -853,6 +986,20 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           onClose={() => setIsProjectSessionsOpen(false)}
           cwd={initialCwd}
         />
+      )}
+
+      {/* The throwaway conversation opened out of a selection. Portaled from
+          inside, so where it sits in this tree only decides its lifetime. */}
+      {selectionAsk && (
+        <SelectionChatPopup
+          selectedText={selectionAsk.text}
+          anchor={selectionAsk.anchor}
+          onClose={closeSelectionAsk}
+          onOpenSession={onOpenSession}
+          onDiscardSession={onDiscardSession}
+        >
+          {renderPopupChat}
+        </SelectionChatPopup>
       )}
 
       {/* User Messages Modal */}
