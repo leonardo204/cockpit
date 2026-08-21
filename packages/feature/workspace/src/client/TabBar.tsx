@@ -3,6 +3,7 @@
 import React from 'react';
 
 import { TabInfo } from './useTabState';
+import { isMarkdownTab } from './tabKinds';
 import { Tooltip } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
 
@@ -10,10 +11,24 @@ import { useTranslation } from 'react-i18next';
 // Tab circle-number icon component
 // ============================================
 
-function TabNumberIcon({ number, isActive }: { number: number; isActive: boolean }) {
+function TabNumberIcon({
+  number,
+  isActive,
+  isDocument,
+}: {
+  number: number;
+  isActive: boolean;
+  isDocument?: boolean;
+}) {
   return (
     <svg
-      className={`w-5 h-5 flex-shrink-0 ${isActive ? 'text-brand' : 'text-muted-foreground'}`}
+      className={`w-5 h-5 flex-shrink-0 ${
+        isActive
+          ? isDocument
+            ? 'text-violet-600 dark:text-violet-400'
+            : 'text-brand'
+          : 'text-muted-foreground'
+      }`}
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -163,8 +178,18 @@ export function TabBar({
               }}
               className={`group flex items-center gap-1 px-3 py-1.5 text-sm cursor-pointer rounded-t-lg border-t-[1.5px] transition-colors ${
                 tab.id === activeTabId
-                  ? 'border-brand bg-slate-4 text-foreground font-medium'
-                  : 'border-transparent text-muted-foreground hover:bg-secondary/50'
+                  ? isMarkdownTab(tab)
+                    ? 'border-violet-500 bg-violet-500/10 text-foreground font-medium'
+                    : 'border-brand bg-slate-4 text-foreground font-medium'
+                  : isMarkdownTab(tab)
+                    ? // INACTIVE DOCUMENT TAB: the strip's ordinary colours, and
+                      // ONLY the top line carries the distinction. Tinting the
+                      // whole tab made a row of inactive tabs read as two
+                      // competing groups; the line says "different kind" without
+                      // claiming attention an unfocused tab has not earned. Held
+                      // at reduced opacity so a lit line still means "active".
+                      'border-violet-500/50 text-muted-foreground hover:bg-secondary/50'
+                    : 'border-transparent text-muted-foreground hover:bg-secondary/50'
               } ${dragTabIndex === index ? 'opacity-50' : ''} ${
                 dragOverTabIndex === index ? 'border-l-2 border-brand' : ''
               }`}
@@ -177,7 +202,11 @@ export function TabBar({
                 className="relative flex-shrink-0"
                 title={index < 9 ? `⌘${index + 1}` : undefined}
               >
-                <TabNumberIcon number={index + 1} isActive={tab.id === activeTabId} />
+                <TabNumberIcon
+                  number={index + 1}
+                  isActive={tab.id === activeTabId}
+                  isDocument={isMarkdownTab(tab)}
+                />
                 {/* Loading pulse dot - top-right */}
                 {tab.isLoading && (
                   <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-9 animate-pulse" />
@@ -220,7 +249,28 @@ export function TabBar({
                   className="flex-1 min-w-0 px-1 py-0 text-sm bg-background border border-brand rounded outline-none"
                 />
               ) : (
-                <span className="flex-1 min-w-0 truncate">{tab.title}</span>
+                <span className="flex-1 min-w-0 truncate flex items-center gap-1">
+                  {/* A DOCUMENT GLYPH AS WELL AS THE COLOUR. Hue alone is not a
+                      signal for everyone, and these two tab kinds behave
+                      differently enough — one holds a conversation that a close
+                      would delete, the other a file that closing merely puts
+                      away — that telling them apart must not depend on
+                      distinguishing violet from teal. */}
+                  {isMarkdownTab(tab) && (
+                    <svg
+                      className="w-3.5 h-3.5 flex-shrink-0 opacity-70"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      aria-hidden="true"
+                    >
+                      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                      <path d="M14 2v6h6" />
+                    </svg>
+                  )}
+                  <span className="min-w-0 truncate">{tab.title}</span>
+                </span>
               )}
               {/* P3-M10 §3 — the TEMPORARY-session marker. Beside the title
                   rather than stacked in the corner with the pin/unread badges,

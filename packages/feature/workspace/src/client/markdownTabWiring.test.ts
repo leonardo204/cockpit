@@ -25,6 +25,7 @@ const TAB_STATE = read('useTabState.ts');
 const MODAL = read('MarkdownPreviewModal.tsx');
 const DOCUMENT = read('MarkdownDocument.tsx');
 const PANEL = read('FileBrowserPanel.tsx');
+const TAB_BAR = read('TabBar.tsx');
 
 describe('tab host — the tab list is no longer chats by construction', () => {
   it('dispatches on the tab KIND instead of rendering ChatPanel unconditionally', () => {
@@ -204,6 +205,34 @@ describe('promotion — one viewer, two chromes', () => {
     expect(MODAL).toContain('useEscToClose');
     expect(DOCUMENT).not.toContain('useEscToClose');
     expect(DOCUMENT).not.toContain('<Portal>');
+  });
+
+  it('tells a document tab apart from a chat tab in the strip', () => {
+    // A document tab and a chat tab behave differently in a way the user has to
+    // know BEFORE clicking: closing a chat deletes its session, closing a
+    // document only puts the file away. So the strip must not render them
+    // identically. Gated on the shared predicate, never a local `tab.rel`
+    // test, so the strip and the panel dispatch can never disagree.
+    expect(TAB_BAR).toContain("from './tabKinds'");
+    expect(TAB_BAR).toContain('isMarkdownTab(tab)');
+    expect(TAB_BAR).toContain('border-violet-500');
+  });
+
+  it('marks an INACTIVE document tab on the top line only', () => {
+    // An unfocused tab keeps the strip's ordinary colours; tinting the whole
+    // thing made a row of inactive tabs read as two competing groups. So the
+    // inactive document tab carries the same text and hover treatment as an
+    // inactive chat tab, and differs only in the line above it.
+    expect(TAB_BAR).toContain("'border-violet-500/50 text-muted-foreground hover:bg-secondary/50'");
+    expect(TAB_BAR).not.toContain('hover:bg-violet-500/10');
+  });
+
+  it('does not make the distinction colour-only', () => {
+    // Hue alone is not a signal for everyone. The glyph is the part that
+    // survives a reader who cannot separate violet from teal, so it is pinned
+    // separately from the colour above.
+    expect(TAB_BAR).toContain('isDocument');
+    expect(TAB_BAR).toMatch(/isMarkdownTab\(tab\) && \(\s*<svg/);
   });
 
   it('keeps the TOC, the images, the navigation and the status line shared', () => {
