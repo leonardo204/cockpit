@@ -131,6 +131,8 @@ import {
   resetBotCommandRegistration,
   resumeTelegramListener,
   stopTelegramListener,
+  telegramListenerDiagnostics,
+  type TelegramListenerDiagnostics,
 } from '../lib/telegramEscalation';
 import {
   findSystemMcpPreset,
@@ -759,6 +761,12 @@ export type NabyActionResult =
         /** telegram-chat §8: `manual` (escalations only) or `always` (mirror every turn). */
         syncMode: 'manual' | 'always';
         ready: boolean;
+        /** The always-on listener's own health — is a loop alive, when did a poll
+         *  last come back, is it wedged. Shipped with the config because "the bot
+         *  went quiet" is answered by the LOOP's state, not by the settings: a
+         *  perfectly valid config with a stalled poll looks identical to a
+         *  working one from everywhere else. */
+        listener?: TelegramListenerDiagnostics;
       };
       /** `telegram.detectChat`: the chat id discovered from the bot's latest message. */
       chatId?: string;
@@ -1331,6 +1339,7 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           chatId: cfg.chatId,
           syncMode: cfg.syncMode,
           ready: isTelegramReady(cfg),
+          listener: telegramListenerDiagnostics(),
         },
       };
     }

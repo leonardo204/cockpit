@@ -364,6 +364,16 @@ function logTelegramOut(
   });
 }
 
+/** Why a poll did not come back with updates.
+ *
+ *  - `timeout`  — OUR wall clock ran out (see `pollDeadlineMs`). The socket is
+ *                 half-open or the response body stalled; nothing is coming.
+ *  - `aborted`  — the CALLER pulled the plug (pause, shutdown, wake kick). Not a
+ *                 fault, and must never be reported as one.
+ *  - `api`      — Telegram answered and refused (a 409, a bad token, …).
+ *  - `network`  — the fetch itself failed (DNS, TLS, ECONNRESET, offline). */
+export type TelegramPollFailure = 'timeout' | 'aborted' | 'api' | 'network';
+
 /** The outcome of one getUpdates poll. `error` is present ONLY when the poll did
  *  not complete — a transport failure or an API-level refusal. It is additive on
  *  purpose: the listener loop can keep ignoring it and retry, while the callers
@@ -375,38 +385,193 @@ export type TelegramPollResult = {
   /** Set when the poll FAILED. Absent means "the poll ran"; `updates` being
    *  empty then genuinely means no update was waiting. */
   error?: string;
+  /** Which KIND of failure — present exactly when `error` is. The loop needs
+   *  this because the three kinds want three different reactions: a timeout is
+   *  a fault to count and back off from, an abort is something we asked for and
+   *  must stay silent about, and a network error is the existing retry path. */
+  failure?: TelegramPollFailure;
 };
+
+/** Slack allowed on top of the long-poll window Telegram was asked to honour,
+ *  before we call the socket dead. Generous on purpose: the deadline exists to
+ *  catch a connection that will NEVER answer, not to race a slow one. */
+export const POLL_DEADLINE_GRACE_MS = 5_000;
+
+/** Floor for the wall clock, for the `timeout=0` polls (the backlog drain).
+ *  Those ask Telegram to answer immediately, but "immediately" over a wedged
+ *  socket is still forever, so they get a ceiling too. */
+export const POLL_DEADLINE_FLOOR_MS = 10_000;
+
+/**
+ * The WALL CLOCK for one poll, in milliseconds.
+ *
+ * WHY THIS EXISTS AT ALL. `timeout=<n>` in the getUpdates query string tells
+ * TELEGRAM how long to hold the request open. It constrains nothing on our side.
+ * A socket that goes half-open — precisely what a network transition at
+ * lock/sleep/wake produces — leaves the `await fetch` pending until undici's
+ * ~300s ceiling, or, for a merely stalled connection, effectively forever. The
+ * listener is one single-threaded loop awaiting that one call, so ONE hung poll
+ * stalls the entire Telegram channel, silently: no error, no updates, nothing
+ * logged. This is the ceiling that turns that hang into an ordinary error the
+ * existing back-off and retry already handle.
+ */
+export function pollDeadlineMs(timeoutSec: number): number {
+  const sec = Number.isFinite(timeoutSec) && timeoutSec > 0 ? timeoutSec : 0;
+  return Math.max(POLL_DEADLINE_FLOOR_MS, sec * 1000 + POLL_DEADLINE_GRACE_MS);
+}
+
+/** The abort reason our own wall-clock timer uses. Distinct from anything the
+ *  caller can pass, so `signal.reason` alone names the culprit. */
+export const POLL_TIMEOUT_REASON = 'naby:telegram-poll-deadline';
+
+let deadlineOverrideMs: number | undefined;
+
+/**
+ * Shorten the wall clock for every poll. TESTS ONLY.
+ *
+ * It exists because the behaviour that needs proving is what the LISTENER LOOP
+ * does when a poll never comes back, and the loop derives its own deadline (30s)
+ * from `POLL_TIMEOUT_SEC` on purpose — passing one in from the call site is what
+ * would let the two drift apart. A seam here is honest about being a seam; a
+ * thirty-second test would simply not be written, which is how this class of bug
+ * stayed uncovered.
+ */
+export function setPollDeadlineForTest(ms: number | undefined): void {
+  deadlineOverrideMs = ms;
+}
+
+/** What we tell the loop (and the log) when the wall clock wins. A CONSTANT for
+ *  a given deadline, so the loop's "report the transition only" rule collapses a
+ *  run of timeouts into one line instead of one per poll. */
+export function describePollTimeout(deadlineMs: number): string {
+  return `poll exceeded its ${deadlineMs}ms wall clock — the connection stalled`;
+}
+
+/** Whether a rejection is an abort rather than a transport fault. Used only for
+ *  an abort we did NOT raise ourselves (a caller signal already aborted, or one
+ *  shared with something else) — our own two causes are tracked positively. */
+export function isAbortError(e: unknown): boolean {
+  if (e === POLL_TIMEOUT_REASON) return true;
+  if (typeof e === 'object' && e !== null && 'name' in e) {
+    return (e as { name?: unknown }).name === 'AbortError' || (e as { name?: unknown }).name === 'TimeoutError';
+  }
+  return false;
+}
+
+/**
+ * Name the failure behind a rejected poll — PURE, so the loop's reaction to each
+ * kind is testable without a socket.
+ *
+ * `cause` is what the poll RECORDED at the moment the abort was raised, and it
+ * is first-writer-wins by construction (see `pollTelegramUpdates`). That is the
+ * whole trick for telling a deadline apart from a deliberate `interruptLoop()`:
+ * reading `signal.aborted` after the fact cannot, because a shutdown landing one
+ * tick after the wall clock fired would make a real timeout look deliberate, and
+ * a deadline landing during a shutdown would log the shutdown as a network
+ * failure. Whichever fired FIRST is the honest answer, and only the poll itself
+ * is in a position to know.
+ */
+export function classifyPollFailure(e: unknown, cause?: 'timeout' | 'aborted'): TelegramPollFailure {
+  if (cause) return cause;
+  if (isAbortError(e)) return 'aborted';
+  return 'network';
+}
 
 /** One long-poll of getUpdates from `offset`. Returns the raw updates and the
  *  next offset to pass. Never throws — a failure yields [] and the SAME offset
  *  so the caller simply retries, plus an `error` so a caller that cares can see
- *  that the emptiness is a failure rather than an answer. */
+ *  that the emptiness is a failure rather than an answer.
+ *
+ *  THE WALL CLOCK LIVES HERE, in the transport, not in the listener loop. Three
+ *  reasons. (1) Every poll gets it — including the backlog drain, which passes
+ *  no signal at all and runs at exactly the moment a wedged socket is likeliest
+ *  (right after a start or a resume). A loop-side timeout would leave that one
+ *  call able to hang the boot path forever. (2) The thing being bounded is the
+ *  fetch AND the body read; only the code holding both can cover both, and a
+ *  stalled body read is as fatal as a stalled connect. (3) It keeps this
+ *  function's stated contract — "never throws, a failure is an `error`" — true
+ *  for the hang case too, instead of making the one caller that happens to be a
+ *  loop responsible for a transport concern. */
 export async function pollTelegramUpdates(
   cfg: Pick<TelegramConfig, 'botToken'>,
   offset: number,
-  opts?: { timeoutSec?: number; signal?: AbortSignal },
+  opts?: {
+    timeoutSec?: number;
+    signal?: AbortSignal;
+    /** Override the wall clock. Tests only — production derives it from
+     *  `timeoutSec` so the two can never drift apart. */
+    deadlineMs?: number;
+  },
 ): Promise<TelegramPollResult> {
+  const timeoutSec = opts?.timeoutSec ?? 25;
+  const deadlineMs = opts?.deadlineMs ?? deadlineOverrideMs ?? pollDeadlineMs(timeoutSec);
+
+  // Our own controller, chained under the caller's. It has to be ours: the
+  // caller's signal is the loop's `pauseTelegramListener`/`stopTelegramListener`
+  // handle and we must not abort it, but we still need the fetch to end when the
+  // wall clock says so.
+  const local = new AbortController();
+  // FIRST WRITER WINS — this is what makes a deadline distinguishable from a
+  // deliberate interrupt even when both happen in the same tick.
+  let cause: 'timeout' | 'aborted' | undefined;
+  const raise = (why: 'timeout' | 'aborted', reason: unknown): void => {
+    cause ??= why;
+    try {
+      local.abort(reason);
+    } catch {
+      /* already settled */
+    }
+  };
+
+  const timer = setTimeout(() => raise('timeout', POLL_TIMEOUT_REASON), deadlineMs);
+  // `unref` keeps a pending deadline from holding the process open at shutdown.
+  // Guarded: the browser/edge shape of setTimeout has no such method.
+  (timer as unknown as { unref?: () => void }).unref?.();
+
+  const outer = opts?.signal;
+  const onCallerAbort = (): void => raise('aborted', outer?.reason);
+  if (outer?.aborted) raise('aborted', outer.reason);
+  else outer?.addEventListener('abort', onCallerAbort, { once: true });
+
+  const failed = (e: unknown): TelegramPollResult => {
+    const failure = classifyPollFailure(e, cause);
+    return {
+      updates: [],
+      nextOffset: offset,
+      error: failure === 'timeout' ? describePollTimeout(deadlineMs) : describeFetchError(e),
+      failure,
+    };
+  };
+
   try {
     const url = new URL(`${API_BASE}/bot${cfg.botToken}/getUpdates`);
     url.searchParams.set('offset', String(offset));
-    url.searchParams.set('timeout', String(opts?.timeoutSec ?? 25));
+    url.searchParams.set('timeout', String(timeoutSec));
     url.searchParams.set('allowed_updates', JSON.stringify(['message', 'callback_query']));
-    const res = await fetch(url, opts?.signal ? { signal: opts.signal } : {});
+    const res = await fetch(url, { signal: local.signal });
     const json = (await res.json().catch(() => null)) as
       | { ok: boolean; result?: TelegramUpdate[]; description?: string }
       | null;
     if (!res.ok || !json?.ok || !json.result) {
+      // A body read cut short by our own abort is NOT an API refusal — the
+      // status line arrived and the bytes never did. Report what actually
+      // happened, or a stalled download would be filed as "Telegram said no".
+      if (cause) return failed(local.signal.reason);
       return {
         updates: [],
         nextOffset: offset,
         error: json?.description ?? `telegram getUpdates failed (${res.status})`,
+        failure: 'api',
       };
     }
     const updates = json.result;
     const maxId = updates.reduce((mx, u) => Math.max(mx, u.update_id), offset - 1);
     return { updates, nextOffset: maxId + 1 };
   } catch (e) {
-    return { updates: [], nextOffset: offset, error: describeFetchError(e) };
+    return failed(e);
+  } finally {
+    clearTimeout(timer);
+    outer?.removeEventListener('abort', onCallerAbort);
   }
 }
 

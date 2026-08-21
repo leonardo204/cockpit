@@ -55,11 +55,13 @@ import {
   isTelegramReady,
   parseCallbackData,
   parseCheckinCallbackData,
+  pollDeadlineMs,
   pollTelegramUpdates,
   readTelegramConfig,
   sendTelegramMessage,
   setMyCommands,
   type TelegramConfig,
+  type TelegramPollFailure,
   type TelegramUpdate,
 } from './telegram';
 import { BOT_COMMANDS, projectHeader } from './telegramChatStrings';
@@ -78,6 +80,20 @@ const POLL_TIMEOUT_SEC = 25;
  *  exactly what the loop exists to carry, and making the second one wait two
  *  seconds behind the first is latency for nothing. */
 const MIN_ITERATION_MS = 2000;
+
+/** How many consecutive DELIBERATE aborts loop straight back into a fresh poll
+ *  before the back-off is applied anyway. A pause/stop/wake kick wants the next
+ *  poll NOW — that is the whole point of interrupting one — but a signal stuck
+ *  in the aborted state would otherwise spin this loop hot, and a hot spin is
+ *  the failure mode `MIN_ITERATION_MS` was written for in the first place. */
+const ABORT_RESTART_MAX = 5;
+
+/** How long a running loop may go without a poll RETURNING before it is called
+ *  stalled. Three wall clocks' worth: a healthy loop returns every ~25s, and a
+ *  loop that has not come back in a minute and a half is not idle, it is stuck.
+ *  Read by `telegramListenerDiagnostics`, never by the loop itself — this is an
+ *  observation, not a control. */
+export const LISTENER_STALL_MS = 90_000;
 
 /** How much of a tool's input is quoted in the escalation message. Enough to
  *  judge the call ("rm -rf …"), never a wall of JSON on a phone screen. */
@@ -335,6 +351,29 @@ type BridgeState = {
    *  an idle one, which is precisely how a transport fault gets read as "the
    *  user never answered". */
   lastPollError?: string;
+  /** Epoch ms at which a poll last RETURNED, whatever the outcome. THE POINT OF
+   *  IT: before this existed, a loop wedged on a half-open socket looked exactly
+   *  like a healthy idle one — no error, no updates, and the transition-only
+   *  logging above means nothing is printed either. It took a user reporting
+   *  "the bot went quiet" to find. A clock that stops advancing is the one
+   *  signal that separates the two, so it is recorded here and surfaced through
+   *  `telegramListenerDiagnostics`. */
+  lastPollAt?: number;
+  /** Epoch ms of the last poll that actually SUCCEEDED — the last moment we know
+   *  the channel was end-to-end alive. */
+  lastPollOkAt?: number;
+  /** Consecutive polls killed by their own wall clock. Zeroed by any poll that
+   *  completes. A number climbing here is a wedged connection, which reads very
+   *  differently from a single blip. */
+  consecutivePollTimeouts: number;
+  /** Consecutive polls ended by a deliberate abort — the spin guard for
+   *  `ABORT_RESTART_MAX`, not a diagnostic. */
+  consecutivePollAborts: number;
+  /** Callbacks watching `loopRunning` flip. The Electron main process holds a
+   *  `prevent-app-suspension` power-save blocker for exactly as long as a loop
+   *  is alive, and this is how it learns. Kept here rather than polled because
+   *  a blocker acquired late is a window in which the OS can nap the channel. */
+  watchers: Set<(running: boolean) => void>;
   /** The Settings "Detect" button is holding the bot's single getUpdates slot
    *  (telegram-chat §5). The loop exits on this and is restarted on resume. */
   paused: boolean;
@@ -382,6 +421,9 @@ const state: BridgeState =
     offset: 0,
     drained: false,
     loopRunning: false,
+    consecutivePollTimeouts: 0,
+    consecutivePollAborts: 0,
+    watchers: new Set(),
     paused: false,
     stopRequested: false,
     sentBySession: new Map(),
@@ -389,6 +431,13 @@ const state: BridgeState =
     chatTurns: new Set(),
     commandsRegistered: false,
   });
+
+// The state object is pinned to `globalThis`, so a hot-reloaded module can meet
+// one created before these fields existed. Filling them in is cheaper than every
+// read having to be defensive.
+state.watchers ??= new Set();
+state.consecutivePollTimeouts ??= 0;
+state.consecutivePollAborts ??= 0;
 
 // -- what the chat half needs from the bridge --------------------------------
 
@@ -753,14 +802,137 @@ export async function sendFinalReport(store: Store, report: FinalReport): Promis
 
 // -- the polling loop ---------------------------------------------------------
 
+/**
+ * WHAT THE LOOP DOES ABOUT ONE POLL'S OUTCOME — pure, so every branch is
+ * testable without a socket or a clock.
+ *
+ * The three failure kinds want three different reactions and conflating them is
+ * how this module went wrong twice over:
+ *
+ *   * `aborted` is something WE asked for — a pause handshake, a shutdown, or a
+ *     wake kick after the machine came back. Logging it as a poll failure would
+ *     put "poll failed: This operation was aborted" in the log on every quit,
+ *     and backing off two seconds after a wake kick would undo the entire point
+ *     of kicking. So: silent, no fault counted, straight back to a fresh poll.
+ *   * `timeout` is the wall clock firing on a socket that will never answer. It
+ *     is a fault, it is the one worth naming out loud every time (a run of them
+ *     is a wedged connection, not a blip), and it backs off like any error.
+ *   * `network` / `api` keep the existing transition-only reporting — one line
+ *     on the way down, one on the way back up.
+ */
+export type PollLoopReaction = {
+  /** Skip the back-off and the empty-poll accounting; poll again at once. */
+  restartNow: boolean;
+  /** What to print, or `undefined` for silence. */
+  log?: { level: 'warn' | 'info'; message: string };
+  /** The value `lastPollError` should carry after this poll. */
+  lastPollError: string | undefined;
+  timeoutStreak: number;
+  abortStreak: number;
+};
+
+export function pollLoopReaction(input: {
+  failure?: TelegramPollFailure;
+  error?: string;
+  prevError?: string;
+  timeoutStreak: number;
+  abortStreak: number;
+}): PollLoopReaction {
+  const { failure, error, prevError } = input;
+
+  if (failure === 'aborted') {
+    const abortStreak = input.abortStreak + 1;
+    return {
+      // The spin guard: past the ceiling, fall through to the back-off rather
+      // than trusting that someone will stop aborting us.
+      restartNow: abortStreak <= ABORT_RESTART_MAX,
+      lastPollError: prevError, // an interrupt says nothing about the network
+      timeoutStreak: input.timeoutStreak,
+      abortStreak,
+    };
+  }
+
+  if (failure === 'timeout') {
+    const timeoutStreak = input.timeoutStreak + 1;
+    return {
+      restartNow: false,
+      log: {
+        level: 'warn',
+        message:
+          `[telegram] poll timed out (${timeoutStreak} in a row): ${error ?? 'no detail'}` +
+          ' — dropping the connection and retrying',
+      },
+      lastPollError: error,
+      timeoutStreak,
+      abortStreak: 0,
+    };
+  }
+
+  // Report the TRANSITION only — first failure, and the recovery — so an outage
+  // is visible in the log without burying it under one line per poll.
+  const log =
+    error && error !== prevError
+      ? ({ level: 'warn', message: `[telegram] poll failed: ${error} — retrying` } as const)
+      : !error && prevError
+        ? ({ level: 'info', message: '[telegram] poll recovered' } as const)
+        : undefined;
+
+  return {
+    restartNow: false,
+    ...(log ? { log } : {}),
+    lastPollError: error,
+    timeoutStreak: 0,
+    abortStreak: 0,
+  };
+}
+
+/** Flip `loopRunning` and tell the watchers. EVERY write goes through here: the
+ *  power-save blocker on the Electron side is armed off these edges, and a write
+ *  that skipped the notification would leave the OS free to nap a listener that
+ *  is very much running. */
+function setLoopRunning(running: boolean): void {
+  if (state.loopRunning === running) return;
+  state.loopRunning = running;
+  for (const watcher of state.watchers) {
+    try {
+      watcher(running);
+    } catch (e) {
+      // A watcher that throws must not take the listener down with it.
+      console.warn('[telegram] listener watcher failed:', e);
+    }
+  }
+}
+
+/**
+ * Watch the loop start and stop. Returns an unsubscribe, and fires ONCE
+ * immediately with the current value so a late subscriber is not left believing
+ * the loop is stopped until the next edge.
+ *
+ * The Electron main process is the caller (electron/telegram-power.ts): it holds
+ * a `prevent-app-suspension` power-save blocker for exactly as long as a loop is
+ * alive, which is what keeps the channel answering while the screen is locked or
+ * the screensaver is up.
+ */
+export function onTelegramListenerChange(cb: (running: boolean) => void): () => void {
+  state.watchers.add(cb);
+  try {
+    cb(state.loopRunning);
+  } catch (e) {
+    console.warn('[telegram] listener watcher failed:', e);
+  }
+  return () => {
+    state.watchers.delete(cb);
+  };
+}
+
 /** Start the loop if it is not already running. Idempotent and synchronous: the
  *  caller (a paused turn) must not wait on a long-poll. */
 export function ensureListener(store: Store): void {
   if (state.loopRunning) return;
   state.stopRequested = false;
-  state.loopRunning = true;
+  setLoopRunning(true);
   void runListener(store).finally(() => {
-    state.loopRunning = false;
+    setLoopRunning(false);
     // A watch added during the shutdown window would otherwise be stranded, so
     // hand it to a fresh loop. (Not while paused or stopped: those are deliberate
     // silences, and the pause handshake below waits for the loop to be gone.)
@@ -795,6 +967,96 @@ export function resumeTelegramListener(store: Store): void {
 /** Whether a poll loop is alive right now (diagnostics, and test teardown). */
 export function telegramListenerRunning(): boolean {
   return state.loopRunning;
+}
+
+/** What the listener can say about its own health. Everything here is an
+ *  OBSERVATION — nothing in the loop reads it back. */
+export type TelegramListenerDiagnostics = {
+  running: boolean;
+  /** The Settings "Detect" button holds the getUpdates slot. Not a fault. */
+  paused: boolean;
+  /** Epoch ms of the last poll that RETURNED, any outcome. */
+  lastPollAt?: number;
+  /** Epoch ms of the last poll that SUCCEEDED. */
+  lastPollOkAt?: number;
+  /** Age of `lastPollAt` against the caller's clock. */
+  sincePollMs?: number;
+  lastPollError?: string;
+  consecutivePollTimeouts: number;
+  /** Running, but no poll has come back in `LISTENER_STALL_MS`. The state that
+   *  used to be invisible: it is not idle, it is stuck. */
+  stalled: boolean;
+};
+
+/** Whether a listener that claims to be running has actually gone quiet. PURE —
+ *  the clock is an argument so the threshold is testable. */
+export function listenerStalled(
+  snapshot: { running: boolean; lastPollAt?: number },
+  now: number,
+  stallMs: number = LISTENER_STALL_MS,
+): boolean {
+  if (!snapshot.running) return false;
+  // No poll has returned YET. A loop that has only just started is not stalled;
+  // one that has been "starting" for longer than the threshold is.
+  if (snapshot.lastPollAt === undefined) return false;
+  return now - snapshot.lastPollAt > stallMs;
+}
+
+/**
+ * The listener's own account of itself, for `telegram.get` and the logs.
+ *
+ * WHY IT IS SURFACED AT ALL. The stall this was written for produced no error,
+ * no updates and — because the loop reports only failure TRANSITIONS — not one
+ * line of log. It was indistinguishable from a healthy idle listener from the
+ * outside, which is why it took a user saying "the bot went quiet" to find. A
+ * poll clock that stops advancing is the difference.
+ */
+export function telegramListenerDiagnostics(now: number = Date.now()): TelegramListenerDiagnostics {
+  const running = state.loopRunning;
+  return {
+    running,
+    paused: state.paused,
+    ...(state.lastPollAt !== undefined
+      ? { lastPollAt: state.lastPollAt, sincePollMs: Math.max(0, now - state.lastPollAt) }
+      : {}),
+    ...(state.lastPollOkAt !== undefined ? { lastPollOkAt: state.lastPollOkAt } : {}),
+    ...(state.lastPollError !== undefined ? { lastPollError: state.lastPollError } : {}),
+    consecutivePollTimeouts: state.consecutivePollTimeouts,
+    stalled: listenerStalled({ running, ...(state.lastPollAt !== undefined ? { lastPollAt: state.lastPollAt } : {}) }, now),
+  };
+}
+
+/**
+ * WAKE THE CHANNEL NOW — the machine just came back (electron/telegram-power.ts
+ * wires this to `powerMonitor`'s `resume` / `unlock-screen` /
+ * `user-did-become-active`).
+ *
+ * The problem it solves: the poll in flight across a sleep or a network
+ * transition is talking to a socket that no longer exists. Left alone, the
+ * channel is dead until the wall clock expires and the back-off elapses — tens
+ * of seconds during which a message sent from a phone gets no answer. Aborting
+ * that poll turns it into a deliberate interrupt (`failure: 'aborted'`, which
+ * `pollLoopReaction` puts straight back into a fresh poll with no back-off and
+ * no log noise), so the channel is live again on the next tick.
+ *
+ * PAUSED AND STOPPED ARE LEFT ALONE. The Detect button owns the bot's single
+ * getUpdates slot while it is up, and a wake that took the slot back would be
+ * the 409 the pause handshake exists to prevent. A requested stop is a shutdown
+ * (or a config that cannot chat), and a resume is not permission to undo it —
+ * `ensureListener` is what lifts that, and it has a caller who meant it.
+ */
+export function kickTelegramListener(store: Store): 'kicked' | 'started' | 'idle' {
+  if (state.paused || state.stopRequested) return 'idle';
+  if (state.loopRunning) {
+    interruptLoop();
+    return 'kicked';
+  }
+  // The loop is gone — a config change ended it, or it never started. Start one
+  // only if Telegram can actually chat; `ensureListener` would exit immediately
+  // otherwise, and reporting 'started' for that would be a lie.
+  if (!isTelegramReady(readTelegramConfig(store))) return 'idle';
+  ensureListener(store);
+  return 'started';
 }
 
 /** End the loop regardless of config (shutdown, and test teardown). It restarts
@@ -838,8 +1100,19 @@ async function runListener(store: Store): Promise<void> {
   // before this escalation existed and must not answer it.
   if (!state.drained) {
     state.drained = true;
-    const { updates, nextOffset } = await pollTelegramUpdates(cfg, state.offset, { timeoutSec: 0 });
-    if (nextOffset !== state.offset) {
+    // Bounded by the transport's wall clock like every other poll — and this is
+    // the one that most needs it. It runs at start and after a resume, exactly
+    // when a socket is likeliest to be half-open, and it is awaited BEFORE the
+    // loop exists, so a hang here is a channel that never begins.
+    const { updates, nextOffset, error } = await pollTelegramUpdates(cfg, state.offset, {
+      timeoutSec: 0,
+    });
+    state.lastPollAt = Date.now();
+    if (error) {
+      // Not fatal: the watermark is unchanged, so the worst case is that the
+      // backlog is dropped by the first real poll instead of this one.
+      console.warn(`[telegram] backlog drain failed: ${error} — listening anyway`);
+    } else if (nextOffset !== state.offset) {
       console.log(`[telegram] dropped ${updates.length} stale update(s) before listening`);
       state.offset = nextOffset;
       writeOffset(store, nextOffset);
@@ -848,7 +1121,10 @@ async function runListener(store: Store): Promise<void> {
   // The command menu, published once per process on the way into the loop
   // (telegram-chat §2). Best-effort: the commands work either way.
   void registerBotCommands(cfg);
-  console.log(`[telegram] listening (offset ${state.offset})`);
+  console.log(
+    `[telegram] listening (offset ${state.offset}, ${POLL_TIMEOUT_SEC}s long-poll under a ` +
+      `${pollDeadlineMs(POLL_TIMEOUT_SEC)}ms wall clock)`,
+  );
   // Consecutive polls that came back empty IMMEDIATELY. A long-poll is supposed
   // to block for 25 seconds, so one fast empty answer is ordinary (a confirm
   // round-trip); a run of them means something is wrong — offline, or a 409 —
@@ -871,19 +1147,36 @@ async function runListener(store: Store): Promise<void> {
     const started = Date.now();
     const abort = new AbortController();
     state.pollAbort = abort;
-    const { updates, nextOffset, error } = await pollTelegramUpdates(live, state.offset, {
+    const { updates, nextOffset, error, failure } = await pollTelegramUpdates(live, state.offset, {
       timeoutSec: POLL_TIMEOUT_SEC,
       signal: abort.signal,
     });
     state.pollAbort = undefined;
-    // Report the TRANSITION only — first failure, and the recovery — so an
-    // outage is visible in the log without burying it under one line per poll.
-    if (error && error !== state.lastPollError) {
-      console.warn(`[telegram] poll failed: ${error} — retrying`);
-    } else if (!error && state.lastPollError) {
-      console.log('[telegram] poll recovered');
+    // THE HEARTBEAT. Stamped before anything can branch away, so it advances on
+    // every outcome including the ones that log nothing. A clock that stops is
+    // the only outward sign of a wedged loop.
+    state.lastPollAt = Date.now();
+    if (!error) state.lastPollOkAt = state.lastPollAt;
+
+    const reaction = pollLoopReaction({
+      ...(failure ? { failure } : {}),
+      ...(error ? { error } : {}),
+      ...(state.lastPollError !== undefined ? { prevError: state.lastPollError } : {}),
+      timeoutStreak: state.consecutivePollTimeouts,
+      abortStreak: state.consecutivePollAborts,
+    });
+    state.lastPollError = reaction.lastPollError;
+    state.consecutivePollTimeouts = reaction.timeoutStreak;
+    state.consecutivePollAborts = reaction.abortStreak;
+    if (reaction.log) {
+      if (reaction.log.level === 'warn') console.warn(reaction.log.message);
+      else console.log(reaction.log.message);
     }
-    state.lastPollError = error;
+    // A deliberate interrupt — pause, stop, or a wake kick. There is nothing in
+    // `updates` and nothing to account for; the top of the loop is where a
+    // pause/stop takes effect, and a kick wants its new poll now, not in two
+    // seconds.
+    if (reaction.restartNow) continue;
     if (nextOffset !== state.offset) {
       state.offset = nextOffset;
       writeOffset(store, nextOffset);

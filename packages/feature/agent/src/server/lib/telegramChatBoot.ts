@@ -18,7 +18,14 @@
 
 import { getStore } from '../engines/naby';
 import { isTelegramReady, readTelegramConfig } from './telegram';
-import { ensureListener, registerTelegramCommands } from './telegramEscalation';
+import {
+  ensureListener,
+  kickTelegramListener,
+  onTelegramListenerChange,
+  registerTelegramCommands,
+  telegramListenerDiagnostics,
+  type TelegramListenerDiagnostics,
+} from './telegramEscalation';
 
 /** Start the always-on Telegram listener when the config can chat. Idempotent —
  *  `ensureListener` returns immediately when a loop already runs. */
@@ -35,5 +42,62 @@ export function startTelegramChat(): void {
     console.log('[telegram] chat listener started');
   } catch (e) {
     console.warn('[telegram] chat listener failed to start:', e);
+  }
+}
+
+// -- the control surface the Electron main process drives ---------------------
+//
+// WHY IT IS HERE AND NOT IMPORTED DIRECTLY. `electron/next-server.ts` already
+// reaches the listener through exactly one specifier — `dist/telegramChat.mjs`,
+// this file's tsup entry — and that is deliberate: the built entries share their
+// chunks, so the bridge's state resolves to ONE instance across the Next bundle
+// and the main process. A second import path (or a second bundling of the
+// TypeScript source) would hand the main process a second bridge, and a second
+// getUpdates loop on one bot token is the 409 the spec calls out. So everything
+// Electron needs is added as an export HERE, and the main process keeps holding
+// the single reference it already had.
+//
+// All three never throw: the caller is a power event handler, and a broken
+// Telegram config must not take a `resume` listener down with it.
+
+/**
+ * The machine came back — a `resume` from sleep, a screen unlock, a login
+ * session becoming active again. Cut the poll that has been talking to a socket
+ * that no longer exists, so the channel is live on the next tick instead of
+ * after the wall clock plus a back-off.
+ */
+export function wakeTelegramChat(reason: string): void {
+  try {
+    const outcome = kickTelegramListener(getStore());
+    // Logged including 'idle': "nothing happened on resume" is itself the answer
+    // when a report says the bot was deaf after a wake, and silence here would
+    // leave that unanswerable.
+    console.log(`[telegram] wake (${reason}): ${outcome}`);
+  } catch (e) {
+    console.warn(`[telegram] wake (${reason}) failed:`, e);
+  }
+}
+
+/**
+ * Watch the listener start and stop. The Electron main process holds a
+ * `prevent-app-suspension` power-save blocker for exactly as long as a loop is
+ * alive; this is how it learns. Returns an unsubscribe, and fires immediately
+ * with the current state.
+ */
+export function observeTelegramChat(cb: (running: boolean) => void): () => void {
+  try {
+    return onTelegramListenerChange(cb);
+  } catch (e) {
+    console.warn('[telegram] listener observer not attached:', e);
+    return () => {};
+  }
+}
+
+/** The listener's own health, for whoever is asking why the bot went quiet. */
+export function telegramChatDiagnostics(): TelegramListenerDiagnostics | undefined {
+  try {
+    return telegramListenerDiagnostics();
+  } catch {
+    return undefined;
   }
 }

@@ -13,7 +13,12 @@ import {
   finishEscalation,
   pendingEscalations,
   ensureListener,
+  kickTelegramListener,
+  LISTENER_STALL_MS,
+  listenerStalled,
+  onTelegramListenerChange,
   pauseTelegramListener,
+  pollLoopReaction,
   rememberChatMessage,
   resetBotCommandRegistration,
   resetSentMapForRestartTest,
@@ -21,10 +26,12 @@ import {
   sendFinalReport,
   sessionForChatMessage,
   stopTelegramListener,
+  telegramListenerDiagnostics,
   telegramListenerRunning,
   TELEGRAM_OFFSET_KEY,
   TELEGRAM_SENT_MAP_KEY,
 } from './telegramEscalation';
+import { setPollDeadlineForTest } from './telegram';
 import { registerApproval, hasPendingApproval } from './approvalRegistry';
 import { registerCheckin, hasPendingCheckin } from './checkinRegistry';
 import type { TelegramUpdate } from './telegram';
@@ -754,4 +761,362 @@ describe('telegramEscalation — sendFinalReport resolves the project itself', (
     await sendFinalReport(storeWith({}), { ok: true, text: '끝', sessionId: 's1' });
     expect(cap.texts[0]!.split('\n')[0]).toBe(`📁 ${STR.noProject}`);
   });
+});
+
+// ---------------------------------------------------------------------------
+// THE STALL — "as long as naby is running, Telegram should work"
+// ---------------------------------------------------------------------------
+//
+// A user reported the bot going quiet while the app was still running. The cause
+// was not the lock screen: `pollTelegramUpdates` had no wall clock of its own,
+// so a half-open socket left the loop awaiting one call forever. Single-threaded
+// loop, one hung await, whole channel dead — and SILENT, because the loop logs
+// only failure transitions and a hang is neither a failure nor an update.
+//
+// These are the loop-side halves of that fix. The transport-side ones live in
+// telegram.test.ts.
+
+describe('telegramEscalation — reacting to one poll (pure)', () => {
+  it('a DELIBERATE abort is silent, uncounted, and goes straight back to polling', () => {
+    // Pause, shutdown, and the wake kick all land here. Logging it would put
+    // "poll failed: This operation was aborted" in the log on every quit, and
+    // backing off would make a wake kick pointless — the kick exists to get the
+    // next poll started NOW.
+    const r = pollLoopReaction({
+      failure: 'aborted',
+      error: 'The operation was aborted',
+      prevError: 'fetch failed (ENOTFOUND)',
+      timeoutStreak: 3,
+      abortStreak: 0,
+    });
+    expect(r.restartNow).toBe(true);
+    expect(r.log).toBeUndefined();
+    // An interrupt says nothing about the network, so it must not overwrite what
+    // the last real poll reported.
+    expect(r.lastPollError).toBe('fetch failed (ENOTFOUND)');
+    expect(r.timeoutStreak).toBe(3);
+    expect(r.abortStreak).toBe(1);
+  });
+
+  it('a run of aborts eventually falls back to the back-off rather than spinning hot', () => {
+    let abortStreak = 0;
+    const runs: boolean[] = [];
+    for (let i = 0; i < 8; i += 1) {
+      const r = pollLoopReaction({ failure: 'aborted', timeoutStreak: 0, abortStreak });
+      abortStreak = r.abortStreak;
+      runs.push(r.restartNow);
+    }
+    expect(runs.slice(0, 5)).toEqual([true, true, true, true, true]);
+    expect(runs.slice(5)).toEqual([false, false, false]);
+  });
+
+  it('a TIMEOUT is counted, named out loud every time, and backs off', () => {
+    const first = pollLoopReaction({
+      failure: 'timeout',
+      error: 'poll exceeded its 30000ms wall clock — the connection stalled',
+      timeoutStreak: 0,
+      abortStreak: 2,
+    });
+    expect(first.restartNow).toBe(false); // the back-off applies, as for any error
+    expect(first.timeoutStreak).toBe(1);
+    expect(first.abortStreak).toBe(0);
+    expect(first.log?.level).toBe('warn');
+    expect(first.log?.message).toContain('timed out (1 in a row)');
+
+    // A REPEAT still logs. A wedged connection climbing 1 → 2 → 3 is the whole
+    // diagnosis; the transition-only rule would have printed it once and then
+    // gone quiet again, which is the exact silence this bug hid behind.
+    const second = pollLoopReaction({
+      failure: 'timeout',
+      error: 'poll exceeded its 30000ms wall clock — the connection stalled',
+      prevError: 'poll exceeded its 30000ms wall clock — the connection stalled',
+      timeoutStreak: 1,
+      abortStreak: 0,
+    });
+    expect(second.log?.message).toContain('timed out (2 in a row)');
+    expect(second.timeoutStreak).toBe(2);
+  });
+
+  it('a network fault keeps the transition-only reporting, and clears the timeout streak', () => {
+    const down = pollLoopReaction({
+      failure: 'network',
+      error: 'fetch failed (ENOTFOUND)',
+      timeoutStreak: 4,
+      abortStreak: 0,
+    });
+    expect(down.log?.message).toContain('poll failed');
+    expect(down.timeoutStreak).toBe(0);
+
+    const stillDown = pollLoopReaction({
+      failure: 'network',
+      error: 'fetch failed (ENOTFOUND)',
+      prevError: 'fetch failed (ENOTFOUND)',
+      timeoutStreak: 0,
+      abortStreak: 0,
+    });
+    expect(stillDown.log).toBeUndefined();
+
+    const back = pollLoopReaction({ prevError: 'fetch failed (ENOTFOUND)', timeoutStreak: 0, abortStreak: 0 });
+    expect(back.log?.message).toContain('recovered');
+    expect(back.lastPollError).toBeUndefined();
+  });
+
+  it('a healthy poll after a healthy poll says nothing', () => {
+    expect(pollLoopReaction({ timeoutStreak: 0, abortStreak: 0 }).log).toBeUndefined();
+  });
+});
+
+describe('telegramEscalation — is the listener actually alive (pure)', () => {
+  it('a loop whose poll clock stopped is stalled; an idle one is not', () => {
+    const now = 1_000_000;
+    expect(listenerStalled({ running: true, lastPollAt: now - 1_000 }, now)).toBe(false);
+    expect(listenerStalled({ running: true, lastPollAt: now - LISTENER_STALL_MS - 1 }, now)).toBe(true);
+    // Not running is not stalled — it is off, which is a different answer.
+    expect(listenerStalled({ running: false, lastPollAt: now - 10 * LISTENER_STALL_MS }, now)).toBe(false);
+    // Just started, no poll has returned yet. Not a stall.
+    expect(listenerStalled({ running: true }, now)).toBe(false);
+  });
+});
+
+/** A Telegram whose getUpdates NEVER answers — the half-open socket. Everything
+ *  else replies normally, so the loop's other paths behave. */
+function stubHangingTelegram(): { pollStarts: number[] } {
+  const pollStarts: number[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: unknown, init?: { signal?: AbortSignal }) => {
+      const url = String(input);
+      if (!url.includes('/getUpdates')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, result: true }) });
+      }
+      pollStarts.push(Date.now());
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal;
+        const fail = (): void =>
+          reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+        if (!signal) return; // no signal: hang forever, exactly as production did
+        if (signal.aborted) fail();
+        else signal.addEventListener('abort', fail, { once: true });
+      });
+    }),
+  );
+  return { pollStarts };
+}
+
+describe('telegramEscalation — a wedged connection cannot silence the channel', () => {
+  afterEach(() => {
+    setPollDeadlineForTest(undefined);
+  });
+
+  it('THE REGRESSION: a poll that never answers times out, is counted, and the loop keeps going', async () => {
+    // 150ms stands in for the production 30s. The loop derives its own deadline
+    // from POLL_TIMEOUT_SEC on purpose, so the seam is the only way to test the
+    // behaviour at all — a thirty-second test would simply not be written, and
+    // not writing it is how this shipped.
+    setPollDeadlineForTest(150);
+    const { pollStarts } = stubHangingTelegram();
+    const store = fakeStore({ ...CHAT_READY });
+
+    ensureListener(store);
+
+    // Without the wall clock this never advances past 0: the loop is parked on
+    // an await that has no way to end.
+    await vi.waitFor(() => expect(telegramListenerDiagnostics().consecutivePollTimeouts).toBeGreaterThanOrEqual(2), {
+      timeout: 12_000,
+    });
+
+    const diag = telegramListenerDiagnostics();
+    // The heartbeat advanced — the signal that separates a wedged loop from an
+    // idle one, and the thing whose absence made this bug take a user report.
+    expect(diag.lastPollAt).toBeDefined();
+    expect(diag.running).toBe(true);
+    expect(diag.lastPollError).toContain('wall clock');
+    // It is still LISTENING, not dead: the loop absorbed the fault and retried.
+    expect(telegramListenerRunning()).toBe(true);
+
+    // THE BACK-OFF SURVIVED THE TIMEOUT. Two consecutive failed polls 150ms
+    // apart would be a hot spin against a dead network; the floor still applies.
+    expect(pollStarts.length).toBeGreaterThanOrEqual(2);
+    const gap = pollStarts[pollStarts.length - 1]! - pollStarts[pollStarts.length - 2]!;
+    expect(gap).toBeGreaterThan(1_500);
+  }, 20_000);
+
+  it('a stalled loop reports itself as STALLED once its clock stops advancing', async () => {
+    setPollDeadlineForTest(150);
+    stubHangingTelegram();
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerDiagnostics().lastPollAt).toBeDefined(), { timeout: 8_000 });
+
+    const at = telegramListenerDiagnostics().lastPollAt!;
+    // Read against a clock far in the future: this is the state that used to be
+    // indistinguishable from a healthy idle listener from the outside.
+    expect(telegramListenerDiagnostics(at + LISTENER_STALL_MS + 1).stalled).toBe(true);
+    expect(telegramListenerDiagnostics(at + 1_000).stalled).toBe(false);
+  }, 15_000);
+
+  it('stopping is NOT reported as a network failure (the timeout/interrupt distinction)', async () => {
+    // The deliberate abort and the wall clock both end the poll in flight. If the
+    // loop could not tell them apart, every quit would log a fault that never
+    // happened — and the counter this fix hangs its diagnosis on would climb on
+    // a perfectly healthy shutdown.
+    setPollDeadlineForTest(10_000); // long enough that only the abort can win
+    stubHangingTelegram();
+    const store = fakeStore({ ...CHAT_READY });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      ensureListener(store);
+      await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+      const timeoutsBefore = telegramListenerDiagnostics().consecutivePollTimeouts;
+
+      stopTelegramListener();
+      await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 4_000 });
+
+      const noise = warn.mock.calls
+        .map((c) => String(c[0]))
+        .filter((line) => line.includes('poll failed') || line.includes('poll timed out'));
+      expect(noise).toEqual([]);
+      expect(telegramListenerDiagnostics().consecutivePollTimeouts).toBe(timeoutsBefore);
+    } finally {
+      warn.mockRestore();
+    }
+  }, 15_000);
+});
+
+describe('telegramEscalation — the heartbeat and the wake kick', () => {
+  it('lastPollAt advances on every poll of a healthy loop', async () => {
+    stubTelegram([[], [], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerDiagnostics().lastPollAt).toBeDefined(), { timeout: 4_000 });
+    const first = telegramListenerDiagnostics().lastPollAt!;
+    await vi.waitFor(() => expect(telegramListenerDiagnostics().lastPollAt!).toBeGreaterThan(first), {
+      timeout: 6_000,
+    });
+    const diag = telegramListenerDiagnostics();
+    // A poll that SUCCEEDED, so the "last known good" clock moved too.
+    expect(diag.lastPollOkAt).toBeDefined();
+    expect(diag.consecutivePollTimeouts).toBe(0);
+    expect(diag.stalled).toBe(false);
+    expect(diag.sincePollMs).toBeGreaterThanOrEqual(0);
+  }, 12_000);
+
+  it('a wake kicks a running loop into a fresh poll without waiting out the back-off', async () => {
+    // The poll in flight across a sleep is holding a socket that no longer
+    // exists. Aborting it is what makes the channel live again on the next tick
+    // instead of after a wall clock plus a back-off.
+    const { calls } = stubTelegram([[], [], [], [], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+    const before = calls.filter((c) => c.url.includes('/getUpdates')).length;
+
+    expect(kickTelegramListener(store)).toBe('kicked');
+
+    await vi.waitFor(
+      () => expect(calls.filter((c) => c.url.includes('/getUpdates')).length).toBeGreaterThan(before),
+      { timeout: 1_500 }, // well inside MIN_ITERATION_MS: no back-off was served
+    );
+  }, 12_000);
+
+  it('a wake STARTS a loop that ended on its own, and stays out of the way when it must', async () => {
+    stubTelegram([[], [], [], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+
+    // The loop ends ITSELF when the config stops being ready — no stop was
+    // requested, so nothing is holding it down once the config comes back. This
+    // is the real "no loop, and there should be" state a resume can find.
+    store.setSetting('telegram.enabled', 'false');
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 8_000 });
+
+    // Still off: there is nothing to wake, and starting a loop that would exit
+    // on its first iteration is not an improvement.
+    expect(kickTelegramListener(store)).toBe('idle');
+
+    store.setSetting('telegram.enabled', 'true');
+    expect(kickTelegramListener(store)).toBe('started');
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+
+    // Detect owns the bot's single getUpdates slot while it is paused. Taking it
+    // back on a wake would be the 409 the pause handshake exists to prevent.
+    await pauseTelegramListener();
+    expect(kickTelegramListener(store)).toBe('idle');
+    resumeTelegramListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+
+    // And an explicit stop — a shutdown — is not something a resume may undo.
+    stopTelegramListener();
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 5_000 });
+    expect(kickTelegramListener(store)).toBe('idle');
+  }, 25_000);
+});
+
+describe('telegramEscalation — the listener announces its own start and stop', () => {
+  it('fires immediately with the current state, then on every edge', async () => {
+    // This is the signal the Electron main process holds its
+    // `prevent-app-suspension` power-save blocker off: a blocker acquired late
+    // is a window in which the OS can nap the channel, and one released late is
+    // a machine kept awake for nothing.
+    stubTelegram([[], [], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    stopTelegramListener();
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 5_000 });
+
+    const seen: boolean[] = [];
+    const off = onTelegramListenerChange((running) => seen.push(running));
+    // The immediate call: a late subscriber must not believe the loop is stopped
+    // until the next edge.
+    expect(seen).toEqual([false]);
+
+    ensureListener(store);
+    await vi.waitFor(() => expect(seen).toEqual([false, true]), { timeout: 4_000 });
+
+    stopTelegramListener();
+    await vi.waitFor(() => expect(seen).toEqual([false, true, false]), { timeout: 5_000 });
+
+    off();
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+    expect(seen).toEqual([false, true, false]); // unsubscribed means unsubscribed
+  }, 20_000);
+
+  it('releases when the CONFIG becomes unready, not only on an explicit stop', async () => {
+    // The `telegram.set` path that finds a half-written config calls
+    // stopTelegramListener, and switching Telegram off mid-flight ends the loop
+    // on its next iteration. Both must reach the blocker, or the machine is held
+    // awake for a listener that no longer exists.
+    stubTelegram([[], [], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    ensureListener(store);
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+
+    const seen: boolean[] = [];
+    const off = onTelegramListenerChange((running) => seen.push(running));
+    expect(seen).toEqual([true]);
+
+    store.setSetting('telegram.enabled', 'false');
+    await vi.waitFor(() => expect(seen).toEqual([true, false]), { timeout: 8_000 });
+    off();
+  }, 15_000);
+
+  it('a watcher that throws does not take the listener down with it', async () => {
+    stubTelegram([[], [], []]);
+    const store = fakeStore({ ...CHAT_READY });
+    stopTelegramListener();
+    await vi.waitFor(() => expect(telegramListenerRunning()).toBe(false), { timeout: 5_000 });
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const off = onTelegramListenerChange(() => {
+      throw new Error('the blocker exploded');
+    });
+    try {
+      ensureListener(store);
+      await vi.waitFor(() => expect(telegramListenerRunning()).toBe(true), { timeout: 4_000 });
+    } finally {
+      off();
+      warn.mockRestore();
+    }
+  }, 12_000);
 });

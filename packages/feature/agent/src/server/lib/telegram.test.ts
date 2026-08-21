@@ -10,7 +10,12 @@ import {
   parseCheckinCallbackData,
   classifyNumericReply,
   CALLBACK_DATA_MAX_BYTES,
+  classifyPollFailure,
   describeFetchError,
+  describePollTimeout,
+  POLL_DEADLINE_FLOOR_MS,
+  POLL_TIMEOUT_REASON,
+  pollDeadlineMs,
   sendTelegramMessage,
   pollTelegramUpdates,
   detectChatId,
@@ -388,5 +393,184 @@ describe('telegram — editing a message in place', () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error('unreachable');
     expect(res.error).toContain('ETIMEDOUT');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WALL CLOCK — the regression suite for the stall that took a user report
+// to find (telegram-chat: "as long as naby is running, Telegram should work").
+// ---------------------------------------------------------------------------
+//
+// The defect: `timeout=25` in the getUpdates query tells TELEGRAM how long to
+// hold the request. It constrains nothing on our side, so a socket that went
+// half-open — what a network transition at lock/sleep/wake produces — left the
+// `await fetch` pending indefinitely. The listener is one single-threaded loop
+// awaiting that call, so ONE hung poll stalled the whole channel, silently.
+//
+// Every test below fails if `pollTelegramUpdates` stops arming its own timer.
+
+/** A fetch that never settles — the half-open socket, staged. */
+function fetchThatNeverAnswers(): { mock: ReturnType<typeof vi.fn>; sawSignal: () => AbortSignal | undefined } {
+  let seen: AbortSignal | undefined;
+  const mock = vi.fn((_input: unknown, init?: { signal?: AbortSignal }) => {
+    seen = init?.signal;
+    // Settles ONLY on abort. Without our own timer this promise is forever, and
+    // `await` on it is the bug.
+    return new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return; // no signal at all — hang, exactly as production did
+      const fail = (): void =>
+        reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+      if (signal.aborted) fail();
+      else signal.addEventListener('abort', fail, { once: true });
+    });
+  });
+  return { mock, sawSignal: () => seen };
+}
+
+describe('telegram — the poll wall clock', () => {
+  it('pollDeadlineMs sits past the long-poll window, with a floor for timeout=0', () => {
+    // 25s long-poll + grace = the ~30s the loop runs under. Comfortably past
+    // what Telegram was asked to hold, so a NORMAL idle poll never trips it.
+    expect(pollDeadlineMs(25)).toBe(30_000);
+    expect(pollDeadlineMs(25)).toBeGreaterThan(25_000);
+    // The backlog drain asks Telegram to answer at once — but "at once" over a
+    // wedged socket is still forever, so it gets the floor rather than nothing.
+    expect(pollDeadlineMs(0)).toBe(POLL_DEADLINE_FLOOR_MS);
+    expect(pollDeadlineMs(-1)).toBe(POLL_DEADLINE_FLOOR_MS);
+    expect(pollDeadlineMs(Number.NaN)).toBe(POLL_DEADLINE_FLOOR_MS);
+  });
+
+  it('THE REGRESSION: a poll that never answers is aborted and REPORTED, not awaited forever', async () => {
+    const { mock, sawSignal } = fetchThatNeverAnswers();
+    vi.stubGlobal('fetch', mock);
+
+    const started = Date.now();
+    const res = await pollTelegramUpdates(CFG, 17, { timeoutSec: 25, deadlineMs: 120 });
+    const elapsed = Date.now() - started;
+
+    // It came back at all. That is the entire point: before the wall clock this
+    // await never resolved and the channel was dead until the app restarted.
+    expect(elapsed).toBeLessThan(5_000);
+    expect(res.failure).toBe('timeout');
+    expect(res.error).toContain('wall clock');
+    expect(res.updates).toEqual([]);
+    // The watermark must NOT advance on a poll that read nothing, or the next
+    // poll would skip updates nobody ever saw.
+    expect(res.nextOffset).toBe(17);
+    // And the transport passed a signal of its own — production used to hand
+    // fetch nothing at all when the caller supplied no signal.
+    expect(sawSignal()).toBeDefined();
+  });
+
+  it('the drain poll (timeoutSec 0, NO caller signal) is bounded too', async () => {
+    // The call that runs at start and after a resume — exactly when a socket is
+    // likeliest to be half-open — and it is awaited before the loop even exists.
+    const { mock, sawSignal } = fetchThatNeverAnswers();
+    vi.stubGlobal('fetch', mock);
+    const res = await pollTelegramUpdates(CFG, 3, { timeoutSec: 0, deadlineMs: 100 });
+    expect(res.failure).toBe('timeout');
+    expect(sawSignal()).toBeDefined();
+  });
+
+  it('a stalled BODY read times out as a timeout, not as an API refusal', async () => {
+    // The status line arrives and the bytes never do. Filing that as "Telegram
+    // said no" would send the loop down the wrong branch AND hide the stall.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: unknown, init?: { signal?: AbortSignal }) => ({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_r, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+              { once: true },
+            );
+          }),
+      })),
+    );
+    const res = await pollTelegramUpdates(CFG, 0, { timeoutSec: 25, deadlineMs: 100 });
+    expect(res.failure).toBe('timeout');
+    expect(res.error).toContain('wall clock');
+  });
+
+  it('a DELIBERATE abort is reported as an abort, never as a timeout or a network fault', async () => {
+    // This is the distinction a shutdown depends on: `interruptLoop()` aborting
+    // the poll must not be logged as "the network failed".
+    const { mock } = fetchThatNeverAnswers();
+    vi.stubGlobal('fetch', mock);
+    const ac = new AbortController();
+    const inflight = pollTelegramUpdates(CFG, 9, { timeoutSec: 25, deadlineMs: 10_000, signal: ac.signal });
+    ac.abort();
+    const res = await inflight;
+    expect(res.failure).toBe('aborted');
+    expect(res.nextOffset).toBe(9);
+  });
+
+  it('a signal already aborted before the call never reaches the network', async () => {
+    const { mock } = fetchThatNeverAnswers();
+    vi.stubGlobal('fetch', mock);
+    const ac = new AbortController();
+    ac.abort();
+    const res = await pollTelegramUpdates(CFG, 1, { signal: ac.signal, deadlineMs: 10_000 });
+    expect(res.failure).toBe('aborted');
+  });
+
+  it('an ordinary network fault is still a network fault', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(fetchFailed('ECONNRESET')));
+    const res = await pollTelegramUpdates(CFG, 0, { timeoutSec: 0 });
+    expect(res.failure).toBe('network');
+    expect(res.error).toContain('ECONNRESET');
+  });
+
+  it('an API refusal keeps its own kind', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({ ok: false, description: 'Conflict: terminated by other getUpdates' }),
+      }),
+    );
+    expect((await pollTelegramUpdates(CFG, 0)).failure).toBe('api');
+  });
+
+  it('a successful poll carries no failure at all', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: [] }),
+      }),
+    );
+    const res = await pollTelegramUpdates(CFG, 4);
+    expect(res.failure).toBeUndefined();
+    expect(res.error).toBeUndefined();
+  });
+
+  it('classifyPollFailure honours the FIRST cause, so a shutdown racing the clock is not a network error', () => {
+    // Reading `signal.aborted` after the fact cannot tell these apart: a
+    // shutdown landing one tick after the wall clock fired would make a real
+    // timeout look deliberate, and a deadline landing during a shutdown would
+    // log the shutdown as a fault. Whichever fired first is the honest answer.
+    const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    expect(classifyPollFailure(abortErr, 'timeout')).toBe('timeout');
+    expect(classifyPollFailure(abortErr, 'aborted')).toBe('aborted');
+    // No recorded cause: an abort we did not raise is still an abort, and
+    // anything else is the network.
+    expect(classifyPollFailure(abortErr, undefined)).toBe('aborted');
+    expect(classifyPollFailure(POLL_TIMEOUT_REASON, undefined)).toBe('aborted');
+    expect(classifyPollFailure(fetchFailed('EAI_AGAIN'), undefined)).toBe('network');
+  });
+
+  it('the timeout message is CONSTANT for a given deadline, so a run of them logs once', () => {
+    // The loop reports failure transitions only. A message carrying an elapsed
+    // time would differ every poll and turn a wedged connection into one warning
+    // line every thirty seconds, forever.
+    expect(describePollTimeout(30_000)).toBe(describePollTimeout(30_000));
+    expect(describePollTimeout(30_000)).not.toBe(describePollTimeout(10_000));
   });
 });
