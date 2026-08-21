@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { WhatsNewButton } from './WhatsNewModal';
 
 /**
  * UpdatePanel — "check for updates", by hand.
@@ -143,6 +144,13 @@ export function UpdatePanel() {
             {t('updates.openReleases')}
           </button>
         )}
+
+        {/* The re-open path for the first-launch release notes. It belongs
+            beside "check for updates" because it answers the other half of the
+            same question — that one is "is there a newer version", this is
+            "what did the one I just got change". Renders nothing where the
+            bridge cannot say which version is running. */}
+        <WhatsNewButton />
       </div>
 
       <div className="text-xs text-muted-foreground">

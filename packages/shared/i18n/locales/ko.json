@@ -1655,6 +1655,7 @@
     "loadError": "이 파일을 읽지 못했습니다.",
     "imageMissing": "이미지를 찾지 못했습니다",
     "imagesUnresolved": "이미지 {{count}}개를 표시하지 못했습니다",
+    "diagramError": "이 다이어그램을 그리지 못했습니다. 아래에 원본을 그대로 둡니다.",
     "openInTab": "탭으로 열기",
     "openInTabHint": "작업하는 동안 이 문서를 탭에 열어 둡니다"
   },
@@ -2059,6 +2060,14 @@
     "unsupported": "이 빌드는 스스로 업데이트할 수 없습니다. 릴리스 페이지에서 내려받으세요.",
     "failed": "업데이트 확인에 실패했습니다.",
     "desktopOnly": "데스크톱 앱에서만 사용할 수 있습니다."
+  },
+  "whatsNew": {
+    "title": "새로워진 점",
+    "updatedTo": "업데이트 완료 · v{{version}}",
+    "currentVersion": "현재 버전 · v{{version}}",
+    "reopen": "변경 내용 보기",
+    "dismiss": "확인",
+    "empty": "이 빌드에는 표시할 릴리스 노트가 없습니다."
   },
   "devMode": {
     "title": "개발 모드",

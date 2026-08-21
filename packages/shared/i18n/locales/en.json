@@ -1655,6 +1655,7 @@
     "loadError": "Could not read this file.",
     "imageMissing": "Image not found",
     "imagesUnresolved": "{{count}} images could not be shown",
+    "diagramError": "This diagram could not be drawn — its source is shown below.",
     "openInTab": "Open as a tab",
     "openInTabHint": "Keep this document open in a tab while you work"
   },
@@ -2059,6 +2060,14 @@
     "unsupported": "This build cannot update itself. Download from the releases page.",
     "failed": "Could not check for updates.",
     "desktopOnly": "Available in the desktop app only."
+  },
+  "whatsNew": {
+    "title": "What's new",
+    "updatedTo": "Updated · v{{version}}",
+    "currentVersion": "Current version · v{{version}}",
+    "reopen": "What changed",
+    "dismiss": "Got it",
+    "empty": "No release notes are available for this build."
   },
   "devMode": {
     "title": "Developer mode",

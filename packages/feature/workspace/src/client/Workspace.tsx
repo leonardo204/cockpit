@@ -16,6 +16,10 @@ import { SettingsModal } from './SettingsModal';
 // F1-06. Renders itself only when the desktop app has no provider key yet;
 // returns null in every other case (including the browser dev server).
 import { NabyOnboardingWizard } from './NabyProviderSetup';
+// The release notes, on the first launch after an update. Renders itself only
+// when the version actually went up for THIS installation; null in every other
+// case, including a fresh install and the browser dev server.
+import { WhatsNewGate } from './WhatsNewModal';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
@@ -826,6 +830,11 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       {/* First-run wizard (F1-06). Covers the workspace until a provider key
           exists or the user skips; re-enterable from Settings → AI provider. */}
       <NabyOnboardingWizard />
+
+      {/* "What changed", once per version. Mounted AFTER the wizard and drawn
+          under it (z-50 vs z-[60]); it also waits for onboarding to be finished
+          before it shows anything, so a new user never gets both. */}
+      <WhatsNewGate />
     </div>
   );
 }

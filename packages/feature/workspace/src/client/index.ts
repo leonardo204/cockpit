@@ -41,6 +41,7 @@ export { I18nProvider } from './I18nProvider';
 // Application-level modals
 // ============================================
 export { SettingsModal } from './SettingsModal';
+export { WhatsNewModal, WhatsNewGate, WhatsNewButton } from './WhatsNewModal';
 export { NoteModal } from './NoteModal';
 export { NoteToolbar } from './NoteToolbar';
 export { SessionBrowser } from './SessionBrowser';
