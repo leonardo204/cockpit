@@ -21,6 +21,11 @@ export * from './FontProvider';
 // Markdown
 export * from './MarkdownRenderer';
 export * from './markdownLinks';
+// Mermaid — the diagram half of the markdown renderer. The engine itself is
+// dynamically imported by MermaidDiagram; exporting the component and its pure
+// source rules costs nothing at the bundle level.
+export * from './MermaidDiagram';
+export * from './mermaidSource';
 
 // Floating UI primitives
 export * from './FloatingToolbar';

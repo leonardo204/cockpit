@@ -16,6 +16,11 @@ import type { ExtraProps } from 'react-markdown';
 import { useTheme } from './ThemeProvider';
 import { scrollToHeadingAnchor } from './markdownLinks';
 import { remarkFrontmatterTable } from './markdownFrontmatter';
+// The COMPONENT is a static import; `mermaid` itself is not. MermaidDiagram
+// imports the 2.5 MB engine dynamically from inside its effect, so nothing of it
+// reaches a bundle that merely renders markdown — see its header.
+import { MermaidDiagram } from './MermaidDiagram';
+import { MERMAID_LANGUAGE } from './mermaidSource';
 
 // Stable reference — avoid recreating on every render
 const REMARK_PLUGINS = [...remarkFrontmatterTable, remarkGfm, remarkMath, remarkAlert];
@@ -28,6 +33,17 @@ interface MarkdownRendererProps {
   isUser?: boolean;
   isStreaming?: boolean;
   enableMath?: boolean;
+  /**
+   * Render ```mermaid fences as diagrams. OPT-IN PER HOST, and off by default —
+   * the opposite default from `enableMath` above, for the reason that prop
+   * exists at all: this renderer is shared with chat, and mermaid is ~2.5 MB of
+   * diagram engine that a conversation has no use for. The document VIEWER
+   * turns it on; nothing else does.
+   *
+   * Off, a mermaid fence renders as a syntax-highlighted code block — which is
+   * what every host did before this prop existed.
+   */
+  enableMermaid?: boolean;
   rehypePlugins?: PluggableList;
   /**
    * Optional link interceptor for non-anchor hrefs. Return true to signal the
@@ -252,6 +268,7 @@ function createMarkdownComponents(
   isDark: boolean,
   onLinkClick: ((href: string) => boolean) | undefined,
   wrapperRef: RefObject<HTMLDivElement | null>,
+  enableMermaid: boolean,
 ) {
   return {
     // Code block — node comes from react-markdown passNode, destructure to avoid passing to DOM
@@ -290,6 +307,14 @@ function createMarkdownComponents(
 
       const code = codeString.replace(/\n$/, '');
       const language = match?.[1] || 'text';
+
+      // A diagram, not a listing — but ONLY where the host asked for one. In
+      // chat (and anywhere else that leaves `enableMermaid` alone) this falls
+      // through to the syntax-highlighted block below, and the mermaid engine is
+      // never fetched.
+      if (enableMermaid && language === MERMAID_LANGUAGE) {
+        return <MermaidDiagram source={code} isDark={isDark} />;
+      }
 
       // Get line range of <pre> from data-source-start injected by rehypeSourceLines onto <code>
       // (node.position on <code> itself is inconsistent with <pre> and unreliable)
@@ -424,7 +449,7 @@ function createMarkdownComponents(
   };
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser = false, isStreaming = false, enableMath = true, rehypePlugins, onLinkClick }: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser = false, isStreaming = false, enableMath = true, enableMermaid = false, rehypePlugins, onLinkClick }: MarkdownRendererProps) {
   // Use global Theme Context to avoid each component creating its own MutationObserver
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
@@ -435,8 +460,8 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser
   // Memoize components to keep stable references — prevents ReactMarkdown from
   // tearing down and recreating the entire DOM tree on parent re-renders
   const components = useMemo(
-    () => createMarkdownComponents(isDark, onLinkClick, wrapperRef),
-    [isDark, onLinkClick],
+    () => createMarkdownComponents(isDark, onLinkClick, wrapperRef, enableMermaid),
+    [isDark, onLinkClick, enableMermaid],
   );
 
   const remarkPlugins = enableMath ? REMARK_PLUGINS : REMARK_PLUGINS_NO_MATH;

@@ -1038,3 +1038,50 @@ mark.chat-search-current { background: rgba(217, 119, 6, 0.6); color: inherit; b
   font-size: 0.875em;
   word-break: break-all;
 }
+
+/* A ```mermaid fence, in the markdown VIEWER only (chat never turns the
+   renderer's `enableMermaid` on). Three states, and the styling exists because
+   two of them are not the drawing: `pending` is the source while the engine
+   loads and the graph lays out, and `error` is the source kept on screen under
+   a diagnostic — a diagram the author cannot see the source of is a diagram
+   they cannot fix. */
+.markdown-body .md-mermaid {
+  margin: 0.75em 0;
+}
+
+/* Centred, and never wider than the reading pane — mermaid's `useMaxWidth`
+   scales the SVG to its container, so this is what that container is. */
+.markdown-body .md-mermaid .mermaid {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+
+.markdown-body .md-mermaid .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Before the drawing exists, and after one failed: the fence's own text, laid
+   out as the code block it would have been with `enableMermaid` off. `pre-wrap`
+   is applied ONLY in these states — inherited into a rendered diagram it would
+   reach the HTML labels inside `<foreignObject>` and re-wrap them. */
+.markdown-body .md-mermaid[data-state='pending'] .mermaid,
+.markdown-body .md-mermaid[data-state='error'] .mermaid {
+  display: block;
+  padding: 0.75em 1em;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.375rem;
+  background: hsl(var(--accent));
+  color: hsl(var(--muted-foreground));
+  font-family: var(--app-font-mono);
+  font-size: 0.875em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.markdown-body .md-mermaid-error {
+  margin-bottom: 0.35em;
+  color: hsl(var(--destructive));
+  font-size: 0.875em;
+}

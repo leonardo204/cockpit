@@ -28,10 +28,17 @@
  * conversation a `$` is nearly always money and turning it into math mangles
  * the message; in a document `$…$` is what the author meant.
  *
- * OUT OF SCOPE FOR v1, deliberately and not half-built: mermaid diagrams (not a
- * dependency, and a diagram renderer is a feature of its own), PDF/HTML export,
- * editing, and editor↔preview scroll sync — there is no editor pane to sync
- * with, which is also why `rehypeSourceLines` is used only for the outline.
+ * MERMAID IS ON HERE TOO, and for the same shape of reason — with a second one
+ * behind it. `enableMermaid` is off by default because the engine is ~2.5 MB and
+ * chat has no use for it; this is the one host that asks for it, and the code is
+ * only fetched once a document that actually contains a ```mermaid fence is
+ * open (MermaidDiagram imports it dynamically). PlantUML stays OUT: the
+ * reference renderer sends the diagram source to kroki.io, which would put the
+ * contents of the user's documents in a third party's access logs.
+ *
+ * STILL OUT OF SCOPE, deliberately and not half-built: PDF/HTML export, editing,
+ * and editor↔preview scroll sync — there is no editor pane to sync with, which
+ * is also why `rehypeSourceLines` is used only for the outline.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -344,6 +351,7 @@ export function MarkdownDocument({
           <MarkdownRenderer
             content={doc.content}
             enableMath
+            enableMermaid
             rehypePlugins={rehypePlugins}
             onLinkClick={onLinkClick}
           />
