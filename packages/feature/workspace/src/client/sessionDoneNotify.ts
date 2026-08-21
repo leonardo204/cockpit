@@ -35,6 +35,19 @@
 //      of them; a banner about it is noise.
 //   3. THE SAME ENDING TWICE. `unread` is written more than once in some paths
 //      (a failure teardown, then a status refresh), so only the EDGE counts.
+//      Within a single push the same session may also appear twice; one session
+//      finishing is one ending however many rows describe it.
+//
+// WHAT THIS SIDE DOES *NOT* DO IS AGGREGATE. The reported bug is a stack of
+// identical banners after a Telegram conversation held away from the PC, and the
+// cure is one replaceable banner in the main process carrying a running count
+// (electron/notifications.ts). It is tempting to collapse a batch here and send
+// "3" across the bridge — that would be wrong twice over. It would let the
+// renderer author a number that ends up in an OS-drawn box with this app's name
+// on it, breaking the channel's founding rule; and it would UNDERCOUNT, because
+// the runs that pile up arrive in separate pushes minutes apart, not in one
+// batch. So this side reports each finished run exactly once and main tallies
+// them.
 //
 // It is pure and testable — jsdom cannot draw an OS banner, so the decision is
 // the part that gets asserted, and the wiring is pinned by a source assertion.
@@ -105,6 +118,49 @@ export function shouldNotifySessionDone(input: {
   return !(input.appFocused && input.visibleSessionId === input.sessionId);
 }
 
+/**
+ * Which of the runs that just finished are actually reported to the desktop, in
+ * the order they arrived.
+ *
+ * The whole per-row decision, lifted out of the hook so the loop that remains
+ * there holds no judgement at all — the file's own doctrine is that every
+ * decision is pure and this was the last one that was not.
+ *
+ * TWO RULES, and the second is new:
+ *   - suppress what the user is already looking at (`shouldNotifySessionDone`);
+ *   - report a session AT MOST ONCE per push. `unread` is written on more than
+ *     one path, so a single push can legitimately carry the same session twice;
+ *     main counts calls, so a duplicate here would make the banner claim two
+ *     conversations finished when one did.
+ *
+ * Deliberately returns the ROWS rather than a count: main owns the tally, and
+ * each row still crosses the bridge as its own bounded label.
+ */
+export function notifiableFinishedSessions(input: {
+  finished: readonly SessionStatusRow[];
+  appFocused: boolean;
+  /** The session the user is actually looking at, if any. */
+  visibleSessionId?: string;
+}): SessionStatusRow[] {
+  const out: SessionStatusRow[] = [];
+  const reported = new Set<string>();
+  for (const row of input.finished) {
+    if (!row?.sessionId || reported.has(row.sessionId)) continue;
+    if (
+      !shouldNotifySessionDone({
+        sessionId: row.sessionId,
+        appFocused: input.appFocused,
+        ...(input.visibleSessionId ? { visibleSessionId: input.visibleSessionId } : {}),
+      })
+    ) {
+      continue;
+    }
+    reported.add(row.sessionId);
+    out.push(row);
+  }
+  return out;
+}
+
 /** What the banner names: the session's title, else the last thing the user
  *  asked, else the project folder. Never the full text of anything — the main
  *  process truncates again, and this is a label, not content. */
@@ -139,8 +195,13 @@ export function desktopNotifications(): NotifyBridge | undefined {
 }
 
 /**
- * Show one banner. Swallows everything: a notification that could not be shown
- * must never surface as an error in a chat app.
+ * Report ONE finished run to the desktop. Swallows everything: a notification
+ * that could not be shown must never surface as an error in a chat app.
+ *
+ * Not "show one banner" any more — main coalesces these into a single banner
+ * that replaces its predecessor and counts how many runs it stands for. Calling
+ * it once per run is therefore load-bearing, not incidental: the call IS the
+ * tally.
  */
 export function notifySessionDone(row: SessionStatusRow, language: string | undefined): void {
   const bridge = desktopNotifications();

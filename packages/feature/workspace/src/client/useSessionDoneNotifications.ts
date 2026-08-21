@@ -3,7 +3,13 @@
 // packages/feature/workspace/src/client/useSessionDoneNotifications.ts
 //
 // The wiring for `sessionDoneNotify.ts`: subscribe to the global-state push the
-// sidebar already listens to, and turn each `unread` EDGE into one OS banner.
+// sidebar already listens to, and report each `unread` EDGE to the desktop.
+//
+// ONE EDGE IS ONE REPORT, NOT ONE BANNER. The main process keeps at most one
+// banner alive and replaces it with a counted successor as further runs finish,
+// which is what stopped ten Telegram turns from becoming ten identical banners
+// at unlock. So this file's job is to be an accurate and unembellished census of
+// endings; the aggregation is somewhere it can outlive a window.
 //
 // IT OPENS NO NEW CONNECTION. `useWebSocket` shares one socket per URL (the
 // sidebar's own comment says so, and its handler identity is kept stable for
@@ -18,9 +24,9 @@ import { useTranslation } from 'react-i18next';
 import { useWebSocket } from '@cockpit/shared-ui';
 import {
   newlyDoneSessions,
+  notifiableFinishedSessions,
   notifySessionDone,
   rememberStatuses,
-  shouldNotifySessionDone,
   type SessionStatusRow,
 } from './sessionDoneNotify';
 
@@ -74,16 +80,16 @@ export function useSessionDoneNotifications({
 
       const visibleSessionId = visibleRef.current();
       const appFocused = typeof document !== 'undefined' && document.hasFocus();
-      for (const row of finished) {
-        if (
-          !shouldNotifySessionDone({
-            sessionId: row.sessionId,
-            appFocused,
-            ...(visibleSessionId ? { visibleSessionId } : {}),
-          })
-        ) {
-          continue;
-        }
+      // The judgement is all in the pure module; what is left here is the call.
+      // ONE call per finished run, on purpose — main tallies the calls to decide
+      // what its single replaceable banner says (electron/notifications.ts), so
+      // collapsing a batch here would make the count say less than the truth.
+      const worthTelling = notifiableFinishedSessions({
+        finished,
+        appFocused,
+        ...(visibleSessionId ? { visibleSessionId } : {}),
+      });
+      for (const row of worthTelling) {
         notifySessionDone(row, languageRef.current);
       }
     } catch {

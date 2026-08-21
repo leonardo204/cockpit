@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   DONE_STATUS,
   newlyDoneSessions,
+  notifiableFinishedSessions,
   notificationLabel,
   notifyLocale,
   notifySessionDone,
@@ -103,6 +104,55 @@ describe('whether that finish is worth interrupting for', () => {
   });
 });
 
+describe('which of a batch reaches the desktop', () => {
+  // THE REPORTED BUG. A Telegram conversation held away from the PC ended ten
+  // turns, and the user came back to ten identical banners. The cure is one
+  // replaceable banner in main carrying a running count — which only counts
+  // correctly if this side reports each finished run exactly once.
+  it('reports every finished run, so main can count them', () => {
+    const finished = [row(), row({ sessionId: 'sess-b' }), row({ sessionId: 'sess-c' })];
+    const out = notifiableFinishedSessions({ finished, appFocused: false });
+    expect(out.map((r) => r.sessionId)).toEqual(['sess-a', 'sess-b', 'sess-c']);
+  });
+
+  it('does not collapse a batch into one report — that would undercount the banner', () => {
+    // Tempting, and wrong: main tallies CALLS. Three endings that arrive in one
+    // push must still be three, or the banner says "1 conversation finished"
+    // about three.
+    const finished = [row(), row({ sessionId: 'sess-b' }), row({ sessionId: 'sess-c' })];
+    expect(notifiableFinishedSessions({ finished, appFocused: false })).toHaveLength(3);
+  });
+
+  it('counts one session once however many rows in a push describe it', () => {
+    // `unread` is written on more than one path, so a single push can carry the
+    // same session twice. One ending is one ending.
+    const finished = [row(), row({ title: 'again' })];
+    const out = notifiableFinishedSessions({ finished, appFocused: false });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.title).toBeUndefined(); // the first sighting is the one reported
+  });
+
+  it('still drops the session on screen in a focused app, and keeps the rest', () => {
+    const finished = [row(), row({ sessionId: 'sess-b' })];
+    const out = notifiableFinishedSessions({
+      finished,
+      appFocused: true,
+      visibleSessionId: 'sess-a',
+    });
+    expect(out.map((r) => r.sessionId)).toEqual(['sess-b']);
+  });
+
+  it('reports nothing from an empty batch, and skips malformed rows', () => {
+    expect(notifiableFinishedSessions({ finished: [], appFocused: false })).toEqual([]);
+    expect(
+      notifiableFinishedSessions({
+        finished: [{ ...row(), sessionId: '' }],
+        appFocused: false,
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe('what the banner says', () => {
   it('prefers the title, then the last thing asked, then the folder', () => {
     expect(notificationLabel(row({ title: 'Deploy prod' }))).toBe('Deploy prod');
@@ -153,6 +203,14 @@ describe('the wiring, asserted on the source', () => {
     join(__dirname, '..', '..', '..', '..', '..', '..', 'electron', 'ipc.ts'),
     'utf8',
   );
+  const notifications = readFileSync(
+    join(__dirname, '..', '..', '..', '..', '..', '..', 'electron', 'notifications.ts'),
+    'utf8',
+  );
+  const main = readFileSync(
+    join(__dirname, '..', '..', '..', '..', '..', '..', 'electron', 'main.ts'),
+    'utf8',
+  );
 
   it('rides the global-state socket the sidebar already opened', () => {
     // A second socket for this would be a second connection per window, for a
@@ -176,5 +234,43 @@ describe('the wiring, asserted on the source', () => {
     expect(ipc).toContain("'notify:show'");
     expect(ipc).toContain('isNotifyKind(kind)');
     expect(ipc).toContain('sanitizeLabel(label)');
+  });
+
+  it('sends no count across the bridge — main owns the tally', () => {
+    // Requirement, not preference: a number from the page ends up in an OS-drawn
+    // box with this app's name on it. The payload stays {kind, locale, label}.
+    expect(preload).not.toMatch(/invoke\('notify:show',[\s\S]{0,200}count/);
+    expect(ipc).not.toMatch(/const \{[^}]*count[^}]*\} = asObject\(payload\)/);
+  });
+
+  it('keeps at most ONE notification instance, and revokes it before replacing it', () => {
+    // The pile-up cure. jsdom has no Notification Center, so what is pinned is
+    // the shape: one construction site, the instance RETAINED (it used to be
+    // dropped on the floor at `show()`), and closed before its successor is
+    // posted — they share an id, so the other order would delete the
+    // replacement along with the original.
+    expect(notifications.match(/new Notification\(/g)).toHaveLength(1);
+    expect(notifications).toMatch(/live\s*=\s*notification/);
+    const flush = notifications.slice(notifications.indexOf('function flushRunsFinished'));
+    expect(flush.indexOf('closeLive()')).toBeLessThan(flush.indexOf('new Notification('));
+    expect(flush.indexOf('new Notification(')).toBeLessThan(flush.indexOf('notification.show()'));
+  });
+
+  it('posts every banner under one fixed id, so the OS replaces rather than stacks', () => {
+    // macOS `UNNotificationRequest.identifier` / Windows toast `Tag`. One line,
+    // both platforms — there must be no `process.platform` branch in here.
+    expect(notifications).toMatch(/RUNS_FINISHED_ID\s*=\s*'[^']+'/);
+    expect(notifications).toMatch(/new Notification\(\{\s*id:\s*RUNS_FINISHED_ID/);
+    expect(notifications).not.toContain('process.platform');
+  });
+
+  it('resets the count on focus and on click, and NOT on dismissal', () => {
+    // `close` fires for a Windows system timeout too; treating that as "seen"
+    // would forget runs the user never saw, in exactly the away-from-desk case.
+    expect(notifications).toMatch(/app\.on\('browser-window-focus',\s*clearRunsFinished\)/);
+    expect(notifications).toMatch(/on\('click',\s*\(\)\s*=>\s*\{\s*clearRunsFinished\(\)/);
+    expect(notifications).not.toMatch(/on\('close'/);
+    // Armed by the production entry, or the reset never happens at all.
+    expect(main).toContain('installRunsFinishedReset()');
   });
 });
