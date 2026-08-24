@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RecentSessionsModal } from './RecentSessionsModal';
+import { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
 
 export interface GlobalSession {
   cwd: string;
@@ -20,9 +21,18 @@ interface GlobalSessionMonitorProps {
   onSwitchProject: (cwd: string, sessionId: string) => void;
   collapsed?: boolean;
   sessions: GlobalSession[];
+  /**
+   * Delete one session, resolving true once the server accepted it.
+   *
+   * The IO belongs to the OWNER OF THE LIST, not to this panel: `sessions` is a
+   * prop here, so only the owner can drop the row optimistically — and it is
+   * also the side of the app that may import `deleteSession` from the workspace
+   * package without inverting the feature-agent ← feature-workspace dependency.
+   */
+  onDeleteSession: (cwd: string, sessionId: string) => Promise<boolean>;
 }
 
-export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, sessions }: GlobalSessionMonitorProps) {
+export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, sessions, onDeleteSession }: GlobalSessionMonitorProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -76,6 +86,14 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
     setIsOpen(false);
     setTooltip(null);
   }, [onSwitchProject]);
+
+  // Delete a session straight from the list. The owner of `sessions` performs
+  // the removal (it holds the state and the effect); this only drops the rich
+  // hover tooltip, which would otherwise stay pinned to a row that is gone.
+  const handleDeleteSession = useCallback((cwd: string, sessionId: string) => {
+    setTooltip(null);
+    void onDeleteSession(cwd, sessionId);
+  }, [onDeleteSession]);
 
   const loadingCount = sessions.filter(s => s.status === 'loading').length;
   const unreadCount = sessions.filter(s => s.status === 'unread').length;
@@ -155,50 +173,70 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
               </div>
             ) : (
               sessions.map((session, index) => (
-                <button
+                /* THE ROW IS NO LONGER ONE <button>. The delete control is a
+                   button of its own, and a button inside a button is invalid
+                   HTML that React refuses to hydrate — so the row became a flex
+                   container holding two siblings: the open target and the ×.
+                   Being siblings, the × cannot fall through to "open" by
+                   bubbling at all; it also stops propagation, which is what
+                   covers the modal's nested case with the same handler. */
+                <div
                   key={`${session.cwd}-${session.sessionId}`}
-                  onClick={() => handleSessionClick(session)}
-                  onMouseEnter={(e) => showTooltip(session, e)}
-                  onMouseLeave={hideTooltip}
-                  className={`w-full px-3 py-2 text-left hover:bg-accent transition-colors flex items-start gap-2 ${
+                  className={`group flex items-start pr-1 hover:bg-accent transition-colors ${
                     index !== sessions.length - 1 ? 'border-b border-border/50' : ''
                   } ${currentCwd === session.cwd ? 'bg-accent/50' : ''}`}
                 >
-                  {/* Status indicator: loading blinking orange dot / unread red static dot / normal gray dot */}
-                  <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
-                    session.status === 'loading'
-                      ? 'bg-orange-9 animate-pulse'
-                      : session.status === 'unread'
-                        ? 'bg-red-500'
-                        : 'bg-muted-foreground/30'
-                  }`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm truncate">
-                        {getProjectName(session.cwd)}
-                      </span>
-                      {session.status === 'loading' && (
-                        <span className="text-xs text-orange-11 flex-shrink-0">{t('sessions.running')}</span>
+                  <button
+                    onClick={() => handleSessionClick(session)}
+                    onMouseEnter={(e) => showTooltip(session, e)}
+                    onMouseLeave={hideTooltip}
+                    className="flex-1 min-w-0 px-3 py-2 text-left flex items-start gap-2"
+                  >
+                    {/* Status indicator: loading blinking orange dot / unread red static dot / normal gray dot */}
+                    <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${
+                      session.status === 'loading'
+                        ? 'bg-orange-9 animate-pulse'
+                        : session.status === 'unread'
+                          ? 'bg-red-500'
+                          : 'bg-muted-foreground/30'
+                    }`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm truncate">
+                          {getProjectName(session.cwd)}
+                        </span>
+                        {session.status === 'loading' && (
+                          <span className="text-xs text-orange-11 flex-shrink-0">{t('sessions.running')}</span>
+                        )}
+                        {session.status === 'unread' && (
+                          <span className="text-xs text-red-500 flex-shrink-0">{t('sessions.done')}</span>
+                        )}
+                        <span className="text-xs text-muted-foreground flex-shrink-0">
+                          {formatTime(session.lastActive)}
+                        </span>
+                      </div>
+                      {session.title && (
+                        <div className="text-xs font-medium text-foreground truncate" title={session.title}>
+                          {session.title}
+                        </div>
                       )}
-                      {session.status === 'unread' && (
-                        <span className="text-xs text-red-500 flex-shrink-0">{t('sessions.done')}</span>
+                      {session.lastUserMessage && (
+                        <div className="text-xs text-foreground/80 truncate">
+                          {session.lastUserMessage}
+                        </div>
                       )}
-                      <span className="text-xs text-muted-foreground flex-shrink-0">
-                        {formatTime(session.lastActive)}
-                      </span>
                     </div>
-                    {session.title && (
-                      <div className="text-xs font-medium text-foreground truncate" title={session.title}>
-                        {session.title}
-                      </div>
-                    )}
-                    {session.lastUserMessage && (
-                      <div className="text-xs text-foreground/80 truncate">
-                        {session.lastUserMessage}
-                      </div>
-                    )}
-                  </div>
-                </button>
+                  </button>
+                  {/* Hover-revealed close at the RIGHT of the row. One click,
+                      no confirmation — the same channel and the same
+                      consequence as closing the session's tab. */}
+                  <span className="flex items-center self-stretch py-2">
+                    <RecentSessionDeleteButton
+                      session={session}
+                      onDelete={handleDeleteSession}
+                    />
+                  </span>
+                </div>
               ))
             )}
           </div>
@@ -249,6 +287,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
         isOpen={searchOpen}
         onClose={() => setSearchOpen(false)}
         onSwitchProject={onSwitchProject}
+        onDeleteSession={onDeleteSession}
       />
     </div>
   );

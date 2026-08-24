@@ -9,6 +9,7 @@ import { PinnedSessionsPanel } from '@cockpit/feature-agent';
 import { ScheduledTasksPanel } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
 import { useScheduledTasks } from '@cockpit/feature-agent';
+import { withoutRecentSession } from '@cockpit/feature-agent';
 import { useWebSocket } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import {
@@ -168,6 +169,37 @@ export function ProjectSidebar({
         setSessionTree((prev) => withoutSession(prev, cwd, sessionId));
       }
     })();
+  }, []);
+
+  /**
+   * Delete a session picked straight out of the RECENT list (the bottom
+   * popover and its expanded modal), through the same single channel as the
+   * tree row above: `deleteSession` → saveProjectState({closedSessionIds}).
+   *
+   * Two lists show that session, so two lists drop it optimistically — the
+   * recents array this component owns and feeds to GlobalSessionMonitor, and
+   * the project branch if it happens to be unfolded. Neither is guesswork: the
+   * recents snapshot is only re-pushed on the next global-state broadcast, and
+   * the branch is refetched by the `project-state-changed` push this very save
+   * triggers.
+   *
+   * A SESSION OPEN IN A TAB NEEDS NOTHING EXTRA HERE, and that is worth stating
+   * because it looks like it should. The server broadcasts
+   * `project-state-changed` with the closed ids after the delete, and every
+   * project iframe's useTabState reconciles on it (`reconcileTabs`): the tab
+   * carrying that session closes itself, falling back to the last remaining tab
+   * or, if it was the only one, to a blank tab plus GoHome. Adding a second
+   * close path from this side would race that one.
+   *
+   * Returns whether the server accepted it, so the modal — which owns its own
+   * copy of the list — can remove the card only on success.
+   */
+  const handleDeleteRecentSession = useCallback(async (cwd: string, sessionId: string) => {
+    const exit = await BrowserRuntime.runPromiseExit(deleteSession(cwd, sessionId));
+    if (exit._tag !== 'Success') return false;
+    setSessions((prev) => withoutRecentSession(prev, cwd, sessionId));
+    setSessionTree((prev) => withoutSession(prev, cwd, sessionId));
+    return true;
   }, []);
 
   const handleGlobalStateMessage = useCallback((msg: unknown) => {
@@ -423,6 +455,7 @@ export function ProjectSidebar({
           onSwitchProject={onSwitchProject}
           collapsed={collapsed}
           sessions={sessions}
+          onDeleteSession={handleDeleteRecentSession}
         />
         {/* Pinned sessions */}
         <PinnedSessionsPanel

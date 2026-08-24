@@ -9,11 +9,19 @@ import {
   restoreRecentSessions,
   type RecentSessionInfo,
 } from './effect/agentClient';
+import { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
+import { withoutRecentSession } from './recentSessionDelete';
 
 interface RecentSessionsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSwitchProject: (cwd: string, sessionId: string) => void;
+  /**
+   * Delete one session, resolving true once the server accepted it. Same prop,
+   * same single removal channel as the sidebar popover that hosts this modal —
+   * the two lists show the same rows and must not answer the × differently.
+   */
+  onDeleteSession: (cwd: string, sessionId: string) => Promise<boolean>;
 }
 
 /**
@@ -36,7 +44,7 @@ interface RecentSessionsModalProps {
  * Uses a full-viewport `fixed inset-0` overlay so it escapes the three-panel
  * SwipeableViewContainer boundaries (see CLAUDE.md UI layout notes).
  */
-export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: RecentSessionsModalProps) {
+export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDeleteSession }: RecentSessionsModalProps) {
   const { t } = useTranslation();
   const [sessions, setSessions] = useState<RecentSessionInfo[]>([]);
   // How many sessions "clear recents" is holding back. Shown, with an undo,
@@ -89,7 +97,22 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
     }
   }, [t]);
 
-  // Drop the pending confirm whenever the modal closes.
+  /**
+   * Delete one session from a card's ×.
+   *
+   * Optimistic, exactly like the sidebar tree's row delete: on success the card
+   * goes at once and the server's own account of the list (the next
+   * /api/global-state read, rebuilt from the store) confirms it behind. On
+   * failure NOTHING is removed — a card that vanished for a session still on
+   * disk is the "clear recents looked like data loss" bug again, in miniature.
+   */
+  const handleDeleteSession = useCallback(async (cwd: string, sessionId: string) => {
+    const deleted = await onDeleteSession(cwd, sessionId);
+    if (deleted) setSessions((prev) => withoutRecentSession(prev, cwd, sessionId));
+  }, [onDeleteSession]);
+
+  // Drop the pending confirm whenever the modal closes. (This one belongs to
+  // the list-wide "clear recents"; the per-session × has no confirm step.)
   useEffect(() => {
     if (!isOpen) setConfirmClear(false);
   }, [isOpen]);
@@ -291,9 +314,9 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
                 <div
                   key={`${session.cwd}-${session.sessionId}`}
                   onClick={() => handleSessionClick(session)}
-                  className="p-3 bg-secondary rounded border border-border hover:border-brand hover:shadow-md cursor-pointer transition-all"
+                  className="group p-3 bg-secondary rounded border border-border hover:border-brand hover:shadow-md cursor-pointer transition-all"
                 >
-                  {/* Project name + status dot + engine badge */}
+                  {/* Project name + status dot + engine badge + delete × */}
                   <div className="flex items-center gap-1.5 mb-1">
                     <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
                       session.status === 'loading'
@@ -311,6 +334,15 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject }: Recent
                     {session.status === 'unread' && (
                       <span className="text-[0.714rem] text-red-500 flex-shrink-0">{t('sessions.done')}</span>
                     )}
+                    {/* Hover-revealed close, at the right edge of the card.
+                        HERE the button really is nested inside the row's click
+                        target, which is why the shared control stops
+                        propagation rather than relying on layout. */}
+                    <RecentSessionDeleteButton
+                      session={session}
+                      onDelete={handleDeleteSession}
+                      className="ml-auto -my-1 -mr-1"
+                    />
                   </div>
 
                   {/* Session title (ai-title / summary / first user message) */}
