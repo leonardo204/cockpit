@@ -65,7 +65,13 @@ describe('status bar labels', () => {
     const cacheSpan = /data-testid="cache-hit-stat"[\s\S]{0,400}?>/.exec(src)?.[0];
     expect(cacheSpan, 'cache stat markup not found — did the row change?').toBeDefined();
     expect(cacheSpan).toContain('title=');
-    expect(cacheSpan).toContain("t('chat.cacheHitHint'");
+    // THE HINT KEY MOVED OUT OF THE TAG and into `cacheHitTitle()`, because the
+    // tooltip is no longer one sentence — it now carries the turn's three input
+    // counts too (statusBarTooltips.test.ts owns that content). The binding is
+    // still asserted, just in two halves: the span uses that builder, and the
+    // builder is the only thing in the file that reads the hint key.
+    expect(cacheSpan).toContain('title={cacheHitTitle()}');
+    expect(src).toContain("t('chat.cacheHitHint'");
     expect(src).toContain("t('chat.cacheHit'");
   });
 

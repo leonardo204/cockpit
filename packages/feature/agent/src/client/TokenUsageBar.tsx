@@ -13,6 +13,7 @@ import {
   usageWindowView,
   type UsageWindowView,
 } from './contextGauge';
+import { cacheBreakdown, type CacheBreakdownLine } from './cacheBreakdown';
 
 // ============================================
 // Token Usage Display
@@ -48,6 +49,12 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
     tokenUsage.contextWindow,
     tokenUsage.contextModel,
   );
+
+  // WHAT THE CACHE PERCENTAGE IS MADE OF, derived once (cacheBreakdown.ts) and
+  // read by BOTH the printed percentage and the tooltip's counts — they are the
+  // same measurement and must not be able to disagree. It also owns the
+  // show-or-not rule the row used to state inline.
+  const cache = cacheBreakdown(tokenUsage);
 
   // "Now" updates every 30s so the countdown stays fresh without calling Date.now()
   // during render (which would violate react-hooks/purity).
@@ -196,6 +203,109 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
     return lines.join('\n');
   };
 
+  // -- THE CACHE TOOLTIP -----------------------------------------------------
+  //
+  // The request this answers was "for the cache hit, tell me WHICH things were
+  // hit", and the line between what that can and cannot mean is drawn in
+  // cacheBreakdown.ts. In short: the API reports token counts over a cached
+  // PREFIX and never says which blocks inside it were reused, so the honest
+  // expansion of `75%` is the three measured categories that make up the turn's
+  // input — read from cache, written to cache, sent uncached. Naming content
+  // ("the system prompt was hit, the memories were hit") would be inventing an
+  // attribution out of numbers that do not carry one; the prefix's composition is
+  // therefore described in WORDS, in its own line, and kept away from the counts.
+
+  /** One breakdown line, translated.
+   *
+   *  THE KEYS ARE LITERAL AT EACH BRANCH, not `chat.${line.kind}Tokens`. An
+   *  assembled key is invisible to the both-locales test that greps this file, and
+   *  the failure it would let through — a key present in en.json and missing in
+   *  ko.json — reaches a Korean user as a raw key path in a tooltip.
+   *
+   *  The count goes through i18next's `number` formatter rather than
+   *  `toLocaleString()` + concatenation, so grouping follows the language the
+   *  sentence is written in and the whole line stays one translatable unit. */
+  const cacheLineText = (line: CacheBreakdownLine): string => {
+    switch (line.kind) {
+      case 'read':
+        return t('chat.cacheReadTokens', {
+          defaultValue: 'Read from cache: {{tokens, number}}',
+          tokens: line.tokens,
+        });
+      case 'write':
+        return t('chat.cacheWriteTokens', {
+          defaultValue: 'Written to cache this turn: {{tokens, number}}',
+          tokens: line.tokens,
+        });
+      case 'uncached':
+        return t('chat.cacheUncachedTokens', {
+          defaultValue: 'Sent uncached: {{tokens, number}}',
+          tokens: line.tokens,
+        });
+    }
+  };
+
+  /** Multi-line, for the same reason the plan chip's tooltip is: these are
+   *  several distinct facts rather than one sentence — what the share is, the
+   *  three counts behind it, what the numbers do NOT say, and why a low one is
+   *  often nothing to fix. That last line is the question people actually have
+   *  when they meet this stat on a session's first turn. */
+  const cacheHitTitle = (): string => {
+    if (!cache.show) return '';
+    return [
+      t('chat.cacheHitHint', {
+        defaultValue:
+          "The share of this turn's input that was reused from the prompt cache. The higher it is, the faster and cheaper the turn.",
+      }),
+      // WHAT CACHING IS, before what it measured. The counts below mean nothing
+      // to a reader who does not know prompt caching exists, and the row gives
+      // them no other way to find out — so the mechanism comes first and the
+      // numbers follow it.
+      //
+      // "about a tenth" is not a guess: naby's own pricing table carries
+      // `inputPerMTok: 1` against `cachedInputPerMTok: 0.1` for the Anthropic
+      // models, cited to anthropic.com/pricing (src/runtime/pricing.ts). It is
+      // hedged rather than exact because a tooltip must not read as a quote.
+      t('chat.cacheWhatItDoes', {
+        defaultValue:
+          'Every turn resends everything said so far. The cache lets that repeated part be reused instead of reprocessed, and tokens read from it cost about a tenth as much. The longer the conversation, the more it saves.',
+      }),
+      ...cache.lines.map(cacheLineText),
+      t('chat.cachePrefixNote', {
+        defaultValue:
+          "What gets cached is the prompt's prefix — the system prompt, the tool definitions and the conversation so far. Which parts inside it were reused is not reported, so only these totals are known.",
+      }),
+      t('chat.cacheFirstTurnNote', {
+        defaultValue:
+          "A low figure on a session's first turn is normal: the cache has to be written before it can be read.",
+      }),
+    ].join('\n');
+  };
+
+  /** The gauge's tooltip. The explanation comes FIRST and the raw pair second:
+   *  `293,384 / 200,000 · claude-opus-5` was all this said, which is the number
+   *  again rather than what it means. */
+  const gaugeTitle = (): string => {
+    if (!gauge.show) return '';
+    return [
+      t('chat.contextWindowHint', {
+        defaultValue:
+          "How much of the model's context window this conversation is holding. Past about 85% it is worth continuing in a new tab.",
+      }),
+      [
+        `${gauge.tokens.toLocaleString()} / ${gauge.window.toLocaleString()}`,
+        gauge.approximate
+          ? t('chat.contextApproxHint', {
+              defaultValue: "Estimated — this model's exact context window is unknown.",
+            })
+          : null,
+        tokenUsage.contextModel || null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    ].join('\n');
+  };
+
   return (
     <div className="px-4 py-1.5 border-t border-border bg-secondary">
       <div className="flex items-center justify-end gap-4 text-xs text-muted-foreground">
@@ -285,17 +395,7 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
           <span
             className={`flex items-center gap-1 ${gaugeToneClass(gauge.tier)}`}
             data-testid="context-window-gauge"
-            title={[
-              `${gauge.tokens.toLocaleString()} / ${gauge.window.toLocaleString()}`,
-              gauge.approximate
-                ? t('chat.contextApproxHint', {
-                    defaultValue: "Estimated — this model's exact context window is unknown.",
-                  })
-                : null,
-              tokenUsage.contextModel || null,
-            ]
-              .filter(Boolean)
-              .join(' · ')}
+            title={gaugeTitle()}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
@@ -309,7 +409,18 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
           </span>
         )}
 
-        <span className="flex items-center gap-1">
+        {/* TURN INPUT. It had no tooltip at all, and it is the figure in this row
+            most often misread — a multi-step turn's sum looks like an occupancy,
+            which is the confusion the rename fixed only half of. The hint says
+            what it counts and points at the gauge for the other question. */}
+        <span
+          className="flex items-center gap-1"
+          data-testid="turn-input-stat"
+          title={t('chat.turnInputHint', {
+            defaultValue:
+              'Everything this turn sent to the model, summed over its steps and including what was read from cache. It is not how full the context window is — the context figure is.',
+          })}
+        >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
           </svg>
@@ -318,7 +429,14 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
               occupancy, which is how a 748k figure ended up on a 200k window. */}
           <span>{t('chat.turnInput')}: <strong className="text-foreground">{(tokenUsage.inputTokens + tokenUsage.cacheReadInputTokens + tokenUsage.cacheCreationInputTokens).toLocaleString()}</strong></span>
         </span>
-        <span className="flex items-center gap-1">
+        <span
+          className="flex items-center gap-1"
+          data-testid="output-stat"
+          title={t('chat.outputHint', {
+            defaultValue:
+              'What the model produced this turn: its answer plus every tool call it made. Output is billed at a higher rate than input.',
+          })}
+        >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
           </svg>
@@ -331,27 +449,36 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
             The explanation is a `title`, which is what every other hint in this
             row already uses (both rate-limit spans, the gauge). It is a native
             tooltip, so it survives Electron's renderer unchanged — no portal, no
-            z-index, and nothing to clip it against the three-panel layout. */}
-        {(tokenUsage.cacheReadInputTokens > 0 || tokenUsage.cacheCreationInputTokens > 0) && (
+            z-index, and nothing to clip it against the three-panel layout.
+
+            IT NOW CARRIES THE BREAKDOWN as well as the sentence — see
+            `cacheHitTitle` above, and cacheBreakdown.ts for what may and may not
+            be claimed about a cache hit. The show-or-not condition moved into the
+            same helper: the stat and its explanation now agree by construction
+            about whether there is anything to say. */}
+        {cache.show && (
           <span
             className="flex items-center gap-1 text-brand"
             data-testid="cache-hit-stat"
-            title={t('chat.cacheHitHint', {
-              defaultValue:
-                "The share of this turn's input that was reused from the prompt cache. The higher it is, the faster and cheaper the turn.",
-            })}
+            title={cacheHitTitle()}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
             </svg>
             <span>
-              {t('chat.cacheHit', { defaultValue: 'Cache hit' })}:{' '}
-              {((tokenUsage.cacheReadInputTokens / (tokenUsage.inputTokens + tokenUsage.cacheReadInputTokens + tokenUsage.cacheCreationInputTokens)) * 100).toFixed(0)}%
+              {t('chat.cacheHit', { defaultValue: 'Cache hit' })}: {cache.percent}%
             </span>
           </span>
         )}
         {tokenUsage.totalCostUsd > 0 && (
-          <span className="flex items-center gap-1 text-green-11">
+          <span
+            className="flex items-center gap-1 text-green-11"
+            data-testid="turn-cost-stat"
+            title={t('chat.turnCostHint', {
+              defaultValue:
+                "What this turn's tokens are worth at the provider's metered prices, as it reported them. On a Claude subscription run that is what the same tokens would have cost on the API, not a charge to you.",
+            })}
+          >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
