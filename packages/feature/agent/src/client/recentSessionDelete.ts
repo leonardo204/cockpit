@@ -16,30 +16,23 @@
  * destructive action and its tooltip says the conversation is deleted rather
  * than merely dismissed (`sessions.deleteSessionFromRecent`).
  *
- * The one case that is not a click at all is a PROJECTLESS session. Legacy rows
- * arrive with `cwd === ''` and are deliberately still listed (recentFilter.ts),
- * but `/api/project-state` rejects an empty cwd (`if (!body.cwd)` →
- * ValidationError), so the only removal channel cannot address them. Their ×
- * is rendered disabled and explains itself, rather than failing silently on
- * click.
+ * EVERY ROW IS DELETABLE, INCLUDING A PROJECTLESS ONE. There was briefly a
+ * `recentDeleteBlock` predicate here whose single member was 'no-project':
+ * legacy rows arrive with `cwd === ''`, are deliberately still listed
+ * (recentFilter.ts), and the removal request had to name a project — so their ×
+ * rendered disabled. That was a limit of the REQUEST, never of the deletion:
+ * `store.deleteSession(sessionId)` takes an id and nothing else. The channel now
+ * carries a projectless shape too (projectSessionTree.deleteSession →
+ * state/projectState.ts), so the reason is gone — and with it the predicate,
+ * rather than leaving one that always answers null. If a row ever does become
+ * undeletable, bring the concept back WITH its member; a permanently-true
+ * predicate is ceremony that teaches the next reader nothing.
  */
 
 /** The fields both recent views carry (GlobalSession / RecentSessionInfo). */
 export interface RecentDeleteTarget {
   cwd: string
   sessionId: string
-}
-
-/** Why a row's × is inert. Shown to the user, never swallowed. */
-export type RecentDeleteBlock = 'no-project'
-
-/** The reason this row cannot be deleted, or null when it can. */
-export function recentDeleteBlock(session: RecentDeleteTarget): RecentDeleteBlock | null {
-  return session.cwd.trim().length === 0 ? 'no-project' : null
-}
-
-export function canDeleteRecentSession(session: RecentDeleteTarget): boolean {
-  return recentDeleteBlock(session) === null
 }
 
 /**

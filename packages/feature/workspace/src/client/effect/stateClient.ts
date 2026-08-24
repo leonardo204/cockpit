@@ -69,6 +69,36 @@ export const saveProjectState = (
   })
 
 /**
+ * Close (= delete) sessions that belong to NO project.
+ *
+ * The same endpoint and the same removal channel as `saveProjectState`'s
+ * `closedSessionIds` — the server runs the one deletion loop for both — but a
+ * distinct request shape, because "delete these ids" is a different sentence
+ * from "here is my project's session list". Legacy sessions arrive with
+ * `cwd === ''`; they are listed in the recent views on purpose and used to be
+ * undeletable, since the only removal request had to name a project.
+ *
+ * `scope` is what makes the two shapes distinguishable in the right direction: a
+ * project save never sets it, so a save whose cwd went missing still fails
+ * loudly instead of quietly becoming a projectless request that links nothing.
+ */
+export const closeProjectlessSessions = (
+  sessionIds: readonly string[]
+): Effect.Effect<void, AppError> =>
+  Effect.tryPromise({
+    try: async () => {
+      const res = await fetch("/api/project-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "projectless", closedSessionIds: sessionIds }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    },
+    catch: (cause) =>
+      new AppError({ message: "closeProjectlessSessions failed", cause }),
+  })
+
+/**
  * Delete a project's whole session-state file. Called when a project is removed
  * from recents so its sessions do not linger as ghosts. Idempotent server-side
  * (rm --force), so a missing file is still a success.

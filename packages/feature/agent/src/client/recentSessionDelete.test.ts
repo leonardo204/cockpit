@@ -1,12 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  canDeleteRecentSession,
-  recentDeleteBlock,
-  withoutRecentSession,
-  type RecentDeleteTarget,
-} from './recentSessionDelete';
+import { withoutRecentSession } from './recentSessionDelete';
 
 /**
  * The × at the right of a "Recent sessions" row.
@@ -33,25 +28,30 @@ const LOCALES = join(CLIENT, '..', '..', '..', '..', 'shared', 'i18n', 'locales'
 
 const CWD = '/Users/me/work/naby';
 
-const target = (over: Partial<RecentDeleteTarget> = {}): RecentDeleteTarget => ({
-  cwd: CWD,
-  sessionId: 's1',
-  ...over,
-});
-
 describe('recent × — what a click means', () => {
-  it('an ordinary row deletes, with nothing in the way', () => {
-    expect(recentDeleteBlock(target())).toBeNull();
-    expect(canDeleteRecentSession(target())).toBe(true);
+  it('EVERY row deletes, including a projectless one', () => {
+    // This is the whole defect: a `recentDeleteBlock` predicate here answered
+    // 'no-project' for `cwd === ''` and the × rendered disabled, because the
+    // removal request had to name a project. The channel carries a projectless
+    // shape now, so no row is refused — and the predicate is gone rather than
+    // left answering null forever.
+    const src = code('recentSessionDelete.ts');
+    expect(src).not.toContain('recentDeleteBlock');
+    expect(src).not.toContain('canDeleteRecentSession');
+    expect(src).not.toContain('no-project');
+    // The control asks nothing about the row before deleting it.
+    const button = code('RecentSessionDeleteButton.tsx');
+    expect(button).not.toContain('blocked');
+    expect(button).not.toContain('disabled');
   });
 
-  it('a projectless row cannot be deleted at all', () => {
-    // /api/project-state rejects an empty cwd, so the ONE removal channel
-    // cannot address these legacy rows. They stay listed (recentFilter keeps
-    // them on purpose) with an inert, explained control.
-    expect(recentDeleteBlock(target({ cwd: '' }))).toBe('no-project');
-    expect(recentDeleteBlock(target({ cwd: '   ' }))).toBe('no-project');
-    expect(canDeleteRecentSession(target({ cwd: '' }))).toBe(false);
+  it('the ONE thing the module still owns is the optimistic removal', () => {
+    // A module that keeps only what has a member. If a row ever does become
+    // undeletable, the concept comes back WITH its reason.
+    const src = code('recentSessionDelete.ts');
+    expect(src).toContain('export function withoutRecentSession');
+    expect(src).toContain('export interface RecentDeleteTarget');
+    expect(src.match(/export (function|interface|type|const)/g)).toHaveLength(2);
   });
 });
 
@@ -72,6 +72,14 @@ describe('recent × — optimistic removal', () => {
     const list = [row(CWD, 's1')];
     expect(withoutRecentSession(list, CWD, 'gone')).toEqual(list);
   });
+
+  it('a PROJECTLESS row is matched by its empty cwd, not skipped by it', () => {
+    // Now that these rows can be deleted, the optimistic drop has to find them:
+    // '' is a real key here, and it must not match a projected row of the same
+    // session id (or a delete would blank the wrong card).
+    const list = [row('', 's1'), row(CWD, 's1'), row('', 's2')];
+    expect(withoutRecentSession(list, '', 's1')).toEqual([row(CWD, 's1'), row('', 's2')]);
+  });
 });
 
 describe('recent × — the control', () => {
@@ -91,8 +99,8 @@ describe('recent × — the control', () => {
     expect(handler).toContain('e.stopPropagation()');
     expect(handler).toContain('e.preventDefault()');
     expect(handler).toContain('onDelete(session.cwd, session.sessionId)');
-    // A refused row swallows its click as well, or it would open the session.
-    expect(handler).toContain('if (blocked) return;');
+    // Unconditionally — there is no row the click is swallowed for.
+    expect(handler).not.toContain('return;');
     expect(src).toContain('onClick={handleClick}');
   });
 
@@ -138,14 +146,13 @@ describe('recent × — the control', () => {
     expect(src).toContain("aria-label={t('sessions.deleteSessionFromRecent')}");
   });
 
-  it('a refused row is shown, disabled, and explains why', () => {
-    const src = read('RecentSessionDeleteButton.tsx');
-    const blocked = /if \(blocked\) \{[\s\S]*?\n  \}/.exec(src)?.[0];
-    expect(blocked, 'the blocked branch was reshaped — re-point this guard').toBeDefined();
-    expect(blocked).toContain("t('sessions.deleteSessionNoProject')");
-    expect(blocked).toContain('disabled');
-    expect(blocked).toContain('title={reason}');
-    expect(blocked).toContain('aria-label={reason}');
+  it('there is ONE button, with no refused variant beside it', () => {
+    // The disabled projectless variant is gone with the limitation that caused
+    // it. One <button> in the file, and no dead "why not" copy left behind.
+    const src = code('RecentSessionDeleteButton.tsx');
+    expect(src.match(/<button/g)).toHaveLength(1);
+    expect(src).not.toContain('deleteSessionNoProject');
+    expect(src).not.toContain('cursor-not-allowed');
   });
 });
 
@@ -210,12 +217,17 @@ describe('recent × — i18n', () => {
   it('every string of the control ships in both locales', () => {
     const en = JSON.parse(readFileSync(join(LOCALES, 'en.json'), 'utf8'));
     const ko = JSON.parse(readFileSync(join(LOCALES, 'ko.json'), 'utf8'));
-    for (const key of ['deleteSessionFromRecent', 'deleteSessionNoProject']) {
+    for (const key of ['deleteSessionFromRecent']) {
       expect(typeof en.sessions[key], `en.sessions.${key}`).toBe('string');
       expect(typeof ko.sessions[key], `ko.sessions.${key}`).toBe('string');
       expect(en.sessions[key].length).toBeGreaterThan(0);
       expect(ko.sessions[key].length).toBeGreaterThan(0);
     }
+    // ...and the string that explained why a projectless row could NOT be
+    // deleted went with the limitation. A locale entry nothing renders is a
+    // promise to translators that the app no longer keeps.
+    expect(en.sessions.deleteSessionNoProject).toBeUndefined();
+    expect(ko.sessions.deleteSessionNoProject).toBeUndefined();
     // The words have to name the consequence: this deletes, it does not hide.
     expect(en.sessions.deleteSessionFromRecent).toContain('deleted');
     expect(ko.sessions.deleteSessionFromRecent).toContain('삭제됩니다');

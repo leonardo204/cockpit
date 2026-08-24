@@ -15,7 +15,7 @@
 import { Effect } from "effect"
 import type { AppError } from "@cockpit/effect-core"
 import { loadSessionsByProject } from "./effect/workspaceClient"
-import { saveProjectState } from "./effect/stateClient"
+import { closeProjectlessSessions, saveProjectState } from "./effect/stateClient"
 
 /**
  * One row of `/api/sessions/projects/<encodedPath>`. The wire type carries more
@@ -160,6 +160,39 @@ export function projectStateChangedCwd(message: unknown): string | null {
   return typeof msg.cwd === "string" && msg.cwd.length > 0 ? msg.cwd : null
 }
 
+/**
+ * The sessions a viewer must reconcile away on a `project-state-changed` push.
+ *
+ * A viewer is one project's iframe, and it normally only cares about ITS OWN
+ * project: the push carries the cwd whose state changed, and a removal in
+ * another project is none of its business.
+ *
+ * `cwd === ''` IS THE EXCEPTION, and it is not a missing value — it is the cwd a
+ * projectless session actually has, everywhere on the wire. Such a session
+ * belongs to no project yet can be open in ANY project's tab, so its removal is
+ * announced to everyone. Applying it broadly is safe because reconciliation is
+ * by session id, and an id names exactly one session: a viewer that holds none
+ * of the closed ids removes nothing.
+ */
+export function closedSessionIdsForViewer(
+  message: unknown,
+  viewerCwd: string
+): string[] {
+  if (typeof message !== "object" || message === null) return []
+  const msg = message as {
+    type?: unknown
+    cwd?: unknown
+    closedSessionIds?: unknown
+  }
+  if (msg.type !== "project-state-changed") return []
+  if (typeof msg.cwd !== "string") return []
+  // "" = projectless, which applies to every viewer; otherwise this project only.
+  if (msg.cwd.length > 0 && msg.cwd !== viewerCwd) return []
+  return Array.isArray(msg.closedSessionIds)
+    ? msg.closedSessionIds.filter((id): id is string => typeof id === "string")
+    : []
+}
+
 /** True when a push for `cwd` should cost a refetch: only expanded branches. */
 export function shouldRefetch(tree: ProjectSessionTree, cwd: string): boolean {
   return projectStateAt(tree, cwd).isExpanded
@@ -185,6 +218,13 @@ export const loadProjectSessions = (
  * the matching tab. `sessions: []` is safe alongside it — saves are union-ADD,
  * so an empty list removes nothing by itself.
  *
+ * A PROJECTLESS SESSION (`cwd === ''`) takes the projectless request shape of
+ * that same channel. It is not a second removal path: same endpoint, same
+ * deletion loop on the server, same broadcast. What differs is only that the
+ * request cannot name a project — and it must not pretend to, because a save
+ * that carries a session list with no cwd is precisely the tab bug the server
+ * still refuses (state/projectState.ts).
+ *
  * There is deliberately no confirmation upstream of this: closing a tab already
  * deletes its session by this exact route, so a dialog here would guard one of
  * two identical actions.
@@ -193,4 +233,6 @@ export const deleteSession = (
   cwd: string,
   sessionId: string
 ): Effect.Effect<void, AppError> =>
-  saveProjectState({ cwd, sessions: [], closedSessionIds: [sessionId] })
+  cwd.trim().length === 0
+    ? closeProjectlessSessions([sessionId])
+    : saveProjectState({ cwd, sessions: [], closedSessionIds: [sessionId] })

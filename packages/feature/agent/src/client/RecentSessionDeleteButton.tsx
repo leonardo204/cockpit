@@ -1,7 +1,7 @@
 'use client';
 
 import { useTranslation } from 'react-i18next';
-import { recentDeleteBlock, type RecentDeleteTarget } from './recentSessionDelete';
+import { type RecentDeleteTarget } from './recentSessionDelete';
 
 /**
  * The × at the right of a recent-sessions row — ONE control, shared by the
@@ -35,7 +35,6 @@ export function RecentSessionDeleteButton({
   className = '',
 }: RecentSessionDeleteButtonProps) {
   const { t } = useTranslation();
-  const blocked = recentDeleteBlock(session);
 
   const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
     // The row around this button is itself a click target that opens the
@@ -43,34 +42,13 @@ export function RecentSessionDeleteButton({
     // Enter/Space on a <button> dispatch a click event just the same.
     e.stopPropagation();
     e.preventDefault();
-    if (blocked) return;
     onDelete(session.cwd, session.sessionId);
   };
 
-  if (blocked) {
-    // A projectless legacy row: the single removal channel cannot address it.
-    // Shown, disabled, and explained — hiding it would read as "this row is
-    // special for no reason", and failing on click as a broken button.
-    const reason = t('sessions.deleteSessionNoProject');
-    return (
-      <button
-        type="button"
-        data-testid="recent-session-delete"
-        data-session-id={session.sessionId}
-        data-blocked={blocked}
-        disabled
-        title={reason}
-        aria-label={reason}
-        onClick={handleClick}
-        className={`flex-shrink-0 p-1 rounded text-muted-foreground/40 cursor-not-allowed transition-colors opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 ${className}`}
-      >
-        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-    );
-  }
-
+  // EVERY ROW GETS THE SAME BUTTON. There used to be a disabled variant for a
+  // projectless row (cwd ''), because the removal request had to name a project;
+  // the channel carries a projectless shape now, so there is one control and no
+  // refused state to explain. See recentSessionDelete.ts.
   return (
     <button
       type="button"

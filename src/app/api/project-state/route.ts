@@ -20,55 +20,27 @@
  * UNION / NO-SHRINK is inherent here: a POST only ADDS links for the sessions the
  * tab lists and only REMOVES via `closedSessionIds` (deleteSession). Sessions a
  * given tab does not list stay linked — a tab can never collapse the shared set.
+ *
+ * WHAT A POST MEANS lives in @cockpit/feature-agent/server/state/projectState —
+ * the two request shapes (a project save, which still REQUIRES its cwd, and a
+ * projectless close, which deletes ids and carries no project), the one removal
+ * loop both end in, and the state read back. This file keeps the HTTP: parse,
+ * map a refusal to ValidationError, wrap the store work, broadcast.
  */
 import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
-// The plan-mode setting key is OWNED by the handoff flow's module, which also
-// writes one when a session is continued in a new tab. Imported rather than
-// re-derived: a second copy of the key is how a continued session gets its plan
-// mode stored where this reader never looks.
-import { sessionPlanModeKey } from "@cockpit/feature-agent/server/lib/sessionHandoff"
+import {
+  applyProjectStateRequest,
+  broadcastCwdOf,
+  parseProjectStateRequest,
+  readProjectState,
+} from "@cockpit/feature-agent/server/state/projectState"
 import { broadcastToGlobalState } from "../../../lib/globalStateBroadcast"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
-
-interface ProjectState {
-  sessions: string[]
-  activeSessionId?: string
-  planModes?: Record<string, boolean>
-}
-
-const activeSessionKey = (cwd: string) => `ui.activeSession.${cwd}`
-const planModeKey = sessionPlanModeKey
-
-/**
- * Build the wire state for a project from the store: the MRU session list, the
- * stored/derived active session, empty (vestigial) engine maps, and the per-
- * session plan-mode flags for exactly the sessions in the list.
- */
-function readProjectState(cwd: string): ProjectState {
-  const store = getStore()
-  const sessions = store.listSessionsByProject(cwd).map((s) => s.sessionId)
-  const inSet = new Set(sessions)
-
-  const storedActive = store.getSetting(activeSessionKey(cwd))
-  const activeSessionId =
-    storedActive && inSet.has(storedActive) ? storedActive : sessions[0]
-
-  const planModes: Record<string, boolean> = {}
-  for (const sid of sessions) {
-    if (store.getSetting(planModeKey(sid)) === "true") planModes[sid] = true
-  }
-
-  return {
-    sessions,
-    ...(activeSessionId ? { activeSessionId } : {}),
-    ...(Object.keys(planModes).length ? { planModes } : {}),
-  }
-}
 
 export const GET = handler((req) =>
   Effect.gen(function* () {
@@ -79,7 +51,7 @@ export const GET = handler((req) =>
       )
     }
     const state = yield* Effect.try({
-      try: () => readProjectState(cwd),
+      try: () => readProjectState(getStore(), cwd),
       catch: (cause) => new FSError({ path: "app.db:project-state", op: "read", cause }),
     })
     return ok(state)
@@ -88,64 +60,27 @@ export const GET = handler((req) =>
 
 export const POST = handler((req) =>
   Effect.gen(function* () {
-    const body = (yield* parseJsonRaw(req)) as Partial<ProjectState> & {
-      cwd?: string
-      closedSessionIds?: string[]
-    }
-    if (!body.cwd) {
-      return yield* Effect.fail(
-        new ValidationError({ field: "cwd", reason: "missing" })
-      )
-    }
-    if (!Array.isArray(body.sessions)) {
-      return yield* Effect.fail(
-        new ValidationError({ field: "sessions", reason: "must be array" })
-      )
-    }
+    const body = yield* parseJsonRaw(req)
 
-    const cwd = body.cwd
-    const incoming = body.sessions
-    const closedIds = body.closedSessionIds ?? []
-    const planModesIn = body.planModes ?? {}
-    const activeIn = body.activeSessionId
+    // Two shapes, one channel. `parseProjectStateRequest` decides which — and a
+    // project save with no cwd is still refused there, exactly as before.
+    const parsed = parseProjectStateRequest(body)
+    if (!parsed.ok) {
+      return yield* Effect.fail(new ValidationError(parsed.error))
+    }
+    const request = parsed.request
 
     const state = yield* Effect.try({
-      try: () => {
-        const store = getStore()
-
-        // Removal happens ONLY via closedSessionIds — deleteSession drops the
-        // session and everything keyed to it. Do this first so a session that is
-        // both listed and closed ends up closed.
-        for (const sid of closedIds) store.deleteSession(sid)
-
-        // Link each incoming session to this project. Only for sessions that
-        // exist in the store (a tab should not conjure a session row); linking is
-        // idempotent and never touches messages/memory. This is the UNION add —
-        // sessions other tabs linked stay linked.
-        const closed = new Set(closedIds)
-        for (const sid of incoming) {
-          if (closed.has(sid)) continue
-          if (store.getSession(sid)) store.setSessionProject(sid, cwd)
-        }
-
-        // Persist per-session plan-mode flags (skip closed/deleted ids).
-        for (const [sid, on] of Object.entries(planModesIn)) {
-          if (closed.has(sid)) continue
-          store.setSetting(planModeKey(sid), String(Boolean(on)))
-        }
-
-        // Persist the active session when it survives (present and not closed).
-        if (activeIn && !closed.has(activeIn) && store.getSession(activeIn)) {
-          store.setSetting(activeSessionKey(cwd), activeIn)
-        }
-
-        return readProjectState(cwd)
-      },
+      try: () => applyProjectStateRequest(getStore(), request),
       catch: (cause) => new FSError({ path: "app.db:project-state", op: "write", cause }),
     })
 
     // #10: notify other browser tabs to reconcile in-app tabs. closedSessionIds
-    // carries the precise removals so viewers remove exactly those tabs.
+    // carries the precise removals so viewers remove exactly those tabs. A
+    // projectless close broadcasts cwd '' — it belongs to no project, so every
+    // viewer applies it (see broadcastCwdOf).
+    const cwd = broadcastCwdOf(request)
+    const closedIds = request.closedSessionIds
     yield* Effect.sync(() =>
       broadcastToGlobalState({ type: "project-state-changed", cwd, closedSessionIds: closedIds })
     )
