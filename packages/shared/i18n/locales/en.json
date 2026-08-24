@@ -187,7 +187,6 @@
     "remove": "Remove",
     "deleteSession": "Delete session",
     "deleteSessionFromRecent": "Close this session — the conversation is deleted, not just hidden from this list",
-    "deleteSessionNoProject": "This session has no project, so it cannot be deleted from here",
     "projectSessions": "Project Sessions",
     "browseAllSessions": "Browse all sessions",
     "sessionList": "Session List",

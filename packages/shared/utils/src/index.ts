@@ -10,6 +10,10 @@ export * from './bootTheme';
 // boot script, the provider and globals.css all read. See fontSettings.ts.
 export * from './fontSettings';
 export * from './shortId';
+// The default name of a session nobody has named — `MMDD-HHmm-animal`. One
+// module because the tab strip, the session lists and Telegram must produce the
+// SAME string for the same session; see sessionName.ts.
+export * from './sessionName';
 // The one answer to "is this markdown?" — see markdownFile.ts on why it is not
 // re-derived at each call site.
 export * from './markdownFile';

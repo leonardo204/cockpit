@@ -25,7 +25,7 @@
 // update from any other chat is dropped before a single character of it is read
 // as a command, because a turn here is arbitrary work on the user's machine.
 
-import { projectNameFromCwd } from '@cockpit/shared-utils';
+import { defaultSessionName, projectNameFromCwd } from '@cockpit/shared-utils';
 import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import type { SessionRef, Store } from '../../../../../../../dist/naby-runtime.mjs';
 import { formatFinalReport, truncate } from './telegramEscalation';
@@ -267,11 +267,21 @@ export function projectLabel(cwd: string | undefined): string | undefined {
   return projectNameFromCwd(cwd) || undefined;
 }
 
-/** A session's display title: its own, or a short id so the line is still
- *  identifiable for a session nobody has named. */
-export function sessionTitle(s: Pick<SessionRef, 'sessionId' | 'title'>): string {
+/**
+ * A session's display title: its own, or — for a session nobody has named — the
+ * same default name every other surface shows it under.
+ *
+ * IT USED TO BE A PIECE OF THE ID (`(제목 없음) s-mt167d`), which is the worst
+ * label a phone can be handed: unreadable, unsayable, and identical-looking to
+ * the next one. `/new` answers with this string the instant it mints a session,
+ * so it was also the FIRST thing the user saw of a session they had just asked
+ * for. `defaultSessionName` is computed from the same two facts the tab strip
+ * and the session lists compute it from, so the name on the phone is the name
+ * on the screen.
+ */
+export function sessionTitle(s: Pick<SessionRef, 'sessionId' | 'title' | 'createdAt'>): string {
   const t = (s.title ?? '').trim();
-  return t.length > 0 ? truncate(t, 48) : `(제목 없음) ${s.sessionId.slice(0, 8)}`;
+  return t.length > 0 ? truncate(t, 48) : defaultSessionName(s.sessionId, s.createdAt);
 }
 
 /** `labelFor` lets the caller hand in the store-aware namer so a renamed project

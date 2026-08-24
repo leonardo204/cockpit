@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { defaultSessionName } from '@cockpit/shared-utils';
 import type { SessionRef } from '../../../../../../../dist/naby-runtime.mjs';
 import {
   TELEGRAM_LINK_IDLE_MS,
@@ -146,8 +147,9 @@ describe('telegramChat — rendering', () => {
       now,
     );
     expect(out).toContain('1. 리팩터링 · naby · 5분 전');
-    // No title and no project: still identifiable by a short id.
-    expect(out).toContain('2. (제목 없음) s2');
+    // No title and no project: named the way every other surface names an
+    // unnamed session, rather than by a piece of its id.
+    expect(out).toContain(`2. ${defaultSessionName('s2', 0)}`);
     expect(out).toContain('방금');
     expect(out).toContain('/use N');
   });
@@ -168,8 +170,21 @@ describe('telegramChat — rendering', () => {
     expect(projectLabel(undefined)).toBeUndefined();
   });
 
-  it('titles an unnamed session by a short id', () => {
-    expect(sessionTitle({ sessionId: 'abcdef123456', title: '  ' })).toBe('(제목 없음) abcdef12');
+  it('titles an unnamed session with the shared default name, not a piece of its id', () => {
+    const createdAt = new Date(2026, 7, 24, 15, 30).getTime();
+    expect(sessionTitle({ sessionId: 'abcdef123456', title: '  ', createdAt })).toBe(
+      defaultSessionName('abcdef123456', createdAt),
+    );
+    // Date, time, animal — and no fragment of the id anywhere in it.
+    expect(sessionTitle({ sessionId: 'abcdef123456', title: '  ', createdAt })).toMatch(
+      /^0824-1530-[a-z]+$/,
+    );
+  });
+
+  it('a name the user gave still wins over the default', () => {
+    expect(sessionTitle({ sessionId: 'abcdef123456', title: '내 세션', createdAt: 0 })).toBe(
+      '내 세션',
+    );
   });
 });
 

@@ -3,6 +3,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { usePageVisible, useWebSocket } from '@cockpit/shared-ui';
 import { applyTitleUpdate } from './titleLock';
+// The name a tab wears before the conversation or the user names it — the same
+// `MMDD-HHmm-animal` string every list shows for the same session.
+import { untitledTabTitle } from './untitledTabTitle';
+import { closedSessionIdsForViewer } from './projectSessionTree';
 import {
   acceptsChatState,
   closableSessionId,
@@ -87,12 +91,19 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   // still opens the requested session: loadSessions' null-data branch keeps this default tab
   // as-is, and its data branch merges/activates initialSessionId anyway. This removes the
   // dependency on a post-onLoad SWITCH_SESSION message and its race with the restore.
-  const [tabs, setTabs] = useState<TabInfo[]>(() => [{
-    id: `tab-${Date.now()}`,
-    cwd: initialCwd,
-    sessionId: initialSessionId,
-    title: initialSessionId ? `Session ${initialSessionId.slice(0, 6)}...` : 'New Chat',
-  }]);
+  const [tabs, setTabs] = useState<TabInfo[]>(() => {
+    // One clock reading, spent twice: the tab id and the name it is seeded with
+    // describe the same moment, and a second Date.now() could disagree with the
+    // first across a minute boundary.
+    const now = Date.now();
+    const id = `tab-${now}`;
+    return [{
+      id,
+      cwd: initialCwd,
+      sessionId: initialSessionId,
+      title: untitledTabTitle(id, initialSessionId, now),
+    }];
+  });
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0]?.id ?? '');
 
   // Unread tabs (session completed but not yet viewed)
@@ -309,7 +320,15 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     // never leave the tab bar empty (tabs[0].id is read every render)
     const next =
       kept.length === 0
-        ? [{ id: `tab-${Date.now()}`, cwd: initialCwd, title: 'New Chat' }]
+        ? [(() => {
+            // Named like every other untitled tab. This was the one blank-tab
+            // path still saying 'New Chat' — it is reached when everything you
+            // had open was closed from somewhere else, which is exactly when a
+            // tab appearing under a different naming scheme reads as a
+            // different kind of thing.
+            const id = `tab-${Date.now()}`;
+            return { id, cwd: initialCwd, title: untitledTabTitle(id, undefined, Date.now()) };
+          })()]
         : kept;
     setTabs(next);
     // active tab closed elsewhere → fall back to the last remaining tab
@@ -323,10 +342,11 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     enabled: !!initialCwd,
     onMessage: (raw) => {
       if (isInitializingRef.current || !initialCwd) return;
-      const p = raw as { type?: string; cwd?: string; closedSessionIds?: string[] };
-      if (p.type === 'project-state-changed' && p.cwd === initialCwd) {
-        reconcileTabs(p.closedSessionIds ?? []);
-      }
+      // Which removals this viewer must act on — its own project's, plus the
+      // projectless ones (cwd ''), which belong to no project and can be open in
+      // any tab. The rule is a unit in projectSessionTree, not a condition
+      // spelled out here, because both recent lists depend on it being right.
+      reconcileTabs(closedSessionIdsForViewer(raw, initialCwd));
     },
   });
 
@@ -335,11 +355,16 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   //   append to the end of all tabs
   // - appendToEnd=false (forked chats): insert to the right of current tab
   const addTab = useCallback((cwd?: string, sessionId?: string, title?: string, engine?: ChatEngine, appendToEnd: boolean = false) => {
+    const now = Date.now();
+    const id = `tab-${now}`;
     const newTab: TabInfo = {
-      id: `tab-${Date.now()}`,
+      id,
       cwd,
       sessionId,
-      title: title || (sessionId ? `Session ${sessionId.slice(0, 6)}...` : 'New Chat'),
+      // A caller that knows the name passes it (opening a session from a list,
+      // a rename carried onto a fork). Otherwise the default name — never a
+      // slice of the id, and never a `New Chat` shared with every other new tab.
+      title: title || untitledTabTitle(id, sessionId, now),
       engine,
     };
     setTabs((prev) => {
@@ -395,10 +420,12 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
         setActiveTabId(newTabs[newTabs.length - 1].id);
       }
       if (newTabs.length === 0) {
+        const now = Date.now();
+        const id = `tab-${now}`;
         const newTab: TabInfo = {
-          id: `tab-${Date.now()}`,
+          id,
           cwd: initialCwd,
-          title: 'New Chat',
+          title: untitledTabTitle(id, undefined, now),
         };
         setActiveTabId(newTab.id);
         // Published from inside the updater, but it is not a render-phase side

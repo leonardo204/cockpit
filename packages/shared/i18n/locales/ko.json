@@ -187,7 +187,6 @@
     "remove": "제거",
     "deleteSession": "세션 삭제",
     "deleteSessionFromRecent": "이 세션을 닫습니다 — 목록에서 숨기는 것이 아니라 대화가 삭제됩니다",
-    "deleteSessionNoProject": "프로젝트가 없는 세션이라 여기서는 삭제하지 못합니다",
     "projectSessions": "프로젝트 세션",
     "browseAllSessions": "모든 세션 보기",
     "sessionList": "세션 목록",

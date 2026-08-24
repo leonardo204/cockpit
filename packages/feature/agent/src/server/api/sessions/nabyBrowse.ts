@@ -11,11 +11,9 @@
  *
  * These helpers touch NO filesystem transcript source — only the store.
  */
-import { encodePath } from '@cockpit/shared-utils';
+import { defaultSessionName, encodePath } from '@cockpit/shared-utils';
 import { getStore } from '../../engines/naby';
 import type { RuntimeMessage, SessionRef } from '../../engines/naby';
-
-export const UNTITLED = 'Untitled Session';
 
 // Display fields mirror the old jsonl-derived shapes: messages truncated to 50
 // chars, sampled as first-5 + last-5 (or all when ≤10).
@@ -51,13 +49,35 @@ export function userTexts(messages: RuntimeMessage[]): string[] {
   return out;
 }
 
-/** Display title: the session's stored title, else its first user message
- *  (clipped), else a stable placeholder. */
+/**
+ * Display title: the session's stored title, else its first user message
+ * (clipped), else the default name of an empty session.
+ *
+ * THE THREE STAGES OF A SESSION'S NAME ARE THESE THREE LINES, in this order.
+ *
+ *   - A STORED TITLE WINS. It is the user's rename (round-tripped through
+ *     `session.customTitle.*`) or a name given at birth on purpose, like the
+ *     fast-growth session's. Nothing below may overwrite it.
+ *   - THEN THE CONVERSATION NAMES ITSELF, from its first user message. This is
+ *     the ordinary case and the one people recognise a session by.
+ *   - AND ONLY AN EMPTY SESSION FALLS THROUGH. No title, not one message: there
+ *     is nothing to name it after, so it is named after WHEN it was made and
+ *     given a word to be called by. This used to be the constant
+ *     'Untitled Session' — which made every unnamed session look like the same
+ *     session — and, at the surfaces that had their own fallback, the raw id.
+ *
+ * The last line is a placeholder, NOT a label: it is not written to the store,
+ * so the first message replaces it by falling into the line above, and a rename
+ * replaces it for good by falling into the line above that. Every surface calls
+ * THIS function (the tab's title fetch, the session browsers, the sidebar tree,
+ * both recent views, the pinned list), so they cannot print different names for
+ * the same session.
+ */
 export function deriveTitle(ref: SessionRef, texts: string[]): string {
   if (ref.title && ref.title.trim()) return ref.title;
   const first = texts[0];
   if (first) return first.length <= TITLE_MAX ? first : first.slice(0, TITLE_MAX) + '...';
-  return UNTITLED;
+  return defaultSessionName(ref.sessionId, ref.createdAt);
 }
 
 /** First-5 / last-5 (or all when ≤10) sample of user texts, each truncated —

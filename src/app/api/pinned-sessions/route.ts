@@ -22,6 +22,10 @@ import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError, ValidationError } from "@cockpit/effect-core"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
+import {
+  deriveTitle,
+  userTexts,
+} from "@cockpit/feature-agent/server/api/sessions/nabyBrowse"
 
 export interface PinnedSession {
   sessionId: string
@@ -36,7 +40,17 @@ export interface PinnedSession {
    * label, while a derived title must not.
    */
   customTitle?: string
-  /** The derived title, for rendering when there is no rename. */
+  /**
+   * The DERIVED title, for rendering when there is no rename.
+   *
+   * It used to be the session row's stored `title` column, which is not the
+   * same thing: that column is empty for almost every session, so the panel
+   * fell through to `sessionId.slice(0, 8)` and a pinned session was labelled
+   * with a piece of its id while every other list showed it by its first
+   * message. It is now the one `deriveTitle` every other surface uses — the
+   * stored title, else the first message, else the default `MMDD-HHmm-animal`
+   * name of an empty session.
+   */
   title?: string
 }
 
@@ -46,11 +60,15 @@ function readPinned(): PinnedSession[] {
   const store = getStore()
   return store.listPinnedSessions().map((ref): PinnedSession => {
     const custom = store.getSetting(customTitleKey(ref.sessionId))
+    // The pinned list is short by construction (it is what one person chose to
+    // keep), so reading each transcript here costs a handful of queries and
+    // buys the same title the recent list and the browsers show.
+    const title = deriveTitle(ref, userTexts(store.getMessages(ref.sessionId)))
     return {
       sessionId: ref.sessionId,
       cwd: ref.cwd ?? "",
       ...(custom && custom.trim() ? { customTitle: custom } : {}),
-      ...(ref.title ? { title: ref.title } : {}),
+      ...(title ? { title } : {}),
     }
   })
 }
