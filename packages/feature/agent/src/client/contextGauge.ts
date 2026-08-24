@@ -285,6 +285,127 @@ export function rateLimitResetsAtMs(resetsAt: number | null | undefined): number
   return resetsAt < 1e12 ? resetsAt * 1000 : resetsAt;
 }
 
+// ---------------------------------------------------------------------------
+// THE PLAN WINDOWS (5-hour / 7-day) — the display rules, pure and clock-injected
+// ---------------------------------------------------------------------------
+//
+// THESE ARE NOT THE `rate_limit_event` HELPERS ABOVE, AND THE DIFFERENCE IS A
+// FACTOR OF A HUNDRED. `rateLimitUtilizationPercent` multiplies its input by 100,
+// on the documented-nowhere assumption that the push event's `utilization` is a
+// 0..1 fraction. The plan-usage reading is ALREADY a percentage, 0-100, from both
+// of its sources and by both of their documentation — feeding one to the other
+// function renders 84 as `8400%`. The runtime names its field
+// `utilizationPercent` for that reason, and these formatters take that field.
+// Neither set of helpers may be used on the other's data.
+
+/** One window as the bar should draw it, or the instruction not to draw it. */
+export type UsageWindowView =
+  | { show: false }
+  | {
+      show: true;
+      /** `39%`, or null when the source sent no utilization. A window can be
+       *  worth showing on its countdown alone. */
+      percent: string | null;
+      /** `2h37m`, `4d7h`, `39m` — or null when there is no future reset to count
+       *  down to. */
+      countdown: string | null;
+      /** Reuses the gauge's three tiers and therefore the bar's existing palette;
+       *  no new colour enters the row. */
+      tier: ContextGaugeTier;
+    };
+
+/**
+ * THE EXPIRY RULE, PINNED HERE: a window whose reset is in the PAST is UNKNOWN,
+ * and unknown renders as nothing at all.
+ *
+ * This is the one judgement call in the feature, so here is the reasoning. A
+ * reading is a pair — "84% used, of the window ending at T". Once T has passed,
+ * that window is over and a new one has begun; the 84% describes a period that no
+ * longer exists. There are three things we could do with it and only one is
+ * honest:
+ *
+ *   * show `84%` — asserts a number about the CURRENT window that we have not
+ *     measured, and it is the pessimistic one, so it would sit there telling a
+ *     user with a fresh window that they are nearly out;
+ *   * show `0%` — invents the opposite number, and is the exact defect this
+ *     codebase names repeatedly: a defaulted zero turns "we were told nothing"
+ *     into a confident claim;
+ *   * show nothing until the next reading lands.
+ *
+ * The third. It matches what the dotclaude HUD does with an expired window, and
+ * it matches the rule the context gauge already follows for an unmeasured window.
+ * The cost is bounded and small: a refresh is due at most fifteen minutes later,
+ * and the window that just rolled over is the one where being briefly silent
+ * costs the user least.
+ *
+ * A window with NO reset at all is a different case and still renders — absent is
+ * not the same as elapsed, and the percentage is still the best thing known.
+ *
+ * `now` is a PARAMETER. A `Date.now()` in here would make every fixture
+ * time-dependent, and this is precisely the branch that has to be exercised at a
+ * fixed clock.
+ */
+export function usageWindowView(
+  window: { utilizationPercent?: number; resetsAt?: number } | null | undefined,
+  now: number,
+): UsageWindowView {
+  if (!window) return { show: false };
+  const resetsAtMs = rateLimitResetsAtMs(window.resetsAt);
+  // Expired — see above. Checked BEFORE the percentage, because an expired window
+  // invalidates the percentage rather than merely lacking a countdown.
+  if (resetsAtMs !== null && resetsAtMs <= now) return { show: false };
+
+  const raw = window.utilizationPercent;
+  const hasPercent = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0;
+  const countdown = resetsAtMs === null ? null : formatUsageCountdown(resetsAtMs - now);
+  // Nothing to say. Note this is reachable with `utilizationPercent: 0` ONLY when
+  // there is also no countdown — `0` is a real reading (a window that just reset)
+  // and is never confused with absence.
+  if (!hasPercent && countdown === null) return { show: false };
+
+  return {
+    show: true,
+    percent: hasPercent ? `${Math.round(raw)}%` : null,
+    countdown,
+    tier: hasPercent ? usageTier(raw) : 'neutral',
+  };
+}
+
+/** The same two boundaries the context gauge escalates at (70% / 85%), applied to
+ *  a 0-100 reading. Shared deliberately: one row should not have two opinions
+ *  about what "getting full" looks like. */
+export function usageTier(percent: number): ContextGaugeTier {
+  if (percent >= GAUGE_CRITICAL_RATIO * 100) return 'critical';
+  if (percent >= GAUGE_WARN_RATIO * 100) return 'warn';
+  return 'neutral';
+}
+
+/**
+ * A remaining duration, compact — `39m`, `2h37m`, `4d7h`.
+ *
+ * DAYS ARE WHY THIS IS NOT `formatResetTime` (TokenUsageBar.tsx). That one tops
+ * out at hours, which is fine for the 5-hour window it was written for and turns
+ * the 7-day window into `163h` — a number nobody reads as "most of a week". Two
+ * significant units, never three: this sits in a one-line row beside four other
+ * figures.
+ *
+ * Returns null for anything non-positive, so an expired or malformed span renders
+ * as no countdown rather than as `0m`.
+ */
+export function formatUsageCountdown(remainingMs: number): string | null {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
+  const totalMin = Math.ceil(remainingMs / 60000);
+  if (totalMin < 60) return `${totalMin}m`;
+  const totalHr = Math.floor(totalMin / 60);
+  if (totalHr < 24) {
+    const min = totalMin % 60;
+    return min > 0 ? `${totalHr}h${min}m` : `${totalHr}h`;
+  }
+  const days = Math.floor(totalHr / 24);
+  const hr = totalHr % 24;
+  return hr > 0 ? `${days}d${hr}h` : `${days}d`;
+}
+
 /** The Tailwind text colour for a tier, reusing the classes the bar already uses
  *  for its other states (muted / amber / red) so nothing new enters the palette. */
 export function gaugeToneClass(tier: ContextGaugeTier): string {

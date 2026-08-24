@@ -150,6 +150,52 @@ export interface ApiRetryInfo {
   error?: string;
 }
 
+// -- the plan windows (5-hour / 7-day), from `usage.limits` ------------------
+//
+// A DIFFERENT THING FROM `RateLimitInfo` BELOW, kept separate on purpose. That
+// one is the mid-turn PUSH and its subject is `status` — "you are being
+// throttled". This is a POLL and its subject is utilization — "you are 39% into
+// the window". They answer different questions, arrive by different routes, and
+// the bar shows both; neither replaces the other.
+//
+// ⚠️ `utilizationPercent` HERE IS 0-100 ALREADY, and `RateLimitInfo.utilization`
+// below is not (the client multiplies that one by 100). The names differ so the
+// two can never be handed to the same formatter by accident — see the note above
+// the usage helpers in contextGauge.ts.
+
+/** One window as the runtime reports it. Mirrors `SubscriptionUsageWindow` in
+ *  src/runtime/subscription-usage.ts; declared again here rather than imported
+ *  because the runtime bundle is server-only (it pulls in `node:sqlite`). */
+export interface UsageWindow {
+  /** 0-100, already a percentage. May exceed 100 on overage. */
+  utilizationPercent?: number;
+  /** UNIX **SECONDS**, the same unit `RateLimitInfo.resetsAt` uses, so the one
+   *  existing conversion (`rateLimitResetsAtMs`) serves both. */
+  resetsAt?: number;
+  /** Which source this particular window's reading won from. */
+  source: 'sdk' | 'cli';
+}
+
+export interface SubscriptionUsage {
+  fiveHour?: UsageWindow;
+  sevenDay?: UsageWindow;
+  /** The model/app sub-windows (`seven_day_opus`, …), keyed by the vendor's own
+   *  name. Tooltip material — see TokenUsageBar for why they are not chips. */
+  extra?: Record<string, UsageWindow>;
+}
+
+/** What `usage.limits` returns, or null before the first answer has arrived.
+ *  `limits: null` inside a non-null snapshot is meaningful and distinct: it says
+ *  we asked and there is nothing to report (no plan, no SDK, both sources
+ *  failed) — as opposed to "we have not asked yet". Both render as no chip. */
+export type UsageLimitsSnapshot = {
+  limits: SubscriptionUsage | null;
+  fetchedAt: number;
+  cached: boolean;
+  sources: ('sdk' | 'cli')[];
+  cliReason: 'same-account' | 'different-account' | 'no-cache' | 'stale-cache';
+} | null;
+
 // Rate limit info (from SDK rate_limit_event)
 export interface RateLimitInfo {
   status: 'allowed' | 'allowed_warning' | 'rejected';

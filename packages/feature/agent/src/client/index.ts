@@ -25,6 +25,17 @@ export { MobileApp } from './mobile/MobileApp';
 export { PinnedSessionsPanel } from './PinnedSessionsPanel';
 export { ScheduledTasksPanel } from './ScheduledTasksPanel';
 export { GlobalSessionMonitor, type GlobalSession } from './GlobalSessionMonitor';
+// The × on a recent-sessions row: the shared control plus the pure rules behind
+// it. `withoutRecentSession` is exported because the OWNER of the recents array
+// (the workspace sidebar) performs the optimistic removal.
+export { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
+export {
+  canDeleteRecentSession,
+  recentDeleteBlock,
+  withoutRecentSession,
+  type RecentDeleteBlock,
+  type RecentDeleteTarget,
+} from './recentSessionDelete';
 export { SessionCompleteToastContainer, showSessionCompleteToast } from './SessionCompleteToast';
 
 // Chat ancillary UI
@@ -43,6 +54,9 @@ export { useChatStream } from './useChatStream';
 export { useChatSearch } from './useChatSearch';
 export { usePinnedSessions } from './usePinnedSessions';
 export { useScheduledTasks } from './useScheduledTasks';
+// The account's plan windows — a shared store, not per-tab state. See the
+// module header for why, and for when it refetches.
+export { useSubscriptionUsage, refreshSubscriptionUsage } from './subscriptionUsage';
 
 // Types
 export type {
@@ -56,5 +70,11 @@ export type {
   TokenUsage,
   ApiRetryInfo,
   RateLimitInfo,
+  // The POLLED plan windows. A different thing from `RateLimitInfo`, which is the
+  // mid-turn push — see the note above them in types.ts, and mind that their two
+  // utilization fields are on different scales.
+  UsageWindow,
+  SubscriptionUsage,
+  UsageLimitsSnapshot,
   ChatEngine,
 } from './types';

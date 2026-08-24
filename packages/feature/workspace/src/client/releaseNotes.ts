@@ -85,6 +85,32 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.27.0 — 2026-08-24
+
+### en
+
+How much of your plan is left, without asking.
+
+**New**
+
+- The bar under the conversation shows your Claude plan's 5-hour and weekly usage, each with the time until it resets. It is there before you send anything, and it refreshes when a turn finishes.
+  - Per-model windows, when your account reports them, are in the tooltip rather than crowding the row.
+  - Nothing is shown when the figure cannot be read. An absent number is not a zero.
+- Hovering a row in **Recent sessions** reveals an ✕ on the right that closes that session in one click.
+  - It deletes the conversation rather than hiding the row, and the tooltip says so.
+
+### ko
+
+플랜을 얼마나 썼는지, 물어보지 않아도 보여요.
+
+**새로 생긴 것**
+
+- 대화 아래 표시줄에 Claude 플랜의 5시간·주간 사용량이 남은 시간과 함께 떠요. 아무것도 보내지 않아도 보이고, 턴이 끝날 때마다 갱신돼요.
+  - 계정이 모델별 사용량까지 알려주면 그건 툴팁에 넣어요. 한 줄에 다 늘어놓으면 읽기 어렵거든요.
+  - 값을 읽지 못하면 아예 표시하지 않아요. 모르는 값을 0으로 적지는 않아요.
+- **최근 세션** 목록에서 행에 마우스를 올리면 오른쪽에 ✕가 나타나고, 한 번 누르면 그 세션이 닫혀요.
+  - 목록에서 감추는 게 아니라 대화가 삭제되며, 툴팁에도 그렇게 적혀 있어요.
+
 ## 1.26.1 — 2026-08-24
 
 ### en

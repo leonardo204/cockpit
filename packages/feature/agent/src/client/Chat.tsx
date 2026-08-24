@@ -22,6 +22,10 @@ import { ContextLimitBanner } from './ContextLimitBanner';
 import { RunFailureNotice } from './RunFailureNotice';
 import { runFailureReducer, type RunFailure, type RunFailureEvent } from './runFailure';
 import { contextGauge } from './contextGauge';
+// The account's plan windows. A SHARED store rather than per-tab state: every
+// chat tab stays mounted, and the reading belongs to the account, not the tab —
+// see that module's header for why this is a singleton and when it refetches.
+import { useSubscriptionUsage } from './subscriptionUsage';
 import { ChatInput } from './ChatInput';
 import type { ComposerViewport } from './composerHeight';
 import { buildComposerHistory, sameComposerHistory } from './composerHistory';
@@ -390,6 +394,13 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onRunError: handleRunError,
     getModel,
   });
+
+  // THE PLAN WINDOWS (5-hour / 7-day). Fed `isLoading` so the refetch happens on
+  // the turn's FALLING edge — a finished turn is the only event that moves the
+  // number, and preferring it to a timer is what keeps this off the rate-limited
+  // accounting behind both sources. It is display state and nothing else: it is
+  // never sent to the engine, never stored, and never reaches the transcript.
+  const planUsage = useSubscriptionUsage(isLoading);
 
   // A SEND RE-PINS THE TRANSCRIPT. Reading history is otherwise sacred — new
   // content never moves a user who has scrolled up — but pressing send states
@@ -964,7 +975,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
         <RunFailureNotice failure={runFailure} onDismiss={dismissRunFailure} />
 
         {/* Token Usage Display */}
-        {tokenUsage && <TokenUsageBar tokenUsage={tokenUsage} rateLimitInfo={rateLimitInfo} />}
+        {tokenUsage && (
+          <TokenUsageBar tokenUsage={tokenUsage} rateLimitInfo={rateLimitInfo} usage={planUsage} />
+        )}
 
         {/* Phase 2 (M2): a paused tool call awaiting the user's Allow/Deny. */}
         <ToolApprovalPrompt sessionId={sessionId ?? undefined} cwd={initialCwd} />

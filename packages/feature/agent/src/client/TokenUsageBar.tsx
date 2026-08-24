@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TokenUsage, RateLimitInfo } from './types';
+import type { TokenUsage, RateLimitInfo, UsageLimitsSnapshot, UsageWindow } from './types';
 import {
   contextGauge,
   formatGaugePercent,
@@ -10,6 +10,8 @@ import {
   formatTokensShort,
   gaugeToneClass,
   rateLimitResetsAtMs,
+  usageWindowView,
+  type UsageWindowView,
 } from './contextGauge';
 
 // ============================================
@@ -23,9 +25,18 @@ import {
 interface TokenUsageBarProps {
   tokenUsage: TokenUsage;
   rateLimitInfo?: RateLimitInfo | null;
+  /**
+   * THE SUBSCRIPTION'S 5-HOUR AND 7-DAY WINDOWS, polled rather than pushed.
+   *
+   * Optional, and absent is the ordinary case for anything that is not a Claude
+   * plan — the ai-sdk engine has no subscription at all. Modelled the way
+   * `rateLimitInfo` is for exactly that reason: engine-supplied, absent
+   * everywhere else, and never assumed.
+   */
+  usage?: UsageLimitsSnapshot;
 }
 
-export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps) {
+export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBarProps) {
   const { t } = useTranslation();
 
   // Pure derivation, unit-tested in contextGauge.ts — the branch rules ("hide when
@@ -40,12 +51,22 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
 
   // "Now" updates every 30s so the countdown stays fresh without calling Date.now()
   // during render (which would violate react-hooks/purity).
+  //
+  // IT NOW TICKS FOR THE PLAN WINDOWS TOO. The condition used to be
+  // `rateLimitInfo?.resetsAt` alone; the plan chip has its own countdowns, and
+  // more importantly its expiry rule (an elapsed window renders as nothing) is
+  // evaluated against this clock — with a frozen `now` a window that rolled over
+  // would keep drawing a stale percentage until something else re-rendered the
+  // bar. Still gated: with neither source present there is no countdown on
+  // screen, and an interval that updates nothing is an interval that should not
+  // be running.
   const [now, setNow] = useState(() => Date.now());
+  const hasCountdown = !!rateLimitInfo?.resetsAt || !!usage?.limits;
   useEffect(() => {
-    if (!rateLimitInfo?.resetsAt) return;
+    if (!hasCountdown) return;
     const id = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(id);
-  }, [rateLimitInfo?.resetsAt]);
+  }, [hasCountdown]);
 
   // Rate limit status styling
   const rateLimitColor = rateLimitInfo?.status === 'rejected'
@@ -91,9 +112,139 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo }: TokenUsageBarProps)
   // stays structural rather than being re-remembered at each site.
   const utilizationPercent = formatRateLimitPercent(rateLimitInfo?.utilization);
 
+  // -- THE PLAN WINDOWS ------------------------------------------------------
+  //
+  // WHICH BUCKETS GET A CHIP, AND WHY ONLY THESE TWO. The response can carry five
+  // (`five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`,
+  // `seven_day_oauth_apps`). Two are shown:
+  //
+  //   * They are the two that describe THE PLAN, and every account on a plan has
+  //     both. The other three are sub-windows of the same seven-day period that
+  //     only bind while a particular model is in use, so a chip for one of them
+  //     is blank or irrelevant most of the time — and `seven_day_oauth_apps`
+  //     meters third-party OAuth apps, which is a different consumer entirely.
+  //   * Five figures do not fit. This row already carries turn input, output,
+  //     cache hit, the context gauge and sometimes cost; appending five more
+  //     would not be a status bar. That is a layout fact, not a preference.
+  //
+  // NOTHING IS DISCARDED, THOUGH. Every bucket the response actually contained is
+  // listed in the tooltip below, which is the mechanism this row already uses for
+  // every other hint (both rate-limit spans and the gauge) — a native `title`, so
+  // it survives Electron's renderer with no portal and nothing to clip it against
+  // the three-panel layout.
+  //
+  // `usageWindowView` decides SHOW-OR-NOT, and its rule is the one worth knowing:
+  // a window whose reset has already passed renders as NOTHING, not as 0% and not
+  // as its old percentage. It is pure and clock-injected so that branch is tested.
+  const fiveHourView = usageWindowView(usage?.limits?.fiveHour, now);
+  const sevenDayView = usageWindowView(usage?.limits?.sevenDay, now);
+  const showUsage = fiveHourView.show || sevenDayView.show;
+
+  /** One window as the chip prints it — `39% (2h37m)`, `39%`, or `2h37m`. Both
+   *  halves are independently optional because the backend really does send one
+   *  without the other, and a chip must render whichever it got. */
+  const usageText = (view: UsageWindowView): string => {
+    if (!view.show) return '';
+    if (view.percent && view.countdown) return `${view.percent} (${view.countdown})`;
+    return view.percent ?? view.countdown ?? '';
+  };
+
+  /** The tooltip. Multi-line, because these are several distinct facts rather
+   *  than one sentence — and the last two exist so the number can be READ
+   *  CORRECTLY: which sources stand behind it, and how old it is. A merged
+   *  reading and a single-source reading are different claims. */
+  const usageTitle = (): string => {
+    const lines: string[] = [
+      t('chat.planUsageHint', {
+        defaultValue:
+          'How much of your Claude subscription this account has used. The 5-hour and 7-day windows are shown; a window is hidden while its current period is unknown.',
+      }),
+    ];
+    const named = (label: string, w: UsageWindow | undefined): void => {
+      const view = usageWindowView(w, now);
+      if (!view.show) return;
+      lines.push(`${label}: ${usageText(view)}`);
+    };
+    named(t('chat.planWindowFiveHour', { defaultValue: '5h' }), usage?.limits?.fiveHour);
+    named(t('chat.planWindowSevenDay', { defaultValue: '7d' }), usage?.limits?.sevenDay);
+    // The buckets that did not earn a chip. Shown under their VENDOR NAMES,
+    // spaced out — they are labels to display, never values to branch on.
+    for (const [key, w] of Object.entries(usage?.limits?.extra ?? {})) {
+      named(key.replace(/_/g, ' '), w);
+    }
+    if (usage && usage.sources.length > 0) {
+      lines.push(
+        t('chat.planUsageSources', {
+          defaultValue: 'Sources: {{sources}}',
+          sources: usage.sources.join(' + '),
+        }),
+      );
+    }
+    // THE MULTI-ACCOUNT REFUSAL, SAID OUT LOUD. When Claude Code on this machine
+    // is signed into a different subscription its reading is dropped rather than
+    // merged, and a user comparing naby's number with their terminal's needs to
+    // be able to find out why they differ.
+    if (usage?.cliReason === 'different-account') {
+      lines.push(
+        t('chat.planUsageOtherAccount', {
+          defaultValue: "Claude Code's own reading was ignored — it is a different account.",
+        }),
+      );
+    }
+    return lines.join('\n');
+  };
+
   return (
     <div className="px-4 py-1.5 border-t border-border bg-secondary">
       <div className="flex items-center justify-end gap-4 text-xs text-muted-foreground">
+        {/* THE PLAN WINDOWS — 5-hour and 7-day (see the derivation above).
+
+            PLACED FIRST, i.e. leftmost in this right-aligned row, because the row
+            now mixes two SCOPES and they should not interleave: this chip is
+            about the ACCOUNT and everything to its right is about this
+            conversation or this turn. Grouping by scope is also what keeps the
+            addition from reading as "two more numbers on the pile".
+
+            ONE CHIP, NOT TWO. Two spans would take two `gap-4` slots and split a
+            single fact — "how much of the plan is left" — across the row. Inside
+            it the two windows are separated by a thin divider and each carries
+            its own tone, so a critical 7-day still goes red on its own without
+            colouring a healthy 5-hour.
+
+            Hidden entirely when neither window is showable, which covers every
+            failure the feature has: no Agent SDK, no plan on this account, the
+            experimental usage method gone, both sources silent, the cached
+            reading past its staleness ceiling, or both windows expired. In none
+            of those does a zero or an empty chip appear. */}
+        {showUsage && (
+          <span
+            className="flex items-center gap-1.5"
+            data-testid="plan-usage-chip"
+            title={usageTitle()}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {fiveHourView.show && (
+              <span className={gaugeToneClass(fiveHourView.tier)}>
+                {t('chat.planWindowFiveHour', { defaultValue: '5h' })}{' '}
+                <strong className={fiveHourView.tier === 'neutral' ? 'text-foreground' : undefined}>
+                  {usageText(fiveHourView)}
+                </strong>
+              </span>
+            )}
+            {fiveHourView.show && sevenDayView.show && <span aria-hidden="true">·</span>}
+            {sevenDayView.show && (
+              <span className={gaugeToneClass(sevenDayView.tier)}>
+                {t('chat.planWindowSevenDay', { defaultValue: '7d' })}{' '}
+                <strong className={sevenDayView.tier === 'neutral' ? 'text-foreground' : undefined}>
+                  {usageText(sevenDayView)}
+                </strong>
+              </span>
+            )}
+          </span>
+        )}
+
         {/* Rate limit warning/rejected indicator */}
         {rateLimitInfo && rateLimitLabel && (
           <span className={`flex items-center gap-1 ${rateLimitColor}`}

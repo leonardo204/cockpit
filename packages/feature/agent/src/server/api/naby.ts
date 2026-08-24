@@ -66,6 +66,19 @@ import {
   probeClaudeModels,
   listGoogleModels,
   type ClaudeModelInfo,
+  // -- the plan-usage chip (5-hour / 7-day) ---------------------------------
+  // Two sources and the rule for combining them. `probeClaudeUsage` asks the
+  // Agent SDK through the session naby authenticated (per-account correct by
+  // construction); `readClaudeCliUsage` reads Claude Code's own already-fetched
+  // cache AND refuses to hand it over unless it provably belongs to the same
+  // account. `mergeSubscriptionUsage` keeps whichever window reports less left.
+  probeClaudeUsage,
+  readClaudeCliUsage,
+  mergeSubscriptionUsage,
+  SUBSCRIPTION_USAGE_TTL_MS,
+  SUBSCRIPTION_USAGE_MAX_STALE_MS,
+  type SubscriptionUsage,
+  type ClaudeCliUsageReason,
   BOOTSTRAP_DONE_KEY,
   BOOTSTRAP_QUESTIONS,
   answersToMemory,
@@ -652,6 +665,19 @@ export type NabyAction =
   //                      key. THE KEY IS READ SERVER-SIDE and never returned;
   //                      the answer is a list of model ids.
   | { action: 'models.list'; refresh?: boolean; provider?: string }
+  // HOW MUCH OF THE SUBSCRIPTION IS LEFT, ASKED RATHER THAN WAITED FOR.
+  //
+  // The status bar already reacted to `rate_limit_event`, but that is a PUSH: it
+  // arrives mid-turn, describes ONE window, and on most turns never arrives at
+  // all. This action answers the question the bar is actually asked — "how much
+  // have I got left, right now, in both windows" — before the user has run
+  // anything. Both paths are kept; see the case body for how they differ.
+  //
+  // SAFE TO CALL ON ANY NATURAL EVENT (a mount, a turn finishing). The 15-minute
+  // floor is enforced HERE, server-side, against a per-account cache, so a caller
+  // that asks more often gets a store read and no source is touched. `refresh`
+  // bypasses the cache and is for an explicit user action only — never a timer.
+  | { action: 'usage.limits'; refresh?: boolean }
   | { action: 'bootstrap.get' }
   | { action: 'bootstrap.save'; answers?: Record<string, string>; dismiss?: boolean }
   | { action: 'checkin.resolve'; checkinId: string; chosen: number; correction?: string }
@@ -833,6 +859,33 @@ export type NabyActionResult =
          *  with an empty list means the probe failed and nothing was cached. */
         cached: boolean;
       };
+      /**
+       * `usage.limits`: the account's plan windows, or null.
+       *
+       * NULL IS A FIRST-CLASS ANSWER AND THE CLIENT RENDERS IT AS NOTHING. It
+       * means any of: no Agent SDK on this machine, not on a plan (an API-key /
+       * Bedrock / Vertex account has no windows at all), the experimental usage
+       * method has been renamed or removed by an SDK bump, both sources failed,
+       * or what was cached is now past the staleness ceiling. None of those is an
+       * error the chat header should render, and none of them is a zero.
+       */
+      usage?: {
+        limits: SubscriptionUsage | null;
+        /** epoch ms this reading was taken, or 0 when nothing has ever succeeded.
+         *  Sent so the client can age the tooltip rather than presenting a
+         *  possibly-stale number as though it were live. */
+        fetchedAt: number;
+        /** True when this came from the cache rather than a fresh look. */
+        cached: boolean;
+        /** WHICH SOURCES ARE BEHIND THIS NUMBER. Shown in the tooltip: a merged
+         *  reading and a single-source reading are different claims and should
+         *  not look identical. */
+        sources: ('sdk' | 'cli')[];
+        /** Why the CLI-side reading was or was not used — including
+         *  `different-account`, which is the multi-account refusal and the one a
+         *  confused user most needs to be able to see. */
+        cliReason: ClaudeCliUsageReason;
+      };
       /** `bootstrap.get`/`save`: whether to offer the interview and what happened. */
       bootstrap?: {
         offer: boolean;
@@ -935,6 +988,103 @@ function writeModelCache(
 ): void {
   try {
     store.setSetting(modelCacheKey(catalog), JSON.stringify({ fetchedAt, [catalog]: models }));
+  } catch {
+    /* see above */
+  }
+}
+
+/** What `usage.limits` keeps between calls. Shaped as the response minus the
+ *  `cached` flag, which is a fact about the read rather than about the reading. */
+export type UsageCacheEntry = {
+  limits: SubscriptionUsage | null;
+  fetchedAt: number;
+  sources: ('sdk' | 'cli')[];
+  cliReason: ClaudeCliUsageReason;
+};
+
+/**
+ * Read the usage cache defensively, and REJECT ANYTHING THAT IS NOT A COMPLETE,
+ * TIMESTAMPED READING.
+ *
+ * The strictness is the point. A settings row can be hand-edited or half-written,
+ * and every caller of this decides "is it too old" by subtracting `fetchedAt` —
+ * so an entry that parses but has `fetchedAt: 0` would read as infinitely stale
+ * (harmless), while one with a missing `limits` key would read as a successful
+ * lookup that found no windows (not harmless: it would suppress a fresh probe for
+ * fifteen minutes). Both are refused as "no cache" instead.
+ */
+export function readUsageCache(raw: string | undefined): UsageCacheEntry | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0;
+    if (fetchedAt <= 0) return null;
+    // `null` is a legitimate stored value ("we asked and this account has no plan
+    // windows"), so it is distinguished from the key being absent entirely.
+    if (!('limits' in parsed)) return null;
+    const limits = (parsed.limits ?? null) as SubscriptionUsage | null;
+    if (limits !== null && typeof limits !== 'object') return null;
+    const sources = Array.isArray(parsed.sources)
+      ? parsed.sources.filter((s): s is 'sdk' | 'cli' => s === 'sdk' || s === 'cli')
+      : [];
+    const cliReason = (
+      parsed.cliReason === 'same-account' ||
+      parsed.cliReason === 'different-account' ||
+      parsed.cliReason === 'stale-cache'
+        ? parsed.cliReason
+        : 'no-cache'
+    ) as ClaudeCliUsageReason;
+    return { limits, fetchedAt, sources, cliReason };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * WHAT A CACHED READING IS STILL GOOD FOR, as a pure function of the clock.
+ *
+ * Extracted from the case body because it is the whole freshness policy of the
+ * feature and it CANNOT BE REACHED FROM AN END-TO-END TEST: the branches that are
+ * not `fresh` all continue into `probeClaudeUsage`, which spawns the Claude CLI
+ * and takes up to a minute to fail on a machine that has no sign-in. So the two
+ * thresholds are asserted here instead, at a fixed clock, and the case body reads
+ * as the three sentences they are.
+ *
+ *   fresh          inside the TTL — serve it and touch no source at all. This is
+ *                  what makes it safe for the client to ask on every turn end.
+ *   stale-usable   past the TTL but inside the ceiling — worth a fresh look, and
+ *                  still good enough to answer with IF that look fails.
+ *   expired        past the ceiling — no longer a reading. A failed look now
+ *                  answers with nothing, because serving a frozen percentage
+ *                  forever is the exact defect that disqualified reading another
+ *                  program's cache as a lone source.
+ *
+ * `refresh` (an explicit user action) skips straight past `fresh`; it can still
+ * be `stale-usable`, so an explicit refresh that FAILS falls back rather than
+ * blanking a number the user was already looking at.
+ */
+export function usageCacheState(
+  cached: { fetchedAt: number } | null,
+  now: number,
+  refresh: boolean,
+): 'none' | 'fresh' | 'stale-usable' | 'expired' {
+  if (!cached) return 'none';
+  const age = now - cached.fetchedAt;
+  if (age >= SUBSCRIPTION_USAGE_MAX_STALE_MS) return 'expired';
+  if (!refresh && age < SUBSCRIPTION_USAGE_TTL_MS) return 'fresh';
+  return 'stale-usable';
+}
+
+/** Persist a reading. An unwritable cache costs one extra probe next time and
+ *  nothing else, which is why this swallows rather than failing the request —
+ *  the same rule `writeModelCache` follows. */
+function writeUsageCache(
+  store: { setSetting(k: string, v: string): void },
+  key: string,
+  entry: UsageCacheEntry,
+): void {
+  try {
+    store.setSetting(key, JSON.stringify(entry));
   } catch {
     /* see above */
   }
@@ -1634,6 +1784,89 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       const fetchedAt = Date.now();
       writeModelCache(store, 'claude', fetchedAt, probed);
       return { ok: true, models: { claude: probed, fetchedAt, cached: false } };
+    }
+
+    /**
+     * HOW MUCH OF THE PLAN IS LEFT — both windows, on demand, best-effort.
+     *
+     * ── WHAT IT DOES NOT DO ──────────────────────────────────────────────────
+     * IT WRITES NOTHING TO THE TRANSCRIPT, and that is structural rather than
+     * careful: this is an HTTP action, not an `EngineEvent`, so it never enters
+     * `runTurn`'s stream and cannot reach the fold in runtime/session.ts that
+     * mints `RuntimeMessage`s. The rule it is respecting is the one written at
+     * length beside the `rate_limit` case there — an account's billing state must
+     * not go into a transcript that has to replay on an engine with no
+     * subscription. The only thing this case touches is one settings row holding
+     * its own cache. `usageLimitsTranscript.test.ts` pins that.
+     *
+     * IT NEVER BRANCHES ANYTHING. No turn is shortened, no run is stopped, no
+     * model is downgraded because a window is full. It is for telling the user.
+     *
+     * ── THE TWO SOURCES ──────────────────────────────────────────────────────
+     *   sdk  `probeClaudeUsage` — the Agent SDK's usage query, asked over an idle
+     *        prompt that spends no tokens. PRIMARY: it goes through the session
+     *        naby itself authenticated, so it is correct for the account this app
+     *        is using even when that is one of several isolated ones.
+     *   cli  `readClaudeCliUsage` — Claude Code's own status-line cache. Reads no
+     *        credential and makes no network call, and REFUSES to answer unless
+     *        it provably describes the same account (see that module's header;
+     *        `~/.claude` can be a different subscription entirely).
+     *
+     * The merge keeps, per window, whichever reading has LESS LEFT. The failure
+     * is asymmetric — a user told 5% when the truth is 84% loses a long run —
+     * so the tie-break is too.
+     *
+     * ── EVERY FAILURE ENDS IN A NUMBER WE ACTUALLY HAVE, OR IN NOTHING ───────
+     * Neither source answering does NOT fall back to the cache indefinitely: past
+     * `SUBSCRIPTION_USAGE_MAX_STALE_MS` the cached reading stops being served and
+     * the bar goes quiet. Serving a frozen percentage forever is the exact defect
+     * that made `.hud_cache` unusable as a lone source, and it would be no less a
+     * defect for being our own cache.
+     */
+    case 'usage.limits': {
+      // PER ACCOUNT. A single shared cache row would show one subscription's
+      // numbers under another's name for up to fifteen minutes after a switch —
+      // which is the same cross-account error the merge guard exists to prevent,
+      // arriving by a different route.
+      const accountId = activeClaudeAccountId(store);
+      const cacheKey = `usage.limits.cache.${accountId ?? 'default'}`;
+      const cached = readUsageCache(store.getSetting(cacheKey));
+      const now = Date.now();
+      const state = usageCacheState(cached, now, body.refresh === true);
+
+      // Inside the TTL: answer from the row and touch nothing. This is the branch
+      // that makes the client's "ask on every turn end" free.
+      if (state === 'fresh' && cached) return { ok: true, usage: { ...cached, cached: true } };
+
+      /** What to answer when a look fails: the last good reading while it is
+       *  still young enough to BE a reading, otherwise silence. Silence is
+       *  `limits: null` — never a zero, and `fetchedAt: 0` so the client cannot
+       *  age a reading that does not exist. */
+      const fallback = (): NabyActionResult => {
+        if (state === 'stale-usable' && cached) return { ok: true, usage: { ...cached, cached: true } };
+        return {
+          ok: true,
+          usage: { limits: null, fetchedAt: 0, cached: false, sources: [], cliReason: 'no-cache' },
+        };
+      };
+
+      // Both sources are consulted every time, and INDEPENDENTLY: the CLI read is
+      // a local file, so it costs nothing and must not be skipped just because
+      // the SDK answered — the whole point is that the pessimistic one wins.
+      const sdkUsage = await probeClaudeUsage(accountId ? { accountId } : {});
+      const cli = readClaudeCliUsage({ ...(accountId ? { accountId } : {}), now });
+      // `sdkUsage` FIRST: it is the preferred source on a tie, being the one that
+      // is per-account correct by construction.
+      const limits = mergeSubscriptionUsage(sdkUsage, cli.usage);
+      if (!limits) return fallback();
+
+      const sources: ('sdk' | 'cli')[] = [
+        ...(sdkUsage ? (['sdk'] as const) : []),
+        ...(cli.usage ? (['cli'] as const) : []),
+      ];
+      const fresh = { limits, fetchedAt: now, sources, cliReason: cli.reason };
+      writeUsageCache(store, cacheKey, fresh);
+      return { ok: true, usage: { ...fresh, cached: false } };
     }
 
     // Phase 1.5 (P15-07) — cold start. Read-only.
