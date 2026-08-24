@@ -85,6 +85,38 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.28.0 — 2026-08-24
+
+### en
+
+New sessions get a name you can read, and the sessions you could not close now close.
+
+**New**
+
+- A new session is called something like \`0824-1530-otter\` instead of a random id. Once the conversation has content the title comes from what you talked about, as before, and a name you type yourself is never overwritten.
+
+**Fixed**
+
+- A session with no project can be closed. Its ✕ was disabled because the delete went through a project-shaped request; sessions like these are created by ordinary use, so they had been accumulating with no way to remove them.
+  - Closing one now also clears it from any window that had it open, which the old path could not do.
+- The ✕ in **Recent sessions** is no longer hidden behind the preview panel. The panel was anchored inside the row, so hovering to reach the button was what covered it.
+- The usage row no longer says the same thing twice. "Approaching Limit" repeated the weekly figure and its countdown; only an actual refusal is called out now.
+
+### ko
+
+새 세션에 읽을 수 있는 이름이 붙고, 닫을 수 없던 세션이 닫혀요.
+
+**새로 생긴 것**
+
+- 새 세션 이름이 난수 대신 \`0824-1530-otter\` 같은 형태예요. 대화가 시작되면 예전처럼 내용에서 제목을 뽑아 오고, 직접 지은 이름은 덮어쓰지 않아요.
+
+**고친 것**
+
+- 프로젝트가 없는 세션도 닫을 수 있어요. 삭제 요청이 프로젝트 단위로만 만들어져 있어서 ✕가 잠겨 있었는데, 이런 세션은 평소 사용 중에도 생기다 보니 지울 방법 없이 쌓이고 있었어요.
+  - 이제 닫으면 그 세션을 열어 둔 창에서도 함께 정리돼요. 예전 경로로는 그게 안 됐어요.
+- **최근 세션**의 ✕가 미리보기 패널에 가리지 않아요. 패널이 행 안쪽을 기준으로 열려서, 버튼을 누르러 다가가는 동작이 버튼을 덮고 있었어요.
+- 사용량 줄이 같은 말을 두 번 하지 않아요. "Approaching Limit"이 주간 수치와 남은 시간을 그대로 반복했는데, 이제는 실제로 거절당했을 때만 알려 줘요.
+
 ## 1.27.0 — 2026-08-24
 
 ### en

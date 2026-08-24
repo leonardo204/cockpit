@@ -69,17 +69,19 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
   }, [hasCountdown]);
 
   // Rate limit status styling
-  const rateLimitColor = rateLimitInfo?.status === 'rejected'
-    ? 'text-red-500'
-    : rateLimitInfo?.status === 'allowed_warning'
-      ? 'text-yellow-500'
-      : 'text-muted-foreground';
-
-  const rateLimitLabel = rateLimitInfo?.status === 'rejected'
-    ? t('chat.rateLimitRejected', 'Rate Limited')
-    : rateLimitInfo?.status === 'allowed_warning'
-      ? t('chat.rateLimitWarning', 'Approaching Limit')
-      : null;
+  // ONLY `rejected` IS DRAWN HERE ANY MORE, and the two states that were
+  // dropped were dropped because the plan chip now says the same thing better.
+  //
+  // `allowed_warning` rendered "Approaching Limit 89% · 9h12m" beside a chip
+  // already reading "7일 89% (9h12m)" — the same number, the same clock, twice
+  // in one row. `allowed` rendered a bare countdown, which is the chip's job
+  // too. Neither told the reader anything the chip had not.
+  //
+  // `rejected` is NOT redundant and stays: it is the only signal that a request
+  // was actually REFUSED. A chip at 100% says the window is spent; it cannot
+  // say the backend just turned a turn away, and that is the one moment the
+  // user needs the row to interrupt them.
+  const rateLimitRejected = rateLimitInfo?.status === 'rejected';
 
   // Format reset time as countdown. The seconds→milliseconds step is NOT done
   // here: the unit is a contract (runtime/engine.ts declares UNIX seconds) and
@@ -246,8 +248,8 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
         )}
 
         {/* Rate limit warning/rejected indicator */}
-        {rateLimitInfo && rateLimitLabel && (
-          <span className={`flex items-center gap-1 ${rateLimitColor}`}
+        {rateLimitInfo && rateLimitRejected && (
+          <span className="flex items-center gap-1 text-red-500"
             title={[
               rateLimitInfo.rateLimitType && `Type: ${formatLimitType(rateLimitInfo.rateLimitType)}`,
               utilizationPercent && `Usage: ${utilizationPercent}`,
@@ -255,39 +257,16 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
               rateLimitInfo.isUsingOverage && 'Using overage',
             ].filter(Boolean).join(' · ')}
           >
-            {rateLimitInfo.status === 'rejected' ? (
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
-            ) : (
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            )}
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
             <span>
-              <strong>{rateLimitLabel}</strong>
-              {utilizationPercent && ` ${utilizationPercent}`}
+              <strong>{t('chat.rateLimitRejected', 'Rate Limited')}</strong>
+              {/* The reset stays; the percentage does not. At `rejected` the
+                  number is 100 and the chip is already showing it — what this
+                  line adds is WHEN it lifts. */}
               {rateLimitInfo.resetsAt && ` · ${formatResetTime(rateLimitInfo.resetsAt)}`}
             </span>
-          </span>
-        )}
-
-        {/* Rate limit info (shown when allowed — display reset countdown) */}
-        {rateLimitInfo && !rateLimitLabel && rateLimitInfo.resetsAt && (
-          <span className="flex items-center gap-1.5"
-            title={[
-              rateLimitInfo.rateLimitType && formatLimitType(rateLimitInfo.rateLimitType),
-              utilizationPercent && `Usage: ${utilizationPercent}`,
-              `Resets in: ${formatResetTime(rateLimitInfo.resetsAt)}`,
-            ].filter(Boolean).join(' · ')}
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            {utilizationPercent
-              ? <span>{utilizationPercent}</span>
-              : <span>{formatResetTime(rateLimitInfo.resetsAt)}</span>
-            }
           </span>
         )}
 
