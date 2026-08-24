@@ -670,6 +670,8 @@
     "output": "Output",
     "outputHint": "What the model produced this turn: its answer plus every tool call it made. Output is billed at a higher rate than input.",
     "turnCostHint": "What this turn's tokens are worth at the provider's metered prices, as it reported them. On a Claude subscription run that is what the same tokens would have cost on the API, not a charge to you.",
+    "usageDetailsShow": "Show this turn's other figures — input, output, cache reuse and cost",
+    "usageDetailsHide": "Hide the turn's detailed figures",
     "copiedCommandTooltip": "Copied!",
     "copyCommandTooltip": "Copy command: claude -r {{sessionId}}",
     "executedCommand": "Executed `{{command}}`{{exitInfo}}, output:\n```\n{{output}}\n```",

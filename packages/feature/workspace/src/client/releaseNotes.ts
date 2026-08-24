@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.29.0 — 2026-08-24
+
+### en
+
+The bar under the conversation shows what you can act on, and explains every figure it shows.
+
+**New**
+
+- Hover any figure in that bar and it says what it is. Turn input, output and the dollar amount had no explanation at all — they were numbers you either already understood or did not.
+- **Cache hit** now says what it is made of: how much was read from the cache, how much was written to it this turn, and how much was sent uncached. What the cache holds is described in words, because which parts of it were reused is not something the API reports — so the tooltip states the three totals it can actually measure and does not guess at the rest.
+
+**Changed**
+
+- The bar is shorter by default. It keeps your plan usage, how full the conversation is, and any refusal — the three you can do something about. Turn input, output, cache hit and cost move behind a **+4** control at the right end, and one click brings them all back for good: the choice is remembered app-wide and survives a restart.
+- A turn with none of those three to report now draws no bar at all, instead of a row of figures nobody asked for.
+
+### ko
+
+대화 아래 줄이 손쓸 수 있는 것만 보여 주고, 보여 주는 수치는 전부 스스로를 설명해요.
+
+**새로 생긴 것**
+
+- 그 줄의 어떤 수치든 위에 올리면 무엇인지 알려 줘요. 턴 입력과 출력과 금액은 설명이 아예 없어서, 알던 사람만 알던 숫자였어요.
+- **캐시 적중**이 무엇으로 이루어졌는지 말해 줘요. 캐시에서 읽은 양, 이번 턴에 캐시에 기록한 양, 캐시 없이 보낸 양이에요. 캐시에 무엇이 담기는지는 문장으로 설명해요. 그 안에서 어느 부분이 재사용됐는지는 API가 알려 주지 않아서, 실제로 잴 수 있는 세 수치만 말하고 나머지는 짐작하지 않아요.
+
+**달라진 것**
+
+- 줄이 기본적으로 짧아졌어요. 플랜 사용량과 대화가 얼마나 찼는지와 거절당한 사실만 남겨요. 셋 다 손쓸 수 있는 것들이에요. 턴 입력·출력·캐시 적중·비용은 오른쪽 끝 **+4** 버튼 뒤로 들어가고, 한 번 누르면 계속 펼쳐진 채로 있어요. 이 선택은 앱 전체에 적용되고 앱을 껐다 켜도 남아요.
+- 남길 것이 셋 다 없는 턴에서는 줄 자체가 그려지지 않아요. 아무도 찾지 않는 숫자만 남은 줄을 띄우지 않아요.
+
 ## 1.28.0 — 2026-08-24
 
 ### en

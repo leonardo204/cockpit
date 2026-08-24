@@ -79,8 +79,14 @@ describe('the cache tooltip says what was hit, as far as that is knowable', () =
     // explaining a different number than the one printed beside it.
     expect(src).toContain('{cache.percent}%');
     expect(src).not.toContain('cacheReadInputTokens / (tokenUsage.inputTokens');
-    // Show-or-not moved into the helper with it.
-    expect(src).toContain('{cache.show && (');
+    // Show-or-not moved into the helper with it. The span is no longer gated on
+    // `cache.show` DIRECTLY — the row's figures are now drawn through
+    // `usageBarView` (usageBarView.test.ts) — but the rule is still this
+    // helper's: `cache.show` is what the row reports as the stat's presence, and
+    // nothing else in the file decides whether there is a cache figure to show.
+    expect(src).toContain('inputReused: cache.show');
+    expect(src).toContain("{shows('inputReused') && cache.show && (");
+    expect(src).not.toMatch(/cacheReadInputTokens\s*>\s*0/);
   });
 
   it('carries the three counts, each through i18next number formatting', () => {
