@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RecentSessionsModal } from './RecentSessionsModal';
 import { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
+import { recentTooltipPosition } from './recentTooltipAnchor';
 
 export interface GlobalSession {
   cwd: string;
@@ -39,16 +40,20 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
   const [now, setNow] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
   // Rich tooltip: which session is hovered + where to anchor it (fixed positioning
-  // escapes the dropdown's overflow-y-auto clipping)
+  // escapes the dropdown's overflow-y-auto clipping).
+  //
+  // ANCHORED TO THE WHOLE ROW, never to the open target inside it. The delete ×
+  // sits at the row's right end, so measuring from the inner button put the
+  // panel straight over the button — see recentTooltipAnchor.ts, which owns the
+  // geometry and is where that rule is asserted.
   const [tooltip, setTooltip] = useState<{ session: GlobalSession; top: number; left: number } | null>(null);
   const showTooltip = useCallback((session: GlobalSession, e: React.MouseEvent<HTMLElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const TOOLTIP_MAX_H = 260;
-    let top = rect.top;
-    if (top + TOOLTIP_MAX_H > window.innerHeight) {
-      top = Math.max(8, window.innerHeight - TOOLTIP_MAX_H - 8);
-    }
-    setTooltip({ session, top, left: rect.right + 8 });
+    const { top, left } = recentTooltipPosition(rect, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    setTooltip({ session, top, left });
   }, []);
   const hideTooltip = useCallback(() => setTooltip(null), []);
 
@@ -182,14 +187,20 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
                    covers the modal's nested case with the same handler. */
                 <div
                   key={`${session.cwd}-${session.sessionId}`}
+                  /* HOVER IS TRACKED ON THE ROW, not on the open target inside
+                     it. Two things follow, and both are the fix for "the popup
+                     hides the ×": the preview is anchored past the row's right
+                     edge (× included) instead of past the button's, and moving
+                     the pointer from the text onto the × never leaves the
+                     hovered element, so nothing flickers on the way there. */
+                  onMouseEnter={(e) => showTooltip(session, e)}
+                  onMouseLeave={hideTooltip}
                   className={`group flex items-start pr-1 hover:bg-accent transition-colors ${
                     index !== sessions.length - 1 ? 'border-b border-border/50' : ''
                   } ${currentCwd === session.cwd ? 'bg-accent/50' : ''}`}
                 >
                   <button
                     onClick={() => handleSessionClick(session)}
-                    onMouseEnter={(e) => showTooltip(session, e)}
-                    onMouseLeave={hideTooltip}
                     className="flex-1 min-w-0 px-3 py-2 text-left flex items-start gap-2"
                   >
                     {/* Status indicator: loading blinking orange dot / unread red static dot / normal gray dot */}

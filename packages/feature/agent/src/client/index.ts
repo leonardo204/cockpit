@@ -30,10 +30,7 @@ export { GlobalSessionMonitor, type GlobalSession } from './GlobalSessionMonitor
 // (the workspace sidebar) performs the optimistic removal.
 export { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
 export {
-  canDeleteRecentSession,
-  recentDeleteBlock,
   withoutRecentSession,
-  type RecentDeleteBlock,
   type RecentDeleteTarget,
 } from './recentSessionDelete';
 export { SessionCompleteToastContainer, showSessionCompleteToast } from './SessionCompleteToast';
