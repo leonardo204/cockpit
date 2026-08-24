@@ -68,11 +68,24 @@ describe('it does not fight the startup flow', () => {
     expect(MODAL).toContain('fixed inset-0 z-50');
   });
 
-  it('waits for onboarding to be finished before showing anything', () => {
+  it('asks whether onboarding is finished, and DECIDES with it rather than around it', () => {
     // The case the fresh-install rule does NOT cover: a user who skipped the
     // wizard without a key (so it is still up) and later updates.
+    //
+    // The answer is passed to planWhatsNew instead of short-circuiting here,
+    // which is what makes "never during onboarding" a row in
+    // releaseNotesOps.test.ts rather than a line only a wizard could exercise.
     expect(MODAL).toContain('api.onboarding.state()');
-    expect(MODAL).toContain('onboarded !== true');
+    expect(MODAL).toContain('onboarding.value.onboarded === true');
+    expect(MODAL).toMatch(/planWhatsNew\(\{[\s\S]*?onboarded,[\s\S]*?\}\)/);
+  });
+
+  it('hands the fresh-install FACT to the decision instead of inferring it', () => {
+    // The bug: an installation that predates the watermark has no watermark
+    // either, so "no watermark" was read as "brand-new user" and the launch
+    // after an update — the one this feature is for — was the silent one.
+    // Main latches the answer at boot; the gate only carries it across.
+    expect(MODAL).toMatch(/planWhatsNew\(\{[\s\S]*?freshInstall: res\.value\.freshInstall/);
   });
 
   it('shows nothing outside the desktop app', () => {

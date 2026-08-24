@@ -8,16 +8,24 @@
  * picking the entries that fall in the gap. None of it touches the DOM, so it
  * runs in vitest's default node environment.
  *
- * THE FOUR RULES, and the order they are applied in:
+ * THE FIVE RULES, and the order they are applied in:
  *
  *   1. SHOW ONLY WHEN THE VERSION WENT UP. Compared numerically, never as
  *      strings — `'1.9.0' < '1.10.0'` is false lexicographically and true in
  *      every sense that matters here.
- *   2. NEVER ON A FRESH INSTALL. No recorded version means a brand-new user,
- *      who has nothing to be told about; the current version is recorded
- *      silently and nothing is shown. This is the rule implementations get
- *      wrong, and getting it wrong is loud: a new user's first impression is a
- *      changelog for software they have never run.
+ *   2. NEVER ON A FRESH INSTALL. A brand-new installation has nothing to be
+ *      told about; the current version is recorded silently and nothing is
+ *      shown. This is the rule implementations get wrong, and getting it wrong
+ *      is loud: a new user's first impression is a changelog for software they
+ *      have never run.
+ *   2b. AN EXISTING INSTALLATION WITH NO WATERMARK HEARS ABOUT THE VERSION IT IS
+ *      RUNNING. This is the OTHER way to get rule 2 wrong, and it is the way
+ *      this file got it wrong first: "no watermark" was read as "brand-new
+ *      user", so the very launch the feature was built for — the first one
+ *      after updating into the build that introduced it — was the one launch
+ *      that said nothing, for EVERY existing user at once. The two cases are
+ *      distinguishable, and `freshInstall` is the caller saying which is which
+ *      rather than this function guessing (see `planWhatsNew`).
  *   3. ONCE PER VERSION. Dismissal records the version that was shown, which is
  *      why `record` is part of the answer rather than something the caller
  *      invents.
@@ -26,6 +34,9 @@
  *      just the newest, and not a four-step wizard the user has to click
  *      through. The newest entry is what they are most likely to care about, so
  *      it is on screen first and the rest is a scroll away.
+ *   5. NOTHING WHILE THE SETUP WIZARD IS UP. `onboarded` is the second signal
+ *      the caller passes in, for the same reason as the first: the guard was a
+ *      hand-written `return` in the gate, which no test on values could reach.
  */
 
 /**
@@ -244,8 +255,9 @@ export interface WhatsNewPlan {
   /** Entries to show, newest first. Empty means show nothing at all. */
   entries: ReleaseNote[];
   /**
-   * A version to record WITHOUT showing anything — the fresh-install case, and
-   * the upgrade whose range happens to contain no entries.
+   * A version to record WITHOUT showing anything — the fresh-install case
+   * (including the stamp written while its setup wizard is still up), and the
+   * upgrade whose range happens to contain no entries.
    *
    * `null` when there is nothing to record now: either the popup is about to be
    * shown (dismissing it records) or nothing happened at all. A launch must
@@ -261,36 +273,89 @@ const NOTHING: WhatsNewPlan = { entries: [], recordSilently: null };
  * What this launch should do about the release notes.
  *
  * `lastSeenVersion` is `null` on a fresh install — and also on any installation
- * whose watermark file could not be read, which is deliberately the same
- * branch: an unreadable record and no record are both "we do not know what this
- * user has seen", and announcing nothing is the safe answer to that.
+ * whose watermark file could not be read, and on every installation that
+ * existed before the watermark did. Those are NOT the same situation, and
+ * telling them apart is the whole of rule 2b, so the answer is not inferred
+ * from the missing watermark: the caller passes `freshInstall` in.
+ *
+ * BOTH EXTRA SIGNALS ARE VALUES, not lookups. This function stays pure — it
+ * reads no bridge, no store and no DOM — so every combination below is a table
+ * row in releaseNotesOps.test.ts rather than something only a second launch of
+ * a packaged build could exercise.
  */
 export function planWhatsNew(input: {
   currentVersion: string | null | undefined;
   lastSeenVersion: string | null | undefined;
   notes: ReleaseNote[];
+  /**
+   * TRUE only when this installation has never run before — the caller's answer
+   * to "is there anything here that predates this launch", not a guess made
+   * from the missing watermark. In the desktop app it is latched in the main
+   * process at boot, before anything this launch does can create the evidence
+   * it looks at (electron/whats-new.ts `looksLikeFreshInstall`).
+   *
+   * DEFAULTS TO TRUE — the silent answer. A caller that cannot say (an older
+   * preload bridge, a plain browser tab) must not be able to turn a brand-new
+   * user's first launch into a changelog.
+   */
+  freshInstall?: boolean;
+  /**
+   * Whether setup is finished. Defaults to true, for the hosts that have no
+   * wizard to ask; the gate passes the real answer.
+   */
+  onboarded?: boolean;
 }): WhatsNewPlan {
   const { currentVersion, lastSeenVersion, notes } = input;
+  const freshInstall = input.freshInstall ?? true;
+  const onboarded = input.onboarded ?? true;
 
   // Nothing trustworthy to compare against, so nothing is written either. See
   // UNKNOWN_VERSION for why the sentinel has to be excluded by name.
   if (!currentVersion || currentVersion === UNKNOWN_VERSION) return NOTHING;
   if (!parseVersion(currentVersion)) return NOTHING;
 
-  // RULE 2 — fresh install. Record and say nothing. Note that this also covers
-  // the very first launch of the build that introduced the popup: an existing
-  // user has no watermark yet either, so their upgrade is silent and the NEXT
-  // one announces. Anything else would greet them with an archive.
-  if (!lastSeenVersion || !parseVersion(lastSeenVersion)) {
-    return { entries: [], recordSilently: currentVersion };
+  // An unreadable watermark is deliberately the same value as no watermark at
+  // all: both are "we have no record of what this user has seen".
+  const seen = lastSeenVersion && parseVersion(lastSeenVersion) ? lastSeenVersion : null;
+
+  // RULE 5 — the setup wizard owns the screen, so nothing is SHOWN here at all.
+  //
+  // One thing is still written: a brand-new installation's watermark. Without
+  // it the fix for rule 2b would leak straight back into a new user's face —
+  // they finish setup, and on their SECOND launch the installation has state,
+  // still has no watermark, and would read as an existing one. Stamping the
+  // version this installation was born on closes that window and costs the user
+  // nothing, because there is by definition nothing they have missed.
+  //
+  // An EXISTING installation stuck in the wizard (skipped it without a key)
+  // records nothing, so its notes survive to the first launch after setup.
+  if (!onboarded) {
+    return freshInstall && !seen ? { entries: [], recordSilently: currentVersion } : NOTHING;
+  }
+
+  if (!seen) {
+    // RULE 2 — genuinely fresh install. Record and say nothing.
+    if (freshInstall) return { entries: [], recordSilently: currentVersion };
+
+    // RULE 2b — an installation that predates the watermark. It is running a
+    // version it was never told about, so it is told about THAT ONE and nothing
+    // else: with no watermark there is no honest floor to the range, and an
+    // archive would be a guess dressed up as news. The version they just
+    // received is the bounded, true answer.
+    const entries = notes.filter((n) => compareVersions(n.version, currentVersion) === 0);
+    return entries.length > 0
+      ? { entries, recordSilently: null }
+      : // Nobody wrote notes for the running version. Record it, or every later
+        // launch re-runs this to the same empty answer.
+        { entries: [], recordSilently: currentVersion };
   }
 
   // RULE 1 — only upwards. A downgrade records nothing on purpose: the
   // watermark stays at the highest version the user has been told about, so
   // going back up to it later does not re-announce what they already read.
-  if ((compareVersions(currentVersion, lastSeenVersion) ?? 0) <= 0) return NOTHING;
+  if ((compareVersions(currentVersion, seen) ?? 0) <= 0) return NOTHING;
 
-  const entries = selectReleaseNotes(notes, lastSeenVersion, currentVersion);
+  const entries = selectReleaseNotes(notes, seen, currentVersion);
 
   // An upgrade nobody wrote notes for. Record it silently rather than leaving
   // the watermark behind, or every later launch re-runs this to the same empty

@@ -20,15 +20,23 @@
  *
  * IT DOES NOT FIGHT ONBOARDING. Two independent guards, because the failure is
  * a brand-new user being handed a changelog on top of a setup wizard:
- *   1. `planWhatsNew`'s fresh-install rule — no watermark means nothing is
- *      shown, which is every genuinely new user.
- *   2. This gate additionally waits for `onboarding.onboarded`, which catches
- *      the case rule 1 does not: someone who SKIPPED the wizard without a key
- *      (so it is still up) and later updates. Nothing is shown and nothing is
- *      recorded on such a launch, so the notes are simply announced on the
- *      first launch after they finish setting up.
+ *   1. `planWhatsNew`'s fresh-install rule — a brand-new INSTALLATION is
+ *      recorded silently and shown nothing.
+ *   2. `onboarding.onboarded` is fetched here and handed to the same function,
+ *      which shows nothing while the wizard is up. It catches the case rule 1
+ *      does not: someone who SKIPPED the wizard without a key (so it is still
+ *      up) and later updates — for them nothing is shown and nothing is
+ *      recorded, so the notes survive to the first launch after setup.
  * The overlay is `z-50`, under the wizard's `z-[60]`, so even if both were ever
  * on screen the wizard is the one in front.
+ *
+ * NEITHER GUARD IS A `return` IN THIS FILE ANY MORE. Both are ARGUMENTS to
+ * `planWhatsNew`, because a guard written as an early return here is a guard no
+ * test on values can reach — and the first version of this feature was wrong in
+ * exactly that blind spot: "no watermark" was read as "new user", so on the
+ * launch after an update every EXISTING user was told nothing at all. The gate
+ * now gathers three facts (running version, watermark, is this installation
+ * brand new) plus onboarding, and does what the pure function says.
  *
  * PORTALED, like every other overlay here: the workspace wraps its panels in a
  * `translateX` container and several hosts are `overflow-hidden`, so an
@@ -50,7 +58,19 @@ import {
 type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 
 interface WhatsNewBridge {
-  get(): Promise<Result<{ currentVersion: string; lastSeenVersion: string | null }>>;
+  get(): Promise<
+    Result<{
+      currentVersion: string;
+      lastSeenVersion: string | null;
+      /**
+       * Whether this installation has never run before, latched in main at boot
+       * (electron/whats-new.ts). OPTIONAL: an older bridge omits it, and
+       * `planWhatsNew` reads a missing answer as "fresh", which is the silent
+       * one.
+       */
+      freshInstall?: boolean;
+    }>
+  >;
   markSeen(version: string): Promise<Result<void>>;
 }
 
@@ -178,11 +198,12 @@ export function WhatsNewGate() {
     let alive = true;
 
     void (async () => {
-      // Guard 2 (see the header): a wizard that is still up owns the screen.
-      // Nothing is recorded on this launch either, so the notes survive to the
-      // launch after setup finishes.
+      // Guard 2 (see the header), as a VALUE rather than a return: a host with
+      // no onboarding bridge at all has no wizard to wait for, and an answer
+      // that did not come back is treated as "not finished" — the cautious
+      // reading, since the wizard may well be on screen.
       const onboarding = api.onboarding ? await api.onboarding.state() : null;
-      if (onboarding && (!onboarding.ok || onboarding.value.onboarded !== true)) return;
+      const onboarded = !onboarding || (onboarding.ok && onboarding.value.onboarded === true);
       if (!alive) return;
 
       const res = await api.whatsNew!.get();
@@ -191,13 +212,18 @@ export function WhatsNewGate() {
       const plan = planWhatsNew({
         currentVersion: res.value.currentVersion,
         lastSeenVersion: res.value.lastSeenVersion,
+        // The signal that tells a brand-new installation apart from one that
+        // predates the watermark — the distinction this popup failed on.
+        freshInstall: res.value.freshInstall,
+        onboarded,
         notes: ALL_NOTES,
       });
 
       if (plan.recordSilently) {
-        // The fresh-install path, and the upgrade nobody wrote notes for. The
-        // user is told nothing; the watermark moves so the NEXT upgrade is the
-        // one that speaks.
+        // The fresh-install path (including the stamp taken while its wizard is
+        // still up), and the upgrade nobody wrote notes for. The user is told
+        // nothing; the watermark moves so the NEXT upgrade is the one that
+        // speaks.
         await api.whatsNew!.markSeen(plan.recordSilently);
         return;
       }

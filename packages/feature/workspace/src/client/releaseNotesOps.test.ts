@@ -222,6 +222,97 @@ describe('planWhatsNew', () => {
     }
   });
 
+  it('RULE 2b — an EXISTING installation with no watermark hears about the version it is RUNNING', () => {
+    // THE BUG THIS EXISTS FOR. The first launch after updating into the build
+    // that introduced the popup: an existing user has no watermark either, and
+    // the old rule read that as a fresh install and said nothing — so the
+    // feature never fired for anybody who already had the app. The caller can
+    // tell the two apart (see `freshInstall`) and now says which one this is.
+    const plan = planWhatsNew({
+      currentVersion: '1.25.0',
+      lastSeenVersion: null,
+      freshInstall: false,
+      onboarded: true,
+      notes,
+    });
+    // ONLY the running version, not the archive: we do not know what they have
+    // already seen, so four entries would be four guesses.
+    expect(plan.entries.map((n) => n.version)).toEqual(['1.25.0']);
+    // Recording still happens on dismissal, like every other shown popup.
+    expect(plan.recordSilently).toBeNull();
+  });
+
+  it('RULE 2b — records silently when the running version has no entry, rather than retrying forever', () => {
+    const plan = planWhatsNew({
+      currentVersion: '9.9.9',
+      lastSeenVersion: null,
+      freshInstall: false,
+      onboarded: true,
+      notes,
+    });
+    expect(plan.entries).toEqual([]);
+    expect(plan.recordSilently).toBe('9.9.9');
+  });
+
+  it('RULE 2b — the sentinel is still excluded by NAME, even for an existing installation', () => {
+    expect(
+      planWhatsNew({
+        currentVersion: UNKNOWN_VERSION,
+        lastSeenVersion: null,
+        freshInstall: false,
+        onboarded: true,
+        notes,
+      }),
+    ).toEqual({ entries: [], recordSilently: null });
+  });
+
+  it('a fresh install is STAMPED while the wizard is still up, so its second launch is silent too', () => {
+    // Without this the fix would leak: a brand-new user finishes setup, and on
+    // their SECOND launch the installation has state, no watermark, and would
+    // read as an existing one. The stamp closes that window.
+    const plan = planWhatsNew({
+      currentVersion: '1.25.0',
+      lastSeenVersion: null,
+      freshInstall: true,
+      onboarded: false,
+      notes,
+    });
+    expect(plan.entries).toEqual([]);
+    expect(plan.recordSilently).toBe('1.25.0');
+  });
+
+  it('NEVER shows during onboarding — not even a real upgrade, and it records nothing then', () => {
+    // An existing user who skipped the wizard without a key still has it up.
+    // Showing nothing AND recording nothing means the notes survive to the
+    // first launch after they finish setting up.
+    expect(
+      planWhatsNew({
+        currentVersion: '1.25.0',
+        lastSeenVersion: '1.22.0',
+        freshInstall: false,
+        onboarded: false,
+        notes,
+      }),
+    ).toEqual({ entries: [], recordSilently: null });
+    expect(
+      planWhatsNew({
+        currentVersion: '1.25.0',
+        lastSeenVersion: null,
+        freshInstall: false,
+        onboarded: false,
+        notes,
+      }),
+    ).toEqual({ entries: [], recordSilently: null });
+  });
+
+  it('treats an ABSENT freshness signal as a fresh install — the silent answer', () => {
+    // A caller that cannot say (an older bridge, a browser tab) must not be
+    // able to turn a brand-new user's first launch into a changelog.
+    const plan = planWhatsNew({ currentVersion: '1.25.0', lastSeenVersion: null, notes });
+    expect(plan.entries).toEqual([]);
+    expect(plan.recordSilently).toBe('1.25.0');
+  });
+
   it('RULE 1 — shows the range on an upgrade, and records NOTHING yet', () => {
     const plan = planWhatsNew({ currentVersion: '1.25.0', lastSeenVersion: '1.22.0', notes });
     expect(plan.entries.map((n) => n.version)).toEqual(['1.25.0', '1.24.1', '1.24.0', '1.23.0']);
@@ -307,6 +398,7 @@ describe('the shipped changelog', () => {
   it('parses, so the feature is demonstrable rather than empty on arrival', () => {
     expect(notes.length).toBeGreaterThanOrEqual(5);
     expect(notes.map((n) => n.version)).toEqual([
+      '1.26.1',
       '1.26.0',
       '1.25.0',
       '1.24.1',
@@ -326,6 +418,76 @@ describe('the shipped changelog', () => {
   it('dates every entry', () => {
     for (const entry of notes) {
       expect(entry.date, `${entry.version} has no date`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  // The groups, in the ONE order every entry uses. Bold lines rather than
+  // `###` headings, because `###` is how the parser finds a language section —
+  // `### New` would be read as a language called "new" and swallow the block.
+  const GROUPS = {
+    en: ['**New**', '**Improved**', '**Fixed**'],
+    ko: ['**새로 생긴 것**', '**나아진 것**', '**고친 것**'],
+  } as const;
+
+  const groupsIn = (body: string, lang: 'en' | 'ko'): number[] =>
+    GROUPS[lang].map((label, i) => (body.includes(label) ? i : -1)).filter((i) => i >= 0);
+
+  it('opens every entry with a lead line, then groups the items', () => {
+    for (const entry of notes) {
+      for (const lang of ['en', 'ko'] as const) {
+        const body = entry.bodies[lang] ?? '';
+        const first = body.split('\n').find((line) => line.trim())?.trim() ?? '';
+        // A reader who reads one line should still learn what the release is
+        // about, so the entry cannot open with a bullet or a group label.
+        expect(first.startsWith('-'), `${entry.version}/${lang} opens with a bullet`).toBe(false);
+        expect(first.startsWith('**'), `${entry.version}/${lang} opens with a group`).toBe(false);
+
+        const groups = groupsIn(body, lang);
+        expect(groups.length, `${entry.version}/${lang} has no group at all`).toBeGreaterThan(0);
+        // New → Improved → Fixed, always, so the shape does not have to be
+        // relearned per entry.
+        expect(groups, `${entry.version}/${lang} groups are out of order`).toEqual(
+          [...groups].sort((a, b) => a - b),
+        );
+        // Every bullet belongs to a group: nothing may sit between the lead
+        // line and the first label.
+        const beforeFirstGroup = body.slice(0, body.indexOf(GROUPS[lang][groups[0] as 0]));
+        expect(
+          /^\s*[-*]\s/m.test(beforeFirstGroup),
+          `${entry.version}/${lang} has an ungrouped bullet`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('groups the SAME way in both languages — one translation, not two edits', () => {
+    for (const entry of notes) {
+      expect(groupsIn(entry.bodies.ko ?? '', 'ko'), `${entry.version} groups differ`).toEqual(
+        groupsIn(entry.bodies.en ?? '', 'en'),
+      );
+    }
+  });
+
+  it('speaks Korean in the app\'s "~해요" voice rather than the specs\' "~한다"', () => {
+    // The register was wrong on arrival: these bodies were written in the plain
+    // declarative the project mandates for SPEC DOCUMENTS. This is UI copy in a
+    // popup, and a spec talking at the reader is the wrong voice for it.
+    for (const entry of notes) {
+      const ko = entry.bodies.ko ?? '';
+      const plainDeclarative = ko.match(/\S*다(?=[.!?]|$)/gm) ?? [];
+      expect(plainDeclarative, `${entry.version} still speaks in ~한다`).toEqual([]);
+      expect(/요[.!?]/.test(ko), `${entry.version} has no ~해요 sentence at all`).toBe(true);
+    }
+  });
+
+  it('avoids the two markdown shapes that would eat the entry they are in', () => {
+    for (const entry of notes) {
+      for (const [lang, body] of Object.entries(entry.bodies)) {
+        // `### anything` is a LANGUAGE heading to the parser.
+        expect(/^###\s/m.test(body), `${entry.version}/${lang} has a ### heading`).toBe(false);
+        // A fence opened inside a bullet swallows the rest of the block.
+        expect(body.includes('```'), `${entry.version}/${lang} opens a code fence`).toBe(false);
+      }
     }
   });
 
