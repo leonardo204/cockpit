@@ -73,6 +73,8 @@ import {
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { gitTintClass, gitTintTitleKey } from './gitStatusTint';
+import type { GitFileState, GitStatusResponse } from './gitStatusTypes';
 import { confirm, toast, useWebSocket } from '@cockpit/shared-ui';
 import { FILE_REF_MIME, insertFileRef, osFilePath } from '@cockpit/feature-agent';
 import { FileBrowserContextMenu, type FileMenuState } from './FileBrowserContextMenu';
@@ -120,6 +122,18 @@ const RefreshContext = createContext<{ nonceOf: (rel: string) => number; bump: (
   nonceOf: () => 0,
   bump: () => {},
 });
+
+/** WHICH ROWS ARE CHANGED, as one lookup the whole tree shares.
+ *
+ *  A context rather than a prop threaded down: the tree is recursive and each
+ *  level is lazily mounted, so a prop would have to pass through every folder
+ *  between the panel and the row that needs it. The value changes only when the
+ *  status is re-read, which is exactly when every row should recolour.
+ *
+ *  The map already has the FOLDERS rolled into it (the server does that fold) —
+ *  a row asks about its own path and gets an answer whether it is a file or a
+ *  collapsed directory holding a change three levels down. */
+const GitStatusContext = createContext<(rel: string) => GitFileState | null>(() => null);
 
 /** What a row needs from the panel to take part in the operations menu.
  *
@@ -343,6 +357,18 @@ const TreeNode = memo(function TreeNode({
   const [copying, setCopying] = useState(false);
   const rel = childRel(parentRel, entry.name);
   const ref = refFor(rel, entry.isDir);
+  // WHY THE COLOUR IS READ HERE AND NOT PASSED IN. The tint depends on the whole
+  // repository's status, which arrives long after this row first drew and
+  // changes on its own schedule; a prop would mean re-rendering every ancestor
+  // to recolour one leaf. The context re-renders exactly the rows that read it.
+  const gitStateOf = useContext(GitStatusContext);
+  const gitState = gitStateOf(rel);
+  // A colour is not self-describing — `text-brand` on a filename says
+  // "something" and gives the reader no way to find out what. The hint rides the
+  // `title` the row already has, under the path it already showed.
+  const gitTitleKey = gitTintTitleKey(gitState);
+  const { t: tGit } = useTranslation();
+  const gitTitle = gitTitleKey ? tGit(gitTitleKey) : null;
   const renaming = renamingRel === rel;
 
   // "New file" chosen on a COLLAPSED folder has to open it, or the input would
@@ -472,9 +498,11 @@ const TreeNode = memo(function TreeNode({
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
           onDrop={(e) => void onDrop(e)}
-          title={ref}
+          title={gitTitle ? `${ref}\n${gitTitle}` : ref}
           style={{ paddingLeft: 8 + depth * 12 }}
-          className={`flex items-center gap-1 py-0.5 pr-2 text-xs text-foreground/90 cursor-pointer select-none rounded ${
+          className={`flex items-center gap-1 py-0.5 pr-2 text-xs ${gitTintClass(
+            gitState,
+          )} cursor-pointer select-none rounded ${
             dropOver ? 'bg-brand/20 ring-1 ring-brand/50' : 'hover:bg-accent/50'
           }`}
         >
@@ -623,6 +651,52 @@ export function FileBrowserPanel({
   }, []);
   const bump = useCallback((rel: string) => bumpMany([rel]), [bumpMany]);
 
+  // -- which rows are changed ----------------------------------------------
+  //
+  // ONE REQUEST FOR THE WHOLE TREE, not one per folder. `git status` reports the
+  // repository, so asking per directory would run it N times for one answer —
+  // and the tree needs the whole map anyway: a collapsed folder is coloured by
+  // paths it has not loaded and cannot ask about.
+  //
+  // WHAT THIS DOES NOT CATCH, stated because the gap is real and the manual
+  // refresh button is its answer. The watcher below is the trigger, and
+  // `.git` is on its ignore list (`fsWatchScope.ts`) — deliberately, since git
+  // rewrites files in there constantly. So an edit recolours immediately, while
+  // a `git add` or `commit` made in a terminal does not: nothing in the working
+  // tree changed. Watching `.git` to close that gap would mean a refresh storm
+  // during every rebase, which is a worse trade than a colour that is briefly
+  // stale.
+  const [gitChanged, setGitChanged] = useState<Record<string, GitFileState>>({});
+  const refreshGitStatus = useCallback(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/git-status?cwd=${encodeURIComponent(cwd)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as GitStatusResponse;
+        if (cancelled) return;
+        // A project with no repository, or an answer this route could not give,
+        // clears the colours rather than leaving the last repository's on screen.
+        setGitChanged(data.ok && data.repo ? (data.changed ?? {}) : {});
+      } catch {
+        // The tree is useful without colours. A status that could not be read is
+        // not worth an error the reader cannot act on.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd]);
+  useEffect(() => refreshGitStatus(), [refreshGitStatus]);
+
+  /** Referentially stable for the tree's sake: this is the context value every
+   *  row reads, and a new identity per render would re-render the whole tree on
+   *  every keystroke in the panel. */
+  const gitStateOf = useCallback(
+    (rel: string): GitFileState | null => gitChanged[rel] ?? null,
+    [gitChanged],
+  );
+
   /**
    * CHANGES MADE FROM OUTSIDE THIS PANEL — the agent writing a file, a build,
    * a `mkdir` in a terminal — arrive here.
@@ -643,8 +717,13 @@ export function FileBrowserPanel({
    * every event on every filesystem.
    */
   const onWatchMessage = useCallback(
-    (data: unknown) => bumpMany(fsChangeDirs(data)),
-    [bumpMany],
+    (data: unknown) => {
+      bumpMany(fsChangeDirs(data));
+      // A file changing on disk is the commonest reason a row's colour is now
+      // wrong, so the same signal that re-reads the folder re-reads the status.
+      refreshGitStatus();
+    },
+    [bumpMany, refreshGitStatus],
   );
   useWebSocket({
     url: `/ws/fs-watch?cwd=${encodeURIComponent(cwd)}`,
@@ -922,7 +1001,13 @@ export function FileBrowserPanel({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => bump('')}
+            onClick={() => {
+              bump('');
+              // The manual refresh is the ONLY way to pick up a `git add` or
+              // `commit` made in a terminal: nothing in the working tree changed,
+              // so the watcher never fired (see the status block above).
+              refreshGitStatus();
+            }}
             title={t('fileBrowser.refreshTree', { defaultValue: 'Refresh directory tree' })}
             className="p-1 rounded text-muted-foreground hover:bg-accent hover:text-foreground"
           >
@@ -948,6 +1033,7 @@ export function FileBrowserPanel({
         })}
       </div>
       <RefreshContext.Provider value={{ nonceOf, bump }}>
+        <GitStatusContext.Provider value={gitStateOf}>
         <FileOpsContext.Provider value={ops}>
           <div
             onDragOver={onRootDragOver}
@@ -959,6 +1045,7 @@ export function FileBrowserPanel({
             <TreeChildren cwd={cwd} parentRel="" depth={0} />
           </div>
         </FileOpsContext.Provider>
+        </GitStatusContext.Provider>
       </RefreshContext.Provider>
       {/* Keyed on the file so a preview opened from a different row starts with
           a clean back history instead of inheriting the last one's. */}

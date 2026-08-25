@@ -166,7 +166,13 @@ describe('the panel subscribes and refreshes only what changed', () => {
   it('keeps the manual refresh button', () => {
     // A watcher that misses an event, or a platform that has none, must not
     // leave the user stranded.
-    expect(src).toContain("onClick={() => bump('')}");
-    expect(src).toContain("t('fileBrowser.refreshTree'");
+    //
+    // Asserted as "the button still bumps the root" rather than as its exact
+    // handler text: it has since grown a second job (re-reading git status,
+    // which the watcher cannot trigger because `.git` is on its ignore list),
+    // and pinning the literal made that addition look like this guard failing.
+    const button = /t\('fileBrowser\.refreshTree'/.exec(src);
+    expect(button, 'the refresh button is gone').not.toBeNull();
+    expect(src).toContain("bump('');");
   });
 });
