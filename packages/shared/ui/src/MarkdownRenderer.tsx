@@ -2,6 +2,7 @@
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { FILE_PATH_ATTR, isDocumentPath, remarkFilePathLinks } from './filePathLinks';
 import remarkMath from 'remark-math';
 import { remarkAlert } from 'remark-github-blockquote-alert';
 import rehypeRaw from 'rehype-raw';
@@ -44,6 +45,21 @@ interface MarkdownRendererProps {
    * what every host did before this prop existed.
    */
   enableMermaid?: boolean;
+  /**
+   * Turn a file path the author WROTE OUT into a link that opens the document.
+   *
+   * Opt-in exactly like `enableMermaid`, and for the same reason: it changes what
+   * ordinary prose renders as, so only the host that wants it gets it. The chat
+   * turns it on — the assistant ends a job by saying where it put the file, and
+   * that path is the answer the reader cannot act on. The document viewer leaves
+   * it off; inside a document a path is usually a citation, not a destination.
+   *
+   * Off, a path renders as the plain text it always did.
+   *
+   * Only a BARE path in the prose is linked, never an authored `[label](path)` —
+   * see filePathLinks.ts for why that distinction is the whole security design.
+   */
+  enableFileLinks?: boolean;
   rehypePlugins?: PluggableList;
   /**
    * Optional link interceptor for non-anchor hrefs. Return true to signal the
@@ -52,6 +68,20 @@ interface MarkdownRendererProps {
    * Same-document `#anchor` links are always handled internally (smooth scroll).
    */
   onLinkClick?: (href: string) => boolean;
+  /**
+   * A MINTED file-path link was clicked. Return true to consume the click.
+   *
+   * Separate from `onLinkClick` on purpose, and the separation IS the security
+   * property: `onLinkClick` receives only an href, so a handler using it could
+   * not tell a path this renderer linkified out of visible text from an authored
+   * `[리포트 열기](/Users/you/.ssh/id_rsa)` — the shape a prompt injection would
+   * use to aim a file-opening affordance. Only a link carrying `FILE_PATH_ATTR`
+   * reaches this callback, and only this renderer mints those, so an authored
+   * link has no path to it at all.
+   *
+   * Authored links keep going to `onLinkClick` exactly as they always have.
+   */
+  onFilePathClick?: (path: string) => boolean;
 }
 
 /**
@@ -269,6 +299,8 @@ function createMarkdownComponents(
   onLinkClick: ((href: string) => boolean) | undefined,
   wrapperRef: RefObject<HTMLDivElement | null>,
   enableMermaid: boolean,
+  enableFileLinks: boolean,
+  onFilePathClick: ((path: string) => boolean) | undefined,
 ) {
   return {
     // Code block — node comes from react-markdown passNode, destructure to avoid passing to DOM
@@ -298,8 +330,35 @@ function createMarkdownComponents(
       const isInline = !match && !className && !codeString.includes('\n');
 
       if (isInline) {
+        const codeClass = "px-1.5 py-0.5 mx-0.5 rounded bg-accent text-[0.875em] font-mono";
+        // A PATH IN BACKTICKS IS THE SHAPE THIS FEATURE EXISTS FOR. The assistant
+        // writes `파일: /Users/…/report.md` in monospace, and this repo's own
+        // conventions ask for `file_path:line` the same way — so a plugin that
+        // only walked prose text would miss the motivating case entirely.
+        //
+        // The whole span must BE the path (isDocumentPath), never merely contain
+        // one: linking `\`cat /tmp/a.md\`` would describe the click as opening a
+        // command. It stays code-styled — this marks a path as reachable, it does
+        // not restyle it as prose.
+        if (enableFileLinks && isDocumentPath(codeString)) {
+          const path = codeString.trim();
+          return (
+            <a
+              href={path}
+              className={`${codeClass} text-brand hover:underline cursor-pointer`}
+              {...{ [FILE_PATH_ATTR]: path }}
+              onClick={(e) => {
+                // ALWAYS prevented, handled or not: the href is a filesystem path,
+                // and letting the anchor resolve it would navigate the shell to
+                // `http://localhost:PORT/Users/…` and lose the conversation.
+                e.preventDefault();
+                onFilePathClick?.(path);
+              }}
+            >{children}</a>
+          );
+        }
         return (
-          <code className="px-1.5 py-0.5 mx-0.5 rounded bg-accent text-[0.875em] font-mono" {...props}>
+          <code className={codeClass} {...props}>
             {children}
           </code>
         );
@@ -380,6 +439,17 @@ function createMarkdownComponents(
         {...rest}
         onClick={(e) => {
           if (!href) return;
+          // MINTED BY THIS RENDERER out of a path the reader can see (the mark is
+          // set in filePathLinks.ts and cannot be authored). Its text is its
+          // target, so opening it can only do what it says on the tin. The
+          // default is always prevented — see the inline-code branch for why a
+          // filesystem href must never reach the browser's navigation.
+          const minted = (rest as Record<string, unknown>)[FILE_PATH_ATTR];
+          if (typeof minted === 'string') {
+            e.preventDefault();
+            onFilePathClick?.(minted);
+            return;
+          }
           // Same-document anchor → smooth-scroll within this renderer.
           if (href.startsWith('#')) {
             if (scrollToHeadingAnchor(wrapperRef.current, href.slice(1))) {
@@ -449,7 +519,7 @@ function createMarkdownComponents(
   };
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser = false, isStreaming = false, enableMath = true, enableMermaid = false, rehypePlugins, onLinkClick }: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser = false, isStreaming = false, enableMath = true, enableMermaid = false, enableFileLinks = false, rehypePlugins, onLinkClick, onFilePathClick }: MarkdownRendererProps) {
   // Use global Theme Context to avoid each component creating its own MutationObserver
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === 'dark';
@@ -460,11 +530,26 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser
   // Memoize components to keep stable references — prevents ReactMarkdown from
   // tearing down and recreating the entire DOM tree on parent re-renders
   const components = useMemo(
-    () => createMarkdownComponents(isDark, onLinkClick, wrapperRef, enableMermaid),
-    [isDark, onLinkClick, enableMermaid],
+    () =>
+      createMarkdownComponents(
+        isDark,
+        onLinkClick,
+        wrapperRef,
+        enableMermaid,
+        enableFileLinks,
+        onFilePathClick,
+      ),
+    [isDark, onLinkClick, enableMermaid, enableFileLinks, onFilePathClick],
   );
 
-  const remarkPlugins = enableMath ? REMARK_PLUGINS : REMARK_PLUGINS_NO_MATH;
+  // The path-linking plugin is APPENDED rather than baked into the constants
+  // above: it is opt-in, and a host that leaves it off must get byte-identical
+  // markdown to what it got before this feature existed.
+  const remarkPluginsBase = enableMath ? REMARK_PLUGINS : REMARK_PLUGINS_NO_MATH;
+  const remarkPlugins = useMemo(
+    () => (enableFileLinks ? [...remarkPluginsBase, remarkFilePathLinks] : remarkPluginsBase),
+    [remarkPluginsBase, enableFileLinks],
+  );
   const rehypePluginsBase = enableMath ? REHYPE_PLUGINS_BASE : REHYPE_PLUGINS_NO_MATH;
 
   // After streaming or for historical messages, detect and pre-process ASCII art

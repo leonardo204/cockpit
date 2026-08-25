@@ -14,7 +14,8 @@ import { formatTurnEndTime, formatTurnMeta } from './elapsed';
 import { filterDisplayToolCalls, shouldGroupUnderHeader } from './toolCallDisplay';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
 import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
-import { MarkdownRenderer } from '@cockpit/shared-ui';
+import { MarkdownRenderer, docTabTarget } from '@cockpit/shared-ui';
+import { openDocumentInTab } from './docOpenBus';
 import { useTranslation } from 'react-i18next';
 
 // Migrated from src/components/project/MessageBubble.tsx.
@@ -127,6 +128,13 @@ interface MessageBalloonProps {
    *  to the turn rather than to one of its sentences and so hang off its last
    *  bubble. */
   extras?: ReactNode;
+  /** A file path in this bubble's text was clicked. Passed down rather than
+   *  reached for here because the balloon has no `cwd` — and it must be a STABLE
+   *  callback, like every other one on this interface: the markdown renderer
+   *  memoises its component table against this identity, so a fresh closure per
+   *  render would tear down and rebuild the message's whole DOM on every stream
+   *  delta. */
+  onFilePathClick?: (path: string) => boolean;
 }
 
 /**
@@ -149,6 +157,7 @@ const MessageBalloon = memo(function MessageBalloon({
   editTitle,
   leading,
   extras,
+  onFilePathClick,
 }: MessageBalloonProps) {
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
@@ -193,7 +202,14 @@ const MessageBalloon = memo(function MessageBalloon({
              timestamps, the composer) moves with it. It scales in `em`, so it
              composes with the global size scale instead of replacing it. */
           <div className="break-words chat-content">
-            <MarkdownRenderer content={text} isUser={isUser} isStreaming={isStreaming} enableMath={false} />
+            <MarkdownRenderer
+              content={text}
+              isUser={isUser}
+              isStreaming={isStreaming}
+              enableMath={false}
+              enableFileLinks
+              onFilePathClick={onFilePathClick}
+            />
             {isStreaming && <span className="inline-block w-2 h-4 ml-1 bg-current animate-pulse" />}
           </div>
         )}
@@ -431,6 +447,33 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // where the turn finishes and where the eye already is. Putting a copy control
   // on every bubble would offer three ways to copy a third of an answer and no
   // way to copy the answer.
+  /**
+   * OPEN A PATH THE ASSISTANT WROTE OUT, in a document tab beside this
+   * conversation.
+   *
+   * Only a link this renderer MINTED out of visible text reaches here — an
+   * authored `[열기](/Users/you/.ssh/id_rsa)` has no route to this callback at
+   * all (MarkdownRenderer's `onFilePathClick` vs `onLinkClick`). So the path
+   * being opened is always the one the reader can see.
+   *
+   * `docTabTarget` decides which root it is read against: inside the project,
+   * the project; outside it, the document's own folder — which is what lets a
+   * report in `~/Downloads` open WITHOUT loosening the server guard that the
+   * write and delete routes share.
+   *
+   * Returns true unconditionally, including when no tab host is mounted. The
+   * href is a filesystem path, so an unconsumed click would let the anchor
+   * navigate the shell to `http://localhost:PORT/Users/…` and lose the live
+   * session — a click that does nothing is the better failure.
+   */
+  const handleFilePathClick = useCallback(
+    (path: string): boolean => {
+      openDocumentInTab(docTabTarget(path, cwd));
+      return true;
+    },
+    [cwd],
+  );
+
   const handleCopy = useCallback(() => {
     if (message.content) {
       navigator.clipboard.writeText(message.content);
@@ -763,6 +806,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             editTitle={t('chat.editMessage', { defaultValue: 'Edit message' })}
             leading={imagesBlock}
             extras={bubbleExtras}
+            onFilePathClick={handleFilePathClick}
           />
         )}
         {/* THE TURN, IN ORDER.
@@ -788,6 +832,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                   copyTitle={t('chat.copyMessage')}
                   leading={seg.id === firstTextId ? imagesBlock : undefined}
                   extras={seg.id === lastTextId ? bubbleExtras : undefined}
+                  onFilePathClick={handleFilePathClick}
                 />
               );
             }

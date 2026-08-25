@@ -78,8 +78,20 @@ describe('mermaid — the engine is opt-in per host', () => {
   /** The components map is memoised on its inputs. A flag left out of the deps
    *  is a flag that only takes effect after some unrelated re-render. */
   it('rebuilds the component map when the flag changes', () => {
-    expect(RENDERER).toContain('createMarkdownComponents(isDark, onLinkClick, wrapperRef, enableMermaid)');
-    expect(RENDERER).toContain('[isDark, onLinkClick, enableMermaid]');
+    // Stated as "the flag is BOTH passed and depended on" rather than as the
+    // whole argument list: the map has since grown a second opt-in
+    // (`enableFileLinks`) and its click callback, and pinning the exact
+    // signature made an unrelated feature look like a regression here. What
+    // matters is unchanged — a flag left out of the deps is a flag that only
+    // takes effect after some other re-render.
+    // `() =>` anchors this to the CALL inside the memo, not the function
+    // definition of the same name further up the file.
+    const call = /\(\)\s*=>\s*\n?\s*createMarkdownComponents\(([\s\S]*?)\),/.exec(RENDERER)?.[1];
+    expect(call, 'the components factory call is gone — did the renderer change?').toBeDefined();
+    expect(call).toContain('enableMermaid');
+    const deps = /\[isDark, onLinkClick[^\]]*\]/.exec(RENDERER)?.[0];
+    expect(deps, 'the components memo deps are gone').toBeDefined();
+    expect(deps).toContain('enableMermaid');
   });
 });
 

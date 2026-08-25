@@ -35,6 +35,11 @@ import {
 import { fetchProjects, saveFilesWidth as saveFilesWidthEffect } from './effect/projectClient';
 import { ChatPanel } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
+import {
+  setActiveDocOpener,
+  clearActiveDocOpener,
+  type DocOpenRequest,
+} from '@cockpit/feature-agent';
 import { useScheduledTasks } from '@cockpit/feature-agent';
 import { Effect } from 'effect';
 import { IframeBus, Topics } from '@cockpit/effect-services';
@@ -358,6 +363,27 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     if (!initialCwd) return;
     openMarkdownTab(initialCwd, rel);
   }, [initialCwd, openMarkdownTab]);
+
+  // ── A path written in a message opens as a document ──────────────────────
+  //
+  // The assistant ends a job by saying where it put the file, and that path was
+  // only ever selectable text. The message bubble linkifies it (filePathLinks.ts
+  // decides what counts, and mints the link out of the path's OWN text so the
+  // label cannot misdescribe its target) and asks THIS host to open it, because
+  // opening tabs is what this host does.
+  //
+  // Through a bus rather than a prop: the bubble is four components down and is
+  // `memo`'d against exactly the prop churn a threaded callback would add. Same
+  // singleton shape as `fileRefBus` in the other direction — see docOpenBus.ts.
+  //
+  // `cwd` comes from the REQUEST, not from `initialCwd`: a document outside the
+  // project is opened against its own folder, which is what lets a report in
+  // ~/Downloads open without loosening the server's containment guard.
+  useEffect(() => {
+    const open = ({ cwd, rel }: DocOpenRequest) => openMarkdownTab(cwd, rel);
+    setActiveDocOpener(open);
+    return () => clearActiveDocOpener(open);
+  }, [openMarkdownTab]);
 
   const handleFilesResize = useCallback((next: number) => {
     setIsResizingFiles(true);

@@ -141,6 +141,7 @@ export type { Project, RuntimeMessage, SessionRef, Store };
 import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
 import { ensureCockpitImport } from './cockpitImport';
 import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
+import { shellSystemNote } from '../lib/shellNote';
 import {
   escalateApproval,
   escalateCheckin,
@@ -1300,9 +1301,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // The turn's system prompt: the routed agent's persona (if any) followed
         // by the working-directory note. Memory + skills are folded in ABOVE this
         // by the runtime. Undefined when neither applies (byte-for-byte no-op).
-        const shellNote = ctx.cwd
-          ? `You are running inside the naby shell. Working directory: ${ctx.cwd}`
-          : undefined;
+        // UNCONDITIONAL NOW, and it carries a second rule: paths are written out
+        // in full. The chat linkifies a path naby reports so the reader can open
+        // the document from the conversation, and it can only resolve an absolute
+        // one — expanding `~` in the browser would mean guessing a home directory,
+        // which is how a link ends up pointing somewhere its own text does not
+        // say. See lib/shellNote.ts.
+        const shellNote = shellSystemNote(ctx.cwd);
         // Phase 3 P3-M3c: HOW MANY STEPS THIS AGENT MAY TAKE ALONE. 1 (or no
         // config) is a plain single-turn chat — nothing below runs and the system
         // prompt is untouched. >1 injects the autonomy protocol and lets the loop

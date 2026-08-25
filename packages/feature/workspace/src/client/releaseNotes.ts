@@ -85,6 +85,38 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.30.0 — 2026-08-25
+
+### en
+
+Projects open where you left off, and a file path in a message is something you can click.
+
+**New**
+
+- A file path naby writes out is now a link. Click it and the document opens in a tab beside the conversation, so you no longer have to select the path, copy it and leave the app to read what was just written for you. It works for paths anywhere on your machine, not only inside the open project.
+  - Only documents (\`.md\`, \`.markdown\`, \`.txt\`) become links, and only a path written out on its own — a link someone typed by hand is never turned into a file link, so what a link says is always where it goes.
+- naby writes paths out in full now, instead of shortening your home folder to \`~\`, so the path it hands you is the one you can click.
+
+**Changed**
+
+- Opening a project puts you back in the conversation you were last in. It used to start an empty chat every time, which meant a project full of work greeted you with a blank page and a name you had never seen. Projects with no sessions yet still open on a fresh chat.
+  - Your other sessions are exactly where they were — this opens one tab, it does not rebuild an old layout.
+
+### ko
+
+프로젝트를 열면 하던 대화로 돌아가고, 메시지 속 파일 경로를 눌러서 바로 열 수 있어요.
+
+**새로 생긴 것**
+
+- 나비가 알려 준 파일 경로가 링크가 됐어요. 누르면 대화 옆에 문서가 열려요. 경로를 긁어서 복사하고 앱 밖으로 나가지 않아도, 방금 만들어 준 문서를 그 자리에서 읽을 수 있어요. 열어 둔 프로젝트 안이 아니어도 돼요.
+  - 문서(\`.md\`, \`.markdown\`, \`.txt\`)만, 그리고 경로가 그대로 적혀 있을 때만 링크가 돼요. 누군가 직접 써 넣은 링크는 파일 링크로 바뀌지 않아요. 그래서 링크에 적힌 곳이 곧 열리는 곳이에요.
+- 나비가 홈 폴더를 \`~\`로 줄이지 않고 경로를 끝까지 적어 줘요. 받은 경로를 그대로 누를 수 있게요.
+
+**달라진 것**
+
+- 프로젝트를 열면 마지막에 있던 대화가 그대로 떠요. 예전에는 열 때마다 빈 대화가 시작돼서, 작업이 쌓인 프로젝트가 빈 화면과 처음 보는 이름으로 사람을 맞았어요. 아직 대화가 없는 프로젝트는 예전처럼 새 대화로 열려요.
+  - 다른 대화들은 있던 자리에 그대로 있어요. 탭 하나를 여는 것이지 예전 배치를 되살리는 게 아니에요.
+
 ## 1.29.0 — 2026-08-24
 
 ### en
