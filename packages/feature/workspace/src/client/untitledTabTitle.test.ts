@@ -104,10 +104,13 @@ describe('the tab strip source', () => {
     const src = code('useTabState.ts');
     expect(src).toContain("import { untitledTabTitle } from './untitledTabTitle'");
     // The seeded tab, the "+" tab, the blank tab left behind by closing the
-    // last one, and the one `reconcileTabs` seeds when every tab you held was
-    // closed from another window. `Date.now()` is read at these call sites and
+    // last one, the one `reconcileTabs` seeds when every tab you held was
+    // closed from another window, and the RESUMED tab — a project that has
+    // sessions opens on the last one, and the seed tab is renamed after the
+    // session it just adopted rather than after the blank it was named as
+    // (projectOpenPlan.ts). `Date.now()` is read at these call sites and
     // passed IN, never inside the namer.
-    expect(src.match(/untitledTabTitle\(/g)?.length).toBe(4);
+    expect(src.match(/untitledTabTitle\(/g)?.length).toBe(5);
     // No blank-tab path may reintroduce a literal — that was the last one.
     expect(src).not.toContain("title: 'New Chat'");
   });

@@ -200,12 +200,37 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     }
   }, [displayTabs, pinnedIds, dragTabIndex, handleTabDragEnd, reorderTabs, pinnedSessions, reorder]);
 
+  // THE LIVE TAB LIST, read by effects that must NOT re-run when tabs change.
+  // Two need it: the pinned restore directly below, and the Cmd/Ctrl+1..9
+  // listener further down. One ref rather than one each — two copies of "what is
+  // open right now" is how an effect ends up trusting the wrong one.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+
   // ── Pinned tabs come back when the project opens ─────────────────────────
   //
-  // This is the ONE exception to the rule in useTabState that opening a project
-  // starts a fresh session and never rebuilds the old tab layout. That rule
-  // exists because silently reconnecting the last session was a real complaint;
-  // a pin is the opposite of silent — the user asked for that session to stay.
+  // A pin is a standing request that a session stay reachable, so it is put back
+  // in a tab of its own when the project opens.
+  //
+  // THIS USED TO BE "the ONE exception" to a rule that no longer exists. That
+  // rule was "opening a project starts a fresh session"; it now resumes the
+  // session the user was last in (projectOpenPlan.ts). What is still refused is
+  // what the rule was actually protecting against — rebuilding the whole
+  // multi-tab layout — so a pin remains the only thing that opens EXTRA tabs.
+  //
+  // The two land on independent fetches and race, in either order, and BOTH
+  // orders had to be closed:
+  //
+  //   pinned first   `projectOpenPlan` sees the id already on screen and makes
+  //                  the seed tab FOCUS it instead of adopting it.
+  //   plan first     this loop must see the adoption. It reads `openTabsRef`
+  //                  rather than the `tabs` snapshot in its closure, because the
+  //                  adoption is a `setTabs` that may not have reached this
+  //                  effect's render — reading the stale copy would find the
+  //                  session absent and open a second tab holding it.
+  //
+  // `handleOpenSession` cannot dedupe on its own: forking deliberately opens a
+  // second tab on a session that is already open, so the check belongs here.
   //
   // Runs once per project open, after the pinned set has loaded. `restoredRef`
   // guards the second pass that arrives when the pinned list refreshes, which
@@ -214,13 +239,14 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   useEffect(() => {
     if (restoredRef.current || !initialCwd || pinnedSessions.length === 0) return;
     restoredRef.current = true;
-    const open = new Set(tabs.map((t) => t.sessionId).filter(Boolean));
+    const open = new Set(tabsRef.current.map((t) => t.sessionId).filter(Boolean));
     for (const p of pinnedSessions) {
       if (p.cwd !== initialCwd || open.has(p.sessionId)) continue;
       handleOpenSession(p.sessionId, p.customTitle);
     }
-    // `tabs` is read as a snapshot on purpose: re-running on every tab change
-    // would fight the user's own closes.
+    // `tabs` stays out of the deps on purpose: re-running on every tab change
+    // would fight the user's own closes. The ref is what makes that safe — the
+    // effect still runs once, but it reads the CURRENT tabs when it does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCwd, pinnedSessions, handleOpenSession]);
 
@@ -352,12 +378,11 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   // never re-fetch messages appended externally (e.g. a scheduled-task run).
   const [sessionRefresh, setSessionRefresh] = useState<{ sessionId: string; nonce: number } | null>(null);
 
-  // Cmd/Ctrl+1..9 tab switching needs the live tab list + switchTab without
-  // re-registering the keydown listener on every tab change. Ref indirection
-  // keeps the effect's dep array empty (single stable listener) while always
-  // reading the current values.
-  const tabsRef = useRef(tabs);
-  tabsRef.current = tabs;
+  // Cmd/Ctrl+1..9 tab switching needs switchTab without re-registering the
+  // keydown listener on every tab change. Ref indirection keeps the effect's dep
+  // array empty (single stable listener) while always reading the current value.
+  // The live tab list it reads is `tabsRef`, declared above the pinned restore
+  // because that effect needs it too.
   const switchTabRef = useRef(switchTab);
   switchTabRef.current = switchTab;
   // Cmd/Ctrl+W (close the active tab) reads through the same indirection.

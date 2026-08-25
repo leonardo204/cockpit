@@ -7,6 +7,7 @@ import { applyTitleUpdate } from './titleLock';
 // `MMDD-HHmm-animal` string every list shows for the same session.
 import { untitledTabTitle } from './untitledTabTitle';
 import { closedSessionIdsForViewer } from './projectSessionTree';
+import { projectOpenPlan } from './projectOpenPlan';
 import {
   acceptsChatState,
   closableSessionId,
@@ -139,51 +140,86 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
 
     // loadProjectState wraps Effect.catchAll -> Effect.succeed(null) internally so
     // runPromise never rejects; the outer try/catch would never fire. On failure
-    // data === null and we fall through to the else branch.
+    // data === null and projectOpenPlan answers `fresh`.
     const loadSessions = async () => {
       const data = await BrowserRuntime.runPromise(
         loadProjectState(initialCwd).pipe(
           Effect.catchAll(() => Effect.succeed(null))
         )
       );
-      if (data) {
-        // NOTE: persisted session state may still carry a `chatModes` key written by
-        // older builds (the removed SDK/PTY picker). It is simply not read — unknown
-        // keys are ignored on load and dropped on the next save.
-        const savedPlanModes: Record<string, boolean> = data.planModes || {};
 
-        // PRODUCT RULE: opening a project starts a NEW session. We deliberately do
-        // NOT rebuild the previous multi-tab layout from state.json — a fresh open
-        // used to silently reconnect the last active session (the "기존 세션 연결"
-        // complaint), which this app must not do. The saved sessions are NOT lost:
-        // the save effect below is a union (it only ADDS, and removes solely via an
-        // explicit closedSessionIds; see /api/project-state), so they stay on disk
-        // and remain reachable through Recent Sessions / Browse all sessions.
-        //
-        // The one exception is an EXPLICIT open of a specific past session — a deep
-        // link or a pick from the session browser — which arrives as initialSessionId.
-        // That id is already seeded into the default tab (see the tabs initial state
-        // above); here we only carry over its saved plan-mode. (Per-engine tab state
-        // was removed with the engine picker — Naby is single-engine.)
-        if (initialSessionId) {
-          setTabs((prev) =>
-            prev.map((t) =>
-              t.sessionId === initialSessionId
-                ? {
-                    ...t,
-                    planMode: savedPlanModes[initialSessionId] ?? t.planMode,
-                  }
-                : t,
-            ),
-          );
-          setTimeout(() => {
-            isInitializingRef.current = false;
-          }, 0);
-        } else {
+      // NOTE: persisted session state may still carry a `chatModes` key written by
+      // older builds (the removed SDK/PTY picker). It is simply not read — unknown
+      // keys are ignored on load and dropped on the next save.
+      const savedPlanModes: Record<string, boolean> = data?.planModes || {};
+
+      // WHICH CONVERSATION THIS PROJECT OPENS ON. The rule is projectOpenPlan's
+      // (and tested there); this is the wiring.
+      //
+      // THE RULE CHANGED, so the old one is written down here rather than just
+      // deleted. It used to be "opening a project starts a NEW session", and the
+      // loaded state was read only for its plan-modes and otherwise discarded.
+      // That existed because a fresh open once REBUILT THE WHOLE MULTI-TAB LAYOUT
+      // and silently reconnected whatever had been active — the "기존 세션 연결"
+      // complaint. What it produced instead, though, was a project full of work
+      // greeting its owner with an empty chat under a name they had never seen.
+      //
+      // The layout is STILL not rebuilt — a project still opens with one tab. The
+      // only change is which conversation that tab holds: the one the user was
+      // last in, when there is one. Nothing is lost either way; the save effect
+      // below is a union, so every other session stays on disk and reachable
+      // through Recent Sessions / Browse all sessions.
+      const plan = projectOpenPlan(
+        initialSessionId,
+        data,
+        tabsRef.current.map((t) => t.sessionId),
+      );
+
+      if (plan.kind === 'resume' && plan.sessionId) {
+        // Adopt it into the tab that was seeded blank, rather than opening a
+        // second one: the seed tab is what is on screen, and adding beside it
+        // would leave the blank one active — the failure this feature is about.
+        // The title is re-derived from the id so the tab is named after when the
+        // SESSION was made, exactly as a restored one is (untitledTabTitle).
+        const resumeId = plan.sessionId;
+        setTabs((prev) =>
+          prev.map((t, i) =>
+            i === 0
+              ? {
+                  ...t,
+                  sessionId: resumeId,
+                  title: untitledTabTitle(t.id, resumeId, Date.now()),
+                  planMode: savedPlanModes[resumeId] ?? t.planMode,
+                }
+              : t,
+          ),
+        );
+      } else if (plan.kind === 'focus' && plan.sessionId) {
+        // A pinned restore got there first. The session is already in a tab of
+        // its own, so activate that one and leave the seed tab alone rather than
+        // showing the same conversation twice.
+        const openTab = tabsRef.current.find((t) => t.sessionId === plan.sessionId);
+        if (openTab) setActiveTabId(openTab.id);
+      } else if (plan.kind === 'explicit' && plan.sessionId) {
+        // The id is already in the seeded tab (see the tabs initial state above);
+        // only its saved plan-mode is carried over here.
+        const explicitId = plan.sessionId;
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.sessionId === explicitId
+              ? { ...t, planMode: savedPlanModes[explicitId] ?? t.planMode }
+              : t,
+          ),
+        );
+      }
+
+      // A setTabs in this pass must land before the save effect is allowed to
+      // run, or init would save the blank tab it is in the middle of replacing.
+      if (plan.kind === 'resume' || plan.kind === 'explicit') {
+        setTimeout(() => {
           isInitializingRef.current = false;
-        }
+        }, 0);
       } else {
-        // loadProjectState failed: don't block init, keep the default tab list
         isInitializingRef.current = false;
       }
     };
