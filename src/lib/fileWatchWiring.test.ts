@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { WATCH_IGNORED_DIRS } from './fsWatchScope';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -147,8 +148,13 @@ describe('the panel subscribes and refreshes only what changed', () => {
     expect(src).toContain('useWebSocket({');
   });
 
-  it('routes the message through the shared parser', () => {
-    expect(src).toContain('bumpMany(fsChangeDirs(data))');
+  it('routes the message through the shared parsers', () => {
+    // Two signals now, each with its own total parser: `fs-change` names
+    // directories whose listing moved, `git-change` says only the colours are
+    // wrong. Neither is parsed inline in the socket callback.
+    expect(src).toContain('const dirs = fsChangeDirs(data);');
+    expect(src).toContain('bumpMany(dirs);');
+    expect(src).toContain('if (isGitChange(data)) {');
   });
 
   it('reuses the existing per-directory nonce instead of a second refresh path', () => {
@@ -174,5 +180,51 @@ describe('the panel subscribes and refreshes only what changed', () => {
     const button = /t\('fileBrowser\.refreshTree'/.exec(src);
     expect(button, 'the refresh button is gone').not.toBeNull();
     expect(src).toContain("bump('');");
+  });
+});
+
+describe('a commit made in a terminal reaches the tree', () => {
+  const HANDLER = readFileSync(join(__dirname, 'effect', 'fileWatchHandler.ts'), 'utf8');
+
+  it('watches the git directory SEPARATELY from the tree', () => {
+    // `.git` stays off the recursive watch — git rewrites it constantly and a
+    // rebase through that channel would be a refresh storm. But `git add` and
+    // `git commit` change NOTHING in the working tree, so without a second
+    // watcher the colours stay wrong until the user presses refresh. That is not
+    // a feature; it is a gap the user has to know about.
+    expect(HANDLER).toContain('const openGitWatcher =');
+    expect(HANDLER).toContain('watch(gitDir, { recursive: false }');
+    expect(WATCH_IGNORED_DIRS.has('.git')).toBe(true);
+  });
+
+  it('listens for only the filenames that move the answer', () => {
+    expect(HANDLER).toContain('isGitStatusSignal(filename)');
+  });
+
+  it('finds the git dir when .git is a FILE — a submodule or worktree', () => {
+    // This repository is its own example: `shell/.git` is a pointer file, and
+    // watching it would see nothing because git updates the real directory.
+    expect(HANDLER).toContain('gitDirFromPointer(');
+    expect(HANDLER).toContain('info.isDirectory()');
+  });
+
+  it('sends its own message rather than a directory bump', () => {
+    // No listing changed, only the colours. As `fs-change` it would make every
+    // expanded folder re-fetch to learn something none of them can tell it.
+    expect(HANDLER).toContain("conn.send({ type: \"git-change\" })");
+  });
+
+  it('coalesces a burst into one re-read', () => {
+    // One commit touches index, HEAD and ORIG_HEAD within milliseconds.
+    expect(HANDLER).toContain('Duration.millis(GIT_SIGNAL_COALESCE_MS)');
+  });
+
+  it('is forked, so a project with no repository still gets its tree watch', () => {
+    expect(HANDLER).toMatch(/if \(gitDir !== null\) \{/);
+    expect(HANDLER).toContain('Effect.forkScoped(');
+  });
+
+  it('releases the second watcher with the Scope, like the first', () => {
+    expect(HANDLER).toContain('Effect.acquireRelease(openGitWatcher(gitDir, signals), closeQuietly)');
   });
 });

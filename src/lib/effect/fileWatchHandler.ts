@@ -29,7 +29,8 @@
  * working exactly as it did before this channel existed.
  */
 import { watch, statSync, type FSWatcher } from "fs"
-import { isAbsolute, resolve } from "path"
+import { readFile, stat } from "fs/promises"
+import { isAbsolute, join, resolve } from "path"
 import { Chunk, Duration, Effect, Queue, Schedule, Scope, Stream } from "effect"
 import type { WebSocket } from "ws"
 import type { WSError } from "@cockpit/effect-core"
@@ -37,9 +38,12 @@ import type { WSConnection } from "@cockpit/effect-services"
 import { fromWebSocket } from "@cockpit/effect-runtime/server"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
 import {
+  GIT_SIGNAL_COALESCE_MS,
   WATCH_BATCH_MAX,
   WATCH_COALESCE_MS,
   coalesceChangedDirs,
+  gitDirFromPointer,
+  isGitStatusSignal,
   supportsRecursiveWatch,
 } from "../fsWatchScope"
 
@@ -138,6 +142,79 @@ const openWatcher = (
   )
 }
 
+/**
+ * WHERE THIS PROJECT'S GIT DIRECTORY IS, or null when it has none.
+ *
+ * `<root>/.git` IS NOT ALWAYS A DIRECTORY. In a submodule or a linked worktree
+ * it is a FILE holding `gitdir: <path>`, and this repository is its own example
+ * — `shell/.git` is one. Watching the pointer would see nothing at all, because
+ * git updates the real directory and never the file, so a submodule would
+ * silently never refresh: exactly the case a developer here would hit first.
+ */
+const resolveGitDir = (root: string): Effect.Effect<string | null> =>
+  Effect.tryPromise({
+    try: async (): Promise<string | null> => {
+      const dotGit = join(root, ".git")
+      const info = await stat(dotGit)
+      if (info.isDirectory()) return dotGit
+      if (!info.isFile()) return null
+      const pointed = gitDirFromPointer(await readFile(dotGit, "utf8"))
+      if (!pointed) return null
+      // Relative pointers are relative to the project root, not to the cwd of
+      // whatever process is reading them.
+      const resolved = isAbsolute(pointed) ? pointed : resolve(root, pointed)
+      const target = await stat(resolved)
+      return target.isDirectory() ? resolved : null
+    },
+    catch: () => null,
+  }).pipe(Effect.orElseSucceed(() => null))
+
+/**
+ * A SECOND, NARROW WATCHER — on the git directory, non-recursively.
+ *
+ * The tree watch excludes `.git` and must keep excluding it: git rewrites that
+ * directory constantly, and a rebase through the recursive watcher would be a
+ * refresh storm. But a `git add` or `commit` run in a terminal changes NOTHING
+ * in the working tree, so without this the file panel's colours would stay wrong
+ * until the user pressed refresh — which is not a feature, it is a gap the user
+ * has to know about.
+ *
+ * Non-recursive, and filtered to four filenames (`GIT_STATUS_SIGNAL_FILES`), so
+ * the object writes and lock churn that made the wholesale watch impossible are
+ * never seen at all.
+ *
+ * Missing git is not a failure: a project without version control simply gets no
+ * watcher, and the panel shows no colours to keep fresh.
+ */
+const openGitWatcher = (
+  gitDir: string,
+  signals: Queue.Queue<string>,
+): Effect.Effect<FSWatcher | null> =>
+  Effect.try({
+    try: (): FSWatcher =>
+      watch(gitDir, { recursive: false }, (_event, filename) => {
+        if (typeof filename === "string" && isGitStatusSignal(filename)) {
+          Effect.runFork(Queue.offer(signals, filename))
+        }
+      }),
+    catch: () => null,
+  }).pipe(
+    Effect.tap((watcher) =>
+      Effect.sync(() => {
+        watcher.on("error", () => Effect.runSync(closeQuietly(watcher)))
+      }),
+    ),
+    Effect.orElseSucceed(() => null),
+  )
+
+const watchGitDir = (
+  gitDir: string,
+  signals: Queue.Queue<string>,
+): Effect.Effect<boolean, never, Scope.Scope> =>
+  Effect.acquireRelease(openGitWatcher(gitDir, signals), closeQuietly).pipe(
+    Effect.map((watcher) => watcher !== null),
+  )
+
 /** The watcher as a scoped resource: true when one is running. */
 const watchTree = (
   root: string,
@@ -177,6 +254,34 @@ export const handleFileWatch = (
     if (!watching) return yield* parkUnavailable(conn, "unsupported")
 
     yield* conn.send({ type: "fs-watch-ready" })
+
+    // THE GIT SIGNAL, ON ITS OWN CHANNEL. It is a separate message from
+    // `fs-change` because it means a different thing: no directory listing has
+    // changed, only the colours have. Sending it as a directory bump would make
+    // the tree re-fetch every expanded folder to learn something none of them
+    // can tell it.
+    //
+    // Forked, so a project with no repository (or a watch that could not be
+    // opened) simply contributes nothing while the tree watch runs on.
+    const gitDir = yield* resolveGitDir(root)
+    if (gitDir !== null) {
+      const signals = yield* Queue.unbounded<string>()
+      const watchingGit = yield* watchGitDir(gitDir, signals)
+      if (watchingGit) {
+        yield* Effect.forkScoped(
+          Stream.fromQueue(signals).pipe(
+            // One `git commit` touches index, HEAD and ORIG_HEAD within
+            // milliseconds; a rebase does it once per replayed commit. The
+            // window collapses all of that into one message, and is long enough
+            // that the status is read after git has finished rather than during.
+            Stream.groupedWithin(WATCH_BATCH_MAX, Duration.millis(GIT_SIGNAL_COALESCE_MS)),
+            Stream.filter((batch) => Chunk.size(batch) > 0),
+            Stream.mapEffect(() => conn.send({ type: "git-change" })),
+            Stream.runDrain,
+          ),
+        )
+      }
+    }
 
     yield* Stream.fromQueue(events).pipe(
       Stream.groupedWithin(WATCH_BATCH_MAX, Duration.millis(WATCH_COALESCE_MS)),

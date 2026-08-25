@@ -115,6 +115,7 @@ import {
   escapeHtml,
   failureKey,
   fsChangeDirs,
+  isGitChange,
   isCommittableName,
   renameSelection,
   stripTransTags,
@@ -884,14 +885,17 @@ export function FileBrowserPanel({
   // and the tree needs the whole map anyway: a collapsed folder is coloured by
   // paths it has not loaded and cannot ask about.
   //
-  // WHAT THIS DOES NOT CATCH, stated because the gap is real and the manual
-  // refresh button is its answer. The watcher below is the trigger, and
-  // `.git` is on its ignore list (`fsWatchScope.ts`) — deliberately, since git
-  // rewrites files in there constantly. So an edit recolours immediately, while
-  // a `git add` or `commit` made in a terminal does not: nothing in the working
-  // tree changed. Watching `.git` to close that gap would mean a refresh storm
-  // during every rebase, which is a worse trade than a colour that is briefly
-  // stale.
+  // TWO TRIGGERS, BECAUSE THERE ARE TWO WAYS THE ANSWER GOES STALE. An edit in
+  // the working tree arrives as `fs-change` from the tree watcher. A `git add`
+  // or `commit` run in a terminal changes NOTHING in the working tree, so it
+  // arrives instead as `git-change` from a second, narrow watcher on the git
+  // directory itself (fileWatchHandler.ts) — filtered to the four filenames that
+  // move the answer, because `.git` as a whole is churn and a rebase through the
+  // tree watcher would be a refresh storm.
+  //
+  // The manual refresh button remains, for the same reason it always did: a
+  // platform with no recursive watch answers `fs-watch-unavailable` and sends
+  // nothing at all.
   const [gitChanged, setGitChanged] = useState<Record<string, GitFileState>>({});
   const refreshGitStatus = useCallback(() => {
     let cancelled = false;
@@ -1042,8 +1046,18 @@ export function FileBrowserPanel({
    */
   const onWatchMessage = useCallback(
     (data: unknown) => {
-      bumpMany(fsChangeDirs(data));
-      // A file changing on disk is the commonest reason a row's colour is now
+      // TWO SIGNALS, TWO MEANINGS. `fs-change` names directories whose listing
+      // moved; `git-change` says the listings are fine and only the colours are
+      // wrong — which is what a `git add` or `commit` in a terminal looks like,
+      // since it touches nothing in the working tree.
+      if (isGitChange(data)) {
+        refreshGitStatus();
+        return;
+      }
+      const dirs = fsChangeDirs(data);
+      if (dirs.length === 0) return;
+      bumpMany(dirs);
+      // A file changing on disk is also the commonest reason a colour is now
       // wrong, so the same signal that re-reads the folder re-reads the status.
       refreshGitStatus();
     },
@@ -1411,9 +1425,9 @@ export function FileBrowserPanel({
             type="button"
             onClick={() => {
               bump('');
-              // The manual refresh is the ONLY way to pick up a `git add` or
-              // `commit` made in a terminal: nothing in the working tree changed,
-              // so the watcher never fired (see the status block above).
+              // Both halves, because the button's job is "I do not trust what I
+              // am looking at" — and on a platform with no watcher at all, this
+              // is the only thing that runs.
               refreshGitStatus();
             }}
             title={t('fileBrowser.refreshTree', { defaultValue: 'Refresh directory tree' })}

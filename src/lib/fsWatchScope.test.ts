@@ -7,6 +7,9 @@ import {
   coalesceChangedDirs,
   isIgnoredWatchPath,
   supportsRecursiveWatch,
+  isGitStatusSignal,
+  gitDirFromPointer,
+  GIT_SIGNAL_COALESCE_MS,
 } from './fsWatchScope';
 
 /**
@@ -190,5 +193,66 @@ describe('window constants', () => {
 
   it('bounds one window instead of letting it grow without limit', () => {
     expect(WATCH_BATCH_MAX).toBeGreaterThan(0);
+  });
+});
+
+describe('the git-status signal', () => {
+  it('reacts to the four files that move the answer', () => {
+    for (const f of ['index', 'HEAD', 'MERGE_HEAD', 'ORIG_HEAD']) {
+      expect(isGitStatusSignal(f), f).toBe(true);
+    }
+  });
+
+  it('IGNORES index.lock', () => {
+    // Created and deleted around every one of those operations. Reacting to it
+    // would mean reading the status mid-write — the one moment git's own answer
+    // is not to be trusted.
+    expect(isGitStatusSignal('index.lock')).toBe(false);
+  });
+
+  it('ignores the churn that made watching .git wholesale impossible', () => {
+    for (const f of [
+      'objects/ab/cdef',
+      'logs/HEAD',
+      'COMMIT_EDITMSG',
+      'refs/heads/main',
+      'FETCH_HEAD',
+      'config',
+    ]) {
+      expect(isGitStatusSignal(f), f).toBe(false);
+    }
+  });
+
+  it('coalesces for longer than the tree does', () => {
+    // One `git commit` touches index, HEAD and ORIG_HEAD within milliseconds; a
+    // rebase does it once per replayed commit.
+    expect(GIT_SIGNAL_COALESCE_MS).toBeGreaterThan(WATCH_COALESCE_MS);
+  });
+});
+
+describe('finding the git directory', () => {
+  it('reads a submodule pointer — this repo’s own shell is one', () => {
+    // `shell/.git` is a FILE. Watching it would see nothing, because git updates
+    // the real directory and never the pointer.
+    expect(gitDirFromPointer('gitdir: ../.git/modules/shell\n')).toBe('../.git/modules/shell');
+  });
+
+  it('reads a linked worktree pointer', () => {
+    expect(gitDirFromPointer('gitdir: /repo/.git/worktrees/feature')).toBe(
+      '/repo/.git/worktrees/feature',
+    );
+  });
+
+  it('tolerates trailing whitespace and CRLF', () => {
+    expect(gitDirFromPointer('gitdir: ../x  \r\n')).toBe('../x');
+  });
+
+  it('refuses what it does not recognise rather than guessing', () => {
+    // A watch on the wrong directory is a feature that reports someone else's
+    // commits. No watch is the better answer; the refresh button still works.
+    expect(gitDirFromPointer('')).toBeNull();
+    expect(gitDirFromPointer('gitdir:')).toBeNull();
+    expect(gitDirFromPointer('gitdir:   ')).toBeNull();
+    expect(gitDirFromPointer('ref: refs/heads/main')).toBeNull();
   });
 });

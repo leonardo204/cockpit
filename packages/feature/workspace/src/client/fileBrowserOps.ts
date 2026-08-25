@@ -138,6 +138,22 @@ export function fsChangeDirs(message: unknown): string[] {
   );
 }
 
+/**
+ * Is this the watcher saying the GIT STATUS changed?
+ *
+ * Its own message rather than a directory bump, because it means a different
+ * thing: no listing has changed, only the colours have. Sent as `fs-change` it
+ * would make every expanded folder re-fetch to learn something none of them can
+ * tell it.
+ *
+ * Total, like `fsChangeDirs` beside it: an unrecognised frame is not a git
+ * change, and a malformed one must not throw inside a socket callback.
+ */
+export function isGitChange(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  return (data as { type?: unknown }).type === 'git-change';
+}
+
 /** Which i18n key explains a failed `/api/fs-op` response. `exists` is the one
  *  a user hits by accident, so it gets its own sentence instead of the generic
  *  "could not". */

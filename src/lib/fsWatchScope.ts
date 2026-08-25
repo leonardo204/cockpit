@@ -30,7 +30,88 @@
  * does not auto-refresh, and neither does `node_modules` appearing or being
  * deleted. That is what the panel's manual refresh button is for, and it is why
  * that button stays.
+ *
+ * `.git` IS ON THE LIST BUT IS NOT UNWATCHED. It is excluded from the TREE
+ * watch, where its churn would be pure noise, and watched separately for the
+ * four files that mean the file tree's colours are now wrong — see
+ * `GIT_STATUS_SIGNAL_FILES` above.
  */
+/**
+ * The files inside the git directory whose change means "the status the tree is
+ * showing is now wrong".
+ *
+ * WATCHING `.git` WHOLESALE IS NOT AN OPTION and that is why this list exists.
+ * Git rewrites that directory constantly — every object written, every lock
+ * taken and dropped, every reflog line — and a rebase would be a refresh storm.
+ * These four are the ones that actually move the answer:
+ *
+ *   `index`        staging. `git add`, `git reset`, and a commit all rewrite it.
+ *   `HEAD`         which commit the tree is measured against — a checkout or a
+ *                  branch switch changes every file's status at once.
+ *   `MERGE_HEAD`   a merge began or ended, which is when `conflicted` appears
+ *                  and disappears.
+ *   `ORIG_HEAD`    written by the operations that rewrite history (rebase,
+ *                  reset --hard), which is the case where nothing else here is
+ *                  a reliable signal that the dust has settled.
+ *
+ * `index.lock` IS DELIBERATELY ABSENT. It is created and deleted around every
+ * one of those operations, so reacting to it would mean reading the status
+ * mid-write — the one moment git's own answer is not to be trusted.
+ */
+export const GIT_STATUS_SIGNAL_FILES: ReadonlySet<string> = new Set([
+  "index",
+  "HEAD",
+  "MERGE_HEAD",
+  "ORIG_HEAD",
+])
+
+/** Does this filename, as reported by a watch on the git directory, mean the
+ *  status should be re-read? `filename` may carry a subdirectory (`refs/heads/x`)
+ *  on some platforms, so only a bare match counts — a ref file changing is
+ *  always accompanied by one of the four above. */
+export function isGitStatusSignal(filename: string): boolean {
+  return GIT_STATUS_SIGNAL_FILES.has(filename)
+}
+
+/**
+ * How long to wait after a git signal before re-reading.
+ *
+ * LONGER THAN THE TREE'S OWN COALESCING, on purpose. A single `git commit`
+ * touches `index` and `HEAD` and `ORIG_HEAD` within milliseconds of each other,
+ * and a rebase does it once per replayed commit. This is the window in which all
+ * of that collapses into one re-read, and it is also long enough that the status
+ * is read AFTER git has finished rather than during.
+ */
+export const GIT_SIGNAL_COALESCE_MS = 400
+
+/**
+ * Where a project's git directory actually is, given what `<root>/.git` contains.
+ *
+ * `.git` IS NOT ALWAYS A DIRECTORY, and this repository is its own proof: the
+ * shell is a submodule, so `shell/.git` is a FILE reading
+ *
+ *     gitdir: ../.git/modules/shell
+ *
+ * The same shape appears for every linked worktree (`git worktree add`). Watching
+ * the file itself would see nothing — git updates the real directory, not the
+ * pointer — so a submodule would silently never refresh, which is precisely the
+ * case a developer on this project would hit first.
+ *
+ * Pure: the caller does the reading and the existence check, so this is only the
+ * parsing rule, and it can be tested without a filesystem.
+ *
+ * Returns null for anything it does not recognise. A pointer file it cannot parse
+ * is better answered with "no git watch" than with a guessed path — the panel
+ * still has its refresh button, and a watch on the wrong directory would be a
+ * feature that reports someone else's commits.
+ */
+export function gitDirFromPointer(contents: string): string | null {
+  const line = contents.split(/\r?\n/).find((l) => l.startsWith("gitdir:"))
+  if (!line) return null
+  const path = line.slice("gitdir:".length).trim()
+  return path === "" ? null : path
+}
+
 export const WATCH_IGNORED_DIRS: ReadonlySet<string> = new Set([
   // Package managers and VCS — the two loudest sources by orders of magnitude.
   "node_modules",
