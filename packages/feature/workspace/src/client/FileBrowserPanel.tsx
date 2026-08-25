@@ -8,10 +8,14 @@
  * opening the panel never walks the whole tree. It does three things:
  *
  *   • DRAG a row onto the chat input  → the cwd-relative PATH is inserted.
- *   • ⌘/Ctrl-CLICK a row              → "@<path>" is inserted at the caret.
  *   • DROP OS files onto a folder     → the files are COPIED into that folder
  *     (Finder/Explorer → project), then that folder refreshes.
- *   • plain click on a folder         → expand/collapse (files: no-op).
+ *   • plain click on a row            → SELECT it; a folder also expands.
+ *   • ⌘/Ctrl-CLICK                    → add/remove one row from the selection.
+ *   • SHIFT-CLICK                     → extend the selection from the anchor.
+ *     ⌘/Ctrl-click USED TO insert "@<path>" at the chat caret. The gesture went
+ *     to selection, where it means one thing to everybody; the reference is
+ *     still reachable by dragging the row, and by "copy path" in the menu.
  *   • DOUBLE-CLICK a MARKDOWN row     → the in-app viewer (MarkdownPreviewModal).
  *   • DOUBLE-CLICK any other file row → the OS default application for that
  *     extension opens it.
@@ -74,9 +78,16 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { gitTintClass, gitTintTitleKey } from './gitStatusTint';
+import {
+  EMPTY_SELECTION,
+  applyClick,
+  isSelected,
+  pruneSelection,
+  type TreeSelection,
+} from './treeSelection';
 import type { GitFileState, GitStatusResponse } from './gitStatusTypes';
 import { confirm, toast, useWebSocket } from '@cockpit/shared-ui';
-import { FILE_REF_MIME, insertFileRef, osFilePath } from '@cockpit/feature-agent';
+import { FILE_REF_MIME, osFilePath } from '@cockpit/feature-agent';
 import { FileBrowserContextMenu, type FileMenuState } from './FileBrowserContextMenu';
 import { MarkdownPreviewModal } from './MarkdownPreviewModal';
 import {
@@ -134,6 +145,26 @@ const RefreshContext = createContext<{ nonceOf: (rel: string) => number; bump: (
  *  a row asks about its own path and gets an answer whether it is a file or a
  *  collapsed directory holding a change three levels down. */
 const GitStatusContext = createContext<(rel: string) => GitFileState | null>(() => null);
+
+/** SELECTION, and the registry that makes a RANGE possible.
+ *
+ *  A range is defined over what the user can SEE, in the order they see it —
+ *  which this tree does not have anywhere, because each level is fetched and
+ *  mounted on its own. So every mounted `TreeChildren` registers its rows under
+ *  its parent, and the panel flattens the registry depth-first when a
+ *  shift-click asks. It is kept in a REF, not state: nothing re-renders when a
+ *  folder registers, and the list is only ever read at click time. */
+const SelectionContext = createContext<{
+  isRowSelected: (rel: string) => boolean;
+  onRowClick: (rel: string, intent: { toggle: boolean; range: boolean }) => void;
+  registerRows: (parentRel: string, rels: readonly string[]) => void;
+  unregisterRows: (parentRel: string) => void;
+}>({
+  isRowSelected: () => false,
+  onRowClick: () => {},
+  registerRows: () => {},
+  unregisterRows: () => {},
+});
 
 /** What a row needs from the panel to take part in the operations menu.
  *
@@ -361,6 +392,8 @@ const TreeNode = memo(function TreeNode({
   // repository's status, which arrives long after this row first drew and
   // changes on its own schedule; a prop would mean re-rendering every ancestor
   // to recolour one leaf. The context re-renders exactly the rows that read it.
+  const { isRowSelected, onRowClick } = useContext(SelectionContext);
+  const selected = isRowSelected(rel);
   const gitStateOf = useContext(GitStatusContext);
   const gitState = gitStateOf(rel);
   // A colour is not self-describing — `text-brand` on a filename says
@@ -389,14 +422,20 @@ const TreeNode = memo(function TreeNode({
 
   const onClick = useCallback(
     (e: React.MouseEvent) => {
-      if (e.metaKey || e.ctrlKey) {
-        e.preventDefault();
-        insertFileRef(`@${ref}`);
-        return;
-      }
-      if (entry.isDir) setOpen((v) => !v);
+      // ⌘/CTRL-CLICK NOW EXTENDS THE SELECTION, not inserts an @path reference.
+      // The gesture was taken because in a file tree it means one thing to
+      // everybody, and a tree that disagreed with every file manager would be
+      // wrong in a way the panel's hint text could not fix. The reference is not
+      // lost: dragging a row into the composer still inserts it, and the
+      // right-click menu still copies the path.
+      onRowClick(rel, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey });
+      // Selecting and expanding are not alternatives — a plain click on a folder
+      // does both, the way every tree does. A modified click does NOT toggle:
+      // the user is building a selection, and folders opening under them while
+      // they do it is the tree fighting the gesture.
+      if (entry.isDir && !e.metaKey && !e.ctrlKey && !e.shiftKey) setOpen((v) => !v);
     },
-    [entry.isDir, ref],
+    [entry.isDir, rel, onRowClick],
   );
 
   /**
@@ -503,7 +542,14 @@ const TreeNode = memo(function TreeNode({
           className={`flex items-center gap-1 py-0.5 pr-2 text-xs ${gitTintClass(
             gitState,
           )} cursor-pointer select-none rounded ${
-            dropOver ? 'bg-brand/20 ring-1 ring-brand/50' : 'hover:bg-accent/50'
+            dropOver
+              ? 'bg-brand/20 ring-1 ring-brand/50'
+              : selected
+                ? // The selection reads as a BACKGROUND, leaving the git tint on
+                  // the text intact: a selected modified file must still look
+                  // modified, or selecting a row would hide what it is.
+                  'bg-accent'
+                : 'hover:bg-accent/50'
           }`}
         >
           <span className="w-3 flex-shrink-0 text-muted-foreground">
@@ -565,6 +611,17 @@ const TreeChildren = memo(function TreeChildren({
       onCancel={cancelCreate}
     />
   );
+
+  // THIS LEVEL'S ROWS, IN DISPLAY ORDER, handed to the panel so a shift-range has
+  // a sequence to measure over. Registered on every entries change and withdrawn
+  // on unmount — which is exactly what collapsing a folder does, so a collapsed
+  // level stops contributing to the range without anyone having to say so.
+  const { registerRows, unregisterRows } = useContext(SelectionContext);
+  useEffect(() => {
+    if (entries === null) return;
+    registerRows(parentRel, entries.map((e) => childRel(parentRel, e.name)));
+    return () => unregisterRows(parentRel);
+  }, [entries, parentRel, registerRows, unregisterRows]);
 
   const body = (() => {
     if (error) {
@@ -650,6 +707,62 @@ export function FileBrowserPanel({
     });
   }, []);
   const bump = useCallback((rel: string) => bumpMany([rel]), [bumpMany]);
+
+  // -- selection -----------------------------------------------------------
+  //
+  // WHERE THE VISIBLE ORDER COMES FROM. A shift-range is measured over the rows
+  // the user can see, in the order they see them, and this tree has that
+  // sequence nowhere — every level is fetched and mounted separately, and a
+  // collapsed folder's children are not merely hidden, they are unmounted. So
+  // each mounted level registers its rows here, and the panel walks the registry
+  // depth-first to reconstruct the order.
+  //
+  // A REF, NOT STATE, deliberately: a folder expanding would otherwise re-render
+  // the whole tree to record a fact only a click ever reads.
+  const rowsRef = useRef<Map<string, readonly string[]>>(new Map());
+  const registerRows = useCallback((parentRel: string, rels: readonly string[]) => {
+    rowsRef.current.set(parentRel, rels);
+  }, []);
+  const unregisterRows = useCallback((parentRel: string) => {
+    rowsRef.current.delete(parentRel);
+  }, []);
+
+  /** The visible rows, depth-first, exactly as drawn. A folder contributes its
+   *  own row and then its children — but only if it is EXPANDED, which is the
+   *  same thing as "its level registered itself". */
+  const visibleRows = useCallback((): string[] => {
+    const out: string[] = [];
+    const walk = (parentRel: string, seen: Set<string>) => {
+      if (seen.has(parentRel)) return;
+      seen.add(parentRel);
+      for (const rel of rowsRef.current.get(parentRel) ?? []) {
+        out.push(rel);
+        if (rowsRef.current.has(rel)) walk(rel, seen);
+      }
+    };
+    walk('', new Set());
+    return out;
+  }, []);
+
+  const [selection, setSelection] = useState<TreeSelection>(EMPTY_SELECTION);
+  const onRowClick = useCallback(
+    (rel: string, intent: { toggle: boolean; range: boolean }) => {
+      const visible = visibleRows();
+      // Pruned FIRST, against the rows that actually exist right now. A folder
+      // collapsed since the last click leaves selected paths behind, and a range
+      // measured from one of them would run from a row that is not on screen.
+      setSelection((prev) => applyClick(pruneSelection(prev, visible), rel, intent, visible));
+    },
+    [visibleRows],
+  );
+  const isRowSelected = useCallback(
+    (rel: string) => isSelected(selection, rel),
+    [selection],
+  );
+  const selectionValue = useMemo(
+    () => ({ isRowSelected, onRowClick, registerRows, unregisterRows }),
+    [isRowSelected, onRowClick, registerRows, unregisterRows],
+  );
 
   // -- which rows are changed ----------------------------------------------
   //
@@ -1029,11 +1142,12 @@ export function FileBrowserPanel({
       </div>
       <div className="px-3 py-1.5 border-b border-border text-[0.714rem] text-muted-foreground leading-tight">
         {t('fileBrowser.hint', {
-          defaultValue: 'Drag a row into the message box for its path, or ⌘/Ctrl-click for @path. Drop files here to copy them in.',
+          defaultValue: 'Click to select, ⌘/Ctrl-click to add, shift-click for a range. Drag a row into the message box for its path; drop files here to copy them in.',
         })}
       </div>
       <RefreshContext.Provider value={{ nonceOf, bump }}>
         <GitStatusContext.Provider value={gitStateOf}>
+        <SelectionContext.Provider value={selectionValue}>
         <FileOpsContext.Provider value={ops}>
           <div
             onDragOver={onRootDragOver}
@@ -1045,6 +1159,7 @@ export function FileBrowserPanel({
             <TreeChildren cwd={cwd} parentRel="" depth={0} />
           </div>
         </FileOpsContext.Provider>
+        </SelectionContext.Provider>
         </GitStatusContext.Provider>
       </RefreshContext.Provider>
       {/* Keyed on the file so a preview opened from a different row starts with

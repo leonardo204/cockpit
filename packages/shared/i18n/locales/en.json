@@ -463,7 +463,7 @@
   "fileBrowser": {
     "panelTitle": "Files",
     "toggle": "Toggle file browser",
-    "hint": "Drag a row into the message box for its path, or ⌘/Ctrl-click for @path. Drop files here to copy them in.",
+    "hint": "Click to select, ⌘/Ctrl-click to add, shift-click for a range. Drag a row into the message box for its path; drop files here to copy them in.",
     "loading": "Loading…",
     "loadError": "Could not read this folder.",
     "empty": "Empty",
