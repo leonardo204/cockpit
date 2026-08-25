@@ -506,6 +506,7 @@
     "cutItems": "잘라내기",
     "pasteItems": "붙여넣기",
     "gitModified": "수정됨 — 아직 커밋하지 않은 변경이 있어요",
+    "touchedSinceOpen": "이 프로젝트를 연 뒤에 바뀌었어요. git 저장소가 아니라서 견줄 커밋이 없어요",
     "gitAdded": "추가됨 — 커밋 대기 중이에요",
     "gitUntracked": "추적 안 됨 — git이 아직 이 파일을 몰라요",
     "gitDeleted": "삭제됨 — 작업 트리에서 지워졌어요",

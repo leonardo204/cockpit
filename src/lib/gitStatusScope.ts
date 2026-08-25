@@ -36,12 +36,36 @@
  * `conflicted` is first because it is the only one that is a PROBLEM rather than
  * a fact — a file needing resolution must not be shown as an ordinary edit.
  */
-export type GitFileState = 'conflicted' | 'added' | 'modified' | 'deleted' | 'untracked';
+export type FileChangeState =
+  | 'conflicted'
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'untracked'
+  /**
+   * CHANGED SINCE THE PROJECT WAS OPENED — the only state a project WITHOUT git
+   * can honestly report, and the reason this type is no longer called
+   * `GitFileState`.
+   *
+   * git's four states all mean "differs from the commit you made", a baseline
+   * the user created deliberately. A project with no repository has no such
+   * baseline, so one has to be chosen, and the only one that needs no history
+   * and no configuration is the moment the project was opened.
+   *
+   * It is deliberately ONE state rather than an imitation of the other four.
+   * mtime says a file was written; it cannot say whether that made it new,
+   * edited or conflicted, and colouring a rewritten file "modified" would be
+   * claiming a comparison that never happened.
+   */
+  | 'touched';
+
+/** @deprecated The old name, kept so the git-only readers still compile. */
+export type GitFileState = FileChangeState;
 
 export interface GitStatusEntry {
   /** Path relative to the repository root, exactly as git prints it. */
   path: string;
-  state: GitFileState;
+  state: FileChangeState;
   /** Whether the change is (also) in the index. The tree does not colour by
    *  this today; it is here because the status columns carry it and dropping it
    *  at the parse step would mean re-running git to get it back. */
@@ -65,7 +89,7 @@ export const MAX_STATUS_ENTRIES = 5000;
  *  again reads `MM`, and the honest single answer is "modified". The columns are
  *  therefore folded in a fixed order rather than concatenated into a lookup of
  *  every pair, which would be 50-odd cases most of which never occur. */
-export function statusFromColumns(x: string, y: string): GitFileState | null {
+export function statusFromColumns(x: string, y: string): FileChangeState | null {
   // Untracked and ignored come as their own two-character codes, not as a
   // column pair — `??` has no index half to read.
   if (x === '?' && y === '?') return 'untracked';
@@ -149,15 +173,19 @@ export function parsePorcelain(stdout: string): GitStatusEntry[] {
  * in. A folder holding one conflict and forty edits is a folder with a conflict
  * in it.
  */
-const PRECEDENCE: readonly GitFileState[] = [
+const PRECEDENCE: readonly FileChangeState[] = [
   'conflicted',
   'added',
   'modified',
   'deleted',
   'untracked',
+  // Last, because it is the weakest claim of the six — "something wrote to this"
+  // rather than "this differs from a known baseline". It also never shares a
+  // tree with the others: a project either has git or it does not.
+  'touched',
 ];
 
-export function mostUrgent(states: readonly GitFileState[]): GitFileState | null {
+export function mostUrgent(states: readonly FileChangeState[]): FileChangeState | null {
   for (const s of PRECEDENCE) {
     if (states.includes(s)) return s;
   }
@@ -178,10 +206,10 @@ export function mostUrgent(states: readonly GitFileState[]): GitFileState | null
  * `src/a/b.ts` therefore contributes an entry for `src/a/b.ts`, `src/a` and
  * `src`.
  */
-export function buildStatusMap(entries: readonly GitStatusEntry[]): Record<string, GitFileState> {
-  const byPath = new Map<string, GitFileState[]>();
+export function buildStatusMap(entries: readonly GitStatusEntry[]): Record<string, FileChangeState> {
+  const byPath = new Map<string, FileChangeState[]>();
 
-  const add = (path: string, state: GitFileState) => {
+  const add = (path: string, state: FileChangeState) => {
     const list = byPath.get(path);
     if (list) list.push(state);
     else byPath.set(path, [state]);
@@ -198,13 +226,48 @@ export function buildStatusMap(entries: readonly GitStatusEntry[]): Record<strin
     }
   }
 
-  const out: Record<string, GitFileState> = {};
+  const out: Record<string, FileChangeState> = {};
   for (const [path, states] of byPath) {
     const state = mostUrgent(states);
     if (state) out[path] = state;
   }
   return out;
 }
+
+// ─────────────────────────────────────────────────────────
+// The baseline a project WITHOUT git gets
+// ─────────────────────────────────────────────────────────
+
+/**
+ * How long the "just opened" grace period is.
+ *
+ * A file written in the same second the project opened is genuinely ambiguous —
+ * clock granularity on some filesystems is one second, and `openedAt` is read
+ * from a different clock than the one that stamped the file. Rather than colour
+ * a project's worth of untouched files on a rounding error, anything at or
+ * before the baseline is left alone.
+ *
+ * It cuts the other way too: a file the user edits immediately after opening is
+ * missed for one second. That is the cheaper mistake by a wide margin — a tree
+ * that lights up entirely on open is a tree nobody looks at again.
+ */
+export const TOUCHED_GRACE_MS = 1000;
+
+/** Was this file written after the project was opened? */
+export function isTouchedSince(mtimeMs: number, openedAt: number): boolean {
+  return mtimeMs > openedAt + TOUCHED_GRACE_MS;
+}
+
+/**
+ * How deep the walk goes.
+ *
+ * A project without git is also a project without `.gitignore`, so the walk is
+ * bounded by the watcher's own ignore list plus this. Deep enough for any source
+ * tree; shallow enough that a symlink loop or a mounted volume cannot hold the
+ * request open. (`readdir` does not follow symlinked directories here, so the
+ * loop case is theoretical — the bound is for the pathological real tree.)
+ */
+export const MAX_WALK_DEPTH = 12;
 
 /** What the route answers. `truncated` is stated rather than silently implied:
  *  a tree with no colours because the answer was cut off must be
@@ -214,6 +277,6 @@ export interface GitStatusResult {
   /** Absent when the directory is not a git repository at all — which is not an
    *  error, just a project without version control. */
   repo: boolean;
-  changed: Record<string, GitFileState>;
+  changed: Record<string, FileChangeState>;
   truncated: boolean;
 }

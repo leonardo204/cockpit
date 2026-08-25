@@ -103,7 +103,7 @@ import {
   targetsFor,
   type TreeSelection,
 } from './treeSelection';
-import type { GitFileState, GitStatusResponse } from './gitStatusTypes';
+import type { FileChangeState, GitStatusResponse } from './gitStatusTypes';
 import { confirm, toast, useWebSocket } from '@cockpit/shared-ui';
 import { FILE_REF_MIME, osFilePath } from '@cockpit/feature-agent';
 import { FileBrowserContextMenu, type FileMenuState } from './FileBrowserContextMenu';
@@ -163,7 +163,7 @@ const RefreshContext = createContext<{ nonceOf: (rel: string) => number; bump: (
  *  The map already has the FOLDERS rolled into it (the server does that fold) —
  *  a row asks about its own path and gets an answer whether it is a file or a
  *  collapsed directory holding a change three levels down. */
-const GitStatusContext = createContext<(rel: string) => GitFileState | null>(() => null);
+const GitStatusContext = createContext<(rel: string) => FileChangeState | null>(() => null);
 
 /** SELECTION, and the registry that makes a RANGE possible.
  *
@@ -896,7 +896,19 @@ export function FileBrowserPanel({
   // The manual refresh button remains, for the same reason it always did: a
   // platform with no recursive watch answers `fs-watch-unavailable` and sends
   // nothing at all.
-  const [gitChanged, setGitChanged] = useState<Record<string, GitFileState>>({});
+  const [gitChanged, setGitChanged] = useState<Record<string, FileChangeState>>({});
+
+  /**
+   * WHEN THE PROJECT WAS OPENED — the baseline a project without git falls back
+   * to.
+   *
+   * A ref, and read once per mount: it must not move. Recomputing it on each
+   * refresh would mean the answer is always "nothing changed since a moment
+   * ago", which is a tree that never lights up at all.
+   */
+  const openedAtRef = useRef(0);
+  if (openedAtRef.current === 0) openedAtRef.current = Date.now();
+
   const refreshGitStatus = useCallback(() => {
     let cancelled = false;
     void (async () => {
@@ -905,9 +917,25 @@ export function FileBrowserPanel({
         if (!res.ok) return;
         const data = (await res.json()) as GitStatusResponse;
         if (cancelled) return;
-        // A project with no repository, or an answer this route could not give,
-        // clears the colours rather than leaving the last repository's on screen.
-        setGitChanged(data.ok && data.repo ? (data.changed ?? {}) : {});
+        if (data.ok && data.repo) {
+          setGitChanged(data.changed ?? {});
+          return;
+        }
+        // NO REPOSITORY — so there is no commit to compare against, and the tree
+        // would otherwise show a project's worth of work as untouched. It falls
+        // back to the only baseline that needs no history and no setup: the
+        // moment this panel opened. Different meaning, different colour, and the
+        // tooltip says which (gitStatusTint.ts).
+        //
+        // Same response shape, so nothing below this line knows the difference.
+        if (!data.ok) return;
+        const alt = await fetch(
+          `/api/changed-since?cwd=${encodeURIComponent(cwd)}&since=${openedAtRef.current}`,
+        );
+        if (!alt.ok) return;
+        const altData = (await alt.json()) as GitStatusResponse;
+        if (cancelled) return;
+        setGitChanged(altData.ok ? (altData.changed ?? {}) : {});
       } catch {
         // The tree is useful without colours. A status that could not be read is
         // not worth an error the reader cannot act on.
@@ -923,7 +951,7 @@ export function FileBrowserPanel({
    *  row reads, and a new identity per render would re-render the whole tree on
    *  every keystroke in the panel. */
   const gitStateOf = useCallback(
-    (rel: string): GitFileState | null => gitChanged[rel] ?? null,
+    (rel: string): FileChangeState | null => gitChanged[rel] ?? null,
     [gitChanged],
   );
 

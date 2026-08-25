@@ -5,6 +5,8 @@ import {
   parsePorcelain,
   statusFromColumns,
   type GitStatusEntry,
+  isTouchedSince,
+  TOUCHED_GRACE_MS,
 } from './gitStatusScope';
 
 /**
@@ -195,5 +197,45 @@ describe('a folder wears the most urgent thing inside it', () => {
 
   it('is empty for a clean tree', () => {
     expect(buildStatusMap([])).toEqual({});
+  });
+});
+
+describe('the baseline a project without git gets', () => {
+  const OPENED = 1_700_000_000_000;
+
+  it('marks a file written after the project opened', () => {
+    expect(isTouchedSince(OPENED + 60_000, OPENED)).toBe(true);
+  });
+
+  it('leaves a file that was already there alone', () => {
+    expect(isTouchedSince(OPENED - 60_000, OPENED)).toBe(false);
+  });
+
+  it('does not light up the whole tree on a rounding error', () => {
+    // Some filesystems stamp mtime to the second, and `openedAt` is read from a
+    // different clock than the one that stamped the file. A tree that lights up
+    // entirely on open is a tree nobody looks at again.
+    expect(isTouchedSince(OPENED, OPENED)).toBe(false);
+    expect(isTouchedSince(OPENED + 999, OPENED)).toBe(false);
+    expect(isTouchedSince(OPENED + TOUCHED_GRACE_MS, OPENED)).toBe(false);
+    expect(isTouchedSince(OPENED + TOUCHED_GRACE_MS + 1, OPENED)).toBe(true);
+  });
+
+  it('rolls up to folders exactly as the git states do', () => {
+    // Same fold, so the two sources produce the same shape and the tree needs no
+    // idea which one it is reading.
+    expect(buildStatusMap([{ path: 'src/a/b.ts', state: 'touched', staged: false }])).toEqual({
+      'src/a/b.ts': 'touched',
+      'src/a': 'touched',
+      src: 'touched',
+    });
+  });
+
+  it('is the weakest claim when states somehow mix', () => {
+    // A project has git or it does not, so this should never arise — but if it
+    // did, "something wrote to this" must not outrank "this differs from your
+    // last commit".
+    expect(mostUrgent(['touched', 'modified'])).toBe('modified');
+    expect(mostUrgent(['touched'])).toBe('touched');
   });
 });

@@ -18,7 +18,7 @@
  * tree where none of them are.
  */
 
-import type { GitFileState } from './gitStatusTypes';
+import type { FileChangeState } from './gitStatusTypes';
 
 /**
  * The text class for a row in this state.
@@ -27,7 +27,7 @@ import type { GitFileState } from './gitStatusTypes';
  * having one function answer for both cases is what stops the row's markup
  * growing a conditional that says the same thing.
  */
-export function gitTintClass(state: GitFileState | null | undefined): string {
+export function gitTintClass(state: FileChangeState | null | undefined): string {
   switch (state) {
     case 'conflicted':
       // The only state that is a PROBLEM rather than a fact, and the only one
@@ -47,6 +47,13 @@ export function gitTintClass(state: GitFileState | null | undefined): string {
       return 'text-green-11/70';
     case 'modified':
       return 'text-brand';
+    case 'touched':
+      // A DIFFERENT COLOUR FROM `modified`, on purpose, even though a reader
+      // might call both "changed". They are not the same claim: `modified`
+      // means "differs from the commit you made", and this means only "written
+      // since you opened the project". Wearing the same colour would let a
+      // project without git look like one with a clean baseline behind it.
+      return 'text-amber-11';
     default:
       return 'text-foreground/90';
   }
@@ -60,7 +67,7 @@ export function gitTintClass(state: GitFileState | null | undefined): string {
  * component so the strings stay in the dictionaries where the both-locales test
  * can see them.
  */
-export function gitTintTitleKey(state: GitFileState | null | undefined): string | null {
+export function gitTintTitleKey(state: FileChangeState | null | undefined): string | null {
   switch (state) {
     case 'conflicted':
       return 'fileBrowser.gitConflicted';
@@ -72,6 +79,8 @@ export function gitTintTitleKey(state: GitFileState | null | undefined): string 
       return 'fileBrowser.gitUntracked';
     case 'modified':
       return 'fileBrowser.gitModified';
+    case 'touched':
+      return 'fileBrowser.touchedSinceOpen';
     default:
       return null;
   }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import en from '../../../../shared/i18n/locales/en.json';
 import ko from '../../../../shared/i18n/locales/ko.json';
 import { gitTintClass, gitTintTitleKey } from './gitStatusTint';
-import type { GitFileState } from './gitStatusTypes';
+import type { FileChangeState } from './gitStatusTypes';
 
 /**
  * A CHANGED FILE LOOKS CHANGED, AND SAYS WHY ON HOVER.
@@ -15,12 +15,13 @@ import type { GitFileState } from './gitStatusTypes';
  * one means.
  */
 
-const STATES: readonly GitFileState[] = [
+const STATES: readonly FileChangeState[] = [
   'conflicted',
   'added',
   'modified',
   'deleted',
   'untracked',
+  'touched',
 ];
 
 const chat = (d: unknown) => (d as { fileBrowser: Record<string, string> }).fileBrowser;
@@ -51,7 +52,7 @@ describe('every state is distinguishable', () => {
     // A file browser is not the place to introduce colours the rest of the app
     // does not have.
     for (const s of STATES) {
-      expect(gitTintClass(s)).toMatch(/text-(red-11|green-11|brand)/);
+      expect(gitTintClass(s)).toMatch(/text-(red-11|green-11|brand|amber-11)/);
     }
   });
 });
@@ -83,7 +84,9 @@ describe('the states that need more than a colour', () => {
 
 describe('a colour explains itself', () => {
   it('names a hint key for every state and none for a clean file', () => {
-    for (const s of STATES) expect(gitTintTitleKey(s)).toMatch(/^fileBrowser\.git/);
+    // Not all of them are git states any more — `touched` is what a project
+    // without a repository gets — so the shared prefix is the panel's, not git's.
+    for (const s of STATES) expect(gitTintTitleKey(s)).toMatch(/^fileBrowser\./);
     expect(gitTintTitleKey(null)).toBeNull();
   });
 
@@ -108,5 +111,43 @@ describe('the row goes through the helper', () => {
     // The old unconditional class must not still be pinned onto the row beside
     // it, or the tint would be overridden by whichever tailwind rule wins.
     expect(panel).not.toContain('cursor-pointer select-none rounded text-foreground/90');
+  });
+});
+
+describe('a project with no git repository', () => {
+  it('does not wear the same colour as "modified"', () => {
+    // They are not the same claim. `modified` means "differs from the commit you
+    // made"; `touched` means only "written since you opened this". Sharing a
+    // colour would let a project with no baseline look like one with a clean one.
+    expect(gitTintClass('touched')).not.toBe(gitTintClass('modified'));
+  });
+
+  it('says what the baseline is, because the reader did not choose it', () => {
+    // Every git state describes a comparison the user set up. This one describes
+    // one the app picked, so the tooltip has to name it rather than assume it.
+    for (const dict of [en, ko]) {
+      expect(chat(dict).touchedSinceOpen).toBeTruthy();
+    }
+    expect(chat(en).touchedSinceOpen).toContain('opened');
+    expect(chat(en).touchedSinceOpen).toContain('git');
+    expect(chat(ko).touchedSinceOpen).toContain('연 뒤');
+    expect(chat(ko).touchedSinceOpen).toContain('git');
+  });
+});
+
+describe('the panel falls back rather than going blank', () => {
+  it('asks the other route when there is no repository', () => {
+    // Otherwise a project without git shows a whole tree of work as untouched,
+    // which is the gap this closes.
+    const panel = readFileSync(join(__dirname, 'FileBrowserPanel.tsx'), 'utf8');
+    expect(panel).toContain('/api/changed-since?cwd=');
+    expect(panel).toContain('since=${openedAtRef.current}');
+  });
+
+  it('pins the baseline once, so the tree can ever light up', () => {
+    // Recomputing it per refresh would make the answer permanently "nothing
+    // changed since a moment ago".
+    const panel = readFileSync(join(__dirname, 'FileBrowserPanel.tsx'), 'utf8');
+    expect(panel).toContain('if (openedAtRef.current === 0) openedAtRef.current = Date.now();');
   });
 });
