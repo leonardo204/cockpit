@@ -142,9 +142,16 @@ export function fsChangeDirs(message: unknown): string[] {
  *  a user hits by accident, so it gets its own sentence instead of the generic
  *  "could not". */
 export function failureKey(
-  action: 'create' | 'rename' | 'duplicate' | 'delete',
+  action: 'create' | 'rename' | 'duplicate' | 'delete' | 'paste',
   reason: string | undefined,
 ): string {
   if (reason === 'exists') return 'fileBrowser.nameTaken';
+  // THE TWO REFUSALS A PASTE HAS THAT NOTHING ELSE DOES, each with its own
+  // sentence for the same reason `exists` has one: a user meets them by
+  // accident, and "could not paste" tells them nothing about what to do
+  // differently. `nest-in-self` especially — the drag looked legal, both paths
+  // are in the project, and without a sentence it reads as a bug.
+  if (reason === 'nest-in-self') return 'fileBrowser.pasteIntoSelf';
+  if (reason === 'dest-not-dir') return 'fileBrowser.pasteNotFolder';
   return `fileBrowser.${action}Error`;
 }

@@ -384,3 +384,128 @@ describe('request validation', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────
+// move / copy
+// ─────────────────────────────────────────────────────────
+
+describe('move', () => {
+  it('moves a file into another folder', async () => {
+    const res = await post({ cwd, action: 'move', rel: 'README.md', destRel: 'src' });
+    expect(res).toEqual({ ok: true, rel: 'src/README.md' });
+    expect(existsSync(join(cwd, 'src', 'README.md'))).toBe(true);
+    expect(existsSync(join(cwd, 'README.md'))).toBe(false);
+  });
+
+  it('moves a whole folder', async () => {
+    const res = await post({ cwd, action: 'move', rel: 'src/nested', destRel: '' });
+    expect(res).toEqual({ ok: true, rel: 'nested' });
+    expect(existsSync(join(cwd, 'nested', 'deep.txt'))).toBe(true);
+  });
+
+  it('takes the project root as a destination', async () => {
+    // `destRel: ""` is the one place the empty string is legal — for `rel` it
+    // means "the project itself" and every mutating action refuses it.
+    const res = await post({ cwd, action: 'move', rel: 'src/a.ts', destRel: '' });
+    expect(res.ok).toBe(true);
+    expect(existsSync(join(cwd, 'a.ts'))).toBe(true);
+  });
+
+  it('is a no-op when dropped back where it came from', async () => {
+    // A drag that changed nothing must not report a collision the user cannot
+    // act on.
+    const res = await post({ cwd, action: 'move', rel: 'src/a.ts', destRel: 'src' });
+    expect(res).toEqual({ ok: true, rel: 'src/a.ts' });
+    expect(existsSync(join(cwd, 'src', 'a.ts'))).toBe(true);
+  });
+});
+
+describe('copy', () => {
+  it('copies a file, leaving the original', async () => {
+    const res = await post({ cwd, action: 'copy', rel: 'README.md', destRel: 'src' });
+    expect(res).toEqual({ ok: true, rel: 'src/README.md' });
+    expect(existsSync(join(cwd, 'src', 'README.md'))).toBe(true);
+    expect(existsSync(join(cwd, 'README.md'))).toBe(true);
+  });
+
+  it('copies a folder and everything under it', async () => {
+    const res = await post({ cwd, action: 'copy', rel: 'src/nested', destRel: '' });
+    expect(res.ok).toBe(true);
+    expect(readFileSync(join(cwd, 'nested', 'deep.txt'), 'utf8')).toBe('deep');
+    expect(existsSync(join(cwd, 'src', 'nested', 'deep.txt'))).toBe(true);
+  });
+});
+
+describe('move / copy refuse rather than damage', () => {
+  it('never overwrites something already at the destination', async () => {
+    // The contract the whole route keeps: skip, never clobber.
+    writeFileSync(join(cwd, 'src', 'README.md'), 'do not lose me');
+    const res = await post({ cwd, action: 'move', rel: 'README.md', destRel: 'src' });
+    expect(res).toEqual({ ok: false, reason: 'exists' });
+    expect(readFileSync(join(cwd, 'src', 'README.md'), 'utf8')).toBe('do not lose me');
+    expect(existsSync(join(cwd, 'README.md'))).toBe(true);
+  });
+
+  it('REFUSES A FOLDER DROPPED INTO ITS OWN DESCENDANT', async () => {
+    // The one that destroys a tree: `cp -r` would recurse until the disk filled,
+    // and it is a gesture a user can make by accident in one drag.
+    const res = await post({ cwd, action: 'move', rel: 'src', destRel: 'src/nested' });
+    expect(res).toEqual({ ok: false, reason: 'nest-in-self' });
+    expect(existsSync(join(cwd, 'src', 'a.ts'))).toBe(true);
+    expect(existsSync(join(cwd, 'src', 'nested', 'src'))).toBe(false);
+  });
+
+  it('refuses a folder dropped onto itself', async () => {
+    const res = await post({ cwd, action: 'copy', rel: 'src', destRel: 'src' });
+    expect(res).toEqual({ ok: false, reason: 'nest-in-self' });
+  });
+
+  it('refuses a destination that is a file', async () => {
+    const res = await post({ cwd, action: 'move', rel: 'src/a.ts', destRel: 'README.md' });
+    expect(res).toEqual({ ok: false, reason: 'dest-not-dir' });
+    expect(readFileSync(join(cwd, 'README.md'), 'utf8')).toBe('hello');
+  });
+
+  it('refuses a destination that does not exist', async () => {
+    const res = await post({ cwd, action: 'move', rel: 'src/a.ts', destRel: 'nope' });
+    expect(res).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('refuses a source that does not exist', async () => {
+    const res = await post({ cwd, action: 'move', rel: 'ghost.ts', destRel: 'src' });
+    expect(res).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  it('refuses to move the project root', async () => {
+    const res = await post({ cwd, action: 'move', rel: '', destRel: 'src' });
+    expect(res).toEqual({ ok: false, reason: 'invalid-target' });
+  });
+
+  it('refuses a destination that escapes the project', async () => {
+    const res = await post({ cwd, action: 'move', rel: 'README.md', destRel: '../outside' });
+    expect(res).toEqual({ ok: false, reason: 'escape' });
+    expect(existsSync(join(outside, 'README.md'))).toBe(false);
+    expect(existsSync(join(cwd, 'README.md'))).toBe(true);
+  });
+
+  it('refuses a SOURCE that escapes the project', async () => {
+    const res = await post({ cwd, action: 'copy', rel: '../outside/secret.txt', destRel: 'src' });
+    expect(res).toEqual({ ok: false, reason: 'escape' });
+    expect(existsSync(join(cwd, 'src', 'secret.txt'))).toBe(false);
+  });
+
+  it('validates a copy exactly as it validates a move', async () => {
+    // A copy that validated differently is a copy that could reach somewhere a
+    // move could not.
+    for (const action of ['move', 'copy']) {
+      expect(await post({ cwd, action, rel: '../outside/secret.txt', destRel: '' })).toEqual({
+        ok: false,
+        reason: 'escape',
+      });
+      expect(await post({ cwd, action, rel: 'src', destRel: 'src/nested' })).toEqual({
+        ok: false,
+        reason: 'nest-in-self',
+      });
+    }
+  });
+});

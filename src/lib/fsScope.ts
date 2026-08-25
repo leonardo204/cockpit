@@ -29,6 +29,26 @@ export function withinCwd(cwd: string, target: string): boolean {
 }
 
 /**
+ * Would moving or copying `source` into `destDir` put it inside ITSELF?
+ *
+ * THE CLASSIC WAY TO DESTROY A TREE. Dragging `src` onto `src/lib` is a gesture
+ * a user can make by accident in one motion, and the operating system's own
+ * answer is not reassuring: `cp -r` will happily recurse until the disk fills,
+ * and a `rename` into a descendant fails with an errno that says nothing about
+ * what was nearly lost. `withinCwd` does not catch it — both paths are inside
+ * the project, which is all that guard was ever asked.
+ *
+ * True for the source itself as well as its descendants: dropping a folder onto
+ * itself is not a move, and treating it as one would ask `rename` to overwrite
+ * its own parent.
+ */
+export function wouldNestInSelf(source: string, destDir: string): boolean {
+  const s = resolve(source)
+  const d = resolve(destDir)
+  return d === s || d.startsWith(s + sep)
+}
+
+/**
  * A single path segment the user typed (a new name, a rename target).
  *
  * Refused: empty/whitespace, `.` and `..`, anything carrying a separator, and

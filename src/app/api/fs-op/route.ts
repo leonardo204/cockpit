@@ -51,15 +51,15 @@
  */
 import { execFile, spawn } from "child_process"
 import { cp, mkdir, open, readdir, rename, rm, stat } from "fs/promises"
-import { dirname, isAbsolute, join, resolve } from "path"
+import { basename, dirname, isAbsolute, join, resolve } from "path"
 import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
-import { copySiblingName, isSafeSegment, withinCwd } from "../../../lib/fsScope"
+import { copySiblingName, isSafeSegment, withinCwd, wouldNestInSelf } from "../../../lib/fsScope"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 
-const ACTIONS = ["mkdir", "mkfile", "rename", "duplicate", "delete", "open", "reveal", "openWith", "read"] as const
+const ACTIONS = ["mkdir", "mkfile", "rename", "duplicate", "move", "copy", "delete", "open", "reveal", "openWith", "read"] as const
 type Action = (typeof ACTIONS)[number]
 
 /** The most text one `read` ever returns. Beyond this the response is marked
@@ -169,6 +169,11 @@ interface Body {
   readonly action?: string
   readonly rel?: string
   readonly name?: string
+  /** `move` / `copy` only: the DESTINATION DIRECTORY, project-relative. The
+   *  empty string is the project root, which is a legal destination — unlike
+   *  `rel`, where it means "the project itself" and every mutating action
+   *  refuses it. */
+  readonly destRel?: string
 }
 
 type Reason =
@@ -180,6 +185,12 @@ type Reason =
   | "exists"
   | "not-found"
   | "too-large"
+  /** The destination is not a directory, so nothing can be put in it. */
+  | "dest-not-dir"
+  /** The destination is the source itself or somewhere inside it. Its own
+   *  reason because it is the one refusal a user might otherwise read as a bug:
+   *  the drag looked legal and both paths are in the project. */
+  | "nest-in-self"
   | "failed"
 
 const fail = (reason: Reason) => ok({ ok: false as const, reason })
@@ -208,6 +219,7 @@ export const POST = handler((req) =>
     const action = typeof body.action === "string" ? body.action : ""
     const rel = typeof body.rel === "string" ? body.rel.trim() : ""
     const name = typeof body.name === "string" ? body.name : ""
+    const destRel = typeof body.destRel === "string" ? body.destRel.trim() : ""
 
     if (!cwd || !isAbsolute(cwd)) return fail("invalid-cwd")
     if (!ACTIONS.includes(action as Action)) return fail("invalid-action")
@@ -305,6 +317,69 @@ export const POST = handler((req) =>
         }).pipe(Effect.orElseSucceed(() => false))
         if (!done) return fail("failed")
         return ok({ ok: true as const, rel: relOf(cwd, copyPath) })
+      }
+
+      // -- move / copy -------------------------------------------------------
+      //
+      // ONE ITEM PER REQUEST, like every other action here. A multi-select paste
+      // is N requests, which is what lets each one come back with its OWN reason
+      // — "three moved, this one collided, that one vanished" — instead of a
+      // single verdict over a batch where the interesting part is which member
+      // failed and why.
+      //
+      // The two share everything except the last syscall, so they share a block:
+      // a copy that validated differently from a move is a copy that could reach
+      // somewhere a move could not.
+      case "move":
+      case "copy": {
+        if (!rel) return fail("invalid-target") // the project root moves nowhere
+        if (!(yield* exists(target))) return fail("not-found")
+
+        // The DESTINATION DIRECTORY. `destRel: ""` is the project root, which is
+        // a legal place to drop something — the only action here for which the
+        // empty string is not a refusal.
+        const destDir = resolve(join(cwd, destRel))
+        if (!withinCwd(cwd, destDir)) return fail("escape")
+
+        const destInfo = yield* Effect.tryPromise({
+          try: () => stat(destDir),
+          catch: () => null,
+        }).pipe(Effect.orElseSucceed(() => null))
+        if (!destInfo) return fail("not-found")
+        if (!destInfo.isDirectory()) return fail("dest-not-dir")
+
+        // INTO ITSELF. Checked before anything is touched, because the failure
+        // it prevents is unbounded: `cp -r` of a folder into its own descendant
+        // recurses until the disk fills, and it is a gesture a user can make by
+        // accident in one drag.
+        if (wouldNestInSelf(target, destDir)) return fail("nest-in-self")
+
+        const landing = join(destDir, basename(target))
+        if (!withinCwd(cwd, landing)) return fail("escape")
+
+        // ALREADY THERE. For a move this is also the "dropped it back where it
+        // came from" case, which is a no-op rather than a collision — reporting
+        // `exists` for a drag that changed nothing would be a refusal the user
+        // cannot act on.
+        if (landing === target) return ok({ ok: true as const, rel })
+        if (yield* exists(landing)) return fail("exists")
+
+        const done = yield* Effect.tryPromise({
+          try: () =>
+            (action === "move"
+              ? rename(target, landing)
+              : // errorOnExist + force:false is the same non-clobbering contract
+                // `duplicate` and /api/copy-into use. The `exists` check above is
+                // the answer the user gets; this is what makes the race safe.
+                cp(target, landing, { recursive: true, errorOnExist: true, force: false })
+            ).then(() => true),
+          catch: () => false,
+        }).pipe(Effect.orElseSucceed(() => false))
+        // A cross-device move fails here (EXDEV) rather than silently becoming a
+        // copy-then-delete: a half-finished fallback is how a move loses a file,
+        // and inside one project tree this does not arise.
+        if (!done) return fail("failed")
+        return ok({ ok: true as const, rel: relOf(cwd, landing) })
       }
 
       // -- delete (permanent; Electron uses the trash bridge instead) --------

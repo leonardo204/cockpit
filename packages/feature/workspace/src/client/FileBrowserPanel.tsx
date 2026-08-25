@@ -79,10 +79,20 @@ import {
 import { useTranslation } from 'react-i18next';
 import { gitTintClass, gitTintTitleKey } from './gitStatusTint';
 import {
+  afterPaste,
+  parentOf,
+  isCutPending,
+  pasteOps,
+  pasteTargetOf,
+  putOnClipboard,
+  type TreeClipboard,
+} from './treeClipboard';
+import {
   EMPTY_SELECTION,
   applyClick,
   isSelected,
   pruneSelection,
+  targetsFor,
   type TreeSelection,
 } from './treeSelection';
 import type { GitFileState, GitStatusResponse } from './gitStatusTypes';
@@ -120,7 +130,7 @@ type CopyResponse =
 // `read` is deliberately absent: it is the only action that returns a body, so
 // it is issued by MarkdownPreviewModal with its own response type rather than
 // forced through the `{ok, rel}` shape every mutating op shares.
-type FsOpAction = 'mkdir' | 'mkfile' | 'rename' | 'duplicate' | 'delete' | 'open' | 'reveal' | 'openWith';
+type FsOpAction = 'mkdir' | 'mkfile' | 'rename' | 'duplicate' | 'move' | 'copy' | 'delete' | 'open' | 'reveal' | 'openWith';
 
 type FsOpResponse =
   | { ok: true; rel: string }
@@ -156,11 +166,13 @@ const GitStatusContext = createContext<(rel: string) => GitFileState | null>(() 
  *  folder registers, and the list is only ever read at click time. */
 const SelectionContext = createContext<{
   isRowSelected: (rel: string) => boolean;
+  isRowCut: (rel: string) => boolean;
   onRowClick: (rel: string, intent: { toggle: boolean; range: boolean }) => void;
   registerRows: (parentRel: string, rels: readonly string[]) => void;
   unregisterRows: (parentRel: string) => void;
 }>({
   isRowSelected: () => false,
+  isRowCut: () => false,
   onRowClick: () => {},
   registerRows: () => {},
   unregisterRows: () => {},
@@ -245,12 +257,15 @@ async function fsOp(
   action: FsOpAction,
   rel: string,
   name?: string,
+  /** `move`/`copy` only: the destination DIRECTORY. Left out of the body when
+   *  absent so every other action's request is byte-identical to what it was. */
+  destRel?: string,
 ): Promise<FsOpResponse> {
   try {
     const res = await fetch('/api/fs-op', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cwd, action, rel, name }),
+      body: JSON.stringify({ cwd, action, rel, name, ...(destRel === undefined ? {} : { destRel }) }),
     });
     if (!res.ok) return { ok: false, reason: 'failed' };
     return (await res.json()) as FsOpResponse;
@@ -392,8 +407,12 @@ const TreeNode = memo(function TreeNode({
   // repository's status, which arrives long after this row first drew and
   // changes on its own schedule; a prop would mean re-rendering every ancestor
   // to recolour one leaf. The context re-renders exactly the rows that read it.
-  const { isRowSelected, onRowClick } = useContext(SelectionContext);
+  const { isRowSelected, onRowClick, isRowCut } = useContext(SelectionContext);
   const selected = isRowSelected(rel);
+  // Dimmed while a cut is pending, the way every file manager shows a move that
+  // has not happened yet. It is still a normal row — readable, openable, there —
+  // because a cut moves nothing until it is pasted.
+  const cut = isRowCut(rel);
   const gitStateOf = useContext(GitStatusContext);
   const gitState = gitStateOf(rel);
   // A colour is not self-describing — `text-brand` on a filename says
@@ -541,7 +560,7 @@ const TreeNode = memo(function TreeNode({
           style={{ paddingLeft: 8 + depth * 12 }}
           className={`flex items-center gap-1 py-0.5 pr-2 text-xs ${gitTintClass(
             gitState,
-          )} cursor-pointer select-none rounded ${
+          )} ${cut ? 'opacity-50' : ''} cursor-pointer select-none rounded ${
             dropOver
               ? 'bg-brand/20 ring-1 ring-brand/50'
               : selected
@@ -755,13 +774,31 @@ export function FileBrowserPanel({
     },
     [visibleRows],
   );
+  // The clipboard's STATE lives here, beside the selection it is filled from —
+  // the operations that use it are further down, after the refreshers they need.
+  // Declared this early because the tree's cut-dimming reads it, and that reader
+  // is part of the same context value the selection publishes.
+  const [clipboard, setClipboard] = useState<TreeClipboard | null>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const clipboardRef = useRef(clipboard);
+  clipboardRef.current = clipboard;
+
   const isRowSelected = useCallback(
     (rel: string) => isSelected(selection, rel),
     [selection],
   );
+  const isRowCut = useCallback(
+    (rel: string) => isCutPending(clipboardRef.current, rel),
+    // `clipboard` is the dep, not the ref: the ref keeps the reader current
+    // while this identity is what tells the tree to redraw when a cut is made
+    // or spent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clipboard],
+  );
   const selectionValue = useMemo(
-    () => ({ isRowSelected, onRowClick, registerRows, unregisterRows }),
-    [isRowSelected, onRowClick, registerRows, unregisterRows],
+    () => ({ isRowSelected, isRowCut, onRowClick, registerRows, unregisterRows }),
+    [isRowSelected, isRowCut, onRowClick, registerRows, unregisterRows],
   );
 
   // -- which rows are changed ----------------------------------------------
@@ -809,6 +846,53 @@ export function FileBrowserPanel({
     (rel: string): GitFileState | null => gitChanged[rel] ?? null,
     [gitChanged],
   );
+
+  // -- the clipboard ---------------------------------------------------------
+  //
+  // ITS OWN, IN MEMORY, not `navigator.clipboard`. A file manager's clipboard
+  // carries a set of paths AND an intent — the same three files mean "leave
+  // them" after a copy and "remove them from here" after a cut, and nothing in a
+  // text payload says which. Writing paths as text would also clobber whatever
+  // the user had copied from their editor, on a keystroke pressed inside a tree.
+  // Rules in treeClipboard.ts; this is the wiring.
+  const copySelection = useCallback((mode: 'copy' | 'cut') => {
+    setClipboard((prev) => putOnClipboard(prev, mode, selectionRef.current.selected));
+  }, []);
+
+  /**
+   * PASTE — one request per item, so each comes back with its own reason.
+   *
+   * The folders that change are bumped rather than the whole tree: the source's
+   * parent (a cut empties it) and the destination. `bumpMany` makes that one
+   * state update, so a ten-file paste is one render, not twenty.
+   */
+  const pasteInto = useCallback(
+    async (destDir: string) => {
+      const ops = pasteOps(clipboardRef.current, destDir);
+      if (ops.length === 0) return;
+      const touched = new Set<string>([destDir]);
+      let moved = 0;
+      let firstFailure: string | undefined;
+      for (const op of ops) {
+        const res = await fsOp(cwd, op.action, op.rel, undefined, op.destRel);
+        if (res.ok) {
+          moved += 1;
+          touched.add(parentOf(op.rel));
+        } else if (!firstFailure) {
+          firstFailure = res.reason;
+        }
+      }
+      bumpMany([...touched]);
+      refreshGitStatus();
+      setClipboard((prev) => afterPaste(prev, moved));
+      // ONE MESSAGE, FOR THE FIRST REFUSAL. Ten toasts for a ten-file paste is a
+      // wall the user dismisses without reading; the rows that did move are
+      // visible in the tree, so the part worth saying out loud is why one did not.
+      if (firstFailure) toast(t(failureKey('paste', firstFailure)), 'error');
+    },
+    [cwd, bumpMany, refreshGitStatus, t],
+  );
+
 
   /**
    * CHANGES MADE FROM OUTSIDE THIS PANEL — the agent writing a file, a build,
@@ -863,7 +947,7 @@ export function FileBrowserPanel({
   /** Report a refused or failed operation. `exists` gets its own sentence
    *  because it is the failure a user causes by accident. */
   const reportFailure = useCallback(
-    (action: 'create' | 'rename' | 'duplicate' | 'delete', reason: string | undefined) => {
+    (action: 'create' | 'rename' | 'duplicate' | 'delete' | 'paste', reason: string | undefined) => {
       toast(t(failureKey(action, reason)), 'error');
     },
     [t],
@@ -1047,6 +1131,25 @@ export function FileBrowserPanel({
     [cwd, t],
   );
 
+  /** COPY / CUT FROM THE MENU. `targetsFor` is the rule that stops a right-click
+   *  on a row outside the selection acting on the selection — without it,
+   *  right-clicking one file while five are selected copies six. */
+  const onMenuClipboard = useCallback(
+    (target: MenuTarget, mode: 'copy' | 'cut') => {
+      setClipboard((prev) =>
+        putOnClipboard(prev, mode, targetsFor(selectionRef.current, target.rel)),
+      );
+    },
+    [],
+  );
+
+  const onMenuPaste = useCallback(
+    (target: MenuTarget) => {
+      void pasteInto(target.rel === '' ? '' : pasteTargetOf(target.rel, target.isDir));
+    },
+    [pasteInto],
+  );
+
   const ops = useMemo(
     () => ({
       openMenu,
@@ -1060,6 +1163,45 @@ export function FileBrowserPanel({
       cancelCreate: () => setCreating(null),
     }),
     [openMenu, onOpen, onPreview, renamingRel, commitRename, creating, commitCreate],
+  );
+
+  // -- keyboard ---------------------------------------------------------------
+  //
+  // SCOPED TO THE PANEL, not the window. The app has no shortcut registry — every
+  // listener is its own `addEventListener` — and a global ⌘C in a chat app would
+  // steal the copy the user meant for the message they just selected. So this
+  // listens on the panel's own element and only acts while focus is inside it.
+  //
+  // It also runs INSIDE THE PER-PROJECT IFRAME (Workspace.tsx documents why that
+  // matters: iframes do not bubble keydown to the parent), which is where the
+  // panel lives, so nothing has to cross the frame boundary.
+  //
+  // A row being renamed swallows its own keys (`InlineNameInput`), so ⌘C while
+  // typing a filename never reaches this.
+  const panelRef = useRef<HTMLElement>(null);
+  const onPanelKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key === 'c') {
+        e.preventDefault();
+        copySelection('copy');
+      } else if (key === 'x') {
+        e.preventDefault();
+        copySelection('cut');
+      } else if (key === 'v') {
+        e.preventDefault();
+        // WHERE A KEYBOARD PASTE LANDS. There is no pointer to read, so it goes
+        // to the selection's own folder — the place the user is looking. With
+        // nothing selected that is the project root, which is the only other
+        // honest answer.
+        const sel = selectionRef.current.selected;
+        const first = sel[0];
+        void pasteInto(first === undefined ? '' : parentOf(first));
+      }
+    },
+    [copySelection, pasteInto],
   );
 
   // Dropping OS files on the panel body (not on a folder row) copies into the
@@ -1102,7 +1244,14 @@ export function FileBrowserPanel({
 
   return (
     <aside
-      className={`shrink-0 flex flex-col bg-card h-full overflow-hidden ${
+      ref={panelRef}
+      // `tabIndex` is what lets the panel HOLD focus at all — without it a click
+      // on a row focuses nothing and a keystroke goes to the document. -1 keeps
+      // it out of the tab order: this is a place keys are delivered to, not a
+      // control to tab into.
+      tabIndex={-1}
+      onKeyDown={onPanelKeyDown}
+      className={`shrink-0 flex flex-col bg-card h-full overflow-hidden outline-none ${
         resizing ? '' : 'transition-[width] duration-200'
       }`}
       style={{ width }}
@@ -1184,6 +1333,9 @@ export function FileBrowserPanel({
           onNewFolder={(target) => setCreating({ parentRel: createParentOf(target), isDir: true })}
           onRename={(target) => setRenamingRel(target.rel)}
           onDuplicate={onDuplicate}
+          onClipboard={onMenuClipboard}
+          onPaste={onMenuPaste}
+          canPaste={clipboard !== null}
           onDelete={(target) => void onDelete(target)}
           onCopyPath={onCopyPath}
           onReveal={onReveal}

@@ -64,6 +64,15 @@ interface FileBrowserContextMenuProps {
   onNewFolder: (target: MenuTarget) => void;
   onRename: (target: MenuTarget) => void;
   onDuplicate: (target: MenuTarget) => void;
+  /** Copy or cut the rows this menu is acting on (the whole selection when it
+   *  was opened from inside it — `targetsFor` decides, at the panel). */
+  onClipboard: (target: MenuTarget, mode: 'copy' | 'cut') => void;
+  /** Paste into the folder this row names — its own if it is a folder, its
+   *  parent if it is a file. Absent from the menu when nothing is on the
+   *  clipboard: an item that would do nothing is a promise the menu cannot
+   *  keep. */
+  onPaste: (target: MenuTarget) => void;
+  canPaste: boolean;
   onDelete: (target: MenuTarget) => void;
   onCopyPath: (target: MenuTarget, absolute: boolean) => void;
   onReveal: (target: MenuTarget) => void;
@@ -84,6 +93,9 @@ export function FileBrowserContextMenu({
   onNewFolder,
   onRename,
   onDuplicate,
+  onClipboard,
+  onPaste,
+  canPaste,
   onDelete,
   onCopyPath,
   onReveal,
@@ -267,6 +279,62 @@ export function FileBrowserContextMenu({
               <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
             </svg>
             {t('fileBrowser.duplicate')}
+          </button>
+        </>
+      )}
+
+      {/* COPY / CUT / PASTE. Placed after the create-and-rename group and before
+          the path/reveal group, which is where a file manager puts them and
+          therefore where a hand goes looking.
+
+          Copy and cut are offered on a row; paste is offered on a row AND on the
+          empty body (the project root), because pasting into the root is a thing
+          people do. Paste is hidden rather than disabled when the clipboard is
+          empty — a greyed item invites a click that explains nothing. */}
+      {!isRoot && (
+        <>
+          <div className="my-1 border-t border-border" />
+          <button
+            role="menuitem"
+            data-testid="file-menu-copy"
+            className={item}
+            onClick={run(() => onClipboard(target, 'copy'))}
+          >
+            <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <rect x="9" y="9" width="12" height="12" rx="2" />
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+            </svg>
+            {t('fileBrowser.copyItems')}
+          </button>
+          <button
+            role="menuitem"
+            data-testid="file-menu-cut"
+            className={item}
+            onClick={run(() => onClipboard(target, 'cut'))}
+          >
+            <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <circle cx="6" cy="6" r="3" />
+              <circle cx="6" cy="18" r="3" />
+              <path d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12" />
+            </svg>
+            {t('fileBrowser.cutItems')}
+          </button>
+        </>
+      )}
+      {canPaste && (
+        <>
+          {isRoot && <div className="my-1 border-t border-border" />}
+          <button
+            role="menuitem"
+            data-testid="file-menu-paste"
+            className={item}
+            onClick={run(() => onPaste(target))}
+          >
+            <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" />
+              <rect x="8" y="2" width="8" height="4" rx="1" />
+            </svg>
+            {t('fileBrowser.pasteItems')}
           </button>
         </>
       )}

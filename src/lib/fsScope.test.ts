@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withinCwd, isSafeSegment, copySiblingName } from './fsScope';
+import { withinCwd, isSafeSegment, copySiblingName, wouldNestInSelf } from './fsScope';
 
 /**
  * The containment rule is the only thing standing between "a file browser" and
@@ -74,5 +74,36 @@ describe('copySiblingName', () => {
 
   it('gives up rather than looping forever', () => {
     expect(copySiblingName('x', false, () => true)).toBeNull();
+  });
+});
+
+describe('wouldNestInSelf', () => {
+  it('refuses a folder dropped into its own descendant', () => {
+    // The classic way to destroy a tree, and a gesture a user can make by
+    // accident in one drag. `cp -r` would recurse until the disk filled.
+    expect(wouldNestInSelf('/proj/src', '/proj/src/lib')).toBe(true);
+    expect(wouldNestInSelf('/proj/src', '/proj/src/a/b/c')).toBe(true);
+  });
+
+  it('refuses a folder dropped onto itself', () => {
+    // Not a move, and asking rename to do it would have it overwrite its own
+    // parent.
+    expect(wouldNestInSelf('/proj/src', '/proj/src')).toBe(true);
+  });
+
+  it('allows a move that goes anywhere else', () => {
+    expect(wouldNestInSelf('/proj/src', '/proj/lib')).toBe(false);
+    expect(wouldNestInSelf('/proj/src/a', '/proj')).toBe(false);
+    expect(wouldNestInSelf('/proj/src/a', '/proj/src')).toBe(false);
+  });
+
+  it('does not mistake a sibling whose name merely starts the same', () => {
+    // The same `+ sep` trap withinCwd documents: `/proj/src-old` is not inside
+    // `/proj/src`, and refusing the move would be refusing a legal one.
+    expect(wouldNestInSelf('/proj/src', '/proj/src-old')).toBe(false);
+  });
+
+  it('is not fooled by a traversing path', () => {
+    expect(wouldNestInSelf('/proj/src', '/proj/lib/../src/deep')).toBe(true);
   });
 });
