@@ -79,6 +79,14 @@ import {
 import { useTranslation } from 'react-i18next';
 import { gitTintClass, gitTintTitleKey } from './gitStatusTint';
 import {
+  TREE_DRAG_MIME,
+  beginTreeDrag,
+  canDropInto,
+  draggedRels,
+  dropOps,
+  endTreeDrag,
+} from './treeDrag';
+import {
   afterPaste,
   parentOf,
   isCutPending,
@@ -167,12 +175,20 @@ const GitStatusContext = createContext<(rel: string) => GitFileState | null>(() 
 const SelectionContext = createContext<{
   isRowSelected: (rel: string) => boolean;
   isRowCut: (rel: string) => boolean;
+  /** The current selection, read at DRAG START so a dragged row can carry the
+   *  whole selection when it belongs to one. A getter rather than the value, so
+   *  the context does not change identity on every click. */
+  selectionOf: () => TreeSelection;
+  /** Carry out a drop: move (or, with Alt, copy) these rows into that folder. */
+  applyDrop: (rels: readonly string[], destDir: string, copy: boolean) => Promise<void>;
   onRowClick: (rel: string, intent: { toggle: boolean; range: boolean }) => void;
   registerRows: (parentRel: string, rels: readonly string[]) => void;
   unregisterRows: (parentRel: string) => void;
 }>({
   isRowSelected: () => false,
   isRowCut: () => false,
+  selectionOf: () => EMPTY_SELECTION,
+  applyDrop: async () => {},
   onRowClick: () => {},
   registerRows: () => {},
   unregisterRows: () => {},
@@ -407,7 +423,8 @@ const TreeNode = memo(function TreeNode({
   // repository's status, which arrives long after this row first drew and
   // changes on its own schedule; a prop would mean re-rendering every ancestor
   // to recolour one leaf. The context re-renders exactly the rows that read it.
-  const { isRowSelected, onRowClick, isRowCut } = useContext(SelectionContext);
+  const { isRowSelected, onRowClick, isRowCut, applyDrop, selectionOf } =
+    useContext(SelectionContext);
   const selected = isRowSelected(rel);
   // Dimmed while a cut is pending, the way every file manager shows a move that
   // has not happened yet. It is still a normal row — readable, openable, there —
@@ -432,12 +449,25 @@ const TreeNode = memo(function TreeNode({
 
   const onDragStart = useCallback(
     (e: React.DragEvent) => {
+      // BOTH PAYLOADS, because one gesture serves two drops. The composer reads
+      // `FILE_REF_MIME` to insert a path; a folder in this tree reads
+      // `TREE_DRAG_MIME` to move files. A row dragged to the chat still inserts
+      // exactly what it always did.
       e.dataTransfer.setData(FILE_REF_MIME, ref);
       e.dataTransfer.setData('text/plain', ref);
-      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData(TREE_DRAG_MIME, rel);
+      // DRAGGING A SELECTED ROW DRAGS THE WHOLE SELECTION — and one outside it
+      // drags only itself, the same rule the context menu follows. Without it,
+      // selecting five files and dragging one of them moves one, which reads as
+      // the selection having been ignored.
+      beginTreeDrag(targetsFor(selectionOf(), rel));
+      // `copyMove`, not `copy`: within the tree this MOVES, and the cursor has
+      // to say so. The chat's own drop zone reads the payload, not the effect.
+      e.dataTransfer.effectAllowed = 'copyMove';
     },
-    [ref],
+    [ref, rel, selectionOf],
   );
+  const onDragEnd = useCallback(() => endTreeDrag(), []);
 
   const onClick = useCallback(
     (e: React.MouseEvent) => {
@@ -494,20 +524,54 @@ const TreeNode = memo(function TreeNode({
     [openMenu, rel, parentRel, entry.name, entry.isDir],
   );
 
-  // A folder is a copy target for OS-file drops (Finder → project).
+  /** A tree drag is recognised by its TYPE, which is all `dragover` may read —
+   *  browsers block `getData` there so a page cannot snoop on a passing drag.
+   *  The rows themselves come from the in-memory slot (treeDrag.ts). */
+  const hasTreeDrag = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes(TREE_DRAG_MIME);
+
+  // A folder takes OS-file drops (Finder → project) AND rows dragged from this
+  // tree. The two are told apart by type and handled by different code, because
+  // one copies files in from outside and the other moves them around inside.
   const onDragOver = useCallback(
     (e: React.DragEvent) => {
-      if (!entry.isDir || !hasOsFiles(e)) return;
+      if (!entry.isDir) return;
+      if (hasOsFiles(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropOver(true);
+        return;
+      }
+      // NOT LIGHTING UP IS THE FEEDBACK. A drop that would do nothing — rows
+      // dropped back where they live — or one that cannot be done — a folder
+      // into its own descendant — leaves the target dark and the cursor showing
+      // "no", which is a better answer than an error after the user lets go.
+      if (!hasTreeDrag(e) || !canDropInto(draggedRels(), rel)) return;
       e.preventDefault();
       e.stopPropagation();
+      // Alt/Option copies, as it does in Finder. Read here as well as at drop so
+      // the cursor tells the truth while the pointer is still moving.
+      e.dataTransfer.dropEffect = e.altKey ? 'copy' : 'move';
       setDropOver(true);
     },
-    [entry.isDir],
+    [entry.isDir, rel],
   );
   const onDragLeave = useCallback(() => setDropOver(false), []);
   const onDrop = useCallback(
     async (e: React.DragEvent) => {
-      if (!entry.isDir || !hasOsFiles(e)) return;
+      if (!entry.isDir) return;
+      // ROWS FROM THIS TREE — handled first, and it never falls through to the
+      // OS-copy path below: a tree drag carries no `files`, so a mistaken
+      // fall-through would silently do nothing at all.
+      if (!hasOsFiles(e) && hasTreeDrag(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setDropOver(false);
+        setOpen(true);
+        await applyDrop(draggedRels(), rel, e.altKey);
+        return;
+      }
+      if (!hasOsFiles(e)) return;
       e.preventDefault();
       e.stopPropagation();
       setDropOver(false);
@@ -550,6 +614,7 @@ const TreeNode = memo(function TreeNode({
         <div
           draggable
           onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
           onContextMenu={onContextMenu}
@@ -788,18 +853,6 @@ export function FileBrowserPanel({
     (rel: string) => isSelected(selection, rel),
     [selection],
   );
-  const isRowCut = useCallback(
-    (rel: string) => isCutPending(clipboardRef.current, rel),
-    // `clipboard` is the dep, not the ref: the ref keeps the reader current
-    // while this identity is what tells the tree to redraw when a cut is made
-    // or spent.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [clipboard],
-  );
-  const selectionValue = useMemo(
-    () => ({ isRowSelected, isRowCut, onRowClick, registerRows, unregisterRows }),
-    [isRowSelected, isRowCut, onRowClick, registerRows, unregisterRows],
-  );
 
   // -- which rows are changed ----------------------------------------------
   //
@@ -866,17 +919,20 @@ export function FileBrowserPanel({
    * parent (a cut empties it) and the destination. `bumpMany` makes that one
    * state update, so a ten-file paste is one render, not twenty.
    */
-  const pasteInto = useCallback(
-    async (destDir: string) => {
-      const ops = pasteOps(clipboardRef.current, destDir);
-      if (ops.length === 0) return;
-      const touched = new Set<string>([destDir]);
+  /** Run a batch of move/copy operations and report what happened. Shared by the
+   *  paste and the drop, which are the same operation reached two ways. Returns
+   *  how many actually succeeded, which is what decides whether a cut is spent. */
+  const runFileOps = useCallback(
+    async (ops: readonly { action: 'move' | 'copy'; rel: string; destRel: string }[]) => {
+      const touched = new Set<string>(ops.map((o) => o.destRel));
       let moved = 0;
       let firstFailure: string | undefined;
       for (const op of ops) {
         const res = await fsOp(cwd, op.action, op.rel, undefined, op.destRel);
         if (res.ok) {
           moved += 1;
+          // The SOURCE folder too: a move empties it, and refreshing only the
+          // destination leaves the row still drawn where it no longer is.
           touched.add(parentOf(op.rel));
         } else if (!firstFailure) {
           firstFailure = res.reason;
@@ -884,14 +940,62 @@ export function FileBrowserPanel({
       }
       bumpMany([...touched]);
       refreshGitStatus();
-      setClipboard((prev) => afterPaste(prev, moved));
       // ONE MESSAGE, FOR THE FIRST REFUSAL. Ten toasts for a ten-file paste is a
       // wall the user dismisses without reading; the rows that did move are
       // visible in the tree, so the part worth saying out loud is why one did not.
       if (firstFailure) toast(t(failureKey('paste', firstFailure)), 'error');
+      return moved;
     },
     [cwd, bumpMany, refreshGitStatus, t],
   );
+
+  const pasteInto = useCallback(
+    async (destDir: string) => {
+      const ops = pasteOps(clipboardRef.current, destDir);
+      if (ops.length === 0) return;
+      const moved = await runFileOps(ops);
+      setClipboard((prev) => afterPaste(prev, moved));
+    },
+    [runFileOps],
+  );
+
+  /**
+   * A DROP, carried out. Deliberately the same body a paste runs — one request
+   * per row, the touched folders bumped together, the first refusal reported —
+   * because a drop IS a paste with an ephemeral clipboard, and two executors is
+   * how the two gestures start behaving differently.
+   */
+  const applyDrop = useCallback(
+    async (rels: readonly string[], destDir: string, copy: boolean) => {
+      const ops = dropOps(rels, destDir, copy);
+      if (ops.length === 0) return;
+      await runFileOps(ops);
+    },
+    [runFileOps],
+  );
+
+  const isRowCut = useCallback(
+    (rel: string) => isCutPending(clipboardRef.current, rel),
+    // `clipboard` is the dep, not the ref: the ref keeps the reader current
+    // while this identity is what tells the tree to redraw when a cut is made
+    // or spent.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [clipboard],
+  );
+  const selectionOf = useCallback(() => selectionRef.current, []);
+  const selectionValue = useMemo(
+    () => ({
+      isRowSelected,
+      isRowCut,
+      selectionOf,
+      applyDrop,
+      onRowClick,
+      registerRows,
+      unregisterRows,
+    }),
+    [isRowSelected, isRowCut, selectionOf, applyDrop, onRowClick, registerRows, unregisterRows],
+  );
+
 
 
   /**
@@ -1208,12 +1312,31 @@ export function FileBrowserPanel({
   // project ROOT.
   const [rootOver, setRootOver] = useState(false);
   const onRootDragOver = useCallback((e: React.DragEvent) => {
-    if (!hasOsFiles(e)) return;
+    if (hasOsFiles(e)) {
+      e.preventDefault();
+      setRootOver(true);
+      return;
+    }
+    // Rows dragged onto the empty space below the tree land in the project root,
+    // which is where a file manager puts them and the only way to move something
+    // OUT of a folder without scrolling to find a target row.
+    const types = Array.from(e.dataTransfer?.types ?? []);
+    if (!types.includes(TREE_DRAG_MIME) || !canDropInto(draggedRels(), '')) return;
     e.preventDefault();
+    e.dataTransfer.dropEffect = e.altKey ? 'copy' : 'move';
     setRootOver(true);
   }, []);
   const onRootDrop = useCallback(
     async (e: React.DragEvent) => {
+      // Rows from this tree, moved into the project root. Checked first and
+      // returning: a tree drag carries no `files`, so falling through would do
+      // nothing at all.
+      if (!hasOsFiles(e) && Array.from(e.dataTransfer?.types ?? []).includes(TREE_DRAG_MIME)) {
+        e.preventDefault();
+        setRootOver(false);
+        await applyDrop(draggedRels(), '', e.altKey);
+        return;
+      }
       if (!hasOsFiles(e)) return;
       e.preventDefault();
       setRootOver(false);
@@ -1230,7 +1353,7 @@ export function FileBrowserPanel({
       );
       bump('');
     },
-    [cwd, bump, t],
+    [cwd, bump, t, applyDrop],
   );
 
   // Right-click on empty space in the tree = the project root: create only.
