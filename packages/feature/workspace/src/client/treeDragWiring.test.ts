@@ -97,3 +97,34 @@ describe('a drop runs the same code a paste runs', () => {
     expect(drop).not.toContain('setClipboard');
   });
 });
+
+describe('dragging out to the OS', () => {
+  it('decides at DRAG START, because startDrag replaces the HTML drag', () => {
+    // `webContents.startDrag` does not accompany the page's drag, it takes it
+    // over — once the OS owns the gesture no in-page target sees it. So one drag
+    // cannot serve both, and the user says which at the moment they start.
+    expect(PANEL).toContain('if (e.altKey && bridge?.startDrag) {');
+    expect(PANEL).toMatch(/e\.preventDefault\(\);\s*\n\s*void bridge\.startDrag\(/);
+  });
+
+  it('carries the whole selection out, like every other row operation', () => {
+    expect(PANEL).toContain('rels: [...targetsFor(selectionOf(), rel)]');
+  });
+
+  it('leaves the in-app drag alone where the bridge is dark', () => {
+    // A plain browser tab cannot hand files to the OS. Without the guard, Alt
+    // would turn a working drag into a gesture that silently does nothing.
+    expect(PANEL).toContain('const bridge = fsBridge();');
+    expect(PANEL).toContain('startDrag?(target: { cwd: string; rels: string[] })');
+  });
+
+  it('runs before the in-app payloads are set, and returns', () => {
+    // Setting them first would be harmless but misleading; returning is what
+    // guarantees the two paths never both run for one gesture.
+    const start = /const onDragStart = useCallback\([\s\S]*?\n  \);/.exec(PANEL)?.[0];
+    expect(start, 'the dragstart handler changed shape').toBeDefined();
+    expect(start!.indexOf('bridge.startDrag')).toBeLessThan(
+      start!.indexOf('setData(FILE_REF_MIME'),
+    );
+  });
+});

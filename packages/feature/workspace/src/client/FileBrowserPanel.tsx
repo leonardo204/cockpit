@@ -296,6 +296,9 @@ interface FsOpsBridge {
   reveal(target: { cwd: string; rel: string }): Promise<BridgeResult>;
   open(target: { cwd: string; rel: string }): Promise<BridgeResult>;
   trash(target: { cwd: string; rel: string }): Promise<BridgeResult>;
+  /** Begin an OS drag carrying these files. Optional: it is newer than the rest
+   *  of the bridge, and a shell built before it simply does not offer drag-out. */
+  startDrag?(target: { cwd: string; rels: string[] }): Promise<BridgeResult>;
 }
 
 /** The Electron file bridge, or null where it is not visible (a plain browser,
@@ -449,6 +452,26 @@ const TreeNode = memo(function TreeNode({
 
   const onDragStart = useCallback(
     (e: React.DragEvent) => {
+      // ALT SENDS THE FILES OUT OF THE APP, to Finder/Explorer or anything else
+      // that takes files — and it has to be decided HERE, because
+      // `webContents.startDrag` REPLACES the HTML drag rather than joining it:
+      // once the OS owns the gesture, no in-page drop target sees it. One drag
+      // cannot serve both, so the user says which at the moment they start.
+      //
+      // It does not collide with Alt-to-copy on an in-tree drop. That modifier
+      // is read when the pointer is RELEASED, and a drag that began with Alt
+      // never reaches an in-tree drop at all; to copy inside the tree, press Alt
+      // after the drag is moving.
+      //
+      // Only where the bridge is visible. In a plain browser tab there is no way
+      // to hand files to the OS, and the drag stays the in-app one it always was
+      // rather than becoming a gesture that silently does nothing.
+      const bridge = fsBridge();
+      if (e.altKey && bridge?.startDrag) {
+        e.preventDefault();
+        void bridge.startDrag({ cwd, rels: [...targetsFor(selectionOf(), rel)] });
+        return;
+      }
       // BOTH PAYLOADS, because one gesture serves two drops. The composer reads
       // `FILE_REF_MIME` to insert a path; a folder in this tree reads
       // `TREE_DRAG_MIME` to move files. A row dragged to the chat still inserts
@@ -465,7 +488,7 @@ const TreeNode = memo(function TreeNode({
       // to say so. The chat's own drop zone reads the payload, not the effect.
       e.dataTransfer.effectAllowed = 'copyMove';
     },
-    [ref, rel, selectionOf],
+    [ref, rel, cwd, selectionOf],
   );
   const onDragEnd = useCallback(() => endTreeDrag(), []);
 
