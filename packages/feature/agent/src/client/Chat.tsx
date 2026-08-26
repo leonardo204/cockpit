@@ -585,13 +585,39 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // Incrementally fetch messages when becoming active (handles external writes like scheduled tasks)
   // With limit to fetch only the last N rounds + fingerprint check + time throttle (inside useChatHistory)
   const prevActiveRef = useRef(isActive);
+  /** The session whose history this tab has already asked for. `null` means it
+   *  has asked for none — which is the state a tab is in when it first mounts
+   *  holding one. */
+  const requestedForRef = useRef<string | null>(null);
   useEffect(() => {
+    const gainedFocus = isActive && !prevActiveRef.current;
+    prevActiveRef.current = isActive;
+
     // Skip while a live run is in progress — the live stream owns the tail; a lagging
     // disk fetch would momentarily regress it. Reconcile happens on completion instead.
-    if (isActive && !prevActiveRef.current && sessionId && initialCwd && !isLoading && !liveRunning) {
+    if (!isActive || !sessionId || !initialCwd || isLoading || liveRunning) return;
+
+    // TWO REASONS TO FETCH, and only the first one used to exist.
+    //
+    //   gained focus       the tab was switched TO, so its history may have moved
+    //                      on while the reader was elsewhere. Unchanged.
+    //
+    //   never asked        this tab holds a session whose history it has never
+    //                      requested. A rising edge alone could not see this
+    //                      case: a tab that is ALREADY ACTIVE when it acquires a
+    //                      session — the first tab of a launch, which is active
+    //                      from its first render — has no edge to rise on, so
+    //                      the conversation simply never loaded. It appeared to
+    //                      fix itself later only because switching tabs and back
+    //                      finally produced the edge.
+    //
+    // The `requestedFor` ref rather than `loadedSessionId`: a session with NO
+    // messages never marks itself loaded, so keying on that would re-fetch an
+    // empty conversation on every dependency change.
+    if (gainedFocus || requestedForRef.current !== sessionId) {
+      requestedForRef.current = sessionId;
       loadHistoryByCwdAndSessionId(initialCwd, sessionId, true, 10);
     }
-    prevActiveRef.current = isActive;
   }, [isActive, sessionId, initialCwd, isLoading, liveRunning, loadHistoryByCwdAndSessionId]);
 
   // Forced refresh on explicit jump (SWITCH_SESSION → scheduled tasks / recent / pinned).

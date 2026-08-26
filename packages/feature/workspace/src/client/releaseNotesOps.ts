@@ -316,7 +316,36 @@ export function planWhatsNew(input: {
 
   // An unreadable watermark is deliberately the same value as no watermark at
   // all: both are "we have no record of what this user has seen".
-  const seen = lastSeenVersion && parseVersion(lastSeenVersion) ? lastSeenVersion : null;
+  //
+  // AND SO IS A WATERMARK THIS APP COULD NEVER HAVE WRITTEN.
+  //
+  // A watermark ahead of the running version has two very different causes, and
+  // they must not share an answer:
+  //
+  //   A DOWNGRADE. `1.25.0` seen, `1.24.0` running. The number is real — it is
+  //     a release that exists — and the watermark is kept: lowering it would
+  //     show those notes all over again when the user goes back up.
+  //
+  //   A NUMBER FROM SOMEWHERE ELSE. `43.1.1` seen, and no such naby release has
+  //     ever existed. Believing it silences the popup FOREVER, because nothing
+  //     can ever be newer than it.
+  //
+  // The second is not hypothetical: `app.getVersion()` returns the version of
+  // the EXECUTABLE when Electron cannot find the app's package.json, and the dev
+  // launcher hands it a file rather than a directory — so a development run
+  // stamped Electron's own version into the userData directory the packaged app
+  // SHARES, and every upgrade after that was silent. The source of the number is
+  // fixed at the root (electron/app-version.ts); this repairs the installations
+  // that already carry one, with no migration to run.
+  //
+  // THE CHANGELOG IS WHAT TELLS THEM APART. A version the app really shipped has
+  // an entry; a number that came from somewhere else does not.
+  const parsedSeen = lastSeenVersion ? parseVersion(lastSeenVersion) : null;
+  const ahead = parsedSeen !== null && (compareVersions(lastSeenVersion!, currentVersion) ?? 0) > 0;
+  const isARealRelease =
+    parsedSeen !== null &&
+    notes.some((n) => compareVersions(n.version, lastSeenVersion!) === 0);
+  const seen = parsedSeen === null || (ahead && !isARealRelease) ? null : lastSeenVersion!;
 
   // RULE 5 — the setup wizard owns the screen, so nothing is SHOWN here at all.
   //

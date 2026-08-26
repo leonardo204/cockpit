@@ -501,3 +501,69 @@ describe('the shipped changelog', () => {
     expect(plan.entries.map((n) => n.version)).toEqual(['1.25.0', '1.24.1', '1.24.0', '1.23.0']);
   });
 });
+
+describe('a watermark this app could never have written', () => {
+  const notes = [note('1.31.0'), note('1.25.0'), note('1.24.1'), note('1.24.0')];
+
+  // The bug this repairs: `app.getVersion()` returns the version of the
+  // EXECUTABLE when Electron cannot find the app's package.json, and the dev
+  // launcher hands it a file rather than a directory. So a development run
+  // stamped Electron's own `43.1.1` into the userData directory the packaged app
+  // SHARES, and no real release could ever be newer than it again. Every upgrade
+  // after that was silent, on an installation that had done nothing wrong.
+
+  it('does not believe a version that never shipped', () => {
+    const plan = planWhatsNew({
+      currentVersion: '1.31.0',
+      lastSeenVersion: '43.1.1',
+      freshInstall: false,
+      notes,
+    });
+    // Treated as "no record", which for an existing installation means the
+    // version they are actually running — the same answer rule 2b gives.
+    expect(plan.entries.map((n) => n.version)).toEqual(['1.31.0']);
+  });
+
+  it('does not silently re-stamp it on a fresh install either', () => {
+    const plan = planWhatsNew({
+      currentVersion: '1.31.0',
+      lastSeenVersion: '43.1.1',
+      freshInstall: true,
+      notes,
+    });
+    expect(plan.recordSilently).toBe('1.31.0');
+  });
+
+  it('STILL keeps a real downgrade’s watermark', () => {
+    // The distinction that matters. `1.25.0` is ahead of `1.24.0` too, but it is
+    // a release that exists — and lowering the watermark would show its notes
+    // all over again when the user goes back up.
+    expect(planWhatsNew({ currentVersion: '1.24.0', lastSeenVersion: '1.25.0', notes })).toEqual({
+      entries: [],
+      recordSilently: null,
+    });
+  });
+
+  it('leaves an ordinary watermark alone', () => {
+    // Behind the current version, so there is nothing to doubt — and the whole
+    // gap is shown, not just the newest entry.
+    const plan = planWhatsNew({
+      currentVersion: '1.25.0',
+      lastSeenVersion: '1.24.0',
+      freshInstall: false,
+      notes,
+    });
+    expect(plan.entries.map((n) => n.version)).toEqual(['1.25.0', '1.24.1']);
+  });
+});
+
+describe('the shipped changelog rejects the poisoned watermark', () => {
+  it('has no entry that could be mistaken for an Electron version', () => {
+    // The discriminator is "does the changelog contain it". If a naby release
+    // ever took a number like 43.1.1 this repair would stop working, so the
+    // assumption is pinned rather than left implicit.
+    for (const n of parseReleaseNotes(RELEASE_NOTES_MARKDOWN)) {
+      expect(Number(n.version.split('.')[0])).toBeLessThan(40);
+    }
+  });
+});
