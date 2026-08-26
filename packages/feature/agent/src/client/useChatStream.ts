@@ -492,6 +492,16 @@ export function useChatStream(
       sawResultRef.current = true;
       // Stream ended → drop any retry indicator
       setApiRetryInfo(null);
+      // AND ANY REFUSAL, because a turn that reached `result` is proof the
+      // account is not being refused right now. `rejected` records a moment and
+      // nothing ever arrives to say the moment has passed, so without this the
+      // red indicator outlives the condition — which is how it came to sit
+      // beside a plan chip reading 16% and 54%.
+      //
+      // Only the REFUSAL is dropped, not the whole reading: `allowed_warning`
+      // and the reset time it carries are still true after a successful turn,
+      // and throwing them away would lose a warning the user should still see.
+      setRateLimitInfo((prev) => (prev?.status === 'rejected' ? null : prev));
       // Stream ended, flush buffer immediately
       if (streamFlushTimerRef.current) {
         clearTimeout(streamFlushTimerRef.current);

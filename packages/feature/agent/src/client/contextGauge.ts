@@ -415,3 +415,36 @@ export function gaugeToneClass(tier: ContextGaugeTier): string {
       ? 'text-yellow-500'
       : 'text-muted-foreground';
 }
+
+/**
+ * IS THE REFUSAL STILL IN FORCE?
+ *
+ * A `rejected` rate-limit event is a fact about a MOMENT — the backend turned a
+ * request away — and the row was treating it as a fact about the session. The
+ * state is set when the event arrives and there is no event that says "it is
+ * over", so the red indicator stayed on screen indefinitely, sitting next to a
+ * plan chip reading 16% and 54%. Two contradictory claims about the same
+ * account, and the alarming one was the stale one.
+ *
+ * So it EXPIRES, exactly as `usageWindowView` expires a plan window: once the
+ * reset the backend named has passed, the refusal is over and drawing it is a
+ * lie the clock can already disprove.
+ *
+ * A REFUSAL WITH NO RESET TIME NEVER EXPIRES HERE, and that is deliberate rather
+ * than an oversight — there is nothing to measure against, and guessing a
+ * duration would replace a stale truth with an invented one. That case is
+ * cleared by the other half of the rule instead: a turn that COMPLETES proves
+ * the account is not currently being refused, and the caller drops the state
+ * then (useChatStream).
+ */
+export function rateLimitRefusalActive(
+  info: { status?: string; resetsAt?: number } | null | undefined,
+  now: number,
+): boolean {
+  if (info?.status !== 'rejected') return false;
+  const resetsAtMs = rateLimitResetsAtMs(info.resetsAt);
+  // No reset named → cannot be shown to be over, so it stands until a
+  // successful turn retires it.
+  if (resetsAtMs === null) return true;
+  return resetsAtMs > now;
+}

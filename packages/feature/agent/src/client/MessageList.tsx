@@ -16,6 +16,7 @@ import {
 } from './stickToBottom';
 import { ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
+import { apiRetryNotice } from './apiRetryNotice';
 
 // Migrated from src/components/project/MessageList.tsx.
 
@@ -80,6 +81,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   ref
 ) {
   const { t } = useTranslation();
+  /** The wording for an in-flight SDK retry. Derived once rather than in the
+   *  markup: which sentence a status deserves is a rule, and apiRetryNotice.ts
+   *  is where it is tested. */
+  const retryNotice = useMemo(
+    () => (apiRetryInfo ? apiRetryNotice(apiRetryInfo) : null),
+    [apiRetryInfo],
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -619,18 +627,28 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                       </button>
                     )}
                   </div>
-                  {apiRetryInfo && (
+                  {apiRetryInfo && retryNotice && (
                     <div className="mt-2 flex items-start gap-2 text-xs text-amber-400 border-t border-border/50 pt-2">
                       <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                       <div className="flex-1 min-w-0">
-                        <div>
-                          Retrying API call (attempt {apiRetryInfo.attempt}
-                          {apiRetryInfo.maxRetries > 0 ? `/${apiRetryInfo.maxRetries}` : ''}
-                          {apiRetryInfo.delayMs > 0 ? `, delay ${(apiRetryInfo.delayMs / 1000).toFixed(1)}s` : ''}
-                          )
-                        </div>
+                        {/* WHAT IS ACTUALLY HAPPENING, in the reader's language.
+                            It said `Retrying API call (attempt 1/3, delay 2.0s)`
+                            — English, in a Korean app, in the vocabulary of the
+                            person who wrote the SDK.
+
+                            The 429 case gets its own sentence because it is the
+                            one that misleads: "rate limited" reads as "your plan
+                            is spent", and a reader who believes that stops
+                            working for the day while the plan chip beside them
+                            still says 16%. apiRetryNotice.ts picks the wording. */}
+                        <div>{t(retryNotice.key)}</div>
+                        {retryNotice.showAttempts && (
+                          <div className="text-muted-foreground/80">
+                            {t('chat.apiRetryAttempt', retryNotice.values)}
+                          </div>
+                        )}
                         {(apiRetryInfo.errorStatus || apiRetryInfo.error) && (
                           <div className="text-muted-foreground/80 break-words">
                             {apiRetryInfo.errorStatus ? `${apiRetryInfo.errorStatus}` : ''}

@@ -11,6 +11,7 @@ import {
   formatRateLimitPercent,
   formatTokensShort,
   gaugeToneClass,
+  rateLimitRefusalActive,
   rateLimitResetsAtMs,
   usageWindowView,
   type UsageWindowView,
@@ -206,7 +207,15 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
   // was actually REFUSED. A chip at 100% says the window is spent; it cannot
   // say the backend just turned a turn away, and that is the one moment the
   // user needs the row to interrupt them.
-  const rateLimitRejected = rateLimitInfo?.status === 'rejected';
+  //
+  // AND WHETHER IT IS STILL TRUE. `rejected` records a moment — a request was
+  // turned away — and nothing ever arrives to say the moment has passed, so the
+  // red indicator used to sit on screen beside a plan chip reading 16% and 54%:
+  // two contradictory claims about one account, with the alarming one being the
+  // stale one. It now expires against the same clock the plan windows do
+  // (contextGauge.ts), and a completed turn retires the ones that named no
+  // reset (useChatStream).
+  const rateLimitRejected = rateLimitRefusalActive(rateLimitInfo, now);
 
   // Format reset time as countdown. The seconds→milliseconds step is NOT done
   // here: the unit is a contract (runtime/engine.ts declares UNIX seconds) and
