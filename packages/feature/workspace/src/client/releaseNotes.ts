@@ -85,6 +85,30 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.31.1 — 2026-08-26
+
+### en
+
+Four things that were quietly telling you the wrong thing.
+
+**Fixed**
+
+- **The what's-new popup comes back.** It had gone silent for good on some machines: the app was reading Electron's version number instead of its own, writing that to disk, and then finding that no release could ever be newer than it. The number is fixed, and a watermark that could not have come from this app is no longer believed — so installations already stuck on one repair themselves.
+- **A tab that opens on a conversation shows it.** After an upgrade your session was there but looked empty until you switched tabs and came back. The history was only fetched when a tab was switched TO, and the first tab of a launch is never switched to — it is already there.
+- **"Rate Limited" goes away when it is over.** It marked the moment a request was turned away and then nothing ever cleared it, so it sat there in red beside a plan chip reading 16%. It now expires when the reset time passes, and a completed turn clears it immediately.
+- **A busy server no longer reads as a spent plan.** When a request is retried because the server is under load, it now says so — and says outright that it is not your usage limit. Retrying was always happening; it was describing itself in English, in developer's terms.
+
+### ko
+
+조용히 틀린 얘기를 하고 있던 네 가지를 고쳤어요.
+
+**고친 것**
+
+- **변경 사항 팝업이 다시 떠요.** 어떤 컴퓨터에서는 영영 안 뜨는 상태였어요. 앱이 자기 버전 대신 Electron의 버전을 읽어 디스크에 적어 뒀는데, 그 숫자보다 큰 릴리즈가 나올 수 없어서요. 숫자를 바로잡았고, 이 앱이 남겼을 리 없는 기록은 더 이상 믿지 않아요. 이미 그 상태인 설치도 알아서 회복돼요.
+- **대화를 이어받은 탭에 대화가 보여요.** 업그레이드 뒤에 세션은 있는데 비어 보이다가, 다른 탭에 갔다 오면 그제서야 보였어요. 히스토리를 "탭으로 전환할 때"만 불러왔는데, 앱을 켤 때 첫 탭은 전환되는 일이 없거든요. 이미 거기 있으니까요.
+- **"Rate Limited" 표시가 끝나면 사라져요.** 요청이 거절당한 순간을 표시해 놓고 지우는 곳이 없어서, 옆에 플랜 16%가 떠 있는데도 빨갛게 남아 있었어요. 이제 리셋 시각이 지나면 사라지고, 턴이 한 번 성공하면 바로 사라져요.
+- **서버가 붐비는 걸 사용량 초과로 읽지 않아요.** 서버가 붐벼서 다시 보내는 중일 때 그렇다고 말해 주고, 사용량 한도 때문이 아니라고 분명히 밝혀요. 다시 보내는 동작은 원래 하고 있었는데, 영어로 개발자 말투로 설명하고 있었어요.
+
 ## 1.31.0 — 2026-08-26
 
 ### en
