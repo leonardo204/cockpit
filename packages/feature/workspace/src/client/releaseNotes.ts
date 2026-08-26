@@ -85,6 +85,44 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.31.0 — 2026-08-26
+
+### en
+
+The file panel works like a file manager, and it shows you what has changed.
+
+**New**
+
+- Changed files are coloured, and so is every folder above them — a collapsed folder still tells you something inside it moved. Modified, added, deleted, untracked and conflicted each look different, and hovering any of them says which.
+  - A project with **no git repository** is not left blank: it shows what has changed since you opened it, in a colour of its own, and the tooltip says that is the baseline. There is no commit to compare against, so the app says which comparison it is making rather than letting you guess.
+  - Colours keep themselves up to date. A \`git add\` or \`commit\` you run in a terminal changes nothing in your files, so nothing used to notice it — that is now watched for separately, and the colours follow.
+- Rows can be selected: click one, ⌘/Ctrl-click to add another, shift-click for a range.
+- Copy, cut and paste — with ⌘/Ctrl-C, X and V, or from the right-click menu. A cut moves nothing until you paste it, so you can change your mind, and the rows waiting to move are dimmed.
+- Drag rows onto a folder to move them there; hold Alt/Option to copy instead. Dropping onto the empty space below the tree moves them to the top of the project.
+- Alt-drag a row out of the app to hand the files to Finder or Explorer.
+
+**Changed**
+
+- ⌘/Ctrl-click on a row now adds it to the selection instead of putting \`@path\` in the message box. In a file tree that gesture means one thing to everybody. To reference a file in a message, drag the row into the box, or use **Copy path** in the right-click menu.
+
+### ko
+
+파일 패널이 탐색기처럼 동작하고, 무엇이 바뀌었는지 보여줘요.
+
+**새로 생긴 것**
+
+- 바뀐 파일에 색이 붙고, 그 위 폴더에도 붙어요. 접어 둔 폴더도 안에서 뭔가 움직였다는 걸 알려줘요. 수정·추가·삭제·추적 안 됨·충돌이 각각 다르게 보이고, 위에 올리면 무엇인지 알려줘요.
+  - **git 저장소가 아닌 프로젝트**도 비워 두지 않아요. 프로젝트를 연 뒤에 바뀐 파일을 따로 구분되는 색으로 보여주고, 그게 기준이라고 툴팁에 적어요. 견줄 커밋이 없으니 무엇과 견주는 중인지 앱이 밝히는 거예요.
+  - 색은 알아서 최신을 유지해요. 터미널에서 \`git add\`나 \`commit\`을 해도 파일 자체는 그대로라 예전에는 아무도 눈치채지 못했는데, 이제 그쪽도 따로 지켜보고 색이 따라가요.
+- 행을 선택할 수 있어요. 클릭하면 하나, ⌘/Ctrl-클릭으로 추가, shift-클릭으로 범위예요.
+- 복사·잘라내기·붙여넣기가 돼요. ⌘/Ctrl-C, X, V 또는 우클릭 메뉴로요. 잘라내기는 붙여넣기 전까지 아무것도 옮기지 않아서 마음을 바꿀 수 있고, 옮길 예정인 행은 흐리게 보여요.
+- 행을 폴더 위로 끌면 옮겨져요. Alt/Option을 누르고 있으면 복사예요. 트리 아래 빈 곳에 놓으면 프로젝트 맨 위로 옮겨져요.
+- Alt를 누른 채 앱 밖으로 끌면 Finder나 탐색기로 파일이 건네져요.
+
+**달라진 것**
+
+- 행을 ⌘/Ctrl-클릭하면 이제 메시지 상자에 \`@경로\`를 넣는 대신 선택에 추가돼요. 파일 트리에서 이 동작은 누구에게나 한 가지 뜻이라서요. 메시지에 파일을 언급하려면 행을 상자로 끌거나 우클릭 메뉴의 **경로 복사**를 쓰세요.
+
 ## 1.30.0 — 2026-08-25
 
 ### en
