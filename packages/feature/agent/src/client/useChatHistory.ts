@@ -358,13 +358,33 @@ export function useChatHistory(
     setIsLoadingHistory(false);
   }, [setMessages]);
 
-  // Load history messages on page load (runs once only)
+  /**
+   * THE SESSION'S CONVERSATION, loaded once per session.
+   *
+   * IT USED TO BE `[]` — read at mount and never again — and that was the empty
+   * chat. A tab does not necessarily know its session at mount: the one a
+   * project opens on is adopted a moment later, when the saved project state
+   * comes back, so `initialSessionId` was `undefined` on the only render this
+   * effect ever looked at.
+   *
+   * The failure then fed itself. `Chat`'s own `sessionId` state is set by the
+   * RESPONSE to this load (`onSessionId`), so with no load there was no session
+   * id, and the activation fetch beside it skipped for want of one. Nothing
+   * broke the loop until the user sent a message — which is why the history
+   * appeared only after starting a new conversation.
+   *
+   * The ref keeps the "once" that the empty array was there for: this reacts to
+   * the id ARRIVING, not to every render, and re-fetching is the job of the
+   * activation effect and the explicit-jump path, both of which know when the
+   * disk may have moved on.
+   */
+  const loadedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (cwd && initialSessionId) {
-      loadHistoryByCwdAndSessionId(cwd, initialSessionId, false, TURNS_PER_PAGE);
-    }
-
-  }, []); // Run only on component mount
+    if (!cwd || !initialSessionId) return;
+    if (loadedForRef.current === initialSessionId) return;
+    loadedForRef.current = initialSessionId;
+    loadHistoryByCwdAndSessionId(cwd, initialSessionId, false, TURNS_PER_PAGE);
+  }, [cwd, initialSessionId, loadHistoryByCwdAndSessionId]);
 
   return {
     isLoadingHistory,

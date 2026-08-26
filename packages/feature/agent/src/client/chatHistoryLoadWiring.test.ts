@@ -69,3 +69,62 @@ describe('what it must not do', () => {
     expect(body).not.toContain('loadedSessionId');
   });
 });
+
+describe('the load that actually renders the conversation', () => {
+  const HOOK = readFileSync(join(__dirname, 'useChatHistory.ts'), 'utf8');
+  const PANEL = readFileSync(join(__dirname, 'ChatPanel.tsx'), 'utf8');
+
+  it('reacts to the session ARRIVING, not only to mount', () => {
+    // This was the empty chat. The effect was `[]` — it read `initialSessionId`
+    // on the one render it ever looked at, and a tab does not know its session
+    // then: the one a project opens on is adopted a moment later, when the saved
+    // project state comes back.
+    const effect = /const loadedForRef = useRef<string \| null>\(null\);[\s\S]*?\}, \[[^\]]*\]\);/.exec(
+      HOOK,
+    )?.[0];
+    expect(effect, 'the initial-load effect is gone — did the hook change?').toBeDefined();
+    expect(effect).toContain('initialSessionId');
+    expect(effect).toMatch(/\}, \[cwd, initialSessionId, loadHistoryByCwdAndSessionId\]\);$/);
+  });
+
+  it('still loads a session only ONCE', () => {
+    // What the empty array was there for. Re-fetching belongs to the activation
+    // effect and the explicit-jump path, which know when the disk may have moved.
+    const effect = /const loadedForRef = useRef<string \| null>\(null\);[\s\S]*?\}, \[[^\]]*\]\);/.exec(
+      HOOK,
+    )![0];
+    expect(effect).toContain('if (loadedForRef.current === initialSessionId) return;');
+    expect(effect).toContain('loadedForRef.current = initialSessionId;');
+  });
+
+  it('does a FULL load, not an incremental one', () => {
+    // There is nothing on screen to merge into, and the incremental path is
+    // throttled — the first sight of a conversation must not be.
+    const effect = /const loadedForRef = useRef<string \| null>\(null\);[\s\S]*?\}, \[[^\]]*\]\);/.exec(
+      HOOK,
+    )![0];
+    expect(effect).toContain('false, TURNS_PER_PAGE');
+  });
+
+  it('the tab’s session actually reaches the hook', () => {
+    // The chain the fix depends on: without it the effect would react to an id
+    // that never changes.
+    expect(PANEL).toContain('initialSessionId={sessionId}');
+    expect(readFileSync(join(__dirname, '../../../workspace/src/client/TabManager.tsx'), 'utf8'))
+      .toContain('sessionId={tab.sessionId}');
+  });
+});
+
+describe('why the two effects are both needed', () => {
+  it('the activation fetch cannot cover the initial load', () => {
+    // It is guarded on `sessionId`, which is Chat's OWN state — and that state is
+    // set by the RESPONSE to the initial load. With no load there is no id, and
+    // with no id the activation fetch skips: a loop nothing broke until the user
+    // sent a message, which is why the history appeared only after starting a
+    // new conversation.
+    const CHAT = readFileSync(join(__dirname, 'Chat.tsx'), 'utf8');
+    expect(CHAT).toContain('const [sessionId, setSessionId] = useState<string | null>(null);');
+    expect(CHAT).toContain('onSessionId: setSessionId');
+    expect(effect).toContain('!sessionId');
+  });
+});

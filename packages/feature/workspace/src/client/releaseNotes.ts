@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.31.2 — 2026-08-26
+
+### en
+
+The conversation a project opens on actually appears.
+
+**Fixed**
+
+- **Opening a project shows the conversation, not an empty chat.** 1.31.1 fixed half of this; the half that mattered was still there. The transcript was requested once, at the moment the chat first appeared — and a tab does not know which conversation it is on yet at that moment, because the session it resumes is picked up a fraction of a second later. It now waits for the session and then loads it.
+  - This is why the history used to turn up only after you started typing: sending a message was the one thing that told the chat which session it was on.
+
+### ko
+
+프로젝트를 열면 그 대화가 실제로 보여요.
+
+**고친 것**
+
+- **프로젝트를 열면 대화가 보여요. 빈 채팅이 아니라요.** 1.31.1에서 절반만 고쳐졌고, 정작 중요한 절반이 남아 있었어요. 대화 내역을 채팅이 처음 뜨는 순간에 딱 한 번 요청했는데, 그 순간에는 탭이 아직 자기가 어느 대화인지 몰라요. 이어받을 세션은 그보다 아주 조금 뒤에 정해지거든요. 이제 세션이 정해질 때까지 기다렸다가 불러와요.
+  - 예전에 뭔가 입력해야 그제서야 내역이 나타난 이유가 이거예요. 메시지를 보내는 게 채팅에게 자기 세션을 알려 주는 유일한 방법이었어요.
+
 ## 1.31.1 — 2026-08-26
 
 ### en
