@@ -9,6 +9,7 @@
  * also be unit-tested without dragging in the store.
  */
 import type { RuntimeMessage } from '../../engines/naby';
+import { isJobReportPrompt } from '../../lib/backgroundJobReport';
 import {
   appendTextSegment,
   appendToolCallSegment,
@@ -19,6 +20,10 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** Why a `system` row is here, and what the pill should say. Mirrors the
+   *  client's own field (feature/agent/src/client/types.ts); a reloaded
+   *  transcript has to describe itself the same way a live one does. */
+  systemEvent?: { kind: 'task-notification' | 'meta' | 'job-report'; status?: string; detail?: string };
   timestamp?: string;
   /** HOW LONG THE TURN TOOK, as the engine measured it (ms). Assistant bubbles
    *  only, and only on turns recorded after this existed — absent everywhere
@@ -102,6 +107,26 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
   messages.forEach((m, i) => {
     if (m.role === 'user') {
+      // NOT EVERY `user` ROW IS SOMETHING A PERSON TYPED. A background job that
+      // finishes reports itself by DRIVING A TURN, and a turn's prompt is stored
+      // as a user message — so the chat drew backend bookkeeping in the reader's
+      // own bubble, as if they had written it.
+      //
+      // It is not naby's either, and that is the part worth being careful about:
+      // the text is an instruction addressed TO naby ("tell the user how it
+      // went"), so moving it to the assistant side would show naby instructing
+      // itself. It is a system notice, and the transcript already has a shape
+      // for one — the muted pill, with the full text one click away, which is
+      // where the original goes so nothing is hidden.
+      if (isJobReportPrompt(m.content)) {
+        out.push({
+          id: `user-${i}`,
+          role: 'system',
+          content: m.content,
+          systemEvent: { kind: 'job-report', detail: m.content },
+        });
+        return;
+      }
       out.push({ id: `user-${i}`, role: 'user', content: m.content });
     } else if (m.role === 'assistant') {
       const toolCalls = (m.toolCalls ?? []).map((tc) => ({

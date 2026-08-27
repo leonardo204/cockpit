@@ -391,11 +391,15 @@ describe('runReflectionSweep — what it writes', () => {
       reviewedEvents: 1,
       droppedVerdicts: 0,
       ...NO_MEMORY,
-      // P3-M13c: the session's own user messages were counted into the style
-      // fingerprint even though the judge proposed no memory. The two are
-      // independent halves of §3.3 — one needs a model, this one needs a
-      // divider — and both obey the same learning gate.
-      fingerprintSamples: 2,
+      // THE STYLE FINGERPRINT IS NO LONGER LEARNED, so nothing is counted here
+      // any more. It measured how the USER TYPES and the voice layer corrected
+      // answers toward it — but how someone writes a prompt and how they want to
+      // be answered are different facts, and this machine's own profile was
+      // steering a user who had asked for polite answers toward their own terse
+      // instructions. How naby speaks is now something the user STATES: a
+      // memory, injected every turn, outranking observations
+      // (runtime/memory-inject.ts `TRUST_RANK`).
+      fingerprintSamples: 0,
     });
     // transcript() is 5 messages ⇒ the highest seq is 4.
     expect(cursorWrites).toEqual([{ sessionId: 's1', lastSeq: 4, reflectedAt: NOW }]);

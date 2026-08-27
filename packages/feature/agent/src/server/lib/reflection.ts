@@ -559,10 +559,26 @@ export async function runReflectionSweep(
   // waiting for the next one.
   consolidateMemory(store, result, now);
 
-  // THE STYLE FINGERPRINT, once, at the very end (P3-M13c §3.3). After
-  // consolidation because it depends on nothing consolidation does, and after
-  // the loop because it is one profile folded from every session read.
-  updateStyleFingerprint(store, styleTexts, result, now);
+  // THE STYLE FINGERPRINT IS NO LONGER LEARNED, and the removal is the point
+  // rather than a cleanup.
+  //
+  // It measured how the USER TYPES, and the voice layer corrected answers toward
+  // it. Those are different facts. This machine's own profile read
+  // `formal 47% · fragment 43% · polite 10%` — the shape of terse instructions
+  // like "커밋 푸시 릴리즈 배포" — while the person typing them had asked, in
+  // words, to be answered politely. The measurement was steering away from the
+  // instruction, and no amount of asking would have changed it.
+  //
+  // How naby SPEAKS is something a user states. Stated preferences are memories,
+  // injected every turn, and they now outrank observations (memory-inject.ts
+  // `TRUST_RANK`). What is worth learning from a conversation is INTENT and
+  // DIRECTION — what the user is trying to do — not the shape of their sentences.
+  //
+  // The reader was removed first (runtime/voice.ts: endings and length are no
+  // longer judged), so this writes into nothing. The stored profile is left on
+  // disk untouched: deleting a user's data to complete a refactor is not this
+  // change's business, and nothing reads it.
+  void styleTexts;
 
   if (result.sweptSessions > 0 || result.markedEvents > 0 || result.proposedMemories > 0) {
     console.log(

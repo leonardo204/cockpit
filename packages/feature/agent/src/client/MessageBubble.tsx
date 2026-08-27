@@ -709,7 +709,20 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
           : ev.status === 'stopped'
             ? '⏹️'
             : '🔔'
-        : 'ℹ️';
+        : ev?.kind === 'job-report'
+          ? '⚙️'
+          : 'ℹ️';
+    // WHAT THE PILL SAYS FOR A JOB REPORT. Its `content` is the prompt naby was
+    // given — English, and addressed to naby ("tell the user how it went"),
+    // which is not a sentence to show a reader in their own transcript. So the
+    // pill carries a short localized line and the ORIGINAL stays one click
+    // away in the detail modal below, exactly as it does for every other
+    // system row. Nothing is hidden; it is only no longer mistaken for
+    // something the user said.
+    const pillText =
+      ev?.kind === 'job-report'
+        ? t('chat.jobReportNotice', { defaultValue: 'A background job finished' })
+        : message.content;
     // Full text for the detail modal — the raw <task-notification> block, or the
     // message content itself (image annotation / compact-summary notice).
     const detail = ev?.detail || message.content;
@@ -723,7 +736,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             title={t('chat.viewDetails', { defaultValue: 'Click for details' })}
           >
             <span className="flex-shrink-0">{icon}</span>
-            <span className="truncate">{message.content}</span>
+            <span className="truncate">{pillText}</span>
           </button>
         </div>
         {showEventDetail && (

@@ -606,6 +606,7 @@
     "jumpToLatest": "최신으로 이동",
     "newResponse": "새 응답",
     "copyMessage": "메시지 복사",
+    "jobReportNotice": "백그라운드 작업이 끝났어요 — 나비가 받은 내용은 눌러서 볼 수 있어요",
     "apiRetryBusy": "서버가 붐벼서 다시 보내는 중이에요. 사용량 한도 때문이 아니에요.",
     "apiRetryTransient": "요청이 한 번 실패해서 다시 보내는 중이에요.",
     "apiRetryAttempt": "{{maxRetries}}번 중 {{attempt}}번째 시도, {{seconds}}초 뒤",

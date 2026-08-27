@@ -116,6 +116,34 @@ function humanDuration(ms: number): string {
  * model fetches what it needs, which keeps a 40MB test log out of a context
  * window and puts the fetch in the transcript where the user can see it.
  */
+/**
+ * HOW THE PROMPT ANNOUNCES ITSELF, as one string both the builder and the
+ * transcript reader use.
+ *
+ * The report is a turn's PROMPT, so it is stored as a `user` message — and the
+ * chat drew it as one, in the user's own bubble, as if they had typed it. They
+ * had not. Nor had naby: it is an instruction ADDRESSED to naby, which is why
+ * showing it as naby's own words would be worse still ("tell the user how it
+ * went" reads as naby instructing itself).
+ *
+ * It is a system notice, and the transcript now renders it as one. Recognising
+ * it means matching the text, because the store keeps a message's role and its
+ * content and nothing about where it came from. Matching TEXT is only safe while
+ * the text is ours, so the sentence lives here, once, and both sides read it
+ * from this constant rather than from two copies that could drift.
+ */
+export const JOB_REPORT_PREFIX = '[system] The background job ';
+
+/** The rest of the opening sentence, so a user who happens to type the prefix is
+ *  not mistaken for one of these. The job id sits between the two halves. */
+const JOB_REPORT_OPENER = /^\[system\] The background job \S+ you started has ended\b/;
+
+/** Is this stored message a background-job report rather than something a person
+ *  typed? Pure, so the transcript mapper can be tested without a job runner. */
+export function isJobReportPrompt(text: string): boolean {
+  return JOB_REPORT_OPENER.test(text);
+}
+
 export function buildJobReportPrompt(job: JobRecord): string {
   const ended = job.endedAt ?? Date.now();
   const outcome =
@@ -127,7 +155,7 @@ export function buildJobReportPrompt(job: JobRecord): string {
           ? `was stopped${job.signal ? ` (${job.signal})` : ''}`
           : `ended with an unrecorded outcome (${job.status})`;
   return [
-    `[system] The background job ${job.id} you started has ended — it ${outcome}.`,
+    `${JOB_REPORT_PREFIX}${job.id} you started has ended — it ${outcome}.`,
     '',
     `  command: ${job.command}`,
     `  ran for: ${humanDuration(ended - job.startedAt)}`,

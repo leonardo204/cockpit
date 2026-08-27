@@ -71,7 +71,11 @@ export interface ChatMessage {
   // `meta` covers skill image annotations / compact-summary notices.
   // `detail` is the full raw text (e.g. the complete <task-notification> block) —
   // shown in a modal when the one-line bar is clicked. `content` stays the summary.
-  systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
+  /** `job-report` is a background job announcing itself. It arrives as a turn's
+   *  PROMPT and is therefore stored as a `user` row, which is how it came to be
+   *  drawn in the reader's own bubble — see toChatMessages for why it is not
+   *  moved to the assistant side either. */
+  systemEvent?: { kind: 'task-notification' | 'meta' | 'job-report'; status?: string; detail?: string };
   // The RUNS this turn launched, as the backend reported their lifecycle:
   // delegated subagents (`Task`) and background shell jobs (`Bash` with
   // `run_in_background`), which arrive on the same four edges and are told apart

@@ -85,7 +85,10 @@ interface ChatMessage {
   timestamp?: string;
   // Set on role:'system' rows — a harness event rendered as a muted one-line bar
   // (not a conversation bubble). `task-notification` shows the <summary> line.
-  systemEvent?: { kind: 'task-notification' | 'meta'; status?: string; detail?: string };
+  // Taken from the mapper's own definition rather than restated, the way
+  // `segments` below already is: this was a third copy of one shape, and a kind
+  // added on one side silently failed to compile on another.
+  systemEvent?: StoreChatMessage['systemEvent'];
   /** WHAT HAPPENED IN WHAT ORDER — text runs and tool-call runs, as the store
    *  recorded them. Built by the shared mapper; see `session/toChatMessages`. */
   segments?: StoreChatMessage['segments'];
