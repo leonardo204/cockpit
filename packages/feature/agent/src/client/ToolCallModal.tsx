@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
+import { pendingMemoryOf } from './pendingMemory';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { toast } from '@cockpit/shared-ui';
@@ -64,6 +65,36 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
       : preview.text
     : null;
   const canCopy = !!preview && preview.kind !== 'label';
+
+  // -- the memory this call proposed ---------------------------------------
+  //
+  // A capture is `proposed` and `artifact`-tier until a PERSON agrees to it, and
+  // this is that person's chance to, in the place they just watched it happen.
+  // It could not be a tool: `confirmMemory` is "the ONLY path external-origin
+  // memory becomes confirmed… a threshold can never do it, only a user", and a
+  // tool call is the model however faithfully it reports what the user said.
+  // The click goes through the same HTTP action the settings screen uses.
+  const [confirmed, setConfirmed] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const pending = confirmed ? null : pendingMemoryOf(toolCall.name, toolCall.resultData);
+  const confirmPending = useCallback(async () => {
+    if (!pending || confirming) return;
+    setConfirming(true);
+    try {
+      const res = await fetch('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'confirm', id: pending.id }),
+      });
+      // Only a confirmed confirm changes the label. A failed one leaves the offer
+      // standing, because the memory is still waiting.
+      if (res.ok) setConfirmed(true);
+    } catch {
+      // Offline, or the row is gone. The offer stays; nothing was promised.
+    } finally {
+      setConfirming(false);
+    }
+  }, [pending, confirming]);
 
   const copyPreview = () => {
     if (!preview) return;
@@ -149,6 +180,31 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
               title={t('chat.workflowViewTitle')}
             >
               {t('chat.workflowRun')}
+            </span>
+          )}
+          {/* CONFIRM THE MEMORY THIS CALL PROPOSED, where it was proposed.
+              Always visible rather than behind the expander: it is an OFFER, and
+              an offer nobody sees is a settings screen with extra steps. The rule
+              for when there is one to make is pendingMemory.ts. */}
+          {pending && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); void confirmPending(); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); void confirmPending(); } }}
+              data-testid="confirm-memory"
+              aria-disabled={confirming}
+              className={`text-[0.786rem] px-2 py-0.5 rounded-full border border-brand/50 text-brand hover:bg-brand/10 transition-colors ${
+                confirming ? 'opacity-50 cursor-default' : 'cursor-pointer'
+              }`}
+              title={t('chat.confirmMemoryHint', {
+                defaultValue:
+                  'Agree to this, and naby will use it from now on — and it will outrank anything naby merely inferred.',
+              })}
+            >
+              {confirmed
+                ? t('chat.memoryConfirmed', { defaultValue: 'Remembered' })
+                : t('chat.confirmMemory', { defaultValue: 'Remember this' })}
             </span>
           )}
           {expanded && !toolCall.isLoading && (

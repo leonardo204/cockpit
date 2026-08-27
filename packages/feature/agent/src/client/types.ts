@@ -12,6 +12,12 @@ export interface ToolCallInfo {
   name: string;
   input: Record<string, unknown>;
   result?: string;
+  /** The STRUCTURED half of the tool's answer (`ToolOutput.data`), when it had
+   *  one. `result` is the prose the model saw; this is the payload written for
+   *  our own use — the transcript reads it to offer a proposed memory's confirm
+   *  (pendingMemory.ts). Absent on a LIVE turn: the stream carries only the text,
+   *  so the offer appears when the turn settles and the transcript reconciles. */
+  resultData?: unknown;
   isLoading?: boolean;
   // Skill body loaded by this call (e.g. the Skill tool). Folded into the tool
   // call's expanded view instead of appearing as a separate user bubble.

@@ -43,6 +43,11 @@ export interface ChatMessage {
     name: string;
     input: Record<string, unknown>;
     result?: string;
+    /** The STRUCTURED half of the tool's answer (`ToolOutput.data`), when it had
+     *  one. `result` is the prose the model saw; this is the payload written for
+     *  our own use — the transcript reads it to offer a proposed memory's
+     *  confirm (pendingMemory.ts). */
+    resultData?: unknown;
     isLoading: boolean;
     skillContent?: string;
     // Which SUBAGENT made the call, as the backend attributed it when the call
@@ -97,9 +102,18 @@ export interface ChatMessage {
 export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
   // First pass: collect every tool output keyed by the call it answers.
   const toolResults = new Map<string, string>();
+  // THE STRUCTURED HALF OF A TOOL'S ANSWER. `ToolOutput.data` is documented as a
+  // "structured payload for our own use", it has been written to disk all along,
+  // and nothing ever read it back — the transcript kept only the prose the model
+  // sees. `naby_remember` puts the proposed memory's id there, which is what
+  // lets the transcript offer to confirm it (pendingMemory.ts) instead of
+  // sending the reader to a settings screen to find a row they just watched
+  // being written.
+  const toolData = new Map<string, unknown>();
   for (const m of messages) {
     if (m.role === 'tool') {
       toolResults.set(m.toolCallId, m.output?.content ?? '');
+      if (m.output?.data !== undefined) toolData.set(m.toolCallId, m.output.data);
     }
   }
 
@@ -134,6 +148,7 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         name: tc.toolName,
         input: (tc.input as Record<string, unknown>) ?? {},
         result: toolResults.get(tc.toolCallId),
+        ...(toolData.has(tc.toolCallId) ? { resultData: toolData.get(tc.toolCallId) } : {}),
         isLoading: false,
         ...(tc.subagent
           ? {

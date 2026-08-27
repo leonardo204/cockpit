@@ -97,6 +97,11 @@ interface ChatMessage {
     name: string;
     input: Record<string, unknown>;
     result?: string;
+    /** The STRUCTURED half of the tool's answer (`ToolOutput.data`), when it had
+     *  one. `result` is the prose the model saw; this is the payload written for
+     *  our own use — the transcript reads it to offer a proposed memory's
+     *  confirm (pendingMemory.ts). */
+    resultData?: unknown;
     isLoading: boolean;
     // Skill body loaded by this call (folded here instead of shown as a user bubble).
     skillContent?: string;
