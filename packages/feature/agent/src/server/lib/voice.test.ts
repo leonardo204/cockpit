@@ -551,7 +551,7 @@ describe('createVoicePort — what it measures the answer against', () => {
     expect(out).toBe(ENGLISH_BODY);
   });
 
-  it('reads the stored style fingerprint, so an ending deviation is measurable', async () => {
+  it('no longer judges a register against the stored fingerprint', async () => {
     const store = fakeStore({
       [STYLE_FINGERPRINT_KEY]: serializeStyleFingerprint(FINGERPRINT),
     });
@@ -562,10 +562,23 @@ describe('createVoicePort — what it measures the answer against', () => {
       learningAllowed: true,
       resolveBackend: async () => backend,
     });
+    // A REGISTER THE FINGERPRINT DOES NOT MATCH IS NO LONGER A DEVIATION, and
+    // this test used to assert the opposite.
+    //
+    // The fingerprint measures how the USER TYPES, and the layer corrected
+    // answers toward it. Those are different facts: someone who types
+    // "커밋 푸시 릴리즈 배포" and has asked, in words, to be answered politely was
+    // being steered back toward their own terse instructions, and asking again
+    // could not have helped.
+    //
+    // How naby SPEAKS is now something the user states — a memory, injected every
+    // turn, outranking observations (runtime/memory-inject.ts `TRUST_RANK`). No
+    // model is called for a register at all, which is also why the backend stays
+    // untouched here.
     const polite =
       '세션 스토어는 런타임에 두는 게 좋아요. 프로바이더를 바꿔도 남아야 하니까요. 셸은 액션만 맡아요.';
     await port.render(req(polite));
-    expect(backend.calls).toHaveLength(1);
-    expect(readVoiceStats(store).byReason.endings).toBe(1);
+    expect(backend.calls).toHaveLength(0);
+    expect(readVoiceStats(store).byReason.endings).toBeUndefined();
   });
 });
