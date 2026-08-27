@@ -85,6 +85,38 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.32.0 — 2026-08-27
+
+### en
+
+What you ask for now outranks what naby worked out on its own.
+
+**New**
+
+- Agree to a memory right where naby proposes it. When naby notes something down, the note itself offers to remember it — no trip to settings to find a row you just watched being written. Settings still works exactly as before.
+
+**Improved**
+
+- Something you told naby beats something naby inferred. Memory was ranked by where it applied, so a fact naby had worked out from a project's code could quietly overrule an instruction you gave in words — and repeating yourself would not have helped, because the repeat landed in the same lower-ranked place. Who said it now comes first.
+- Agreeing to a memory is what makes it yours. Confirming a suggestion used to change only whether it was in use, not whose word it carried, so you could agree to "answer in Korean" and still lose to something naby had guessed.
+- naby no longer copies how you type. It used to measure your writing — how your sentences end, how long they run — and correct its own answers toward that. But how you type an instruction and how you want to be answered are different things: someone who types "커밋 푸시 릴리즈 배포" and has asked for polite answers was being steered back toward their own shorthand. How naby speaks is something you tell it, not something it measures.
+  - Which LANGUAGE it answers in is still checked. That one is read from what you just wrote, not inferred from a sample of your habits.
+
+### ko
+
+이제 부탁하신 것이 나비가 혼자 알아낸 것보다 우선해요.
+
+**새로 생긴 것**
+
+- 나비가 제안한 그 자리에서 바로 기억시킬 수 있어요. 나비가 무언가를 적어 두면 그 기록이 "기억할까요?"를 물어봐요. 방금 눈앞에서 쓰인 항목을 찾으러 설정까지 가지 않아도 돼요. 설정에서 하던 방식도 그대로예요.
+
+**나아진 것**
+
+- 직접 말씀하신 것이 나비의 추측을 이겨요. 기억이 "어디에 적용되나"로 줄을 서다 보니, 나비가 프로젝트 코드에서 알아낸 것이 말씀으로 주신 지시를 조용히 덮곤 했어요. 다시 말씀하셔도 같은 낮은 자리에 떨어져서 소용이 없었고요. 이제 "누가 말했나"를 먼저 봐요.
+- 동의하시는 것이 곧 그 기억을 사용자 것으로 만들어요. 예전에는 제안에 동의해도 "쓰이는지"만 바뀌고 "누구 말인지"는 그대로였어요. 그래서 "한국어로 답한다"에 동의해도 나비의 추측에 지곤 했어요.
+- 나비가 사용자의 문체를 따라 하지 않아요. 예전에는 사용자가 쓰는 문장의 어미와 길이를 재서 자기 답을 거기에 맞췄어요. 그런데 지시를 입력하는 방식과 답변받고 싶은 방식은 다른 얘기예요. "커밋 푸시 릴리즈 배포"처럼 쓰면서 공손한 답변을 원하신 분은 오히려 자기 축약체 쪽으로 끌려가고 있었어요. 나비가 어떻게 말할지는 사용자가 정해 주시는 것이지 나비가 재는 게 아니에요.
+  - 어느 **언어**로 답할지는 계속 봐요. 그건 습관을 표본으로 추론한 게 아니라 방금 쓰신 글에서 읽는 것이니까요.
+
 ## 1.31.2 — 2026-08-26
 
 ### en
