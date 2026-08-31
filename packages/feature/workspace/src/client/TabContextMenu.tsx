@@ -36,6 +36,16 @@ export interface TabContextMenuState {
    * tabs that look identical to the user.
    */
   hasSession: boolean;
+  /**
+   * Whether a "continue in a new tab" is ALREADY RUNNING for this tab.
+   *
+   * Unlike the flags above this one is NOT read at open time — it is passed live
+   * from the host, because the request it describes can start and finish while
+   * the menu is on screen. The item it gates is the one that used to look dead:
+   * the handoff summary is a model call, so the menu closed and nothing visible
+   * happened for seconds, and a second click minted a second session.
+   */
+  isContinuing?: boolean;
 }
 
 interface TabContextMenuProps {
@@ -168,7 +178,7 @@ export function TabContextMenu({
           tab has no conversation to hand off. */}
       <button
         role="menuitem"
-        disabled={!state.hasSession}
+        disabled={!state.hasSession || state.isContinuing === true}
         className={`${item} disabled:opacity-40 disabled:cursor-not-allowed`}
         data-testid="tab-menu-continue"
         onClick={() => {
@@ -176,13 +186,28 @@ export function TabContextMenu({
           onClose();
         }}
       >
-        <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-          {/* An arrow leaving a page: this conversation, carried onward. */}
-          <path d="M14 5h5v5" />
-          <path d="M19 5l-7 7" />
-          <path d="M19 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h4" />
-        </svg>
-        {t('tabBar.continueInNewTab', { defaultValue: 'Continue in a new tab' })}
+        {state.isContinuing ? (
+          <svg
+            className="w-4 h-4 flex-shrink-0 animate-spin"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <circle cx="12" cy="12" r="9" className="opacity-25" />
+            <path d="M21 12a9 9 0 00-9-9" strokeLinecap="round" />
+          </svg>
+        ) : (
+          <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            {/* An arrow leaving a page: this conversation, carried onward. */}
+            <path d="M14 5h5v5" />
+            <path d="M19 5l-7 7" />
+            <path d="M19 14v4a2 2 0 01-2 2H6a2 2 0 01-2-2V7a2 2 0 012-2h4" />
+          </svg>
+        )}
+        {state.isContinuing
+          ? t('tabBar.continuing', { defaultValue: 'Writing the handoff…' })
+          : t('tabBar.continueInNewTab', { defaultValue: 'Continue in a new tab' })}
       </button>
     </div>
   );

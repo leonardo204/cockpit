@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ProjectSessionsModal } from '@cockpit/feature-agent';
 import { ChatProvider } from '@cockpit/feature-agent';
-import { PanelPortalProvider, ResizeHandle } from '@cockpit/shared-ui';
+import { PanelPortalProvider, ResizeHandle, toast } from '@cockpit/shared-ui';
 import { useTabState } from './useTabState';
 import { TabManagerTopBar } from './TabManagerTopBar';
 import { TabBar } from './TabBar';
@@ -109,10 +109,28 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   // ── Continue this conversation in a new tab (session-context-management §2.2)
   //
   // The same action the threshold banner offers, reached from the tab it is about.
-  // The handoff summary happens SERVER-SIDE and can take a few seconds, which is
-  // why the menu item does not wait for it visibly — the new tab appears when the
-  // reply lands (or immediately, when there is no handoff to write).
+  // The handoff summary happens SERVER-SIDE and is a MODEL CALL, so it takes
+  // seconds — long enough that the honest reading of a silent UI was "the click
+  // did nothing", and the natural response (clicking again) minted a SECOND
+  // session with a second summary behind it.
   //
+  // So the wait is now stated in the two places the user is already looking: the
+  // tab grows a spinner, and the menu item — reopened during the wait — says
+  // what is happening and refuses a repeat. `continuingRef` is what actually
+  // enforces the refusal; the state exists to RENDER it. Two clicks in one tick
+  // would both read the pre-update set, which is exactly the case the ref covers.
+  // (Same shape as ContextLimitBanner's `inFlight`, which offers this action from
+  // the other end.)
+  const [continuingTabs, setContinuingTabs] = useState<ReadonlySet<string>>(() => new Set());
+  const continuingRef = useRef<Set<string>>(new Set());
+  const publishContinuing = useCallback(() => {
+    setContinuingTabs(new Set(continuingRef.current));
+  }, []);
+  const isTabContinuing = useCallback(
+    (tabId: string) => continuingTabs.has(tabId),
+    [continuingTabs],
+  );
+
   // The words travel from here, like every other name this client sends: the server
   // has no locale.
   const handleContinueInNewTab = useCallback(async (tabId: string) => {
@@ -121,6 +139,9 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     // conversation to hand off. The menu item is disabled in that state, and this
     // is the matching guard.
     if (!tab?.sessionId) return;
+    if (continuingRef.current.has(tabId)) return;
+    continuingRef.current.add(tabId);
+    publishContinuing();
     const cwd = tab.cwd || initialCwd || '';
     try {
       const res = await fetch('/api/naby', {
@@ -139,7 +160,16 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       const json = (await res.json().catch(() => null)) as
         | { ok?: boolean; sessionId?: string; cwd?: string }
         | null;
-      if (!res.ok || !json?.ok || !json.sessionId) return;
+      if (!res.ok || !json?.ok || !json.sessionId) {
+        // SAY SO. A refused request used to end in the same silence a slow one
+        // did, which left the two indistinguishable — and the spinner this now
+        // clears would otherwise have promised a tab that is never coming.
+        toast(
+          t('tabBar.continueFailed', { defaultValue: 'Could not continue in a new tab' }),
+          'error',
+        );
+        return;
+      }
       // The existing "open this project at this session" path — the one the
       // fast-growth button and the session-list rows already publish.
       //
@@ -150,9 +180,20 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       if (openIn) publishTopic(Topics.OpenProject, { cwd: openIn, sessionId: json.sessionId });
     } catch {
       // A failed continue leaves the user exactly where they were, which is the
-      // conversation they can still use. Nothing to undo.
+      // conversation they can still use. Nothing to undo — but it is said out
+      // loud, because the spinner made a promise this branch cannot keep.
+      toast(
+        t('tabBar.continueFailed', { defaultValue: 'Could not continue in a new tab' }),
+        'error',
+      );
+    } finally {
+      // EVERY exit clears the mark, including the ones above that `return`. A
+      // spinner that never stops is worse than no spinner at all: it says the
+      // app is still working on something it has already given up on.
+      continuingRef.current.delete(tabId);
+      publishContinuing();
     }
-  }, [tabs, initialCwd, t]);
+  }, [tabs, initialCwd, t, publishContinuing]);
 
   const handleTogglePin = useCallback((tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
@@ -416,6 +457,9 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
   activeTabIdRef.current = activeTabId;
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
+  // Cmd/Ctrl+T (open a new tab) reads through the same indirection.
+  const handleNewTabRef = useRef(handleNewTab);
+  handleNewTabRef.current = handleNewTab;
 
   // Global keyboard shortcuts for the chat host. This listener lives on the
   // project iframe's own window (the same window the tab UI renders into), so
@@ -442,6 +486,18 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
         e.preventDefault();
         const activeId = activeTabIdRef.current;
         if (activeId) closeTabRef.current(activeId);
+        return;
+      }
+      // Cmd/Ctrl+T → open a NEW tab, the mirror of the Cmd/Ctrl+W above and the
+      // same gesture a browser answers with. It reaches this handler for the
+      // same reason: the Electron application menu (electron/menu-template.ts)
+      // binds no accelerator to it, so nothing upstream swallows the key. The
+      // modifier guard at the top of this listener already accepts either
+      // modifier, so Ctrl+T is the Windows and Linux half at no extra cost —
+      // and the `+` button's tooltip names whichever one this platform uses.
+      if (e.key === 't') {
+        e.preventDefault();
+        handleNewTabRef.current();
         return;
       }
       // Cmd/Ctrl+1..9 → switch to the Nth tab. 1..8 are positional; 9 always
@@ -563,6 +619,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                 dragOverTabIndex={dragOverTabIndex}
                 isPinned={isTabPinned}
                 isNoLearn={isTabNoLearn}
+                isContinuing={isTabContinuing}
                 onTabContextMenu={openTabMenu}
                 renamingTabId={renamingTabId}
                 onRenameCommit={commitRename}
@@ -579,7 +636,10 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
               />
               {menu && (
                 <TabContextMenu
-                  state={menu}
+                  // LIVE, unlike the flags the menu captured at open time: a
+                  // handoff can start and finish while the menu is on screen,
+                  // and the item has to disable itself when it does.
+                  state={{ ...menu, isContinuing: continuingTabs.has(menu.tabId) }}
                   onClose={() => setMenu(null)}
                   onTogglePin={handleTogglePin}
                   onRename={setRenamingTabId}

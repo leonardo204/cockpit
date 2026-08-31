@@ -1834,6 +1834,8 @@
     "noLearnOff": "학습 포함",
     "noLearnBadge": "학습 제외됨",
     "continueInNewTab": "새 탭에서 이어가기",
+    "continuing": "핸드오프 요약을 쓰는 중…",
+    "continueFailed": "새 탭에서 이어가지 못했습니다",
     "continuedTitle": "이어서 — {{title}}"
   },
   "tabManagerTopBar": {

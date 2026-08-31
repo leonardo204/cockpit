@@ -1,11 +1,30 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 
 import { TabInfo } from './useTabState';
 import { isMarkdownTab } from './tabKinds';
 import { Tooltip } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
+
+/**
+ * The modifier label shortcut hints are written with — `⌘` on a Mac, `Ctrl+`
+ * everywhere else.
+ *
+ * WHY IT IS STATE AND NOT A CONSTANT. This module is evaluated during SSR as
+ * well, where there is no `navigator`, so reading the platform during render
+ * would make the server write `Ctrl+` and a Mac client write `⌘` for the same
+ * tooltip — a hydration mismatch. Starting at `⌘` (what this bar has always
+ * rendered) keeps the first client render identical to the server's, and the
+ * real platform lands one effect later, before anyone has hovered anything.
+ */
+function useModLabel(): string {
+  const [label, setLabel] = useState('⌘');
+  useEffect(() => {
+    setLabel(/Mac|iPhone|iPad|iPod/.test(navigator.userAgent || '') ? '⌘' : 'Ctrl+');
+  }, []);
+  return label;
+}
 
 // ============================================
 // Tab circle-number icon component
@@ -59,12 +78,19 @@ function TabNumberIcon({
 // tab uses the default Naby engine (engine undefined → /api/chat → nabySpec).
 // This is now just a `+` button that creates a fresh tab directly.
 
-function NewTabButton({ onNewTab }: { onNewTab: () => void }) {
+function NewTabButton({ onNewTab, modLabel }: { onNewTab: () => void; modLabel: string }) {
+  const { t } = useTranslation();
+  // The hint names the key the tab host actually binds (TabManager's keydown),
+  // which is the only reason a discoverable `+` button needs to say anything at
+  // all: without it the shortcut exists and nobody knows.
+  const label = `${t('tabBar.newTab')} (${modLabel}T)`;
   return (
     <button
       onClick={onNewTab}
       className="flex-shrink-0 p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
-      title="New tab"
+      title={label}
+      aria-label={label}
+      data-testid="tab-new"
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -88,6 +114,11 @@ interface TabBarProps {
    *  nothing is learned from it. Reported as a badge, never toggled here: the
    *  toggle is in the context menu, next to pin and rename. */
   isNoLearn?: (tabId: string) => boolean;
+  /** Whether a "continue in a new tab" is IN FLIGHT for this tab. The server
+   *  writes the handoff summary with a model call, which takes seconds; without
+   *  a mark here the menu item closed the menu and the UI said nothing at all.
+   *  Reported, never toggled — the action is in the right-click menu. */
+  isContinuing?: (tabId: string) => boolean;
   /** Right-click on a tab. Pin/unpin and rename live in that menu now — the
    *  hover icon they replaced was read as a bell and never found. */
   onTabContextMenu?: (tabId: string, x: number, y: number) => void;
@@ -118,6 +149,7 @@ export function TabBar({
   dragOverTabIndex,
   isPinned,
   isNoLearn,
+  isContinuing,
   onTabContextMenu,
   renamingTabId,
   onRenameCommit,
@@ -133,11 +165,21 @@ export function TabBar({
   onDragEnd,
 }: TabBarProps) {
   const { t } = useTranslation();
+  const modLabel = useModLabel();
+  const continuingLabel = t('tabBar.continuing', { defaultValue: 'Writing the handoff…' });
   return (
     <div className="border-b border-border bg-card shrink-0">
       <div className="flex items-center px-2 gap-1 overflow-x-auto">
         {tabs.map((tab, index) => (
-          <Tooltip key={tab.id} content={tab.title} delay={200} className="flex-1 min-w-16 max-w-[260px]">
+          <Tooltip
+            key={tab.id}
+            // While a handoff is being written the tooltip says so as well as the
+            // spinner does: the spinner tells you something is happening, the
+            // words tell you what — and the wait is long enough to ask.
+            content={isContinuing?.(tab.id) ? `${tab.title} — ${continuingLabel}` : tab.title}
+            delay={200}
+            className="flex-1 min-w-16 max-w-[260px]"
+          >
             <div
               draggable
               onDragStart={(e) => {
@@ -200,7 +242,7 @@ export function TabBar({
                   only the first 9 tabs are reachable that way. */}
               <div
                 className="relative flex-shrink-0"
-                title={index < 9 ? `⌘${index + 1}` : undefined}
+                title={index < 9 ? `${modLabel}${index + 1}` : undefined}
               >
                 <TabNumberIcon
                   number={index + 1}
@@ -278,6 +320,26 @@ export function TabBar({
                   at a glance WHILE typing, because it is the difference between a
                   conversation naby learns from and one it does not. State only,
                   never a button — the toggle is in the right-click menu. */}
+              {/* CONTINUE-IN-A-NEW-TAB IS RUNNING. It sits beside the title for
+                  the same reason the temporary marker does: the corner already
+                  holds the loading, unread and pin badges, and this has to be
+                  readable while all three may be lit. A spinner rather than a
+                  pulse dot, because this wait ENDS — the tab it opens is the end
+                  of it — and a spinner is the shape that promises that. */}
+              {isContinuing?.(tab.id) && (
+                <span
+                  className="shrink-0 text-brand"
+                  title={continuingLabel}
+                  aria-label={continuingLabel}
+                  role="status"
+                  data-testid="tab-continuing"
+                >
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                    <circle cx="12" cy="12" r="9" className="opacity-25" />
+                    <path d="M21 12a9 9 0 00-9-9" strokeLinecap="round" />
+                  </svg>
+                </span>
+              )}
               {isNoLearn?.(tab.id) && (
                 <span
                   className="shrink-0 text-muted-foreground"
@@ -318,7 +380,7 @@ export function TabBar({
           </Tooltip>
         ))}
         {/* Plain new-tab button (single Naby engine, no picker) */}
-        <NewTabButton onNewTab={onNewTab} />
+        <NewTabButton onNewTab={onNewTab} modLabel={modLabel} />
         {/* Project sessions entry — only when a project (cwd) is open. Sits
             right after the new-tab button. Chat-bubble icon reads as
             "conversations" and sizes to match NewTabButton. */}
