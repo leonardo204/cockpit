@@ -64,6 +64,7 @@ import {
   BUILTIN_PERSONA_ID,
   parseAgentSidecar,
   probeClaudeModels,
+  claudeAgentSdkVersion,
   listGoogleModels,
   type ClaudeModelInfo,
   // -- the plan-usage chip (5-hour / 7-day) ---------------------------------
@@ -956,18 +957,24 @@ const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
  * The payload field is NAMED AFTER THE CATALOGUE (`{ fetchedAt, claude: [...] }`,
  * `{ fetchedAt, google: [...] }`), which is what lets one reader serve both
  * without touching the shape Claude's cache is already written in.
+ *
+ * `sdk` is the Agent SDK version that PRODUCED a Claude list — absent on Google's
+ * cache and on any row written before this existed, which is why it is optional
+ * rather than required. See the `fresh` check in the Claude branch for what it is
+ * for.
  */
 function readModelCache<T>(
   raw: string | undefined,
   catalog: ModelCatalog,
   keep: (row: unknown) => row is T,
-): { fetchedAt: number; models: T[] } | null {
+): { fetchedAt: number; sdk: string | null; models: T[] } | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     const fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0;
+    const sdk = typeof parsed.sdk === 'string' ? parsed.sdk : null;
     const rows = parsed[catalog];
-    return { fetchedAt, models: Array.isArray(rows) ? rows.filter(keep) : [] };
+    return { fetchedAt, sdk, models: Array.isArray(rows) ? rows.filter(keep) : [] };
   } catch {
     return null;
   }
@@ -975,6 +982,41 @@ function readModelCache<T>(
 
 const isClaudeModel = (row: unknown): row is ClaudeModelInfo =>
   !!row && typeof row === 'object' && typeof (row as ClaudeModelInfo).value === 'string';
+
+/**
+ * Whether a cached CLAUDE model list may still be served without probing.
+ *
+ * TWO RULES, ANSWERING TWO DIFFERENT QUESTIONS.
+ *
+ *   1. THE TTL asks "might a new model have shipped since?" — a day, because they
+ *      do not ship hourly and there is an explicit refresh either way.
+ *   2. THE SDK VERSION asks "is the thing that PRODUCES this list still the same
+ *      one?" The list is reported by the CLI bundled inside the Agent SDK, and its
+ *      names move with the package: one release called an alias "Sonnet 4.6", the
+ *      next called the same alias "Sonnet 5". An app upgrade replaces that CLI
+ *      under a cache the TTL still considers fresh, so without this rule an
+ *      upgraded app went on naming last version's models for up to a day — which
+ *      is precisely the staleness the live probe exists to prevent.
+ *
+ * A row written before this stamp existed has `sdk: null` and is therefore stale
+ * ONCE: the probe it forces writes the stamp, and the next read is a hit again.
+ * That is the migration, and it costs one probe per install.
+ *
+ * `sdk === null` means we could not tell which SDK would answer (unresolvable, or
+ * an unreadable manifest). Then the TTL is the only rule, exactly as before.
+ *
+ * Extracted rather than inlined so it can be asserted without spawning a CLI —
+ * the same reason `tabOrder` and `contextBannerReveal` are their own functions.
+ */
+export function claudeModelCacheIsFresh(
+  cached: { fetchedAt: number; sdk: string | null; models: unknown[] } | null,
+  now: number,
+  sdk: string | null,
+): boolean {
+  if (cached === null || cached.models.length === 0) return false;
+  if (now - cached.fetchedAt >= MODEL_CACHE_TTL_MS) return false;
+  return sdk === null || cached.sdk === sdk;
+}
 
 const isModelId = (row: unknown): row is string => typeof row === 'string' && row.length > 0;
 
@@ -985,9 +1027,15 @@ function writeModelCache(
   catalog: ModelCatalog,
   fetchedAt: number,
   models: unknown[],
+  /** The Agent SDK version this list came from. Claude only — Google's catalogue
+   *  is an HTTP endpoint and has no local version to move. */
+  sdk?: string | null,
 ): void {
   try {
-    store.setSetting(modelCacheKey(catalog), JSON.stringify({ fetchedAt, [catalog]: models }));
+    store.setSetting(
+      modelCacheKey(catalog),
+      JSON.stringify({ fetchedAt, ...(sdk ? { sdk } : {}), [catalog]: models }),
+    );
   } catch {
     /* see above */
   }
@@ -1763,8 +1811,10 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         'claude',
         isClaudeModel,
       );
-      const fresh =
-        cached !== null && Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS && cached.models.length > 0;
+      // WHICH SDK WOULD ANSWER A PROBE RIGHT NOW — the second half of the
+      // freshness rule, alongside the TTL. See `claudeModelCacheIsFresh`.
+      const sdk = claudeAgentSdkVersion();
+      const fresh = claudeModelCacheIsFresh(cached, Date.now(), sdk);
       if (fresh && body.refresh !== true) {
         return { ok: true, models: { claude: cached!.models, fetchedAt: cached!.fetchedAt, cached: true } };
       }
@@ -1782,7 +1832,7 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         };
       }
       const fetchedAt = Date.now();
-      writeModelCache(store, 'claude', fetchedAt, probed);
+      writeModelCache(store, 'claude', fetchedAt, probed, sdk);
       return { ok: true, models: { claude: probed, fetchedAt, cached: false } };
     }
 

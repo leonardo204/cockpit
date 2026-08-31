@@ -1,7 +1,8 @@
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest';
-import { readNabyState, runNabyAction } from './naby';
+import { readNabyState, runNabyAction, claudeModelCacheIsFresh } from './naby';
 import { getStore } from '../engines/naby';
 import {
+  claudeAgentSdkVersion,
   clearCredentialBridge,
   installCredentialBridge,
   parseGoogleModelList,
@@ -226,10 +227,15 @@ describe('models.list — the Gemini catalogue', () => {
   it('leaves the Claude catalogue alone (default provider, separate cache row)', async () => {
     // Written straight into the settings row so no probe is needed: the point is
     // that generalising the cache did not move or reshape Claude's.
+    //
+    // The `sdk` stamp is part of "no probe is needed" — a row that does not name
+    // the SDK now on disk is stale by design (see `claudeModelCacheIsFresh`), so
+    // leaving it out here would spawn the CLI rather than test the cache.
     getStore().setSetting(
       'models.claude.cache',
       JSON.stringify({
         fetchedAt: Date.now(),
+        sdk: claudeAgentSdkVersion(),
         claude: [{ value: 'opus', displayName: 'Opus' }],
       }),
     );
@@ -237,6 +243,65 @@ describe('models.list — the Gemini catalogue', () => {
     expect(res.ok && res.models?.claude).toEqual([{ value: 'opus', displayName: 'Opus' }]);
     expect(res.ok && res.models?.cached).toBe(true);
     expect(res.ok && res.models?.google).toBeUndefined();
+  });
+});
+
+/**
+ * AN APP UPGRADE MUST NOT LEAVE LAST VERSION'S MODEL NAMES IN THE PICKER.
+ *
+ * The Claude list is reported by the CLI bundled inside the Agent SDK, so the
+ * names are a property of the installed package: one release called an alias
+ * "Sonnet 4.6", the next called the same alias "Sonnet 5". The day-long TTL is
+ * the right rule for "a new model may have shipped" and the wrong one for "the
+ * thing that produces this list was replaced under us" — which is exactly what
+ * installing a new build does.
+ *
+ * Asserted against the RULE rather than through the action, because the only way
+ * to invalidate a cache through the action is to make it probe, and a probe
+ * spawns the CLI.
+ */
+describe('claudeModelCacheIsFresh', () => {
+  const now = 1_800_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+  const row = (over: Partial<{ fetchedAt: number; sdk: string | null; models: unknown[] }> = {}) => ({
+    fetchedAt: now - 1000,
+    sdk: '0.3.251',
+    models: [{ value: 'opus' }],
+    ...over,
+  });
+
+  it('serves a recent list from the SDK that is still installed', () => {
+    expect(claudeModelCacheIsFresh(row(), now, '0.3.251')).toBe(true);
+  });
+
+  it('expires it the moment the SDK version changes, TTL or not', () => {
+    expect(claudeModelCacheIsFresh(row(), now, '0.3.260')).toBe(false);
+  });
+
+  it('treats a row written before the stamp existed as stale — once', () => {
+    // The probe it forces writes the stamp, so this costs one probe per install
+    // rather than one per read.
+    expect(claudeModelCacheIsFresh(row({ sdk: null }), now, '0.3.251')).toBe(false);
+  });
+
+  it('falls back to the TTL alone when the SDK cannot be identified', () => {
+    // Unresolvable package, or a manifest that would not read. Answering "stale"
+    // here would probe on every single read for no information gained.
+    expect(claudeModelCacheIsFresh(row({ sdk: null }), now, null)).toBe(true);
+    expect(claudeModelCacheIsFresh(row({ fetchedAt: now - DAY - 1 }), now, null)).toBe(false);
+  });
+
+  it('still honours the TTL and still refuses an empty list', () => {
+    expect(claudeModelCacheIsFresh(row({ fetchedAt: now - DAY - 1 }), now, '0.3.251')).toBe(false);
+    expect(claudeModelCacheIsFresh(row({ models: [] }), now, '0.3.251')).toBe(false);
+    expect(claudeModelCacheIsFresh(null, now, '0.3.251')).toBe(false);
+  });
+
+  it('the stamp it compares against is a real version string', () => {
+    // Guards the seam between the two trees: the runtime reads the SDK's own
+    // manifest, and a rename or a bad export would silently turn every read into
+    // the "cannot be identified" branch above.
+    expect(claudeAgentSdkVersion()).toMatch(/^\d+\.\d+\.\d+/);
   });
 });
 
