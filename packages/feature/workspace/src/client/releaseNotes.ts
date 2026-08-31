@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.33.0 — 2026-08-31
+
+### en
+
+A new tab is one keystroke, and carrying a conversation onward says that it is working.
+
+**New**
+
+- **Cmd+T opens a new tab — Ctrl+T on Windows and Linux.** The `+` button's tooltip names whichever key your own machine uses, and so do the numbered hints on the tabs: they used to say ⌘ everywhere, including on Windows.
+
+**Fixed**
+
+- **"Continue in a new tab" shows that it is working.** It takes a few seconds, because naby is summarising the conversation you are carrying over — and until now nothing said so. The tab grows a spinner, the menu item says what is happening, and a second click is refused rather than quietly starting a second conversation with a second summary behind it. A failure now says it failed, instead of leaving you looking at a menu that closed and did nothing.
+- **The model list names the models you actually have.** The app carried two copies of the Claude Agent SDK and used the older one, so the picker still said "Sonnet 4.6" where the current one says "Sonnet 5" and "Opus 5 with 1M context". Both copies are now the same, current version.
+  - The list is also refreshed the moment you install a new build. It was remembered for a day at a time, which meant an upgrade could go on showing the previous version's model names until that day ran out.
+
+### ko
+
+새 탭이 단축키 하나로 열리고, 대화를 이어갈 때 지금 일하는 중이라고 말해 줘요.
+
+**새로 생긴 것**
+
+- **Cmd+T로 새 탭을 열어요. 윈도우와 리눅스는 Ctrl+T예요.** `+` 버튼 툴팁이 이 기계에서 실제로 쓰는 키를 알려 줘요. 탭에 붙은 번호 힌트도 마찬가지예요. 예전에는 윈도우에서도 ⌘라고 적혀 있었어요.
+
+**고친 것**
+
+- **"새 탭에서 이어가기"가 지금 작업 중이라고 알려 줘요.** 넘겨받을 대화를 나비가 요약하느라 몇 초가 걸리는데, 그동안 아무 말이 없었어요. 이제 그 탭에 스피너가 돌고, 메뉴 항목이 무슨 일이 벌어지는지 말해 주고, 두 번째 클릭은 거절돼요. 예전에는 그 두 번째 클릭이 요약을 하나 더 만들면서 대화도 하나 더 만들었어요. 실패하면 실패했다고 말해 줘요. 메뉴만 닫히고 아무 일도 없던 예전과 달라요.
+- **모델 목록이 실제로 쓸 수 있는 모델을 말해요.** 앱 안에 Claude Agent SDK가 두 벌 들어 있었고 그중 오래된 쪽을 쓰고 있었어요. 그래서 지금은 "Sonnet 5", "Opus 5 with 1M context"라고 부르는 것을 목록은 아직 "Sonnet 4.6"이라고 적고 있었어요. 이제 두 벌이 같은 최신 버전이에요.
+  - 새 빌드를 설치하면 목록도 그 자리에서 갱신돼요. 예전에는 하루 단위로 기억해 둬서, 업데이트를 해도 그 하루가 지나기 전까지는 지난 버전의 모델 이름이 계속 보일 수 있었어요.
+
 ## 1.32.0 — 2026-08-27
 
 ### en
