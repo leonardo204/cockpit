@@ -85,6 +85,28 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.34.1 — 2026-09-02
+
+### en
+
+Two things in the new git panel that did not work as they looked.
+
+**Fixed**
+
+- **"Ask naby about this" reaches the conversation again.** It said "open a conversation first" to people who had one open behind the diff — and it could never have done anything else, because the message box only accepts text while its own tab is the one in front. The button now brings that conversation forward and puts the question in it, ready for you to send.
+- **A diff you leave open keeps up with the file.** It used to show the file as it was the moment you clicked, so editing it again — or letting naby edit it — changed nothing on screen until you pressed refresh. It now follows along in a fraction of a second, whether the change came from you, from naby, or from a terminal. Staging a file counts too: those lines leave the diff as soon as they are staged.
+  - A commit's diff is left alone on purpose. A commit cannot change, so there is nothing to keep up with.
+
+### ko
+
+새로 생긴 git 패널에서 보이는 것과 다르게 동작하던 두 가지를 고쳤어요.
+
+**고친 것**
+
+- **"나비에게 물어보기"가 대화를 다시 찾아가요.** 대화를 열어 둔 채로 눌러도 "대화를 먼저 열어 주세요"라고 했어요. 사실 그럴 수밖에 없었어요. 메시지 상자는 자기 탭이 앞에 있을 때만 글을 받거든요. 이제 그 대화를 앞으로 가져오면서 질문을 넣어 줘요. 보내기만 하시면 돼요.
+- **열어 둔 변경 내용이 파일을 따라가요.** 예전에는 누른 순간의 모습 그대로 멈춰 있어서, 파일을 또 고치거나 나비가 고쳐도 새로고침을 누르기 전까지는 화면이 그대로였어요. 이제 0.2초쯤이면 따라와요. 직접 고치든, 나비가 고치든, 터미널에서 바꾸든 마찬가지예요. 파일을 스테이지에 올려도 그 줄들이 바로 빠져요.
+  - 커밋의 변경 내용은 일부러 그대로 둬요. 커밋은 바뀌지 않으니 따라갈 것이 없어요.
+
 ## 1.34.0 — 2026-09-02
 
 ### en
