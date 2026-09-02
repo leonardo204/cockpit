@@ -8,6 +8,9 @@ export default defineConfig({
     // The always-on Telegram listener (telegram-chat §5) — started by the custom
     // server so the bot answers after a restart without anyone opening Settings.
     telegramChat: 'packages/feature/agent/src/server/lib/telegramChatBoot.ts',
+    // Settles what an unclean shutdown left behind: jobs whose record still says
+    // `running`, and session rows still marked `loading`. Boot-only, by design.
+    bootReconcile: 'packages/feature/agent/src/server/lib/bootReconcileBoot.ts',
   },
   outDir: 'dist',
   format: 'esm',

@@ -3,6 +3,7 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { ClipboardList } from 'lucide-react';
 import { toast } from '@cockpit/shared-ui';
+import { refreshJobs } from './jobStore';
 import { useLiveStream } from './useLiveStream';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { querySessionByPath } from './effect/agentClient';
@@ -537,6 +538,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
       // …and that reconcile does NOT clear the failure notice. Stated as an
       // event rather than left implicit, so the invariant is executable.
       dispatchRunFailure({ type: 'history-reconciled' });
+      // A TURN ENDING IS WHEN JOBS MOST OFTEN START OR STOP, and the reconcile
+      // above has just replaced the live bubbles with disk rows that carry no
+      // lifecycle. Without this the block for a job that is still running would
+      // fall back to "outcome not recorded" until something else happened to
+      // refresh the store. Not a poll — this rides an event the app already has.
+      void refreshJobs();
     },
     // A turn this tab merely WATCHED can fail too (a Telegram message, a
     // scheduled task); it reconciles from disk the same way, so it needs the

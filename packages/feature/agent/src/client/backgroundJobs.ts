@@ -103,6 +103,59 @@ export function isBackgroundLaunch(call: ToolCallInfo | undefined): boolean {
   return call?.input?.run_in_background === true;
 }
 
+/** The naby tool that starts a job naby itself owns and can report on. */
+export const NABY_START_JOB_TOOL = 'naby_start_job';
+
+/** What the job store says about one job, in ITS vocabulary. */
+export interface StoredJobState {
+  status: 'running' | 'succeeded' | 'failed' | 'killed' | 'lost';
+  startedAt?: number;
+  endedAt?: number;
+}
+
+/**
+ * The store's vocabulary translated into the block's.
+ *
+ * TWO NAMES FOR ONE THING, AND ONE GENUINE ADDITION. `succeeded`/`killed` are
+ * this transcript's `completed`/`stopped` — a rename, nothing more. `lost` has
+ * no counterpart, and it means precisely what `unknown` has always meant here:
+ * it ran, and how it ended was never recorded. Mapping it to `failed` would
+ * accuse a job that may well have succeeded after the app closed.
+ */
+export function statusFromStore(status: StoredJobState['status']): BackgroundJobStatus {
+  switch (status) {
+    case 'running':
+      return 'running';
+    case 'succeeded':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+    case 'killed':
+      return 'stopped';
+    case 'lost':
+      return 'unknown';
+  }
+}
+
+/**
+ * The naby job id this call started, if it started one.
+ *
+ * READ FROM THE RESULT, NOT THE PROSE. The executor returns
+ * `data: { jobId, command, status }` alongside its sentence, and the structured
+ * half is what this reads — parsing "Started in the background as job-…" out of
+ * a message would break the first time that sentence is reworded or translated.
+ *
+ * THE RESULT IS PERSISTED, WHICH IS THE POINT. Lifecycle edges are not, so an
+ * SDK-backgrounded job loses its identity on reload and can never be looked up
+ * again. A naby job's id survives in the transcript, so its block can ask the
+ * store how it went — days later, in a different window, after a restart.
+ */
+export function nabyJobIdOf(call: ToolCallInfo | undefined): string | undefined {
+  if (!call || call.name !== NABY_START_JOB_TOOL) return undefined;
+  const id = (call.resultData as { jobId?: unknown } | undefined)?.jobId;
+  return typeof id === 'string' && id.startsWith('job-') ? id : undefined;
+}
+
 /**
  * The command line as ONE line: newlines collapsed, truncated at the display
  * limit. A heredoc or a `&&` chain is often several lines long and would
@@ -155,14 +208,46 @@ export function partitionBackgroundJobs(
      *  nothing is listening for an ending edge any more (see the module doc), so
      *  a job still marked running is reported as unrecorded rather than live. */
     turnEnded?: boolean;
+    /**
+     * WHAT THE JOB STORE SAYS, keyed by naby job id (`job-xxxxxxxx`).
+     *
+     * THE SECOND SOURCE OF TRUTH, AND THE ONLY ONE THAT OUTLIVES A TURN. The
+     * lifecycle edges above are transport: they stop when the turn stops, which
+     * is why `turnEnded` had to downgrade a running job to `unknown`. That was
+     * the honest answer while the edges were all we had — and it is why a job
+     * that was still encoding showed "outcome not recorded" the moment its turn
+     * finished.
+     *
+     * A naby job is not transport. It is a record on disk and, while it runs, a
+     * registry entry; `/api/jobs` reads both. When the store knows a job the
+     * block reports what the store says, whatever the turn did. When it does not
+     * — an SDK-backgrounded job from before that path was closed, or a record
+     * that aged out — the old rule still applies, because for those jobs it is
+     * still the truth.
+     */
+    jobStore?: Readonly<Record<string, StoredJobState>>;
   }
 ): BackgroundPartition {
   const calls = toolCalls ?? [];
   const taskList = tasks ?? [];
   const turnEnded = opts?.turnEnded === true;
-  /** What the block may claim, given that the turn may be over. */
-  const claim = (status: SubagentTask['status']): BackgroundJobStatus =>
-    turnEnded && status === 'running' ? 'unknown' : status;
+  const store = opts?.jobStore;
+
+  /**
+   * What the block may claim.
+   *
+   * `storeId` is the naby job id when this block has one. Asking the store FIRST
+   * is the whole fix: the turn ending is a fact about the conversation, not
+   * about the work.
+   */
+  const claim = (
+    status: SubagentTask['status'],
+    storeId?: string,
+  ): BackgroundJobStatus => {
+    const known = storeId ? store?.[storeId] : undefined;
+    if (known) return statusFromStore(known.status);
+    return turnEnded && status === 'running' ? 'unknown' : status;
+  };
 
   // Main-thread calls only (see the doc): a subagent's own calls are that
   // block's business.
@@ -181,7 +266,11 @@ export function partitionBackgroundJobs(
     else otherTasks.push(task);
   }
 
-  if (jobTasks.length === 0 && !calls.some((c) => !c.agentId && isBackgroundLaunch(c))) {
+  // THE FAST PATH HAS TO KNOW ABOUT BOTH STARTERS. It missed `naby_start_job`,
+  // which is how the only reporting-capable background path ended up with no
+  // block at all: the turn returned here before pass 1 could see it.
+  const hasNabyJob = calls.some((c) => !c.agentId && nabyJobIdOf(c) !== undefined);
+  if (jobTasks.length === 0 && !hasNabyJob && !calls.some((c) => !c.agentId && isBackgroundLaunch(c))) {
     // The overwhelmingly common turn: nothing was backgrounded. Hand back the
     // input arrays themselves so the caller's memo sees no change.
     return { calls, tasks: taskList, jobs: [] };
@@ -202,22 +291,39 @@ export function partitionBackgroundJobs(
   // its lifecycle when there is one.
   for (const call of calls) {
     const task = call.agentId ? undefined : taskByCallId.get(call.id);
-    if (!task && !(isBackgroundLaunch(call) && !call.agentId)) {
+    const nabyJobId = nabyJobIdOf(call);
+    if (!task && !nabyJobId && !(isBackgroundLaunch(call) && !call.agentId)) {
       remainingCalls.push(call);
       continue;
     }
     if (task) claimedTaskIds.add(task.id);
     const command = formatJobCommand(call.input?.command);
     const description = descriptionOf(call);
+    const stored = nabyJobId ? store?.[nabyJobId] : undefined;
     jobs.push({
-      id: task ? task.id : `call:${call.id}`,
-      // No lifecycle ⇒ no claim. See the module doc: the launch acknowledgement
-      // is not an outcome.
-      status: task ? claim(task.status) : 'unknown',
+      id: task ? task.id : nabyJobId ? nabyJobId : `call:${call.id}`,
+      // A naby job answers from the store — the only source that outlives the
+      // turn. Otherwise: no lifecycle ⇒ no claim. See the module doc, the launch
+      // acknowledgement is not an outcome.
+      status: task
+        ? claim(task.status, nabyJobId)
+        : stored
+          ? statusFromStore(stored.status)
+          : nabyJobId
+            ? 'running'
+            : 'unknown',
       ...(command ? { command } : {}),
       ...(description ? { description } : {}),
-      ...(task?.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
-      ...(task?.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
+      ...(task?.startedAt !== undefined
+        ? { startedAt: task.startedAt }
+        : stored?.startedAt !== undefined
+          ? { startedAt: stored.startedAt }
+          : {}),
+      ...(task?.endedAt !== undefined
+        ? { endedAt: task.endedAt }
+        : stored?.endedAt !== undefined
+          ? { endedAt: stored.endedAt }
+          : {}),
       spawningCall: call,
     });
   }

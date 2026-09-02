@@ -994,6 +994,16 @@
     "commitTitle": "커밋 {{commit}}",
     "stagedTitle": "{{path}} — 스테이지됨"
   },
+  "jobs": {
+    "title": "백그라운드 작업",
+    "running": "{{count}}개 실행 중",
+    "lastOutput": "마지막 출력 {{ago}} 전",
+    "noOutputYet": "아직 출력 없음",
+    "lost": "실행 중에 앱이 다시 시작돼 결과를 모릅니다",
+    "failed": "실패{{code}}",
+    "killed": "중단됨",
+    "succeeded": "끝남"
+  },
   "git": {
     "panelTitle": "Git",
     "toggle": "Git 패널 열기/닫기",

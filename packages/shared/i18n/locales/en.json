@@ -994,6 +994,16 @@
     "commitTitle": "Commit {{commit}}",
     "stagedTitle": "{{path}} — staged"
   },
+  "jobs": {
+    "title": "Background jobs",
+    "running": "{{count}} running",
+    "lastOutput": "last output {{ago}} ago",
+    "noOutputYet": "no output yet",
+    "lost": "the app restarted while this was running — outcome unknown",
+    "failed": "failed{{code}}",
+    "killed": "stopped",
+    "succeeded": "finished"
+  },
   "git": {
     "panelTitle": "Git",
     "toggle": "Toggle git panel",

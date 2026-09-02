@@ -5,6 +5,7 @@ import { APP_NAME } from '@cockpit/shared-utils';
 import { useTranslation } from 'react-i18next';
 import { publishTopic } from '@cockpit/effect-react';
 import { Topics } from '@cockpit/effect-services';
+import { RunningJobsIndicator } from './RunningJobsIndicator';
 
 // ============================================
 // TopBar
@@ -83,6 +84,10 @@ export function TabManagerTopBar({
 
         {/* Right: session-related */}
         <div className="flex items-center gap-2">
+          {/* FIRST IN THE ROW, because it is the only control here that reports
+              something happening RIGHT NOW. It renders nothing at all when there
+              are no jobs, so the row is unchanged in the ordinary case. */}
+          <RunningJobsIndicator />
           {/* Toggle the right-side file browser (VSCode-style). */}
           {onToggleFiles && (
             <button

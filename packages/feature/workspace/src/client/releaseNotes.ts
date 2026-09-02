@@ -85,6 +85,40 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.35.0 — 2026-09-02
+
+### en
+
+Work that keeps running after naby answers is now something you can see.
+
+**New**
+
+- **A background-work indicator in the toolbar.** When naby starts something long — a build, a deploy, an encode — a spinner appears at the top right with how many are going. Click it for the list: what each one runs, how long it has been at it, and how the recent ones ended. It survives switching tabs, switching conversations and restarting the app, because it reads the job store rather than the conversation.
+- **A job you left running says whether it is alive.** The list shows when each one last printed something, which is the difference between "still working" and "stuck".
+
+**Fixed**
+
+- **A running job no longer reports "outcome not recorded" while it is still running.** The block in the conversation used to go quiet when the TURN ended rather than when the JOB ended — so a two-hour encode looked finished, and unrecorded, minutes after it started. It now answers from the job store, which outlives the conversation.
+- **The jobs naby can actually report on now show up.** There were two ways to start background work and only one of them could ever come back and tell you the result — and it was the one that left no trace on screen. Long work now always takes the path that reports, and that path is the one you can see.
+- **Reading a long job's output gives you the recent end, not the first minute.** A chatty job used to fill its log and stop, after which naby kept re-reading the same early lines and reasonably concluded nothing was happening.
+- **Restarting the app no longer leaves dots pulsing for work that ended.** A conversation interrupted by a crash or an update stayed marked "running" forever. Those are now cleared at startup, and a job that was running when the app closed is marked as having an unknown outcome instead of pretending to still be watched.
+
+### ko
+
+나비가 대답한 뒤에도 계속 도는 작업이 이제 눈에 보여요.
+
+**새로 생긴 것**
+
+- **오른쪽 위에 작업 표시가 생겼어요.** 빌드, 배포, 인코딩처럼 오래 걸리는 것을 나비가 시작하면 표시가 돌면서 몇 개가 도는지 알려 줘요. 눌러 보면 목록이 나와요. 무엇을 돌리는지, 얼마나 됐는지, 최근 것들은 어떻게 끝났는지 보여 줘요. 탭을 옮기든, 대화를 바꾸든, 앱을 다시 켜든 그대로 있어요. 대화가 아니라 작업 기록을 읽으니까요.
+- **돌고 있는 작업이 살아 있는지 알 수 있어요.** 마지막으로 뭔가를 출력한 게 언제인지 보여 줘요. 계속 일하는 중인지, 멈춰 있는지를 가르는 정보예요.
+
+**고친 것**
+
+- **도는 중인데 "결과 기록 없음"이라고 하던 문제를 고쳤어요.** 대화 안의 작업 표시가 **작업이 끝날 때**가 아니라 **턴이 끝날 때** 꺼졌어요. 그래서 두 시간짜리 인코딩이 시작 몇 분 만에 끝난 것처럼 보였어요. 이제 대화보다 오래 남는 작업 기록에서 답을 가져와요.
+- **결과를 알려줄 수 있는 작업이 화면에 나와요.** 백그라운드로 돌리는 방법이 두 가지였는데, 끝나고 결과를 말해 줄 수 있는 쪽은 하나뿐이었어요. 그런데 화면에 흔적이 남는 건 반대쪽이었어요. 이제 오래 걸리는 일은 항상 알려주는 쪽으로 가고, 그쪽이 눈에 보이는 쪽이에요.
+- **긴 작업의 출력을 읽으면 최근 것이 나와요.** 출력이 많은 작업은 기록이 꽉 차면 거기서 멈췄어요. 그래서 나비가 몇 번을 다시 읽어도 초반 몇 줄만 보고 "아무 일도 없다"고 판단했어요.
+- **앱을 다시 켜도 끝난 작업 표시가 남지 않아요.** 앱이 갑자기 닫히면 그때 진행 중이던 대화가 계속 "실행 중"으로 남아 점이 깜빡였어요. 이제 시작할 때 정리해요. 앱이 닫힐 때 돌고 있던 작업은 결과를 모른다고 표시하고, 지켜보는 척하지 않아요.
+
 ## 1.34.1 — 2026-09-02
 
 ### en

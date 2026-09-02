@@ -1,6 +1,14 @@
 'use client';
 
-import { useState, useEffect, useMemo, memo, useCallback, type ReactNode } from 'react';
+import {
+  useState,
+  useEffect,
+  useMemo,
+  memo,
+  useCallback,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import { Portal, toast } from '@cockpit/shared-ui';
 import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight, RotateCw, Pencil } from 'lucide-react';
 import { setComposerText } from './fileRefBus';
@@ -8,6 +16,7 @@ import { ToolCallModal } from './ToolCallModal';
 import { SubagentBlock } from './SubagentBlock';
 import { BackgroundJobBlock } from './BackgroundJobBlock';
 import { groupSubagentCalls } from './subagentGroups';
+import { getJobsById, subscribeJobs } from './jobStore';
 import { partitionBackgroundJobs } from './backgroundJobs';
 import { buildRenderSegments, lastTextSegmentId } from './turnSegments';
 import { formatTurnEndTime, formatTurnMeta } from './elapsed';
@@ -369,15 +378,24 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // was still running and nothing else on screen mentioned it again. The launch
   // is folded into a block that keeps reporting (backgroundJobs.ts), and what is
   // left goes on to the subagent grouping exactly as before.
+  // The job store, subscribed rather than fetched: every bubble in the
+  // transcript reads the same snapshot, and a refresh redraws them together.
+  const jobsById = useSyncExternalStore(subscribeJobs, getJobsById, getJobsById);
+
   const background = useMemo(
     () =>
       partitionBackgroundJobs(displayToolCalls, message.subagents, {
         // Once the turn is over, nothing is listening for the job's ending edge
         // — the backend process winds down with the turn — so a block that had
         // not heard back stops claiming the job is live (backgroundJobs.ts).
+        // That rule now applies only to jobs the STORE does not know: a naby job
+        // outlives its turn and can still be asked about, so it answers from
+        // there instead of being downgraded for a reason that is about the
+        // conversation rather than the work.
         turnEnded: !message.isStreaming,
+        jobStore: jobsById,
       }),
-    [displayToolCalls, message.subagents, message.isStreaming]
+    [displayToolCalls, message.subagents, message.isStreaming, jobsById]
   );
   const partition = useMemo(
     () => groupSubagentCalls(background.calls, background.tasks),

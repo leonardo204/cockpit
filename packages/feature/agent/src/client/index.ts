@@ -7,6 +7,14 @@ export { ChatInput } from './ChatInput';
 // The file-browser panel (workspace) inserts a path reference into the active
 // chat input through this same-window channel.
 export {
+  getJobsById,
+  getJobsSnapshot,
+  refreshJobs,
+  subscribeJobs,
+  type JobRow,
+  type JobsSnapshot,
+} from './jobStore';
+export {
   insertFileRef,
   insertFileRefWhenReady,
   cancelPendingFileRef,

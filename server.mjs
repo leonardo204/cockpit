@@ -178,6 +178,13 @@ app.prepare().then(async () => {
   });
   await scheduledTaskManager.init();
 
+  // What an unclean shutdown left behind, settled once. A job record still
+  // saying `running` can never be heard from again (its handle died with the old
+  // process), and a session row still saying `loading` makes every dot in the
+  // sidebar pulse for a turn that no longer exists.
+  const { runBootReconcile } = await import(dev ? '@cockpit/feature-agent/server/lib/bootReconcileBoot' : './dist/bootReconcile.mjs');
+  runBootReconcile();
+
   // Telegram two-way chat: one always-on getUpdates loop for the whole process
   // (telegram-chat §5). Started here so the bot is reachable after a restart —
   // the user talking to it is the trigger, and nothing inside the app would
