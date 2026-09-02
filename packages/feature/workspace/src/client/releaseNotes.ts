@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.34.0 — 2026-09-02
+
+### en
+
+The right panel gains a git view: what changed, where your branch is, and the history as a graph.
+
+**New**
+
+- **A git panel, behind the branch icon at the top right.** It sits beside the file browser and the two take turns in the same space, so the conversation is never squeezed between them. It shows the files you have changed, which branch you are on and how far ahead or behind its remote it is, your branches, and the history drawn as a graph with the branch lines coloured.
+- **Click a changed file, or any commit, to read the diff.** It opens in a tab next to the conversation rather than in a box on top of it — so you can look at the change and ask naby about it at the same time. There is a button on the diff that writes the question for you.
+- **The panel has no buttons that change anything, on purpose.** Committing, pulling, pushing and sorting out a conflict are things you ask naby for in a sentence, and the panel writes that sentence into the message box for you to send. Half the job in buttons and half in questions would only leave you guessing which was which.
+
+**Fixed**
+
+- **Work you do outside the app shows up straight away.** Running \`git fetch\`, \`git push\`, \`git branch\` or \`git tag\` in a terminal — or letting naby run them — used to leave the panel showing numbers that were true a minute ago, because none of those touch the files the app was watching. They now arrive in about a fifth of a second, whoever ran them.
+
+### ko
+
+오른쪽 패널에 git 보기가 생겼어요. 뭐가 바뀌었는지, 지금 어느 브랜치인지, 이력이 어떻게 갈라졌는지 보여 줘요.
+
+**새로 생긴 것**
+
+- **오른쪽 위 브랜치 아이콘을 누르면 git 패널이 열려요.** 파일 목록과 같은 자리를 번갈아 써요. 둘이 동시에 뜨지 않으니 대화가 양쪽에 끼이지 않아요. 바꾼 파일, 지금 브랜치와 원격보다 얼마나 앞서거나 뒤처졌는지, 브랜치 목록, 그리고 갈래마다 색이 다른 커밋 그래프를 보여 줘요.
+- **바뀐 파일이나 커밋을 누르면 무엇이 달라졌는지 볼 수 있어요.** 대화 위를 덮는 창이 아니라 옆 탭으로 열려요. 그래서 변경을 보면서 그 자리에서 나비에게 물어볼 수 있어요. 물어볼 말을 대신 써 주는 버튼도 있어요.
+- **이 패널에는 저장소를 바꾸는 버튼이 없어요. 일부러 그렇게 했어요.** 커밋하고, 받아오고, 올리고, 충돌을 푸는 일은 나비에게 말로 시키면 돼요. 패널은 그 말을 메시지 상자에 대신 적어 주고, 보내는 건 직접 하시면 돼요. 절반은 버튼으로 절반은 말로 하면 어느 쪽인지 매번 헷갈리니까요.
+
+**고친 것**
+
+- **앱 밖에서 한 작업도 바로 보여요.** 터미널에서 \`git fetch\`, \`git push\`, \`git branch\`, \`git tag\`를 치거나 나비가 대신 실행하면, 예전에는 패널이 한참 전 숫자를 그대로 보여 줬어요. 그 명령들은 앱이 지켜보던 파일을 건드리지 않았거든요. 이제 누가 실행하든 0.2초쯤 뒤에 반영돼요.
+
 ## 1.33.0 — 2026-08-31
 
 ### en
