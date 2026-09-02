@@ -6,7 +6,14 @@ export { ChatPanel } from './ChatPanel';
 export { ChatInput } from './ChatInput';
 // The file-browser panel (workspace) inserts a path reference into the active
 // chat input through this same-window channel.
-export { insertFileRef, FILE_REF_MIME, osFilePath, quotePath } from './fileRefBus';
+export {
+  insertFileRef,
+  insertFileRefWhenReady,
+  cancelPendingFileRef,
+  FILE_REF_MIME,
+  osFilePath,
+  quotePath,
+} from './fileRefBus';
 export { setActiveDocOpener, clearActiveDocOpener, type DocOpenRequest } from './docOpenBus';
 export { ChatHeader } from './ChatHeader';
 export { TokenUsageBar } from './TokenUsageBar';

@@ -10,9 +10,16 @@
  * of fragments — every line wraps twice and the `+`/`−` gutter costs a tenth of
  * the space. So a diff opens where the conversation is, at full width.
  *
- * It is deliberately NOT A MODAL either. The reason anyone opens a diff in this
- * app is to then ask naby about it, and a modal covers the box they would ask
- * in. Side by side, the question and the thing it is about are both visible.
+ * It is deliberately NOT A MODAL either — but not for the reason an earlier
+ * version of this comment gave. A tab REPLACES the conversation on screen rather
+ * than sitting beside it, so the diff and the message box are never visible at
+ * once and "ask about it while looking at it" was never true.
+ *
+ * What a tab buys instead is that the diff STAYS. A modal is dismissed the
+ * moment you go to type, and with it the thing you were about to describe; a tab
+ * is still there when you come back, and switching costs one click. That is also
+ * why "Ask naby about this" hands the text to the tab host rather than inserting
+ * it here: reaching the chat input means making a conversation active first.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * UNIFIED, NOT SIDE BY SIDE
@@ -25,8 +32,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { insertFileRef } from '@cockpit/feature-agent';
-import { toast } from '@cockpit/shared-ui';
 import type { DiffFile, DiffHunk, DiffResponse } from './gitPanelTypes';
 
 // ─────────────────────────────────────────────────────────
@@ -188,9 +193,13 @@ export interface DiffDocumentProps {
   staged?: boolean;
   /** A whole commit's diff. */
   commit?: string;
+  /** Put a question in the chat box. Delivered by the tab host, which switches
+   *  to a conversation first — a diff tab IS the active tab, so the chat input
+   *  it would insert into is never registered while this is on screen. */
+  onAsk?: (text: string) => void;
 }
 
-export function DiffDocument({ cwd, path, staged, commit }: DiffDocumentProps) {
+export function DiffDocument({ cwd, path, staged, commit, onAsk }: DiffDocumentProps) {
   const { t } = useTranslation();
   const [data, setData] = useState<DiffResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -261,17 +270,12 @@ export function DiffDocument({ cwd, path, staged, commit }: DiffDocumentProps) {
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => {
-              if (!insertFileRef(`${askText} `)) {
-                toast(
-                  t('git.askNoChat', {
-                    defaultValue: 'Open a conversation first, then try again.',
-                  }),
-                  'error',
-                );
-              }
-            }}
-            className="px-2 py-1 rounded border border-dashed border-border text-xs text-muted-foreground hover:border-brand hover:text-brand hover:bg-brand/5"
+            disabled={!onAsk}
+            onClick={() => onAsk?.(askText)}
+            title={t('git.askTooltip', {
+              defaultValue: 'Put this in the message box — you send it',
+            })}
+            className="px-2 py-1 rounded border border-dashed border-border text-xs text-muted-foreground hover:border-brand hover:text-brand hover:bg-brand/5 disabled:opacity-40"
           >
             {t('diff.ask', { defaultValue: 'Ask naby about this' })}
           </button>

@@ -44,8 +44,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast, useWebSocket } from '@cockpit/shared-ui';
-import { insertFileRef } from '@cockpit/feature-agent';
+import { useWebSocket } from '@cockpit/shared-ui';
 import { isGitChange, isGitRefsChange } from './fileBrowserOps';
 import type { GitChange, GitLogResponse, GitOverview, GraphRow } from './gitPanelTypes';
 
@@ -159,21 +158,18 @@ const PATH = {
  * behalf would be a button that changes the repository after all — just with an
  * extra step and less warning.
  */
-function AskNaby({ text, label }: { text: string; label?: string }) {
+function AskNaby({ text, label, onAsk }: { text: string; label?: string; onAsk?: (t: string) => void }) {
   const { t } = useTranslation();
   return (
     <button
       type="button"
-      onClick={() => {
-        // False means no chat input is registered — every tab keeps one mounted,
-        // so in practice this is the moment before the first tab exists.
-        if (!insertFileRef(text.endsWith(' ') ? text : `${text} `)) {
-          toast(
-            t('git.askNoChat', { defaultValue: 'Open a conversation first, then try again.' }),
-            'error',
-          );
-        }
-      }}
+      disabled={!onAsk}
+      // THE HOST DELIVERS IT, not this button. Reaching the chat input can mean
+      // switching to the tab that owns it first, and only the tab host knows
+      // which tab that is — a button that inserted directly could only ever
+      // reach a conversation that was already in front, which from a diff tab is
+      // never the case.
+      onClick={() => onAsk?.(text)}
       title={t('git.askTooltip', {
         defaultValue: 'Put this in the message box — you send it',
       })}
@@ -405,9 +401,12 @@ export interface GitPanelProps {
   /** Open a diff beside the conversation. Absent → rows are not clickable, which
    *  is the honest state rather than a click that does nothing. */
   onOpenDiff?: (target: { path?: string; staged?: boolean; commit?: string }) => void;
+  /** Put a question in the chat box, switching to a conversation if one is not
+   *  already in front. Absent → the suggestion buttons are disabled. */
+  onAsk?: (text: string) => void;
 }
 
-export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff }: GitPanelProps) {
+export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff, onAsk }: GitPanelProps) {
   const { t } = useTranslation();
   const ago = useRelativeTime();
 
@@ -537,7 +536,7 @@ export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff }: GitPanel
         <p className="text-xs text-muted-foreground leading-relaxed">
           {t('git.noRepo', { defaultValue: 'This project is not a git repository.' })}
         </p>
-        <AskNaby text={t('git.askInit', { defaultValue: 'Set this project up with git.' })} />
+        <AskNaby onAsk={onAsk} text={t('git.askInit', { defaultValue: 'Set this project up with git.' })} />
       </div>,
     );
   }
@@ -613,17 +612,17 @@ export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff }: GitPanel
             {t('git.askLead', { defaultValue: 'Tell naby to do it:' })}
           </div>
           {dirty > 0 && (
-            <AskNaby
+            <AskNaby onAsk={onAsk}
               text={t('git.askCommit', { defaultValue: 'Commit the current changes for me.' })}
             />
           )}
           {behind > 0 && (
-            <AskNaby
+            <AskNaby onAsk={onAsk}
               text={t('git.askPull', { defaultValue: 'Bring down the new commits from the remote.' })}
             />
           )}
           {ahead > 0 && (
-            <AskNaby text={t('git.askPush', { defaultValue: 'Push my commits to the remote.' })} />
+            <AskNaby onAsk={onAsk} text={t('git.askPush', { defaultValue: 'Push my commits to the remote.' })} />
           )}
         </div>
       )}
@@ -641,7 +640,7 @@ export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff }: GitPanel
           ))}
           {/* The old copy here said "resolve these in a terminal", which is the
               one instruction this panel's reader cannot act on. */}
-          <AskNaby
+          <AskNaby onAsk={onAsk}
             text={t('git.askResolve', {
               defaultValue: 'Walk me through these merge conflicts and resolve them.',
             })}
@@ -741,7 +740,7 @@ export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff }: GitPanel
             </div>
           )}
           <div className="px-2 pt-1.5">
-            <AskNaby
+            <AskNaby onAsk={onAsk}
               text={t('git.askBranch', {
                 defaultValue: 'Make a new branch for what I am working on.',
               })}

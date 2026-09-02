@@ -23,7 +23,7 @@ import { TabBar } from './TabBar';
 import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
 import { useNoLearnSessions } from './useNoLearnSessions';
 import { orderTabs, planDrop, pinRankOf } from './tabOrder';
-import { isDiffTab, isMarkdownTab } from './tabKinds';
+import { isChatTab, isDiffTab, isMarkdownTab } from './tabKinds';
 import { MarkdownDocument } from './MarkdownDocument';
 import { DiffDocument } from './DiffDocument';
 import { deleteSession } from './projectSessionTree';
@@ -36,6 +36,7 @@ import {
 import { GitPanel } from './GitPanel';
 import { fetchProjects, saveFilesWidth as saveFilesWidthEffect } from './effect/projectClient';
 import { ChatPanel } from '@cockpit/feature-agent';
+import { insertFileRef, insertFileRefWhenReady } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
 import {
   setActiveDocOpener,
@@ -452,6 +453,56 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     [initialCwd, openDiffTab],
   );
 
+  /**
+   * The last CHAT tab that was on screen — where a question goes.
+   *
+   * A ref rather than state: it is read inside a click handler and must not
+   * re-render anything when it moves. It trails `activeTabId` by design, so
+   * opening a diff and asking about it lands the question back in the
+   * conversation you came from rather than in the oldest tab in the strip.
+   */
+  const lastChatTabIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const active = tabs.find((t) => t.id === activeTabId);
+    if (active && isChatTab(active)) lastChatTabIdRef.current = active.id;
+  }, [tabs, activeTabId]);
+
+  /**
+   * "Ask naby about this" — from the git panel, or from a diff tab.
+   *
+   * IT SWITCHES TABS FIRST, and that is the whole fix rather than a nicety. A
+   * ChatInput registers as the insertion target only while ITS tab is active
+   * (ChatInput.tsx), so from a diff tab — which IS the active tab — there is no
+   * registered input and the question had nowhere to go. It reported "open a
+   * conversation first" at a moment when one was open and merely not in front.
+   *
+   * So: make a chat tab active, then hand over the text. The insert waits for
+   * the input that is about to mount rather than being attempted against the one
+   * that just went away.
+   */
+  const handleAskNaby = useCallback(
+    (text: string) => {
+      const body = text.endsWith(' ') ? text : `${text} `;
+      const active = tabs.find((t) => t.id === activeTabId);
+      if (active && isChatTab(active)) {
+        // Already looking at a conversation — no switch, no waiting.
+        if (!insertFileRef(body)) insertFileRefWhenReady(body);
+        return;
+      }
+      const target =
+        tabs.find((t) => t.id === lastChatTabIdRef.current && isChatTab(t)) ?? tabs.find(isChatTab);
+      if (!target) {
+        // Genuinely no conversation to ask in — the only case the old message
+        // was ever the right one.
+        toast(t('git.askNoChat', { defaultValue: 'Open a conversation first, then try again.' }), 'error');
+        return;
+      }
+      switchTab(target.id);
+      insertFileRefWhenReady(body);
+    },
+    [tabs, activeTabId, switchTab, t],
+  );
+
   const handleFilesResize = useCallback((next: number) => {
     setIsResizingFiles(true);
     setFilesWidth(next);
@@ -727,6 +778,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                         path={tab.diffPath}
                         staged={tab.diffStaged}
                         commit={tab.diffCommit}
+                        onAsk={handleAskNaby}
                       />
                     ) : isMarkdownTab(tab) ? (
                       <MarkdownDocument
@@ -797,6 +849,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
               width={filesWidth}
               resizing={isResizingFiles}
               onOpenDiff={handleOpenDiff}
+              onAsk={handleAskNaby}
             />
           )}
         </>

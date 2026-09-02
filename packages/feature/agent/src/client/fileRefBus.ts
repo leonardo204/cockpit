@@ -20,9 +20,59 @@ type Inserter = (text: string) => void
 
 let activeInserter: Inserter | null = null
 
+/**
+ * A request made while NO input is registered, waiting for one to arrive.
+ *
+ * WHY THIS IS NEEDED AT ALL. The registration above is gated on `isActive` — a
+ * ChatInput registers only while ITS tab is the one on screen. That is right for
+ * the file browser, which is a panel beside a visible chat, and wrong for
+ * anything that asks from a tab of its own: a diff tab IS the active tab, so by
+ * construction no chat is active and there is nobody to insert into.
+ *
+ * The caller therefore switches to a chat tab and asks in the same breath, and
+ * the switch has not rendered yet. Rather than poll for the registration, the
+ * request waits here and the registration collects it.
+ */
+let pending: { text: string; at: number } | null = null
+
+/**
+ * How long a waiting request stays valid.
+ *
+ * A CAP, NOT A TIMEOUT FOR ITS OWN SAKE. The tab switch that follows takes one
+ * render; anything approaching this means the switch never happened. Without the
+ * cap a request that missed its moment would sit here and splice itself into
+ * whatever conversation the user opened next — minutes later, with no idea where
+ * the text came from.
+ */
+const PENDING_TTL_MS = 3000
+
 /** The active ChatInput registers its caret-insertion function. Idempotent. */
 export function setActiveFileRefInserter(fn: Inserter): void {
   activeInserter = fn
+  // Collect a request that arrived while this input was still mounting.
+  if (pending && Date.now() - pending.at <= PENDING_TTL_MS) {
+    const { text } = pending
+    pending = null
+    fn(text)
+    return
+  }
+  pending = null
+}
+
+/**
+ * Insert `text` into the active chat input, or into the next one to register.
+ *
+ * The difference from `insertFileRef` below is only what happens when nothing is
+ * registered: that one reports the miss, this one waits. Use this when you are
+ * ALSO making a chat tab active — the caller knows an input is about to exist,
+ * and reporting "no chat is open" in that moment would be false.
+ */
+export function insertFileRefWhenReady(text: string): void {
+  if (activeInserter) {
+    activeInserter(text)
+    return
+  }
+  pending = { text, at: Date.now() }
 }
 
 /** Relinquish, but only if `fn` is still the registered inserter — avoids a
@@ -30,6 +80,11 @@ export function setActiveFileRefInserter(fn: Inserter): void {
  *  the outgoing input's cleanup runs. */
 export function clearActiveFileRefInserter(fn: Inserter): void {
   if (activeInserter === fn) activeInserter = null
+}
+
+/** Drop a waiting request — for a caller that decides not to ask after all. */
+export function cancelPendingFileRef(): void {
+  pending = null
 }
 
 /** Insert `text` into the active chat input, if one is mounted. Returns whether
