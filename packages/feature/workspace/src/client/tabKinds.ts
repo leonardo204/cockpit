@@ -26,7 +26,7 @@
  * field, and the default has to be the kind they all are — an undefined that
  * fell through to "document" would render the whole app as an empty viewer.
  */
-export type TabKind = 'chat' | 'markdown';
+export type TabKind = 'chat' | 'markdown' | 'diff';
 
 /** The parts of a tab this module reads. Deliberately structural rather than
  *  importing TabInfo: these rules are about the shape, and typing them this way
@@ -39,14 +39,29 @@ export interface KindedTab {
   /** The document, project-relative. Only a markdown tab has one. */
   rel?: string;
   sessionId?: string;
+  /** What a diff tab is showing. Absent on every other kind.
+   *
+   *  A `path` diff is the working tree (or the index, when `staged`); a `commit`
+   *  diff is one commit's whole change. They are separate fields rather than one
+   *  string because they are not the same question, and a viewer that guessed
+   *  which it had been given would show the wrong one silently. */
+  diffPath?: string;
+  diffStaged?: boolean;
+  diffCommit?: string;
 }
 
 export function tabKindOf(tab: KindedTab): TabKind {
-  return tab.kind === 'markdown' ? 'markdown' : 'chat';
+  if (tab.kind === 'markdown') return 'markdown';
+  if (tab.kind === 'diff') return 'diff';
+  return 'chat';
 }
 
 export function isMarkdownTab(tab: KindedTab): boolean {
   return tabKindOf(tab) === 'markdown';
+}
+
+export function isDiffTab(tab: KindedTab): boolean {
+  return tabKindOf(tab) === 'diff';
 }
 
 export function isChatTab(tab: KindedTab): boolean {
@@ -85,6 +100,54 @@ export function findDocumentTab<T extends KindedTab>(
   return tabs.find((tab) => isMarkdownTab(tab) && tab.cwd === cwd && tab.rel === rel);
 }
 
+/** What a diff tab is looking at, as one comparable value. */
+export interface DiffTarget {
+  cwd: string;
+  /** A working-tree or index diff of one file. */
+  path?: string;
+  staged?: boolean;
+  /** One commit's whole change. */
+  commit?: string;
+}
+
+/**
+ * The already-open tab for this exact diff, if there is one.
+ *
+ * Same focus-don't-stack rule as `findDocumentTab`, with one addition that
+ * matters: STAGED AND UNSTAGED ARE DIFFERENT TABS for the same file. They are
+ * genuinely different diffs — what a commit would take, and what it would leave
+ * behind — and treating them as one identity would silently swap the reader onto
+ * the other one.
+ */
+export function findDiffTab<T extends KindedTab>(
+  tabs: readonly T[],
+  target: DiffTarget,
+): T | undefined {
+  return tabs.find(
+    (tab) =>
+      isDiffTab(tab) &&
+      tab.cwd === target.cwd &&
+      tab.diffCommit === target.commit &&
+      tab.diffPath === target.path &&
+      !!tab.diffStaged === !!target.staged,
+  );
+}
+
+/**
+ * The label a diff tab wears.
+ *
+ * A file diff wears the FILE NAME, like a document tab, for the same reason: the
+ * folder part truncates to the half that says nothing. A commit diff wears the
+ * short hash, which is the only part of a commit that is both short and unique —
+ * a subject line truncates to "Fix the thing that…" for every third commit.
+ */
+export function diffTabTitle(target: DiffTarget): string {
+  if (target.commit) return target.commit.slice(0, 7);
+  const rel = target.path ?? '';
+  const parts = rel.split(/[/\\]/).filter(Boolean);
+  return parts.length > 0 ? (parts[parts.length - 1] as string) : rel;
+}
+
 /**
  * The sessions this tab list has open — the set the project-state save writes.
  *
@@ -107,7 +170,10 @@ export function openSessionIds(tabs: readonly KindedTab[]): string[] {
  * deleted).
  *
  * `undefined` for a document tab, which is the whole safety argument for
- * markdown tabs: closing one cannot remove a session, because it names none.
+ * markdown tabs — and, unchanged, for diff tabs: closing one cannot remove a
+ * session, because it names none. Every rule in this file is written as a
+ * question about `isChatTab` rather than about "not chat", which is why adding
+ * a third kind needed no edit to any of them.
  * Expressed as a function rather than as an `if (tab.sessionId)` in the close
  * path so it can be asserted directly — nothing in a build can see that a close
  * deleted something it should not have.

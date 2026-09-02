@@ -3,8 +3,11 @@ import {
   acceptsChatState,
   closableSessionId,
   documentTabTitle,
+  diffTabTitle,
+  findDiffTab,
   findDocumentTab,
   isChatTab,
+  isDiffTab,
   isMarkdownTab,
   openSessionIds,
   tabKindOf,
@@ -150,5 +153,71 @@ describe('tab kind — the chat title machinery cannot rename a document', () =>
     );
     // Which is exactly why the update never reaches it.
     expect(acceptsChatState(tab)).toBe(false);
+  });
+});
+
+/**
+ * The THIRD kind, and why it needed almost no new rules.
+ *
+ * Every rule in tabKinds is written as a question about `isChatTab` rather than
+ * as "not a chat", so a new kind inherits the safe answer by construction. That
+ * is a property worth pinning: the day someone rewrites one of them as
+ * `kind === 'markdown'`, diff tabs start deleting conversations on close and
+ * nothing else in the build changes.
+ */
+describe('a diff tab', () => {
+  const diff: KindedTab = { kind: 'diff', cwd: '/p', diffPath: 'a.ts' };
+  const staged: KindedTab = { kind: 'diff', cwd: '/p', diffPath: 'a.ts', diffStaged: true };
+  const commit: KindedTab = { kind: 'diff', cwd: '/p', diffCommit: 'abc1234' };
+
+  it('is its own kind, and is neither a chat nor a document', () => {
+    expect(tabKindOf(diff)).toBe('diff');
+    expect(isDiffTab(diff)).toBe(true);
+    expect(isChatTab(diff)).toBe(false);
+    expect(isMarkdownTab(diff)).toBe(false);
+  });
+
+  it('cannot delete a session when it is closed', () => {
+    // The safety argument. A diff tab names no session, so the close path has
+    // nothing to queue — expressed as a function precisely so it can be asserted.
+    expect(closableSessionId(diff)).toBeUndefined();
+    expect(closableSessionId(commit)).toBeUndefined();
+  });
+
+  it('contributes nothing to the persisted session set', () => {
+    expect(openSessionIds([{ sessionId: 's1' }, diff, commit])).toEqual(['s1']);
+  });
+
+  it('is never renamed by a conversation', () => {
+    expect(acceptsChatState(diff)).toBe(false);
+  });
+
+  it('focuses rather than stacking when the same diff is opened twice', () => {
+    const tabs = [diff, commit];
+    expect(findDiffTab(tabs, { cwd: '/p', path: 'a.ts' })).toBe(diff);
+    expect(findDiffTab(tabs, { cwd: '/p', commit: 'abc1234' })).toBe(commit);
+  });
+
+  it('treats staged and unstaged as DIFFERENT diffs of the same file', () => {
+    // They are genuinely different: what a commit would take, and what it would
+    // leave behind. One identity would silently swap the reader onto the other.
+    const tabs = [diff, staged];
+    expect(findDiffTab(tabs, { cwd: '/p', path: 'a.ts' })).toBe(diff);
+    expect(findDiffTab(tabs, { cwd: '/p', path: 'a.ts', staged: true })).toBe(staged);
+  });
+
+  it('does not confuse two projects holding the same filename', () => {
+    expect(findDiffTab([diff], { cwd: '/other', path: 'a.ts' })).toBeUndefined();
+  });
+
+  it('is not found by the document finder, nor documents by the diff finder', () => {
+    const doc: KindedTab = { kind: 'markdown', cwd: '/p', rel: 'a.ts' };
+    expect(findDocumentTab([diff], '/p', 'a.ts')).toBeUndefined();
+    expect(findDiffTab([doc], { cwd: '/p', path: 'a.ts' })).toBeUndefined();
+  });
+
+  it('wears the file name, or the short hash for a commit', () => {
+    expect(diffTabTitle({ cwd: '/p', path: 'src/deep/thing.ts' })).toBe('thing.ts');
+    expect(diffTabTitle({ cwd: '/p', commit: 'abc1234def5678' })).toBe('abc1234');
   });
 });

@@ -38,11 +38,13 @@ import type { WSConnection } from "@cockpit/effect-services"
 import { fromWebSocket } from "@cockpit/effect-runtime/server"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
 import {
+  GIT_REFS_COALESCE_MS,
   GIT_SIGNAL_COALESCE_MS,
   WATCH_BATCH_MAX,
   WATCH_COALESCE_MS,
   coalesceChangedDirs,
   gitDirFromPointer,
+  isGitRefsSignal,
   isGitStatusSignal,
   supportsRecursiveWatch,
 } from "../fsWatchScope"
@@ -189,12 +191,64 @@ const resolveGitDir = (root: string): Effect.Effect<string | null> =>
 const openGitWatcher = (
   gitDir: string,
   signals: Queue.Queue<string>,
+  refsSignals: Queue.Queue<string>,
 ): Effect.Effect<FSWatcher | null> =>
   Effect.try({
     try: (): FSWatcher =>
       watch(gitDir, { recursive: false }, (_event, filename) => {
-        if (typeof filename === "string" && isGitStatusSignal(filename)) {
+        if (typeof filename !== "string") return
+        if (isGitStatusSignal(filename)) {
           Effect.runFork(Queue.offer(signals, filename))
+        }
+        // A FILENAME CAN BE BOTH, and neither branch is an `else`. On the
+        // platforms that report nested paths from a non-recursive watch, a
+        // `refs/heads/x` write arrives here as well as at the refs watcher; and
+        // `config` is a refs signal that is not a status one. Routing by
+        // question rather than by first match is what keeps a fetch from being
+        // swallowed because something else matched first.
+        if (isGitRefsSignal(filename)) {
+          Effect.runFork(Queue.offer(refsSignals, filename))
+        }
+      }),
+    catch: () => null,
+  }).pipe(
+    Effect.tap((watcher) =>
+      Effect.sync(() => {
+        watcher.on("error", () => Effect.runSync(closeQuietly(watcher)))
+      }),
+    ),
+    Effect.orElseSucceed(() => null),
+  )
+
+/**
+ * A THIRD WATCHER — on `<gitDir>/refs`, recursively.
+ *
+ * The git-dir watch above is deliberately NON-recursive, and must stay that way:
+ * recursing there means watching `objects/`, where git writes a file per blob,
+ * and `logs/`, which every ref update appends to. That was the storm the narrow
+ * watch was built to avoid.
+ *
+ * But `refs/` is where branches, tags and remote-tracking refs actually live,
+ * and a non-recursive watch on the parent cannot see inside it on most
+ * platforms. So `refs/` gets its own recursive watch: it holds no objects, no
+ * logs and no locks worth speaking of — a few dozen tiny files whose changes are
+ * exactly the events the panel needs and nothing else.
+ *
+ * Failure is not an error. A repository whose refs are entirely packed may have
+ * an almost-empty `refs/`, and `packed-refs` is caught by the flat watch above;
+ * a platform that refuses the recursive watch simply falls back to that.
+ */
+const openRefsWatcher = (
+  gitDir: string,
+  refsSignals: Queue.Queue<string>,
+): Effect.Effect<FSWatcher | null> =>
+  Effect.try({
+    try: (): FSWatcher =>
+      watch(join(gitDir, "refs"), { recursive: true }, (_event, filename) => {
+        // Paths arrive relative to `refs/` here (`heads/main`), which
+        // `isGitRefsSignal` accepts alongside the `refs/`-prefixed form.
+        if (typeof filename === "string" && isGitRefsSignal(filename)) {
+          Effect.runFork(Queue.offer(refsSignals, filename))
         }
       }),
     catch: () => null,
@@ -210,8 +264,17 @@ const openGitWatcher = (
 const watchGitDir = (
   gitDir: string,
   signals: Queue.Queue<string>,
+  refsSignals: Queue.Queue<string>,
 ): Effect.Effect<boolean, never, Scope.Scope> =>
-  Effect.acquireRelease(openGitWatcher(gitDir, signals), closeQuietly).pipe(
+  Effect.acquireRelease(openGitWatcher(gitDir, signals, refsSignals), closeQuietly).pipe(
+    Effect.map((watcher) => watcher !== null),
+  )
+
+const watchGitRefs = (
+  gitDir: string,
+  refsSignals: Queue.Queue<string>,
+): Effect.Effect<boolean, never, Scope.Scope> =>
+  Effect.acquireRelease(openRefsWatcher(gitDir, refsSignals), closeQuietly).pipe(
     Effect.map((watcher) => watcher !== null),
   )
 
@@ -266,7 +329,8 @@ export const handleFileWatch = (
     const gitDir = yield* resolveGitDir(root)
     if (gitDir !== null) {
       const signals = yield* Queue.unbounded<string>()
-      const watchingGit = yield* watchGitDir(gitDir, signals)
+      const refsSignals = yield* Queue.unbounded<string>()
+      const watchingGit = yield* watchGitDir(gitDir, signals, refsSignals)
       if (watchingGit) {
         yield* Effect.forkScoped(
           Stream.fromQueue(signals).pipe(
@@ -277,6 +341,28 @@ export const handleFileWatch = (
             Stream.groupedWithin(WATCH_BATCH_MAX, Duration.millis(GIT_SIGNAL_COALESCE_MS)),
             Stream.filter((batch) => Chunk.size(batch) > 0),
             Stream.mapEffect(() => conn.send({ type: "git-change" })),
+            Stream.runDrain,
+          ),
+        )
+      }
+
+      // THE REFS CHANNEL — branches, tags, remotes and how far ahead we are.
+      //
+      // Its own message, because it answers a different question from
+      // `git-change` and has a different audience: the git panel redraws its
+      // branch list and counters, and the file tree — whose colours cannot have
+      // moved — is left alone.
+      //
+      // Opened even when the recursive refs watch could not be: the flat watch
+      // above still reports `FETCH_HEAD`, `packed-refs` and `config` into the
+      // same queue, which covers fetch and gc on a platform that refuses it.
+      yield* watchGitRefs(gitDir, refsSignals)
+      if (watchingGit) {
+        yield* Effect.forkScoped(
+          Stream.fromQueue(refsSignals).pipe(
+            Stream.groupedWithin(WATCH_BATCH_MAX, Duration.millis(GIT_REFS_COALESCE_MS)),
+            Stream.filter((batch) => Chunk.size(batch) > 0),
+            Stream.mapEffect(() => conn.send({ type: "git-refs-change" })),
             Stream.runDrain,
           ),
         )

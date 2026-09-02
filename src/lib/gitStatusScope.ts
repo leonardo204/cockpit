@@ -133,8 +133,42 @@ export function statusFromColumns(x: string, y: string): FileChangeState | null 
  * would be colouring nothing.
  */
 export function parsePorcelain(stdout: string): GitStatusEntry[] {
-  const records = stdout.split('\0');
   const out: GitStatusEntry[] = [];
+
+  for (const rec of parsePorcelainRecords(stdout)) {
+    const state = statusFromColumns(rec.x, rec.y);
+    if (!state) continue;
+    out.push({ path: rec.path, state, staged: rec.x !== ' ' && rec.x !== '?' });
+  }
+
+  return out;
+}
+
+/**
+ * ONE RECORD AS GIT WROTE IT — both columns kept apart, and the rename source
+ * kept rather than skipped.
+ *
+ * `parsePorcelain` above folds the two columns into the single answer a tree row
+ * needs, which is the right answer for a colour and the WRONG one for a staging
+ * panel: `MM` means "staged, and edited again since", and a panel that shows the
+ * file only once cannot offer to unstage half of it. So the scan lives here and
+ * is projected two ways, rather than being written twice — a second porcelain
+ * parser is exactly the kind of duplicate this file's own header warns about.
+ */
+export interface GitPorcelainRecord {
+  /** Index column. `' '` for unmodified, `'?'` for untracked. */
+  x: string;
+  /** Worktree column. */
+  y: string;
+  /** Path relative to the repository root, raw bytes between NULs. */
+  path: string;
+  /** Where a rename or copy came from, when git said so. */
+  oldPath?: string;
+}
+
+export function parsePorcelainRecords(stdout: string): GitPorcelainRecord[] {
+  const records = stdout.split('\0');
+  const out: GitPorcelainRecord[] = [];
 
   for (let i = 0; i < records.length; i++) {
     const rec = records[i];
@@ -150,12 +184,14 @@ export function parsePorcelain(stdout: string): GitStatusEntry[] {
     // Consume the rename/copy source that follows, so it is never read as an
     // entry in its own right — its first two characters are part of a PATH and
     // would parse as an arbitrary status.
-    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') i++;
+    let oldPath: string | undefined;
+    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') {
+      i++;
+      const src = records[i];
+      if (src) oldPath = src;
+    }
 
-    const state = statusFromColumns(x, y);
-    if (!state) continue;
-
-    out.push({ path, state, staged: x !== ' ' && x !== '?' });
+    out.push(oldPath === undefined ? { x, y, path } : { x, y, path, oldPath });
   }
 
   return out;

@@ -8,6 +8,7 @@ import {
   isIgnoredWatchPath,
   supportsRecursiveWatch,
   isGitStatusSignal,
+  isGitRefsSignal,
   gitDirFromPointer,
   GIT_SIGNAL_COALESCE_MS,
 } from './fsWatchScope';
@@ -254,5 +255,70 @@ describe('finding the git directory', () => {
     expect(gitDirFromPointer('gitdir:')).toBeNull();
     expect(gitDirFromPointer('gitdir:   ')).toBeNull();
     expect(gitDirFromPointer('ref: refs/heads/main')).toBeNull();
+  });
+});
+
+/**
+ * The refs signal, pinned against a measurement.
+ *
+ * Each command below was run against a real repository with a recursive watch
+ * on `.git` recording what it touched. The point of the suite is the FIRST
+ * group: five ordinary git commands that write neither `index` nor `HEAD`, and
+ * were therefore invisible to this app until this predicate existed.
+ */
+describe('what says the branches or counters moved', () => {
+  it('catches a fetch — which writes FETCH_HEAD and nothing else flat', () => {
+    expect(isGitRefsSignal('FETCH_HEAD')).toBe(true);
+    expect(isGitStatusSignal('FETCH_HEAD')).toBe(false);
+  });
+
+  it('catches a branch created or deleted', () => {
+    // `git branch feature-x` touches ONE path, and it is nested.
+    expect(isGitRefsSignal('refs/heads/feature-x')).toBe(true);
+    // The refs watcher reports paths relative to refs/, so both shapes count.
+    expect(isGitRefsSignal('heads/feature-x')).toBe(true);
+  });
+
+  it('catches a push, which only moves a remote-tracking ref', () => {
+    expect(isGitRefsSignal('refs/remotes/origin/main')).toBe(true);
+    expect(isGitRefsSignal('remotes/origin/main')).toBe(true);
+  });
+
+  it('catches a tag', () => {
+    expect(isGitRefsSignal('refs/tags/v1.0')).toBe(true);
+    expect(isGitRefsSignal('tags/v1.0')).toBe(true);
+  });
+
+  it('catches a remote being added, which writes only config', () => {
+    expect(isGitRefsSignal('config')).toBe(true);
+  });
+
+  it('catches gc folding every loose ref into one file', () => {
+    expect(isGitRefsSignal('packed-refs')).toBe(true);
+  });
+
+  it('ignores the half-written temporaries', () => {
+    // Same reasoning as `index.lock` for the status signal: reacting to these
+    // means reading refs in the middle of being rewritten.
+    expect(isGitRefsSignal('packed-refs.new')).toBe(false);
+    expect(isGitRefsSignal('refs/heads/main.lock')).toBe(false);
+    expect(isGitRefsSignal('config.lock')).toBe(false);
+  });
+
+  it('ignores the churn the narrow watch exists to avoid', () => {
+    expect(isGitRefsSignal('objects/ab/cdef')).toBe(false);
+    expect(isGitRefsSignal('logs/HEAD')).toBe(false);
+    expect(isGitRefsSignal('COMMIT_EDITMSG')).toBe(false);
+    expect(isGitRefsSignal('index')).toBe(false);
+  });
+
+  it('leaves the status signal exactly as it was', () => {
+    // The file tree's contract must not widen: these four and no more.
+    for (const f of ['index', 'HEAD', 'MERGE_HEAD', 'ORIG_HEAD']) {
+      expect(isGitStatusSignal(f), f).toBe(true);
+    }
+    for (const f of ['FETCH_HEAD', 'packed-refs', 'config', 'refs/heads/main']) {
+      expect(isGitStatusSignal(f), f).toBe(false);
+    }
   });
 });

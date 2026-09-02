@@ -154,6 +154,23 @@ export function isGitChange(data: unknown): boolean {
   return (data as { type?: unknown }).type === 'git-change';
 }
 
+/**
+ * Is this the watcher saying the BRANCHES, TAGS OR REMOTES moved?
+ *
+ * A THIRD MESSAGE, AND THE FILE TREE IGNORES IT. `git fetch`, `git push`,
+ * `git branch` and `git tag` change no file's status — measured, not assumed —
+ * so waking the tree for them would be its whole refresh spent to redraw the
+ * same colours. The git panel is the only reader: its branch list and its
+ * ahead/behind counters are the things that just went stale.
+ *
+ * Total for the same reason as its neighbours: this runs inside a socket
+ * callback, where a throw takes the connection with it.
+ */
+export function isGitRefsChange(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  return (data as { type?: unknown }).type === 'git-refs-change';
+}
+
 /** Which i18n key explains a failed `/api/fs-op` response. `exists` is the one
  *  a user hits by accident, so it gets its own sentence instead of the generic
  *  "could not". */

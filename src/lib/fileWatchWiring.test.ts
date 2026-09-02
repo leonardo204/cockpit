@@ -225,6 +225,63 @@ describe('a commit made in a terminal reaches the tree', () => {
   });
 
   it('releases the second watcher with the Scope, like the first', () => {
-    expect(HANDLER).toContain('Effect.acquireRelease(openGitWatcher(gitDir, signals), closeQuietly)');
+    expect(HANDLER).toContain(
+      'Effect.acquireRelease(openGitWatcher(gitDir, signals, refsSignals), closeQuietly)',
+    );
+  });
+});
+
+/**
+ * The gap the status watcher does not cover, and cannot.
+ *
+ * Measured against a real repository, one command at a time: `git branch`,
+ * `git tag`, `git fetch`, `git push` and `git remote add` write NEITHER `index`
+ * NOR `HEAD`. Every one of them is invisible to the four filenames above, and
+ * every one of them moves something the git panel is showing — the branch list,
+ * or the ahead/behind counters.
+ *
+ * Nothing here can be caught by a mounted test: jsdom has no filesystem and no
+ * watcher, and the failure mode is a NUMBER THAT IS QUIETLY OLD rather than an
+ * error. So the wiring is pinned as source, the way its neighbours above are.
+ */
+describe('a fetch or a branch made in a terminal reaches the git panel', () => {
+  const HANDLER = readFileSync(join(__dirname, 'effect', 'fileWatchHandler.ts'), 'utf8');
+  const PANEL = readFileSync(
+    join(__dirname, '..', '..', 'packages', 'feature', 'workspace', 'src', 'client', 'GitPanel.tsx'),
+    'utf8',
+  );
+
+  it('watches inside refs/, which a non-recursive watch on the git dir cannot see', () => {
+    // `git branch feature-x` writes ONE file: refs/heads/feature-x. The watch on
+    // the git directory is non-recursive and must stay that way (objects/ and
+    // logs/ are the churn it exists to avoid), so refs/ gets its own.
+    expect(HANDLER).toContain('const openRefsWatcher =');
+    expect(HANDLER).toContain('watch(join(gitDir, "refs"), { recursive: true }');
+  });
+
+  it('still catches fetch and gc when the recursive watch is unavailable', () => {
+    // FETCH_HEAD, packed-refs and config are FLAT files in the git dir, so the
+    // non-recursive watcher reports them — which is why it routes to the refs
+    // queue too, and why that routing is not an `else`.
+    expect(HANDLER).toContain('isGitRefsSignal(filename)');
+    expect(HANDLER).toMatch(/isGitStatusSignal\(filename\)[\s\S]{0,600}isGitRefsSignal\(filename\)/);
+  });
+
+  it('sends refs on their own channel, so the file tree is not woken for them', () => {
+    // A fetch changes no file's status. Sending this as `git-change` would spend
+    // the tree's whole refresh to redraw exactly the same colours.
+    expect(HANDLER).toContain('conn.send({ type: "git-refs-change" })');
+    expect(HANDLER).toContain('Duration.millis(GIT_REFS_COALESCE_MS)');
+  });
+
+  it('the panel listens for it, and the file tree does not', () => {
+    expect(PANEL).toContain('isGitRefsChange(data)');
+    const TREE = readFileSync(join(__dirname, '..', '..', 'packages', 'feature', 'workspace',
+      'src', 'client', 'FileBrowserPanel.tsx'), 'utf8');
+    expect(TREE).not.toContain('isGitRefsChange');
+  });
+
+  it('re-reads the graph on a refs change, because a new branch is a new line', () => {
+    expect(PANEL).toContain('if (open.graph && (refs || isGitChange(data))) void refreshLog();');
   });
 });

@@ -74,6 +74,75 @@ export function isGitStatusSignal(filename: string): boolean {
 }
 
 /**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE SECOND QUESTION: WHERE ARE THE BRANCHES, AND HOW FAR AHEAD ARE WE?
+ *
+ * The four files above answer the file tree's question — "is this path changed"
+ * — and that is genuinely all they answer. The git PANEL asks two more, and the
+ * four are silent on both. Measured, by watching a real repository while running
+ * each command:
+ *
+ *   git branch <new>   touches ONLY refs/heads/<new>
+ *   git branch -d      touches ONLY refs/heads/<name> and config
+ *   git tag            touches ONLY refs/tags/<name>
+ *   git fetch          touches ONLY FETCH_HEAD and refs/remotes/…
+ *   git push           touches ONLY refs/remotes/…
+ *   git remote add     touches ONLY config
+ *   git gc / pack-refs touches ONLY packed-refs and every refs/… it folded in
+ *
+ * Not one of those writes `index` or `HEAD`. So a person who types `git fetch`
+ * in a terminal — or an agent that does it for them — moves the panel's
+ * ahead/behind counters and the panel is never told. It sits there showing a
+ * number that was true a minute ago, which is worse than showing nothing.
+ *
+ * WHY IT IS A SEPARATE SIGNAL rather than four more entries in the set above:
+ * these do not change any file's status, and waking the file tree to re-read a
+ * status that cannot have moved would be paying its whole refresh for nothing.
+ * Two questions, two signals, each sent to whoever asked it.
+ */
+export const GIT_REFS_SIGNAL_FILES: ReadonlySet<string> = new Set([
+  // Written by every fetch, and by nothing else — the only flat file that moves
+  // when a fetch brings new commits down.
+  "FETCH_HEAD",
+  // `git gc` and `pack-refs` fold every loose ref into this one file, after
+  // which the individual `refs/…` paths are deleted rather than updated.
+  "packed-refs",
+  // Remotes live here, and so does branch tracking. `git remote add` writes
+  // nothing else at all.
+  "config",
+])
+
+/**
+ * Does this filename mean the branches, remotes or tags moved?
+ *
+ * Accepts both shapes the watchers report: a bare flat filename from the watch
+ * on the git directory itself, and a `heads/main`-style path from the recursive
+ * watch on `refs/`.
+ *
+ * `packed-refs.new` IS EXCLUDED for the same reason `index.lock` is excluded
+ * above: it is the temporary file `pack-refs` writes before renaming it into
+ * place, so reacting to it means reading refs halfway through being rewritten.
+ */
+export function isGitRefsSignal(filename: string): boolean {
+  if (filename.endsWith(".lock") || filename.endsWith(".new")) return false
+  if (GIT_REFS_SIGNAL_FILES.has(filename)) return true
+  // From the git-dir watch, a nested path arrives with its `refs/` prefix; from
+  // the refs watch it arrives without one. Both are a ref moving.
+  return filename.startsWith("refs/") || /^(heads|remotes|tags)\//.test(filename)
+}
+
+/**
+ * How long to wait after a refs signal before re-reading.
+ *
+ * LONGER THAN THE STATUS WINDOW, because the operations behind it are burstier
+ * by an order of magnitude: one `git fetch` on a busy repository rewrites every
+ * remote-tracking ref it advanced, and `pack-refs` rewrites all of them at once.
+ * None of that is urgent — nobody is watching a branch list for sub-second
+ * latency — so the window is sized to collapse the whole burst into one read.
+ */
+export const GIT_REFS_COALESCE_MS = 800
+
+/**
  * How long to wait after a git signal before re-reading.
  *
  * LONGER THAN THE TREE'S OWN COALESCING, on purpose. A single `git commit`

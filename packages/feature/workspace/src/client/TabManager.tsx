@@ -23,8 +23,9 @@ import { TabBar } from './TabBar';
 import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
 import { useNoLearnSessions } from './useNoLearnSessions';
 import { orderTabs, planDrop, pinRankOf } from './tabOrder';
-import { isMarkdownTab } from './tabKinds';
+import { isDiffTab, isMarkdownTab } from './tabKinds';
 import { MarkdownDocument } from './MarkdownDocument';
+import { DiffDocument } from './DiffDocument';
 import { deleteSession } from './projectSessionTree';
 import {
   FileBrowserPanel,
@@ -32,6 +33,7 @@ import {
   FILES_MAX_WIDTH,
   FILES_MIN_WIDTH,
 } from './FileBrowserPanel';
+import { GitPanel } from './GitPanel';
 import { fetchProjects, saveFilesWidth as saveFilesWidthEffect } from './effect/projectClient';
 import { ChatPanel } from '@cockpit/feature-agent';
 import { usePinnedSessions } from '@cockpit/feature-agent';
@@ -68,6 +70,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     handleNewTab,
     handleOpenSession,
     openMarkdownTab,
+    openDiffTab,
     updateTabState,
     updateTabPlanMode,
     handleTabDragStart,
@@ -366,8 +369,16 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
 
   // UI state
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
-  // Right-side file browser (VSCode-style). Project-scoped, so it needs a cwd.
-  const [isFilesOpen, setIsFilesOpen] = useState(false);
+  // ── The right-side dock ───────────────────────────────────────────────────
+  //
+  // ONE PANEL AT A TIME, not two booleans. The file browser and the git panel
+  // are both project-scoped side panels of the same width, and a reader wants
+  // one of them showing — mounting both would squeeze the chat column between
+  // two trees. So this is which panel the dock is showing, and `null` is closed;
+  // the two top-bar buttons swap the view rather than each opening a dock.
+  //
+  // Project-scoped, so both need a cwd.
+  const [rightPanel, setRightPanel] = useState<'files' | 'git' | null>(null);
   // Its width, dragged by the divider beside it. An app-wide preference (the
   // same `ui.*` store the sidebar width uses), NOT per project: a person who
   // likes a wide file tree likes it in every project, and having it change on
@@ -425,6 +436,21 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     setActiveDocOpener(open);
     return () => clearActiveDocOpener(open);
   }, [openMarkdownTab]);
+
+  /**
+   * The git panel names a diff; the tab list is what can hold one.
+   *
+   * The cwd is added HERE rather than passed into the panel's callback, because
+   * the panel already has one and a second copy travelling through a click
+   * handler is a second thing that can be the wrong project.
+   */
+  const handleOpenDiff = useCallback(
+    (target: { path?: string; staged?: boolean; commit?: string }) => {
+      if (!initialCwd) return;
+      openDiffTab({ cwd: initialCwd, ...target });
+    },
+    [initialCwd, openDiffTab],
+  );
 
   const handleFilesResize = useCallback((next: number) => {
     setIsResizingFiles(true);
@@ -603,8 +629,18 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
         {/* Top bar - always visible */}
         <TabManagerTopBar
           initialCwd={initialCwd}
-          filesOpen={isFilesOpen}
-          onToggleFiles={initialCwd ? () => setIsFilesOpen((v) => !v) : undefined}
+          filesOpen={rightPanel === 'files'}
+          // Clicking the panel that is already showing closes the dock; clicking
+          // the other one SWAPS to it rather than closing first. Two clicks to
+          // move between them would be the wrong answer to a button that is
+          // right there.
+          onToggleFiles={
+            initialCwd ? () => setRightPanel((p) => (p === 'files' ? null : 'files')) : undefined
+          }
+          gitOpen={rightPanel === 'git'}
+          onToggleGit={
+            initialCwd ? () => setRightPanel((p) => (p === 'git' ? null : 'git')) : undefined
+          }
         />
 
         {/* Tab bar + Chat */}
@@ -685,7 +721,14 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                         the conversation next to it. That is the point of the
                         promotion; re-fetching the file on every switch would be a
                         modal with extra steps. */}
-                    {isMarkdownTab(tab) ? (
+                    {isDiffTab(tab) ? (
+                      <DiffDocument
+                        cwd={tab.cwd ?? initialCwd ?? ''}
+                        path={tab.diffPath}
+                        staged={tab.diffStaged}
+                        commit={tab.diffCommit}
+                      />
+                    ) : isMarkdownTab(tab) ? (
                       <MarkdownDocument
                         // No `onOpenInTab`: it IS the tab. The modal's promote
                         // control is the entry point, and offering it here would
@@ -719,13 +762,17 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
         </div>
       </div>
 
-      {/* Right-side file browser (VSCode-style). Sibling of the chat column so it
-          is stable across chat-tab switches; only mounted while toggled open and
-          a project cwd exists. */}
-      {initialCwd && isFilesOpen && (
+      {/* The right-side dock (VSCode-style). Sibling of the chat column so it is
+          stable across chat-tab switches; only mounted while a panel is showing
+          and a project cwd exists.
+
+          THE DIVIDER IS SHARED, and so is the stored width: the dock is one
+          space that two panels take turns in, and a width that reset on every
+          swap would read as the app forgetting how wide you like it. */}
+      {initialCwd && rightPanel !== null && (
         <>
-          {/* Its divider. `side="right"` because the panel it sizes is on the
-              right of the handle: dragging LEFT makes it wider. */}
+          {/* `side="right"` because the panel it sizes is on the right of the
+              handle: dragging LEFT makes it wider. */}
           <ResizeHandle
             width={filesWidth}
             min={FILES_MIN_WIDTH}
@@ -735,13 +782,23 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
             onResizeEnd={handleFilesResizeEnd}
             label={t('workspace.resizeFiles')}
           />
-          <FileBrowserPanel
-            cwd={initialCwd}
-            onClose={() => setIsFilesOpen(false)}
-            width={filesWidth}
-            resizing={isResizingFiles}
-            onOpenInTab={handleOpenDocumentInTab}
-          />
+          {rightPanel === 'files' ? (
+            <FileBrowserPanel
+              cwd={initialCwd}
+              onClose={() => setRightPanel(null)}
+              width={filesWidth}
+              resizing={isResizingFiles}
+              onOpenInTab={handleOpenDocumentInTab}
+            />
+          ) : (
+            <GitPanel
+              cwd={initialCwd}
+              onClose={() => setRightPanel(null)}
+              width={filesWidth}
+              resizing={isResizingFiles}
+              onOpenDiff={handleOpenDiff}
+            />
+          )}
         </>
       )}
 

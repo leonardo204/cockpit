@@ -17,13 +17,23 @@ interface TabManagerTopBarProps {
   filesOpen?: boolean;
   /** Toggle the file browser. Absent (undefined) with no project → button hidden. */
   onToggleFiles?: () => void;
+  /** Whether the right-side git panel is the one showing. */
+  gitOpen?: boolean;
+  /** Toggle the git panel. Absent with no project → button hidden, same as files. */
+  onToggleGit?: () => void;
 }
 
 // ============================================
 // TabManagerTopBar
 // ============================================
 
-export function TabManagerTopBar({ initialCwd, filesOpen, onToggleFiles }: TabManagerTopBarProps) {
+export function TabManagerTopBar({
+  initialCwd,
+  filesOpen,
+  onToggleFiles,
+  gitOpen,
+  onToggleGit,
+}: TabManagerTopBarProps) {
   const { t } = useTranslation();
   return (
     <div className="border-b border-border bg-card shrink-0">
@@ -85,6 +95,29 @@ export function TabManagerTopBar({ initialCwd, filesOpen, onToggleFiles }: TabMa
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+            </button>
+          )}
+          {/* Toggle the right-side git panel. It shares the dock with the file
+              browser — the two swap rather than stacking, so this button reads
+              as active exactly when git is the panel showing. */}
+          {onToggleGit && (
+            <button
+              onClick={onToggleGit}
+              className={`p-2 rounded-lg transition-colors hover:bg-accent ${
+                gitOpen ? 'text-brand bg-accent' : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title={t('git.toggle', { defaultValue: 'Toggle git panel' })}
+              aria-pressed={gitOpen}
+            >
+              {/* A branch: a commit splitting off a line and rejoining it. Drawn
+                  in the same outline style as its neighbours rather than pulled
+                  from lucide, so the row does not end up half hand-drawn and
+                  half library at two different stroke weights. */}
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 6v10m0-4a6 6 0 016-6h2" />
+                <circle cx="6" cy="18" r="2" strokeWidth={2} />
+                <circle cx="18" cy="6" r="2" strokeWidth={2} />
               </svg>
             </button>
           )}

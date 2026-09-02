@@ -11,10 +11,13 @@ import { projectOpenPlan } from './projectOpenPlan';
 import {
   acceptsChatState,
   closableSessionId,
+  diffTabTitle,
   documentTabTitle,
+  findDiffTab,
   findDocumentTab,
   isMarkdownTab,
   openSessionIds,
+  type DiffTarget,
   type TabKind,
 } from './tabKinds';
 import type { ChatEngine } from '@cockpit/feature-agent';
@@ -50,6 +53,12 @@ export interface TabInfo {
   /** `markdown` tabs only: the document, relative to `cwd`. Both halves are
    *  needed — images and relative links are resolved against the project. */
   rel?: string;
+  /** `diff` tabs only: which diff this is. See `DiffTarget` in ./tabKinds — a
+   *  file path (with `diffStaged` choosing the index or the working tree), or a
+   *  commit, never both. */
+  diffPath?: string;
+  diffStaged?: boolean;
+  diffCommit?: string;
   sessionId?: string;
   title: string;
   isLoading?: boolean;
@@ -525,6 +534,37 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     setActiveTabId(newTab.id);
   }, []);
 
+  /**
+   * Open a diff beside the conversation, or focus the one already open.
+   *
+   * A TAB RATHER THAN SOMETHING INSIDE THE PANEL, because the panel is 288px
+   * wide by default and a diff read at that width is a column of fragments. It
+   * is also not a modal: the whole point of looking at a diff here is to then
+   * ask naby about it, and a modal covers the thing you would ask in.
+   *
+   * Read through the ref for the same reason `openMarkdownTab` does — the
+   * identity is passed to the always-mounted panel side, where a churning prop
+   * defeats a memo.
+   */
+  const openDiffTab = useCallback((target: DiffTarget) => {
+    const existing = findDiffTab(tabsRef.current, target);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const newTab: TabInfo = {
+      id: `tab-${Date.now()}`,
+      kind: 'diff',
+      cwd: target.cwd,
+      ...(target.path ? { diffPath: target.path } : {}),
+      ...(target.staged ? { diffStaged: true } : {}),
+      ...(target.commit ? { diffCommit: target.commit } : {}),
+      title: diffTabTitle(target),
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+  }, []);
+
   // Create new blank tab (appended to end). Naby has a single runtime engine —
   // the engine picker was removed, so every new tab is a default tab (engine
   // undefined → the Naby `claude` path → /api/chat → nabySpec). dev/prod is
@@ -712,6 +752,7 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     handleNewTab,
     handleOpenSession,
     openMarkdownTab,
+    openDiffTab,
     updateTabState,
     updateTabPlanMode,
 
