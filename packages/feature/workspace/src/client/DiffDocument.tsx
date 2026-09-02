@@ -30,8 +30,10 @@
  * information the second column would have.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useWebSocket } from '@cockpit/shared-ui';
+import { isGitRefsChange } from './fileBrowserOps';
 import type { DiffFile, DiffHunk, DiffResponse } from './gitPanelTypes';
 
 // ─────────────────────────────────────────────────────────
@@ -214,21 +216,64 @@ export function DiffDocument({ cwd, path, staged, commit, onAsk }: DiffDocumentP
     return `/api/git/diff?${p.toString()}`;
   }, [cwd, path, staged, commit]);
 
+  /** Guards against a slow re-read landing after a faster, newer one — an editor
+   *  saving twice in a second is enough to overlap two fetches. */
+  const reqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++reqRef.current;
     setLoading(true);
     try {
       const res = await fetch(url);
-      setData(res.ok ? ((await res.json()) as DiffResponse) : null);
+      const next = res.ok ? ((await res.json()) as DiffResponse) : null;
+      if (seq === reqRef.current) setData(next);
     } catch {
-      setData(null);
+      if (seq === reqRef.current) setData(null);
     } finally {
-      setLoading(false);
+      if (seq === reqRef.current) setLoading(false);
     }
   }, [url]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * A WORKING-TREE DIFF GOES STALE WHILE YOU READ IT. The file is on disk and
+   * anything can write to it — you in an editor, naby carrying out the thing you
+   * just asked for, a formatter on save. A viewer that showed the state at the
+   * moment you clicked would be quietly describing a file that no longer looks
+   * like that, and there is nothing on screen to say so.
+   *
+   * Both signals count, and for different reasons:
+   *   `fs-change`   the file was written — the unstaged diff moved.
+   *   `git-change`  the index moved. `git add` takes lines OUT of the unstaged
+   *                 diff and puts them in the staged one without touching the
+   *                 file at all, so nothing else would notice.
+   *
+   * `git-refs-change` is not subscribed: a branch or a tag moving does not
+   * change what the working tree differs from.
+   *
+   * A COMMIT DIFF IS NOT WATCHED AT ALL, and that is not an omission. A commit is
+   * identified by the hash of its content; `git show <hash>` returns the same
+   * bytes forever. Re-reading it on every file save would be work that cannot
+   * ever produce a different answer.
+   */
+  const onWatch = useCallback(
+    (message: unknown) => {
+      // Everything except the refs channel means this diff may have moved, so
+      // the test is a single exclusion rather than a list of inclusions — a
+      // fourth signal added later should re-read by default, not be forgotten.
+      if (isGitRefsChange(message)) return;
+      void load();
+    },
+    [load],
+  );
+  useWebSocket({
+    url: `/ws/fs-watch?cwd=${encodeURIComponent(cwd)}`,
+    onMessage: onWatch,
+    enabled: !commit,
+  });
 
   // WHAT THE READER WOULD ASK NABY ABOUT THIS DIFF, prefilled. The panel's own
   // suggestions are about the repository; this one is about the thing on screen,

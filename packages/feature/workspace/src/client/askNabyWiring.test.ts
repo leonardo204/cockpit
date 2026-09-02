@@ -105,3 +105,53 @@ describe('the waiting insert', () => {
     expect(BUS).toMatch(/Date\.now\(\) - pending\.at <= PENDING_TTL_MS/);
   });
 });
+
+/**
+ * A diff tab left open must not quietly go stale.
+ *
+ * The file is on disk and anything can write to it — the user in an editor, naby
+ * carrying out what it was just asked, a formatter on save. A viewer showing the
+ * state at the moment of the click describes a file that no longer looks like
+ * that, and nothing on screen says so. That is the failure mode this pins,
+ * because a stale diff looks exactly like a correct one.
+ */
+describe('the diff tab keeps up with the file', () => {
+  it('subscribes to the same watcher the panel uses', () => {
+    expect(DIFF).toContain('useWebSocket({');
+    expect(DIFF).toContain('url: `/ws/fs-watch?cwd=${encodeURIComponent(cwd)}`');
+  });
+
+  it('re-reads on anything but a refs change', () => {
+    // Stated as ONE exclusion rather than a list of inclusions, so a signal
+    // added later re-reads by default instead of being forgotten.
+    expect(DIFF).toContain('if (isGitRefsChange(message)) return;');
+    expect(DIFF).toContain('void load();');
+  });
+
+  it('re-reads when the INDEX moves, not only when the file is written', () => {
+    // `git add` takes lines out of the unstaged diff without touching the file,
+    // so listening for file writes alone would leave the tab showing lines that
+    // are now staged. The subscription is to the whole socket, which carries
+    // `git-change` too — it must not narrow to one message type.
+    expect(DIFF).not.toContain("'fs-change'");
+  });
+
+  it('does not watch a commit diff, because a commit cannot change', () => {
+    // A commit is identified by the hash of its content: `git show <hash>` is
+    // the same bytes forever. Re-reading it on every save is work that cannot
+    // produce a different answer.
+    expect(DIFF).toContain('enabled: !commit');
+  });
+
+  it('drops a slow re-read that lands after a newer one', () => {
+    // An editor saving twice in a second is enough to overlap two fetches.
+    expect(DIFF).toContain('const seq = ++reqRef.current;');
+    expect(DIFF).toContain('if (seq === reqRef.current) setData(next);');
+  });
+
+  it('does not blank the diff while re-reading it', () => {
+    // The loading state is shown only when there is nothing to show yet;
+    // otherwise a live refresh would flash the whole tab empty.
+    expect(DIFF).toContain('{loading && !data ?');
+  });
+});
