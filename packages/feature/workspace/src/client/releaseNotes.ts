@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.36.1 — 2026-09-03
+
+### en
+
+The background-work button is always there now, and the toolbar buttons say what they are.
+
+**Fixed**
+
+- **The background-work button no longer hides.** It used to appear only after a job had run at least once, and while idle it looked like a clock — so on a fresh install, or on Windows after a restart, it read as missing. It is now always in the top-right row, drawn as an activity line when nothing is running, and the list it opens says so when it is empty. The spinner and count while something runs are unchanged.
+- **Hovering a toolbar button shows its name.** The top-right buttons — file browser, git panel, reload, token statistics, background work — had tooltips that the Windows build did not show. They now use the same tooltip as the rest of the app.
+
+### ko
+
+백그라운드 작업 버튼이 항상 보이고, 상단 버튼에 마우스를 올리면 이름이 나와요.
+
+**고친 것**
+
+- **백그라운드 작업 버튼이 숨지 않아요.** 작업을 한 번이라도 돌린 뒤에야 나타났고, 쉬는 동안에는 시계 모양이라 새로 설치했거나 Windows에서 다시 켠 뒤에는 없는 것처럼 보였어요. 이제 오른쪽 위 줄에 항상 있어요. 도는 게 없으면 활동선 모양이고, 눌러 보면 비어 있다고 알려줘요. 작업이 돌 때의 회전 표시와 개수는 그대로예요.
+- **상단 버튼에 마우스를 올리면 이름이 보여요.** 파일 브라우저, Git 패널, 새로고침, 토큰 통계, 백그라운드 작업 버튼의 설명이 Windows에서는 뜨지 않았어요. 이제 앱의 다른 곳과 같은 툴팁을 써요.
+
 ## 1.36.0 — 2026-09-03
 
 ### en
