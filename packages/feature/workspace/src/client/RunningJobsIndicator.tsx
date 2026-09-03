@@ -111,11 +111,13 @@ export function RunningJobsIndicator() {
 
   const rows = useMemo(() => [...data.running, ...data.recent], [data]);
 
-  // NOTHING RUNNING AND NOTHING RECENT ⇒ NOTHING SHOWN. A permanently visible
-  // zero would be one more thing in a toolbar that is already busy, and it says
-  // nothing a person needs.
-  if (rows.length === 0) return null;
-
+  // ALWAYS SHOWN, since 2026-09-03. It used to render nothing until a job had
+  // run at least once, and while idle it drew a clock — and the field report
+  // from Windows was "the background-work icon is missing": the control was
+  // there, and read as a history button. A control that only appears once you
+  // have already used the feature cannot teach anyone the feature exists. So it
+  // stays in the row, at rest as an activity line rather than a clock, and the
+  // list it opens says plainly when there is nothing in it.
   const label =
     runningCount > 0
       ? t('jobs.running', { defaultValue: '{{count}} running', count: runningCount })
@@ -123,6 +125,9 @@ export function RunningJobsIndicator() {
 
   return (
     <div className="relative">
+      {/* `data-tooltip`, not `title`: the app's own popover (TooltipProvider)
+          is what every other control uses, and native title tooltips were the
+          thing the Windows build was not showing. */}
       <button
         type="button"
         onClick={() => {
@@ -130,20 +135,23 @@ export function RunningJobsIndicator() {
           void load();
         }}
         aria-expanded={open}
-        title={label}
-        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg transition-colors hover:bg-accent ${
+        aria-label={label}
+        data-tooltip={label}
+        className={`flex items-center gap-1 p-2 rounded-lg transition-colors hover:bg-accent ${
           runningCount > 0 ? 'text-brand' : 'text-muted-foreground hover:text-foreground'
         }`}
       >
         {runningCount > 0 ? (
           // A ring that turns, so "still going" reads without counting.
-          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" opacity="0.25" />
             <path d="M21 12a9 9 0 00-9-9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
         ) : (
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          // An activity trace, in the same outline style and size as the
+          // buttons beside it — "work", not "time".
+          <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M22 12h-4l-3 9L9 3l-3 9H2" />
           </svg>
         )}
         {runningCount > 0 && <span className="text-xs tabular-nums">{runningCount}</span>}
@@ -158,6 +166,11 @@ export function RunningJobsIndicator() {
             <div className="px-3 py-2 border-b border-border text-xs font-medium text-foreground">
               {t('jobs.title', { defaultValue: 'Background jobs' })}
             </div>
+            {rows.length === 0 && (
+              <div className="px-3 py-3 text-xs text-muted-foreground">
+                {t('jobs.none', { defaultValue: 'Nothing running, and nothing recent.' })}
+              </div>
+            )}
             {rows.map((job) => (
               <div key={job.id} className="px-3 py-2 border-b border-border last:border-0">
                 <div className="flex items-center gap-2">

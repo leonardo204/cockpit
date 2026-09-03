@@ -996,6 +996,7 @@
   },
   "jobs": {
     "title": "백그라운드 작업",
+    "none": "돌고 있는 작업도, 최근 작업도 없어요.",
     "running": "{{count}}개 실행 중",
     "lastOutput": "마지막 출력 {{ago}} 전",
     "noOutputYet": "아직 출력 없음",

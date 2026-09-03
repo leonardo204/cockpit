@@ -46,7 +46,7 @@ export function TabManagerTopBar({
               src="/icons/icon-72x72.png"
               alt={APP_NAME}
               className="w-6 h-6 cursor-pointer"
-              title={t('tabManagerTopBar.copyPageUrl')}
+              data-tooltip={t('tabManagerTopBar.copyPageUrl')}
               onClick={() => {
                 navigator.clipboard.writeText(window.location.href).then(() => {
                   toast(t('toast.copiedPageUrl'), 'success');
@@ -67,7 +67,7 @@ export function TabManagerTopBar({
                     toast(t('toast.copiedDirPath'));
                   }}
                   className="p-1 text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors"
-                  title={t('tabManagerTopBar.copyDirPath')}
+                  data-tooltip={t('tabManagerTopBar.copyDirPath')}
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -85,8 +85,12 @@ export function TabManagerTopBar({
         {/* Right: session-related */}
         <div className="flex items-center gap-2">
           {/* FIRST IN THE ROW, because it is the only control here that reports
-              something happening RIGHT NOW. It renders nothing at all when there
-              are no jobs, so the row is unchanged in the ordinary case. */}
+              something happening RIGHT NOW. Always present — see the note in
+              RunningJobsIndicator on why it stopped hiding while idle. */}
+          {/* TOOLTIPS ON THIS ROW ARE `data-tooltip`, the app's own popover, not
+              the native `title` attribute. The Windows build showed no native
+              tooltips on these buttons at all, and the rest of the app already
+              uses the provider — so this row now does too. */}
           <RunningJobsIndicator />
           {/* Toggle the right-side file browser (VSCode-style). */}
           {onToggleFiles && (
@@ -95,7 +99,7 @@ export function TabManagerTopBar({
               className={`p-2 rounded-lg transition-colors hover:bg-accent ${
                 filesOpen ? 'text-brand bg-accent' : 'text-muted-foreground hover:text-foreground'
               }`}
-              title={t('fileBrowser.toggle', { defaultValue: 'Toggle file browser' })}
+              data-tooltip={t('fileBrowser.toggle', { defaultValue: 'Toggle file browser' })}
               aria-pressed={filesOpen}
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,7 +116,7 @@ export function TabManagerTopBar({
               className={`p-2 rounded-lg transition-colors hover:bg-accent ${
                 gitOpen ? 'text-brand bg-accent' : 'text-muted-foreground hover:text-foreground'
               }`}
-              title={t('git.toggle', { defaultValue: 'Toggle git panel' })}
+              data-tooltip={t('git.toggle', { defaultValue: 'Toggle git panel' })}
               aria-pressed={gitOpen}
             >
               {/* A branch: a commit splitting off a line and rejoining it. Drawn
@@ -130,7 +134,7 @@ export function TabManagerTopBar({
           <button
             onClick={() => window.location.reload()}
             className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
-            title={t('tabManagerTopBar.refreshProject')}
+            data-tooltip={t('tabManagerTopBar.refreshProject')}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -140,7 +144,7 @@ export function TabManagerTopBar({
           <button
             onClick={() => publishTopic(Topics.OpenTokenStats, {})}
             className="p-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-colors"
-            title={t('tabManagerTopBar.tokenStats')}
+            data-tooltip={t('tabManagerTopBar.tokenStats')}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
