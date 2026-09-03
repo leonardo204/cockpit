@@ -85,6 +85,40 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.36.0 — 2026-09-03
+
+### en
+
+The newest Claude is on the list, and the app stops asking for a developer key.
+
+**New**
+
+- **Claude Fable 5.1 in the model picker.** The list comes from the Claude sign-in itself, and the copy of the Agent SDK inside the app only knew models up to Fable 5. It is updated, so a sign-in that has Fable 5.1 now shows it — and the cost and context figures know the new model too, rather than going blank.
+
+**Improved**
+
+- **Developer mode is gone, because it is the only mode.** The Claude and ChatGPT subscription sign-ins used to stay locked in an installed build until a key was typed into Settings. This app is a single-user development tool, so that door is removed: both sign-ins are simply available. (Set NABY_ENABLE_CHATGPT_OAUTH=0 in the environment to keep the ChatGPT one off.)
+
+**Fixed**
+
+- **A helper's words no longer show up as naby's answer.** When naby delegates part of a task to a sub-agent, that agent narrates as it works — "I'll start by examining…", "I've been blocked, so I'm stopping here". Those lines used to land in the middle of naby's own reply. They now appear inside the sub-agent's block, where you can expand them if you want them.
+
+### ko
+
+최신 Claude 모델이 목록에 나오고, 개발자 키를 묻지 않아요.
+
+**새로 생긴 것**
+
+- **모델 선택에 Claude Fable 5.1이 나와요.** 모델 목록은 Claude 로그인에서 가져오는데, 앱 안의 Agent SDK가 Fable 5까지만 알고 있었어요. 새 버전으로 올려서 Fable 5.1을 쓸 수 있는 로그인이면 목록에 보여요. 비용과 컨텍스트 숫자도 새 모델을 알아서 빈칸이 되지 않아요.
+
+**나아진 것**
+
+- **개발 모드가 없어졌어요. 이 앱은 원래 개발용이니까요.** 설치본에서는 Claude·ChatGPT 구독 로그인이 잠겨 있어서 설정에서 키를 입력해야 열렸어요. 혼자 쓰는 개발 도구에 그 문은 필요 없어서 없앴어요. 두 로그인 모두 그냥 쓸 수 있어요. (ChatGPT 쪽을 끄고 싶으면 환경변수 NABY_ENABLE_CHATGPT_OAUTH=0을 주면 돼요.)
+
+**고친 것**
+
+- **보조 에이전트가 한 말이 나비의 답처럼 보이지 않아요.** 나비가 일의 일부를 보조 에이전트에 맡기면 그 에이전트가 일하면서 말을 해요. "먼저 파일부터 살펴볼게요", "막혀서 여기서 멈출게요" 같은 것들이요. 이 말이 나비의 답 한가운데 섞여 나왔어요. 이제 보조 에이전트 칸 안에 들어가고, 펼치면 볼 수 있어요.
+
 ## 1.35.0 — 2026-09-02
 
 ### en
