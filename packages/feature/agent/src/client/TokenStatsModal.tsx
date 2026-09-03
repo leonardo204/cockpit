@@ -11,8 +11,14 @@ interface TokenStatsModalProps {
   onClose: () => void;
 }
 
-// Claude API official pricing ($/MTok) — 2026.03
+// Claude API official pricing ($/MTok) — 2026.09
 const MODEL_PRICING: Record<string, { label: string; input: number; output: number; cacheRead: number; cacheWrite: number; color: string }> = {
+  'claude-fable-5-1':           { label: 'Fable 5.1',  input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, color: '#a855f7' },
+  'claude-fable-5':             { label: 'Fable 5',    input: 10, output: 50, cacheRead: 1.00, cacheWrite: 12.5, color: '#c084fc' },
+  'claude-opus-5':              { label: 'Opus 5',     input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#ea580c' },
+  'claude-opus-4-8':            { label: 'Opus 4.8',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
+  'claude-opus-4-7':            { label: 'Opus 4.7',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
+  'claude-sonnet-5':            { label: 'Sonnet 5',   input: 2,  output: 10, cacheRead: 0.20, cacheWrite: 2.50, color: '#2563eb' },
   'claude-opus-4-6':            { label: 'Opus 4.6',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
   'claude-opus-4-5-20251101':   { label: 'Opus 4.5',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#fb923c' },
   'claude-sonnet-4-6':          { label: 'Sonnet 4.6',  input: 3,  output: 15, cacheRead: 0.30, cacheWrite: 3.75, color: '#3b82f6' },
@@ -25,6 +31,9 @@ const DEFAULT_PRICING = { label: '', input: 3, output: 15, cacheRead: 0.30, cach
 function getPricing(modelId: string) {
   if (MODEL_PRICING[modelId]) return MODEL_PRICING[modelId];
   const lower = modelId.toLowerCase();
+  // `claude-fable-5-1[1m]` and the like: the concrete id the provider reports
+  // can carry a tier suffix the exact-match table does not know.
+  if (lower.includes('fable')) return { ...DEFAULT_PRICING, input: 10, output: 50, cacheRead: 1.00, cacheWrite: 12.5, color: '#a855f7' };
   if (lower.includes('opus')) return { ...DEFAULT_PRICING, input: 5, output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' };
   if (lower.includes('haiku')) return { ...DEFAULT_PRICING, input: 1, output: 5, cacheRead: 0.10, cacheWrite: 1.25, color: '#22c55e' };
   return DEFAULT_PRICING;

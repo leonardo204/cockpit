@@ -51,7 +51,6 @@ const read = (f: string) =>
 const MODAL = read('SettingsModal.tsx');
 const SECTION = read('SettingsSection.tsx');
 const DETAILS = read('SettingsDetails.tsx');
-const DEV_MODE = read('DevModePanel.tsx');
 
 /** The locale dictionaries, for the copy-length rules below. */
 const LOCALES = ['en', 'ko'] as const;
@@ -94,7 +93,6 @@ const PANELS = [
   'AgentExportButton.tsx',
   'AgentImportButton.tsx',
   'UpdatePanel.tsx',
-  'DevModePanel.tsx',
   // The font knobs (2026-08-06). A panel of four selects and a preview, so it is
   // squarely in scope for the no-box rules: the preview is the surface most
   // likely to be "helpfully" wrapped in a tinted rectangle, and it uses the left
@@ -201,22 +199,10 @@ describe('every settings block is a section', () => {
     });
   }
 
-  it('lets DevModePanel wrap itself, so an unavailable build shows nothing', () => {
-    // It returns null when the build has no dev-mode door; a section supplied by
-    // the caller would leave an empty titled block — and a dangling divider — in
-    // its place.
-    expect(DEV_MODE).toContain('<SettingsSection');
-    expect(DEV_MODE).toContain('if (!bridge() || !status?.available) return null;');
-    const about = sectionBlock('about');
-    expect(about).toContain('<DevModePanel />');
-    expect(about).not.toMatch(/<SettingsSection[^>]*>\s*<DevModePanel/);
-  });
-
   it('draws no hand-rolled divider anywhere — the pane does it', () => {
     // Two sources of the same rule is how About ended up with a divider above it
     // and a card around it at the same time.
     expect(MODAL).not.toContain('mt-6 pt-4 border-t border-border');
-    expect(DEV_MODE).not.toContain('border-t border-border');
   });
 });
 

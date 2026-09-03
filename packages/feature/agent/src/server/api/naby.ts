@@ -315,8 +315,10 @@ async function probeMcpServer(
  * access/refresh tokens never leave the main process.
  */
 export type ChatgptLoginState = {
-  /** The dev seal (`isChatgptOauthEnabled()`). False in every packaged build, so
-   *  the chip renders nothing there. */
+  /** The dev seal (`isChatgptOauthEnabled()`). Open by default in every launch
+   *  (electron/main.ts); false only when the environment shut it explicitly, or
+   *  under a plain shell server nobody opened it for — the chip renders nothing
+   *  then. */
   available: boolean;
   signedIn: boolean;
   email: string | null;
@@ -324,8 +326,8 @@ export type ChatgptLoginState = {
 };
 
 async function readChatgptLogin(): Promise<ChatgptLoginState> {
-  // Sealed out of official builds — same discipline as the dedicated sign-in
-  // card and `describeProviders`. With the flag off there is nothing to sign in.
+  // Same gate as the dedicated sign-in card and `describeProviders`. With the
+  // flag off there is nothing to sign in.
   if (!isChatgptOauthEnabled()) {
     return { available: false, signedIn: false, email: null, accountId: null };
   }

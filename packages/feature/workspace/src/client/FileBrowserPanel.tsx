@@ -304,7 +304,7 @@ interface FsOpsBridge {
 
 /** The Electron file bridge, or null where it is not visible (a plain browser,
  *  and Windows builds where the subframe bridge does not surface). Feature-
- *  detected the same way DevModePanel/UpdatePanel detect theirs — the panel
+ *  detected the same way UpdatePanel detects its own — the panel
  *  must work in both hosts. It decides whether delete can be a recoverable
  *  trash, and which transport Open / Reveal use; the menu offers them either
  *  way, because `/api/fs-op` covers both when the bridge is dark. */

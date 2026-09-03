@@ -50,10 +50,10 @@ export { CHATGPT_OAUTH_PROVIDER_ID };
  */
 export const CLAUDE_MODELS: ModelOption[] = [
   { value: '', label: 'Default', hint: 'let Claude pick' },
-  { value: 'opus', label: 'Opus', hint: 'most capable' },
+  { value: 'fable', label: 'Fable', hint: 'most capable' },
+  { value: 'opus', label: 'Opus', hint: 'strong all-round' },
   { value: 'sonnet', label: 'Sonnet', hint: 'balanced' },
   { value: 'haiku', label: 'Haiku', hint: 'fast & light' },
-  { value: 'fable', label: 'Fable', hint: 'creative' },
 ];
 
 /** One row of the live catalog, as `models.list` returns it. */

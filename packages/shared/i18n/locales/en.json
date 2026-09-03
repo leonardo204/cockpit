@@ -2162,21 +2162,5 @@
     "reopen": "What changed",
     "dismiss": "Got it",
     "empty": "No release notes are available for this build."
-  },
-  "devMode": {
-    "title": "Developer mode",
-    "description": "Enter the key to use the Claude and ChatGPT subscription sign-ins in this release build. Intended for testing a shipped artifact.",
-    "placeholder": "Developer mode key",
-    "unlock": "Unlock",
-    "lock": "Lock again",
-    "unlockedRestart": "Unlocked. Restart the app to apply.",
-    "active": "Unlocked — active in this launch.",
-    "reveal": "Show",
-    "hide": "Hide",
-    "charCount": "{{n}} characters entered",
-    "wrongKey": "That key does not match. Use 'Show' to check what was entered — an active IME or a pasted newline is easy to miss.",
-    "notPersisted": "The key matched, but the unlock could not be saved. Check write access to ~/.naby.",
-    "unavailable": "This build has no developer mode.",
-    "failed": "The unlock request failed."
   }
 }

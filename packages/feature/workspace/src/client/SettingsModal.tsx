@@ -20,7 +20,6 @@ import {
 // (settings-ia-reorg §3.4).
 import { NabyProviderSettings, NabyMcpServers } from './NabyProviderSetup';
 import { UpdatePanel } from './UpdatePanel';
-import { DevModePanel } from './DevModePanel';
 // P15-06. The scoped-memory review + delete panel. Given the active session/cwd
 // so its `session`/`project` scopes are addressable; `user` scope needs neither.
 // It reads its own summary (`fetchMemorySummary`, exported from that file) and
@@ -449,13 +448,6 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
                 <SettingsSection title={t('updates.title')}>
                   <UpdatePanel />
                 </SettingsSection>
-
-                {/* Renders its own section, or nothing at all when the build has
-                    no dev-mode door — which is why it is not wrapped here: an
-                    empty titled block would advertise a feature this binary
-                    lacks. Returning null also drops its divider, because the rule
-                    is drawn BETWEEN siblings that exist. */}
-                <DevModePanel />
               </>
             ) : null}
           </div>
