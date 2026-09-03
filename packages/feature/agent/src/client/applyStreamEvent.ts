@@ -1,6 +1,6 @@
 import type { ChatMessage, ToolCallInfo } from './types';
 import { renderHarnessPill } from './harnessPill';
-import { applySubagentTaskEvent, type SubagentTaskPhase } from './subagentGroups';
+import { appendSubagentText, applySubagentTaskEvent, type SubagentTaskPhase } from './subagentGroups';
 import { appendTextSegment, appendToolCallSegment } from './turnSegments';
 
 /**
@@ -51,6 +51,10 @@ interface ToolResultBlock {
 export interface StreamEvent {
   type?: string;
   subtype?: string;
+  /** `subagent_text`: one chunk of a delegated run's narration, and the `Task`
+   *  call it belongs to. Kept off the answer — see the handler. */
+  text?: string;
+  agent_tool_call_id?: string;
   _human?: boolean; // synthetic human-prompt user event (rendered by useLiveStream)
   _turnId?: string; // per-turn unique id (the dispatch runId) — identity for live-bubble dedup
   _ts?: number; // server clock at startRun — time boundary for disk-copy dedup
@@ -102,6 +106,26 @@ export function applyStreamEvent(
   opts: { engine?: string; assistantId: string }
 ):ChatMessage[] {
   const { assistantId } = opts;
+
+  // A SUBAGENT'S NARRATION — filed under the subagent, never into the answer.
+  //
+  // THE BUG THIS CLOSES. A delegated run's words used to arrive on the same
+  // channel as naby's own and were appended to the same bubble, so a transcript
+  // read as one voice when it was two: "I'll start by examining the key files"
+  // and "I've been blocked, so I'm stopping here" appeared as if naby had said
+  // them, in the middle of an answer to the user. The engine knew the difference
+  // the whole time (`parent_tool_use_id`) and was spending it only on the token
+  // gauge.
+  //
+  // Placed ABOVE the generic text paths deliberately: a fall-through here is
+  // exactly the failure being fixed.
+  if (ev.type === 'subagent_text' && ev.agent_tool_call_id && ev.text) {
+    const callId = ev.agent_tool_call_id;
+    const text = ev.text;
+    return messages.map((m) =>
+      m.id === assistantId ? { ...m, subagents: appendSubagentText(m.subagents, callId, text) } : m,
+    );
+  }
 
   // claude/deepseek/PTY: streamed text deltas
   if (ev.type === 'stream_event') {

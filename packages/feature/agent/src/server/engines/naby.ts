@@ -2365,6 +2365,21 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // One tested rule for both engines — see lib textRender.ts.
                   const plan = planTextRender(ev.partial === true, sawPartialText);
                   sawPartialText = plan.sawPartialNext;
+                  // A SUBAGENT'S WORDS NEVER BECOME THE ANSWER. `agentToolCallId`
+                  // is set only for text produced inside a delegated run; letting
+                  // it accumulate would put a subagent's narration into the reply
+                  // that gets saved, and into the autonomy loop's stop decision.
+                  // It is still forwarded below — attributed — so the transcript
+                  // can show it inside that subagent's own block.
+                  if (ev.agentToolCallId) {
+                    ctx.emit({
+                      type: 'subagent_text',
+                      session_id: sessionId,
+                      agent_tool_call_id: ev.agentToolCallId,
+                      text: ev.text,
+                    });
+                    break;
+                  }
                   if (plan.accumulate) {
                     assistantText += ev.text;
                     // Per-step copy: the stop decision looks for the done marker in

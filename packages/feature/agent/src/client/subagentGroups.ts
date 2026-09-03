@@ -54,6 +54,16 @@ export interface SubagentTask {
   startedAt?: number;
   /** When the runtime saw it END (epoch ms). */
   endedAt?: number;
+  /**
+   * WHAT THE SUBAGENT SAID, kept out of the conversation.
+   *
+   * A delegated run narrates as it works — "I'll start by examining…", "I've been
+   * blocked, so I'm stopping here". That narration used to land in the assistant
+   * bubble beside naby's own answer, so the reader could not tell which sentences
+   * were addressed to them. It belongs to the subagent, so it lives on the
+   * subagent and its block decides how much to show.
+   */
+  text?: string;
 }
 
 /** The backend's discriminant for a BACKGROUND SHELL JOB — the Claude Agent
@@ -82,6 +92,9 @@ export interface SubagentGroup {
   /** The `Task` call that launched it, when it can be identified — folded in
    *  here so it stops sitting in the generic batch as an unrelated row. */
   parentCall?: ToolCallInfo;
+  /** What the subagent said while it worked. Shown inside this block when
+   *  expanded, never in the conversation — see `SubagentTask.text`. */
+  text?: string;
 }
 
 export interface SubagentPartition {
@@ -94,6 +107,34 @@ export interface SubagentPartition {
 /** The phases a task event can report. `progress` is a mid-flight heartbeat: it
  *  must not close a block, only confirm it is still open. */
 export type SubagentTaskPhase = 'started' | 'progress' | 'ended';
+
+/**
+ * Append a subagent's narration to its own record.
+ *
+ * MATCHED ON THE SPAWNING CALL, not on the task id: the text arrives carrying
+ * `parent_tool_use_id` — the `Task` call that started the run — which is the one
+ * handle both sides already share. The task id is the backend's, and the text
+ * events do not carry it.
+ *
+ * TOTAL AND IDEMPOTENT-SAFE. Text for a run this turn has never seen is dropped
+ * rather than conjuring a task: a block with no lifecycle would be a subagent
+ * that appears to exist and can never finish. A reconnect replays the buffer, so
+ * the caller is responsible for not re-applying — same contract as
+ * `applySubagentTaskEvent`.
+ */
+export function appendSubagentText(
+  tasks: SubagentTask[] | undefined,
+  toolCallId: string,
+  text: string,
+): SubagentTask[] | undefined {
+  if (!tasks || !text) return tasks;
+  const idx = tasks.findIndex((t) => t.toolCallId === toolCallId);
+  if (idx < 0) return tasks;
+  const target = tasks[idx]!;
+  const next = [...tasks];
+  next[idx] = { ...target, text: (target.text ?? '') + text };
+  return next;
+}
 
 export interface SubagentTaskEvent {
   id: string;
@@ -240,6 +281,9 @@ export function groupSubagentCalls(
     const g = ensure(task.id);
     g.status = task.status;
     if (task.agentType) g.agentType = task.agentType;
+    // What it said while it worked. Carried onto the group so the block can show
+    // it in place, rather than it having gone into the conversation.
+    if (task.text) g.text = task.text;
   }
 
   // The id of the call that spawned each run, from either source.

@@ -97,6 +97,18 @@ export const SubagentBlock = memo(function SubagentBlock({ group, cwd, sessionId
           <span className="truncate opacity-60 text-left">· {group.description}</span>
         )}
       </button>
+      {expanded && group.text && (
+        // WHAT THE SUBAGENT SAID, in its own block and behind the same fold as
+        // its calls. This text used to be appended to the assistant bubble, so a
+        // delegated run's narration read as naby's answer to the user. It is a
+        // record of someone else's working, so it is shown as one: quiet,
+        // monospaced, and only when asked for.
+        <div className="ml-3 border-l border-border/50 pl-2 py-1">
+          <pre className="whitespace-pre-wrap break-words font-mono text-[0.688rem] leading-relaxed text-muted-foreground">
+            {group.text.trim()}
+          </pre>
+        </div>
+      )}
       {expanded && rows.length > 0 && (
         <div className="ml-3 border-l border-border/50 pl-2">
           {rows.map((toolCall, index) => (
