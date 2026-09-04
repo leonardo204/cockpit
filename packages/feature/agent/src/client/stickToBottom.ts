@@ -25,6 +25,10 @@
  *     the user types a second line and takes those pixels from the bottom of
  *     the transcript; without this the last message hides behind it, which
  *     reads as the input having been drawn ON TOP of the conversation.
+ *   • our own write, outrun    → a scroll event that did NOT move the view up
+ *     is never the user reading history — it is content that landed between
+ *     our write and the browser reporting it — so a pinned list writes again
+ *     instead of detaching. (The second report; see the `scroll` case.)
  *
  * WHY A NEAR-BOTTOM TOLERANCE. Exact equality is unreachable in practice:
  * sub-pixel layout, a lazily measured code block, an image that finishes
@@ -70,13 +74,37 @@ export interface StickState {
   /** Last observed scrollHeight, so a real GROWTH can be told from a re-measure
    *  of unchanged content (a resize, a reconcile that swaps ids but no text). */
   height: number;
+  /**
+   * Where the viewport was when last MEASURED OR WRITTEN. This is what tells a
+   * scroll event the user made from one our own write produced — see the
+   * `scroll` case for the second report, the one this field closes.
+   */
+  scrollTop: number;
+  /**
+   * A smooth jump is on its way. While it travels, its own scroll events must
+   * not be read as "content outran the write" and answered with an instant hop
+   * that cuts the animation short; the `arrived` event settles the difference.
+   */
+  travelling: boolean;
 }
 
-export const initialStickState: StickState = { stuck: true, pending: false, height: 0 };
+export const initialStickState: StickState = {
+  stuck: true,
+  pending: false,
+  height: 0,
+  scrollTop: 0,
+  travelling: false,
+};
 
 export type StickEvent =
   /** The user (or a programmatic write) moved the viewport. */
   | { kind: 'scroll'; metrics: ScrollMetrics }
+  /** The caller just wrote `scrollTop` — the position the browser actually
+   *  landed on, after clamping. Recorded so the scroll event that follows can
+   *  be recognised as ours. */
+  | { kind: 'wrote'; scrollTop: number }
+  /** A smooth jump finished travelling (`scrollend`, or a fallback timer). */
+  | { kind: 'arrived'; metrics: ScrollMetrics }
   /** The content box changed size — a streamed delta, an appended segment, a
    *  growing subagent block, the reconcile after a run ends. */
   | { kind: 'content'; metrics: ScrollMetrics }
@@ -120,44 +148,87 @@ export function reduceStick(
 ): StickDecision {
   switch (ev.kind) {
     case 'scroll': {
-      if (ev.metrics.clientHeight === 0) return { state: prev, write: 'none' };
-      const stuck = isAtBottom(ev.metrics, tolerance);
-      return {
+      const m = ev.metrics;
+      if (m.clientHeight === 0) return { state: prev, write: 'none' };
+      const measured = { height: m.scrollHeight, scrollTop: m.scrollTop };
+      if (isAtBottom(m, tolerance)) {
         // Returning to the bottom re-engages the stick AND consumes the chip:
         // the user has now seen the newest content, so there is nothing to
-        // offer them a jump to.
-        state: { stuck, pending: stuck ? false : prev.pending, height: ev.metrics.scrollHeight },
-        // Never write during a scroll. Any correction here would be fighting
-        // the user's own wheel.
-        write: 'none',
-      };
+        // offer them a jump to. A jump that was travelling has landed.
+        return {
+          state: { stuck: true, pending: false, travelling: false, ...measured },
+          write: 'none',
+        };
+      }
+      // THE SECOND REPORT. "응답 이후에 새로운 요청을 하면 스크롤해야 응답을 볼 수
+      // 있다" — every so often the transcript came unstuck with nobody touching
+      // it. The scroll event that followed OUR OWN write was the culprit: the
+      // write lands, then a delta, a tool block or a system-event bar lands
+      // before the browser dispatches that event, and by the time the handler
+      // measures, the bottom has moved past the tolerance. The old rule read
+      // any not-at-bottom scroll as the user reading history, and from there
+      // "reading history is sacred" kept the view exactly where it was.
+      //
+      // The tell is DIRECTION. A user reading history moves the viewport UP;
+      // our writes only ever move it down, and content growing under a write
+      // leaves it where the write put it. So a scroll that did not move up,
+      // from a pinned state, is content outrunning us — and the answer is to
+      // write again, which is not fighting anyone's wheel.
+      const movedUp = m.scrollTop < prev.scrollTop;
+      if (movedUp || !prev.stuck) {
+        return {
+          state: { stuck: false, pending: prev.pending, travelling: false, ...measured },
+          // Never write for a user's own scroll.
+          write: 'none',
+        };
+      }
+      if (prev.travelling) {
+        // The smooth jump's own progress. Let it arrive.
+        return { state: { ...prev, ...measured }, write: 'none' };
+      }
+      return { state: { stuck: true, pending: false, travelling: false, ...measured }, write: 'instant' };
+    }
+    case 'wrote':
+      return { state: { ...prev, scrollTop: ev.scrollTop }, write: 'none' };
+    case 'arrived': {
+      const m = ev.metrics;
+      if (m.clientHeight === 0) return { state: { ...prev, travelling: false }, write: 'none' };
+      const measured = { height: m.scrollHeight, scrollTop: m.scrollTop };
+      // Content that grew while the animation was in flight was deliberately
+      // not chased (see `content`); one corrective hop now, if it is owed.
+      const short = prev.stuck && !isAtBottom(m, tolerance);
+      return { state: { ...prev, travelling: false, ...measured }, write: short ? 'instant' : 'none' };
     }
     case 'content': {
-      if (ev.metrics.clientHeight === 0) return { state: prev, write: 'none' };
-      const grew = ev.metrics.scrollHeight > prev.height;
+      const m = ev.metrics;
+      if (m.clientHeight === 0) return { state: prev, write: 'none' };
+      const grew = m.scrollHeight > prev.height;
+      const measured = { height: m.scrollHeight, scrollTop: m.scrollTop };
       if (prev.stuck) {
         return {
-          state: { stuck: true, pending: false, height: ev.metrics.scrollHeight },
+          state: { stuck: true, pending: false, travelling: prev.travelling, ...measured },
           // `instant`, never `smooth`: a smooth scroll restarted by every
           // 50ms delta flush never arrives, which looks exactly like the
-          // stuck-in-the-middle bug this replaces.
-          write: grew ? 'instant' : 'none',
+          // stuck-in-the-middle bug this replaces. And nothing at all while a
+          // jump is travelling — `arrived` settles whatever it missed.
+          write: grew && !prev.travelling ? 'instant' : 'none',
         };
       }
       return {
-        state: { stuck: false, pending: prev.pending || grew, height: ev.metrics.scrollHeight },
+        state: { stuck: false, pending: prev.pending || grew, travelling: false, ...measured },
         write: 'none',
       };
     }
     case 'viewport': {
-      if (ev.metrics.clientHeight === 0) return { state: prev, write: 'none' };
+      const m = ev.metrics;
+      if (m.clientHeight === 0) return { state: prev, write: 'none' };
       if (prev.stuck) {
         // Pinned, and the floor just rose. Re-pin unconditionally — NOT on a
         // `grew` test: a viewport shrink leaves `scrollHeight` exactly where it
         // was, which is the whole reason the content observer misses this.
         return {
-          state: { stuck: true, pending: false, height: ev.metrics.scrollHeight },
-          write: 'instant',
+          state: { ...prev, pending: false, height: m.scrollHeight, scrollTop: m.scrollTop },
+          write: prev.travelling ? 'none' : 'instant',
         };
       }
       // Scrolled up and reading. `scrollTop` is measured from the TOP, so a
@@ -168,14 +239,14 @@ export function reduceStick(
       // NOT re-derived from `isAtBottom` either: shrinking the viewport pushes
       // the distance-from-bottom up by the same pixels, which would spuriously
       // unstick a user who had never scrolled at all.
-      return { state: { ...prev, height: ev.metrics.scrollHeight }, write: 'none' };
+      return { state: { ...prev, height: m.scrollHeight, scrollTop: m.scrollTop }, write: 'none' };
     }
     case 'send':
-      return { state: { stuck: true, pending: false, height: prev.height }, write: 'instant' };
+      return { state: { ...prev, stuck: true, pending: false, travelling: false }, write: 'instant' };
     case 'jump':
       // Smooth here and only here: one deliberate click, so the animation
       // carries the sense of travel instead of teleporting the user.
-      return { state: { stuck: true, pending: false, height: prev.height }, write: 'smooth' };
+      return { state: { ...prev, stuck: true, pending: false, travelling: true }, write: 'smooth' };
     case 'reset':
       return { state: { ...initialStickState }, write: 'instant' };
   }

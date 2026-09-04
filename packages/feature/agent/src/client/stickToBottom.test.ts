@@ -82,7 +82,7 @@ describe('reduceStick — pinned at the bottom', () => {
   it('THE REPORT: a growth with no new message still scrolls', () => {
     // One assistant bubble, already on screen, now being filled token by token.
     // The array length is identical across all of these; only the box grows.
-    let state: StickState = { stuck: true, pending: false, height: 900 };
+    let state: StickState = { stuck: true, pending: false, height: 900, scrollTop: 400, travelling: false };
     for (const h of [980, 1100, 1400, 2000]) {
       const d = reduceStick(state, { kind: 'content', metrics: metrics(h - 500, h) });
       expect(d.write).toBe('instant');
@@ -95,7 +95,7 @@ describe('reduceStick — pinned at the bottom', () => {
   it('writes instantly, never smoothly, while streaming', () => {
     // A smooth scroll restarted by every 50ms delta flush never arrives —
     // which looks exactly like the bug being fixed.
-    const d = reduceStick({ stuck: true, pending: false, height: 900 }, {
+    const d = reduceStick({ stuck: true, pending: false, height: 900, scrollTop: 400, travelling: false }, {
       kind: 'content',
       metrics: metrics(400, 1000),
     });
@@ -105,7 +105,7 @@ describe('reduceStick — pinned at the bottom', () => {
   it('a re-measure of unchanged content writes nothing', () => {
     // A reconcile that swaps live ids for canonical uuids changes the array
     // but not the layout; scrolling for it would be a pointless write.
-    const d = reduceStick({ stuck: true, pending: false, height: 1000 }, {
+    const d = reduceStick({ stuck: true, pending: false, height: 1000, scrollTop: 500, travelling: false }, {
       kind: 'content',
       metrics: metrics(500, 1000),
     });
@@ -115,15 +115,21 @@ describe('reduceStick — pinned at the bottom', () => {
 });
 
 describe('reduceStick — the user scrolled up', () => {
+  // Pinned at the bottom of a 2000px transcript and MEASURED there — the state
+  // every scroll-up below starts from. (The pristine `initialStickState` has
+  // never been measured, and a scroll away from it cannot be told from the
+  // reset write landing.)
+  const AT_BOTTOM: StickState = { ...initialStickState, height: 2000, scrollTop: 1500 };
+
   it('scrolling up detaches the stick and moves nothing', () => {
-    const d = reduceStick(initialStickState, { kind: 'scroll', metrics: metrics(200, 2000) });
+    const d = reduceStick(AT_BOTTOM, { kind: 'scroll', metrics: metrics(200, 2000) });
     expect(d.state.stuck).toBe(false);
     expect(d.write).toBe('none');
   });
 
   it('READING HISTORY IS SACRED: growth while detached never writes', () => {
     const { state, write } = run(
-      initialStickState,
+      AT_BOTTOM,
       { kind: 'scroll', metrics: metrics(200, 2000) },
       { kind: 'content', metrics: metrics(200, 2600) },
       { kind: 'content', metrics: metrics(200, 3200) },
@@ -134,7 +140,7 @@ describe('reduceStick — the user scrolled up', () => {
 
   it('growth while detached raises the chip', () => {
     const { state } = run(
-      initialStickState,
+      AT_BOTTOM,
       { kind: 'scroll', metrics: metrics(200, 2000) },
       { kind: 'content', metrics: metrics(200, 2600) },
     );
@@ -144,13 +150,13 @@ describe('reduceStick — the user scrolled up', () => {
   it('scrolled up with NOTHING new offers no chip', () => {
     // There is nothing to jump TO yet — the plain jump-to-latest control still
     // covers "take me back down", but a "new response" chip would be a lie.
-    const { state } = run(initialStickState, { kind: 'scroll', metrics: metrics(200, 2000) });
+    const { state } = run(AT_BOTTOM, { kind: 'scroll', metrics: metrics(200, 2000) });
     expect(shouldShowJumpChip(state)).toBe(false);
   });
 
   it('a scroll that does not reach the bottom keeps the chip up', () => {
     const { state } = run(
-      initialStickState,
+      AT_BOTTOM,
       { kind: 'scroll', metrics: metrics(200, 2000) },
       { kind: 'content', metrics: metrics(200, 2600) },
       { kind: 'scroll', metrics: metrics(900, 2600) },
@@ -161,7 +167,7 @@ describe('reduceStick — the user scrolled up', () => {
 
   it('scrolling back down by hand re-engages the stick and clears the chip', () => {
     const { state } = run(
-      initialStickState,
+      AT_BOTTOM,
       { kind: 'scroll', metrics: metrics(200, 2000) },
       { kind: 'content', metrics: metrics(200, 2600) },
       { kind: 'scroll', metrics: metrics(2100, 2600) },
@@ -172,7 +178,7 @@ describe('reduceStick — the user scrolled up', () => {
 
   it('the chip re-engages the stick, and travels smoothly', () => {
     const detached = run(
-      initialStickState,
+      AT_BOTTOM,
       { kind: 'scroll', metrics: metrics(200, 2000) },
       { kind: 'content', metrics: metrics(200, 2600) },
     ).state;
@@ -180,8 +186,136 @@ describe('reduceStick — the user scrolled up', () => {
     expect(d.write).toBe('smooth');
     expect(d.state.stuck).toBe(true);
     expect(shouldShowJumpChip(d.state)).toBe(false);
-    // …and from there the next delta follows the answer again.
-    expect(reduceStick(d.state, { kind: 'content', metrics: metrics(2200, 3000) }).write).toBe('instant');
+    // A delta while the animation is still travelling is not chased (it would
+    // cut the travel short); the arrival settles it, and from there the next
+    // delta follows the answer again.
+    expect(reduceStick(d.state, { kind: 'content', metrics: metrics(2200, 3000) }).write).toBe('none');
+    const landed = run(
+      d.state,
+      { kind: 'content', metrics: metrics(2200, 3000) },
+      { kind: 'arrived', metrics: metrics(2100, 3000) },
+    );
+    expect(landed.write).toBe('instant');
+    expect(reduceStick(landed.state, { kind: 'content', metrics: metrics(2500, 3400) }).write).toBe('instant');
+  });
+});
+
+describe('reduceStick — our own write, outrun by the content', () => {
+  // THE SECOND REPORT. "응답 이후에 새로운 요청을 하면 스크롤해야 응답을 볼 수 있다."
+  // The list came unstuck with nobody touching it. The scroll event that
+  // follows a programmatic write is dispatched a frame later, and by then a
+  // delta, a tool block or a system-event bar has landed below the write —
+  // so the handler measured "not at the bottom" and read it as the user
+  // reading history. From there nothing ever moved the view again.
+  const pinned: StickState = { ...initialStickState, height: 2000, scrollTop: 1500 };
+
+  it('THE REPORT: a scroll event that did not move up, from a pinned list, re-pins', () => {
+    const { state, write } = run(
+      pinned,
+      { kind: 'content', metrics: metrics(1500, 2600) }, // grew → instant write
+      { kind: 'wrote', scrollTop: 2100 },                // the browser landed here
+      { kind: 'scroll', metrics: metrics(2100, 2800) },  // …and 200px more arrived first
+    );
+    expect(state.stuck).toBe(true);
+    expect(shouldShowJumpChip(state)).toBe(false);
+    expect(write).toBe('instant');
+  });
+
+  it('a wheel up straight after the write still detaches', () => {
+    const { state, write } = run(
+      pinned,
+      { kind: 'wrote', scrollTop: 2100 },
+      { kind: 'scroll', metrics: metrics(1900, 2800) },
+    );
+    expect(state.stuck).toBe(false);
+    expect(write).toBe('none');
+  });
+
+  it('a wheel up that coalesced with the write is a wheel up', () => {
+    // The browser folds a write and a wheel in the same frame into one event;
+    // it reports less than the write, which is the user speaking.
+    const { state } = run(
+      pinned,
+      { kind: 'content', metrics: metrics(1500, 2600) },
+      { kind: 'wrote', scrollTop: 2100 },
+      { kind: 'scroll', metrics: metrics(1950, 2600) },
+    );
+    expect(state.stuck).toBe(false);
+  });
+
+  it('the clamp after content shrinks keeps the stick', () => {
+    // The thinking bubble goes, the browser pulls scrollTop back to the new
+    // maximum. Down in absolute terms, but at the bottom.
+    const d = reduceStick(pinned, { kind: 'scroll', metrics: metrics(1200, 1700) });
+    expect(d.state.stuck).toBe(true);
+    expect(d.write).toBe('none');
+  });
+
+  it('wheeling down toward the bottom while detached stays detached', () => {
+    const reading: StickState = { stuck: false, pending: true, height: 2000, scrollTop: 200, travelling: false };
+    const d = reduceStick(reading, { kind: 'scroll', metrics: metrics(600, 2000) });
+    expect(d.state.stuck).toBe(false);
+    expect(shouldShowJumpChip(d.state)).toBe(true);
+    expect(d.write).toBe('none');
+  });
+});
+
+describe('reduceStick — a smooth jump travels, then arrives', () => {
+  const reading: StickState = { stuck: false, pending: true, height: 2000, scrollTop: 200, travelling: false };
+
+  it('its own scroll events do not cut it short', () => {
+    const { state, write } = run(
+      reading,
+      { kind: 'jump' },
+      { kind: 'scroll', metrics: metrics(600, 2000) },
+      { kind: 'scroll', metrics: metrics(1100, 2000) },
+    );
+    expect(state.stuck).toBe(true);
+    expect(state.travelling).toBe(true);
+    expect(write).toBe('none');
+  });
+
+  it('reaching the bottom ends the journey', () => {
+    const { state } = run(reading, { kind: 'jump' }, { kind: 'scroll', metrics: metrics(1500, 2000) });
+    expect(state.travelling).toBe(false);
+    expect(state.stuck).toBe(true);
+  });
+
+  it('growth in flight is not chased, and is corrected on arrival', () => {
+    const inFlight = run(
+      reading,
+      { kind: 'jump' },
+      { kind: 'scroll', metrics: metrics(600, 2000) },
+      { kind: 'content', metrics: metrics(600, 2600) },
+    );
+    expect(inFlight.write).toBe('none');
+    const landed = reduceStick(inFlight.state, { kind: 'arrived', metrics: metrics(1500, 2600) });
+    expect(landed.state.travelling).toBe(false);
+    expect(landed.write).toBe('instant');
+  });
+
+  it('an arrival the tab could not measure still ends the journey', () => {
+    // The tab was hidden before the animation finished. Left "travelling",
+    // every later growth would be silently unchased — pinned, so no chip.
+    const { state, write } = run(
+      reading,
+      { kind: 'jump' },
+      { kind: 'arrived', metrics: metrics(0, 0, 0) },
+    );
+    expect(state.travelling).toBe(false);
+    expect(state.stuck).toBe(true);
+    expect(write).toBe('none');
+  });
+
+  it('a wheel up mid-flight is the user, and wins', () => {
+    const { state } = run(
+      reading,
+      { kind: 'jump' },
+      { kind: 'scroll', metrics: metrics(600, 2000) },
+      { kind: 'scroll', metrics: metrics(400, 2000) },
+    );
+    expect(state.stuck).toBe(false);
+    expect(state.travelling).toBe(false);
   });
 });
 
@@ -201,7 +335,7 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
 
   it('THE REPORT: a pinned list re-pins when the composer takes 124px', () => {
     // Pinned at the bottom of a 500px viewport over 2000px of transcript…
-    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    const pinned: StickState = { stuck: true, pending: false, height: 2000, scrollTop: 1500, travelling: false };
     // …the composer grows from 1 line to 10, so the viewport is now 376px. The
     // content did not move: scrollHeight is still 2000, scrollTop still 1500.
     const d = reduceStick(pinned, { kind: 'viewport', metrics: metrics(1500, 2000, 376) });
@@ -213,7 +347,7 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
     // The same measurements as a `content` event: no growth, so no write. This
     // is why a separate event kind exists rather than another call into the old
     // one.
-    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    const pinned: StickState = { stuck: true, pending: false, height: 2000, scrollTop: 1500, travelling: false };
     expect(reduceStick(pinned, { kind: 'content', metrics: metrics(1500, 2000, 376) }).write).toBe('none');
   });
 
@@ -222,7 +356,7 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
     // `stuck` from the metrics here would detach a pinned list for the crime of
     // typing a second line, and the next delta would raise a "new response"
     // chip for an answer already on screen.
-    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    const pinned: StickState = { stuck: true, pending: false, height: 2000, scrollTop: 1500, travelling: false };
     const d = reduceStick(pinned, { kind: 'viewport', metrics: metrics(1500, 2000, 376) });
     expect(d.state.stuck).toBe(true);
     expect(shouldShowJumpChip(d.state)).toBe(false);
@@ -231,7 +365,7 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
   it('READING HISTORY IS STILL SACRED: no write while scrolled up', () => {
     // scrollTop is measured from the TOP, so a shorter viewport does not move
     // what they are reading. Any correction would.
-    const reading: StickState = { stuck: false, pending: true, height: 2000 };
+    const reading: StickState = { stuck: false, pending: true, height: 2000, scrollTop: 400, travelling: false };
     const d = reduceStick(reading, { kind: 'viewport', metrics: metrics(400, 2000, 376) });
     expect(d.write).toBe('none');
     expect(d.state.stuck).toBe(false);
@@ -242,7 +376,7 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
   it('a reflow caused by the resize is not mistaken for new content', () => {
     // A width change rewraps the transcript, so scrollHeight moves without a
     // single new token. Re-baselining here keeps that out of the `grew` test.
-    const reading: StickState = { stuck: false, pending: false, height: 2000 };
+    const reading: StickState = { stuck: false, pending: false, height: 2000, scrollTop: 400, travelling: false };
     const after = reduceStick(reading, { kind: 'viewport', metrics: metrics(400, 2200, 376) }).state;
     expect(after.height).toBe(2200);
     expect(shouldShowJumpChip(after)).toBe(false);
@@ -250,12 +384,12 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
 
   it('the composer collapsing again re-pins too', () => {
     // Send clears the input, the box returns to one line, the viewport grows.
-    const pinned: StickState = { stuck: true, pending: false, height: 2000 };
+    const pinned: StickState = { stuck: true, pending: false, height: 2000, scrollTop: 1500, travelling: false };
     expect(reduceStick(pinned, { kind: 'viewport', metrics: metrics(1500, 2000, 500) }).write).toBe('instant');
   });
 
   it('a hidden tab is not measured here either', () => {
-    const detached: StickState = { stuck: false, pending: true, height: 2600 };
+    const detached: StickState = { stuck: false, pending: true, height: 2600, scrollTop: 200, travelling: false };
     const d = reduceStick(detached, { kind: 'viewport', metrics: metrics(0, 0, 0) });
     expect(d.state).toEqual(detached);
     expect(d.write).toBe('none');
@@ -265,7 +399,7 @@ describe('reduceStick — the viewport shrank under a growing composer', () => {
 describe('reduceStick — send', () => {
   it('sending pins, whatever the user was reading', () => {
     const detached = run(
-      initialStickState,
+      { ...initialStickState, height: 4000, scrollTop: 3500 },
       { kind: 'scroll', metrics: metrics(0, 4000) },
       { kind: 'content', metrics: metrics(0, 4400) },
     ).state;
@@ -286,14 +420,14 @@ describe('reduceStick — a hidden tab is not measured', () => {
   const hidden = metrics(0, 0, 0);
 
   it('a content event from a hidden tab changes nothing', () => {
-    const detached: StickState = { stuck: false, pending: true, height: 2600 };
+    const detached: StickState = { stuck: false, pending: true, height: 2600, scrollTop: 200, travelling: false };
     const d = reduceStick(detached, { kind: 'content', metrics: hidden });
     expect(d.state).toEqual(detached);
     expect(d.write).toBe('none');
   });
 
   it('a scroll event from a hidden tab changes nothing', () => {
-    const detached: StickState = { stuck: false, pending: true, height: 2600 };
+    const detached: StickState = { stuck: false, pending: true, height: 2600, scrollTop: 200, travelling: false };
     const d = reduceStick(detached, { kind: 'scroll', metrics: hidden });
     expect(d.state).toEqual(detached);
     expect(d.write).toBe('none');
@@ -302,7 +436,7 @@ describe('reduceStick — a hidden tab is not measured', () => {
 
 describe('reduceStick — reset', () => {
   it('a fresh transcript lands at the newest message', () => {
-    const d = reduceStick({ stuck: false, pending: true, height: 9000 }, { kind: 'reset' });
+    const d = reduceStick({ stuck: false, pending: true, height: 9000, scrollTop: 200, travelling: false }, { kind: 'reset' });
     expect(d.state).toEqual(initialStickState);
     expect(d.write).toBe('instant');
   });

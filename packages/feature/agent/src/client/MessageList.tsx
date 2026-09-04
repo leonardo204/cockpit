@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { formatElapsed } from './elapsed';
 import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './types';
 import { MessageBubble } from './MessageBubble';
@@ -250,6 +250,25 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
   }, []);
 
+  /** `dispatchStick`, reachable from the write path defined before it. */
+  const dispatchRef = useRef<(ev: StickEvent) => void>(() => {});
+  /** The smooth jump's arrival watch — `scrollend`, with a timer behind it. */
+  const arrivalRef = useRef<{ cancel: () => void } | null>(null);
+
+  /**
+   * Pin the container to its bottom NOW, and tell the machine where it landed.
+   *
+   * The landing position is what lets the next scroll event be recognised as
+   * ours rather than the user's — the second report in stickToBottom.ts. It is
+   * read back after the write because the browser clamps it.
+   */
+  const pinNow = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickRef.current = reduceStick(stickRef.current, { kind: 'wrote', scrollTop: el.scrollTop }).state;
+  }, []);
+
   /** Perform a scroll write, at most one per frame while streaming. */
   const applyWrite = useCallback((write: ScrollWrite) => {
     if (write === 'none') return;
@@ -263,6 +282,32 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         rafRef.current = null;
       }
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      // Watch for it to land. `scrollend` is the browser's own word for it;
+      // the timer is for a browser without one, and for a jump so short no
+      // scroll fires at all. Either way the machine hears `arrived` once.
+      arrivalRef.current?.cancel();
+      const el = containerRef.current;
+      let done = false;
+      const arrive = () => {
+        if (done) return;
+        done = true;
+        cleanup();
+        // ALWAYS delivered, even unmeasurable. A tab hidden inside the window
+        // would otherwise never hear it, and a jump left "travelling" forever
+        // suppresses every follow after it — with no chip, because the list
+        // still believes it is pinned. The machine treats 0/0/0 as "the
+        // journey is over, nothing to correct".
+        const metrics = readMetrics() ?? { scrollTop: 0, scrollHeight: 0, clientHeight: 0 };
+        dispatchRef.current({ kind: 'arrived', metrics });
+      };
+      const timer = setTimeout(arrive, 1000);
+      const cleanup = () => {
+        clearTimeout(timer);
+        el?.removeEventListener('scrollend', arrive);
+        arrivalRef.current = null;
+      };
+      el?.addEventListener('scrollend', arrive);
+      arrivalRef.current = { cancel: () => { done = true; cleanup(); } };
       return;
     }
     // rAF-throttled: deltas flush every 50ms and a subagent block can grow
@@ -274,10 +319,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       // Re-check: the user may have grabbed the wheel between the growth and
       // this frame, and a queued write must never overrule that.
       if (!stickRef.current.stuck || !isActiveRef.current) return;
-      const el = containerRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      pinNow();
     });
-  }, []);
+  }, [pinNow, readMetrics]);
 
   /** Feed one event to the state machine and reflect the result. */
   const dispatchStick = useCallback((ev: StickEvent) => {
@@ -287,6 +331,9 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     setShowBottomButton(!d.state.stuck);
     applyWrite(d.write);
   }, [applyWrite]);
+  useLayoutEffect(() => {
+    dispatchRef.current = dispatchStick;
+  }, [dispatchStick]);
 
   /** The content box changed size — a delta, a segment, a reconcile, a resize. */
   const handleContentGrowth = useCallback(() => {
@@ -383,6 +430,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   useEffect(() => {
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      arrivalRef.current?.cancel();
     };
   }, []);
 
@@ -468,8 +516,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
         shouldRestoreScrollRef.current = false;
         // Older history was prepended ABOVE the viewport, so the user has not
         // moved and neither has the bottom. Re-baseline the machine's height so
-        // that growth is not mistaken for new content arriving below.
-        stickRef.current = { ...stickRef.current, height: container.scrollHeight };
+        // that growth is not mistaken for new content arriving below, and its
+        // position so the write just made is not read as a scroll up.
+        stickRef.current = {
+          ...stickRef.current,
+          height: container.scrollHeight,
+          scrollTop: container.scrollTop,
+        };
       }
     }
   }, [messages, isLoadingMore]);
@@ -486,11 +539,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     // After layout, so scrollHeight reflects the now-visible content.
     const id = requestAnimationFrame(() => {
       if (!stickRef.current.stuck) return;
-      const container = containerRef.current;
-      if (container) container.scrollTop = container.scrollHeight;
+      pinNow();
     });
     return () => cancelAnimationFrame(id);
-  }, [isActive, messages.length]);
+  }, [isActive, messages.length, pinNow]);
 
   // Initial load: land on the newest message.
   useEffect(() => {
@@ -501,13 +553,12 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     setShowNewChip(false);
     setShowBottomButton(false);
     if (isActive) {
-      const container = containerRef.current;
-      if (container) container.scrollTop = container.scrollHeight;
+      pinNow();
     } else {
       // Tab is hidden — mark that scroll should happen on activation
       owedScrollRef.current = true;
     }
-  }, [messages.length, isActive]);
+  }, [messages.length, isActive, pinNow]);
 
   return (
     <div ref={outerRef} className="relative flex-1 min-h-0 overflow-hidden flex flex-col outline-none" tabIndex={-1} onMouseUp={handleSelectionMouseUp} onMouseDown={handleSelectionMouseDown}>
