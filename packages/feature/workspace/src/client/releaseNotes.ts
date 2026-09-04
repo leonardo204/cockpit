@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.36.2 — 2026-09-04
+
+### en
+
+The conversation keeps following the answer.
+
+**Fixed**
+
+- **The transcript no longer comes unstuck on its own.** Every so often, after you sent a message, the view stopped at the top of the reply and you had to scroll down to read it. The list was mistaking its own scroll for yours: when a large chunk landed in the same instant it moved to the bottom, it concluded you had scrolled up to read history and stopped following. It now tells the two apart by direction — only a scroll UP is you — so it keeps following unless you actually scroll up. Scrolling up to read still leaves the view exactly where you put it.
+- **The "new response" jump lands.** Clicking the chip while the answer was still growing could stop short and detach again; it now finishes the jump and then follows.
+
+### ko
+
+대화창이 답을 계속 따라가요.
+
+**고친 것**
+
+- **대화창이 혼자 멈추던 문제를 고쳤어요.** 가끔 메시지를 보내면 답의 첫머리에서 화면이 멈춰서 스크롤을 내려야 읽을 수 있었어요. 앱이 스스로 내린 스크롤을 사용자가 올린 것으로 잘못 봤기 때문이에요. 맨 아래로 옮기는 순간에 큰 덩어리가 같이 도착하면 "위로 올려서 읽는 중"이라고 판단하고 따라가기를 멈췄어요. 이제 방향으로 구분해요. 위로 올린 것만 사용자의 뜻으로 보니까, 직접 올리지 않는 한 계속 따라가요. 위로 올려서 읽을 때는 지금처럼 화면을 건드리지 않아요.
+- **"새 응답" 칩이 끝까지 내려가요.** 답이 자라는 중에 칩을 누르면 중간에 멈추고 다시 떨어지는 경우가 있었어요. 이제 끝까지 내려간 뒤 따라가요.
+
 ## 1.36.1 — 2026-09-03
 
 ### en
