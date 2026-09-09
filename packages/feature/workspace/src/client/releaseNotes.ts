@@ -85,6 +85,32 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.36.3 — 2026-09-09
+
+### en
+
+Background work is sorted by project, and a wait that is still going says so.
+
+**Improved**
+
+- **The background-jobs list is grouped by project.** Jobs from the project you have open come first, marked "This project"; every other project's jobs sit under their own folder name. Until now one flat list mixed a server job from one project into the view of another, and it read as "something is running here" when nothing was — or the other way round. The number on the button is still the total, so you can tell work is going on somewhere even when none of it is here.
+
+**Fixed**
+
+- **A job that is still waiting no longer says "outcome not recorded".** When the model started a long wait — a Monitor watching a log, a backgrounded command — and then went on talking, the block for that wait dropped to "outcome not recorded" the moment the next sentence began, while the turn kept going for minutes. It now shows "running" with the elapsed time for as long as the turn is actually alive, so "generating…" has something on screen to explain it. Once the turn is over, an unreported job still says so honestly.
+
+### ko
+
+백그라운드 작업이 프로젝트별로 묶이고, 아직 기다리는 중이면 그렇다고 말해요.
+
+**나아진 것**
+
+- **백그라운드 작업 목록이 프로젝트별로 묶여요.** 지금 열어 둔 프로젝트의 작업이 "이 프로젝트" 표시와 함께 맨 위에 오고, 다른 프로젝트의 작업은 각자 폴더 이름 아래에 모여요. 지금까지는 한 목록에 다 섞여 있어서, 다른 프로젝트가 서버에 걸어 둔 작업이 이 프로젝트에서 도는 것처럼 읽혔어요. 버튼의 숫자는 여전히 전체 개수라서, 여기엔 없어도 어딘가에서 일이 돌고 있다는 건 알 수 있어요.
+
+**고친 것**
+
+- **아직 기다리는 중인 작업이 "상태가 기록되지 않았습니다"로 떨어지지 않아요.** 모델이 긴 대기를 걸고(로그를 지켜보는 Monitor, 백그라운드로 보낸 명령) 이어서 말을 계속하면, 그 대기의 블록이 다음 문장이 시작되는 순간 "기록되지 않음"으로 바뀌었어요. 턴은 몇 분씩 더 살아 있는데도요. 이제 턴이 실제로 살아 있는 동안은 "진행 중"과 경과 시간을 보여 줘서, "생성 중…"이 왜 계속되는지 화면에서 알 수 있어요. 턴이 끝난 뒤 결과를 못 들은 작업은 지금처럼 솔직하게 모른다고 말해요.
+
 ## 1.36.2 — 2026-09-04
 
 ### en
