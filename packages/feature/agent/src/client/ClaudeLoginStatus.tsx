@@ -63,6 +63,33 @@ type ClaudeLogin = {
   account?: ClaudeAccount | null;
 };
 
+/** One Claude subscription naby keeps, as `/api/naby` describes it. An OPAQUE id
+ *  and identity labels — never a path (claude-multi-account §5.6). `emailHint` is
+ *  the identity read straight from the account's own file, so a row shows WHO it
+ *  is before a `verify` has confirmed it and written `email` back. */
+type ClaudeAccountRow = {
+  id: string;
+  email: string | null;
+  emailHint: string | null;
+  orgName: string | null;
+  subscriptionType: string | null;
+  status: 'signed-in' | 'signed-out' | 'unknown' | string;
+};
+
+/** The account block that rides along on every `/api/naby` GET. Absent from an
+ *  older server, which reads as "one account" and hides the switcher. */
+type ClaudeAccountsBlock = {
+  /** False when this computer cannot keep sign-ins apart (§5.3) — the switcher
+   *  then does not appear, exactly as the settings card hides its section. */
+  supported: boolean;
+  /** null = "this computer's own sign-in", i.e. single-account behaviour. */
+  activeId: string | null;
+  accounts: ClaudeAccountRow[];
+  /** The machine's own sign-in identity, read from its file so the default row
+   *  can name WHO it is rather than only "this computer". */
+  machineDefault: { email: string | null; orgName: string | null; subscriptionType: string | null } | null;
+};
+
 /** Deliberately unhurried background poll: this covers only "the token expired
  *  while the user sat here", which takes hours. Focus + the login poll catch a
  *  fresh sign-in far sooner. */
@@ -80,6 +107,12 @@ const LOGIN_COMMAND = 'claude auth login';
 export function ClaudeLoginStatus() {
   const { t } = useTranslation();
   const [login, setLogin] = useState<ClaudeLogin | null>(null);
+  // The account list, from the same GET. Drives the switcher; null on an older
+  // server, which correctly shows no switcher.
+  const [accounts, setAccounts] = useState<ClaudeAccountsBlock | null>(null);
+  // A calm, non-error note shown after a mid-turn switch: the new account answers
+  // from the NEXT turn (claude-multi-account §5.4). Cleared on the next action.
+  const [switchInfo, setSwitchInfo] = useState<string | null>(null);
   const [rechecking, setRechecking] = useState(false);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -95,6 +128,12 @@ export function ClaudeLoginStatus() {
   const rootRef = useRef<HTMLSpanElement>(null);
   // A login poll in flight, so a second click (or unmount) can cancel it.
   const loginPollRef = useRef(false);
+  // The latest account block, read inside the add-account poll without a stale
+  // closure over `accounts`.
+  const accountsRef = useRef<ClaudeAccountsBlock | null>(null);
+  useEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
 
   // Returns the freshly-fetched login so callers (the login poll) can inspect it
   // without waiting for React state to settle.
@@ -102,10 +141,16 @@ export function ClaudeLoginStatus() {
     try {
       const res = await fetch(`/api/naby${force ? '?recheckLogin=1' : ''}`);
       if (!res.ok) return null;
-      const data = (await res.json()) as { claudeLogin?: ClaudeLogin };
+      const data = (await res.json()) as {
+        claudeLogin?: ClaudeLogin;
+        claudeAccounts?: ClaudeAccountsBlock;
+      };
       // An older server (or a build without the runtime) simply omits the
       // field; rendering nothing is the correct degradation.
       if (aliveRef.current && data.claudeLogin) setLogin(data.claudeLogin);
+      // The account block rides on the same poll (a settings read, no process),
+      // so the switcher stays current at no extra cost.
+      if (aliveRef.current) setAccounts(data.claudeAccounts ?? null);
       return data.claudeLogin ?? null;
     } catch {
       // A failed poll keeps the last known answer. The send path surfaces any
@@ -230,6 +275,100 @@ export function ClaudeLoginStatus() {
     }
   }, [load]);
 
+  // Switch which Claude account answers. Accepted even mid-turn (§5.4): the reply
+  // carries `appliesNextTurn`, and if so we say the new account answers from the
+  // next turn rather than pretending it is already live. `id` is '' for the
+  // machine's own sign-in — the way back to single-account behaviour.
+  const switchAccount = useCallback(
+    async (id: string) => {
+      setBusy(true);
+      setSwitchInfo(null);
+      try {
+        const res = await fetch('/api/naby', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'claude-account.select', accountId: id }),
+        });
+        const body = (await res.json().catch(() => null)) as {
+          ok?: boolean;
+          appliesNextTurn?: boolean;
+        } | null;
+        // Cache was reset server-side; a forced re-check reflects the newly
+        // selected account's identity rather than a 10s-stale answer.
+        if (res.ok) await load(true);
+        if (aliveRef.current && body?.appliesNextTurn) {
+          setSwitchInfo(t('claudeAccount.appliesNextTurn'));
+        }
+      } catch {
+        // Leave the menu open so the user can retry; the next re-check corrects
+        // whatever the display shows.
+      } finally {
+        if (aliveRef.current) setBusy(false);
+      }
+    },
+    [load, t],
+  );
+
+  // Add a brand-new account: mint the namespace and launch its browser sign-in,
+  // then poll until the sign-in lands (same contract as `doLogin`). This is how a
+  // user logs in a SECOND account without leaving the chat bar.
+  const addAccount = useCallback(async () => {
+    setLoginError(null);
+    setLoginDocsUrl(null);
+    setSwitchInfo(null);
+    setLoggingIn(true);
+    loginPollRef.current = true;
+    try {
+      const res = await fetch('/api/naby', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'claude-account.add' }),
+      });
+      const body = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        accountId?: string;
+        error?: string;
+        errorHeadline?: string;
+        errorKey?: string;
+        installHelp?: { docsUrl?: string } | null;
+      } | null;
+      if (!res.ok || !body?.accountId) {
+        if (aliveRef.current) {
+          setLoginError(
+            body?.errorKey
+              ? t(body.errorKey)
+              : (body?.errorHeadline ?? body?.error ?? t('claudeAccount.login')),
+          );
+          setLoginDocsUrl(body?.installHelp?.docsUrl ?? null);
+          setLoggingIn(false);
+        }
+        loginPollRef.current = false;
+        return;
+      }
+      const accountId = body.accountId;
+      await load(true);
+      // Poll that account's own namespace until the OAuth callback completes.
+      for (let i = 0; i < LOGIN_POLL_MAX && loginPollRef.current && aliveRef.current; i++) {
+        await fetch('/api/naby', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'claude-account.verify', accountId }),
+        }).catch(() => undefined);
+        const fresh = await load(true);
+        void fresh;
+        if (aliveRef.current && accountsRef.current?.accounts.find((a) => a.id === accountId)?.status === 'signed-in') {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, LOGIN_POLL_MS));
+      }
+    } catch {
+      if (aliveRef.current) setLoginError(t('claudeAccount.login'));
+    } finally {
+      loginPollRef.current = false;
+      if (aliveRef.current) setLoggingIn(false);
+    }
+  }, [load, t]);
+
   const copyCommand = useCallback(async () => {
     try {
       await navigator.clipboard.writeText(LOGIN_COMMAND);
@@ -334,7 +473,7 @@ export function ClaudeLoginStatus() {
         <div
           role="menu"
           data-testid="claude-account-menu"
-          className="absolute top-full left-0 mt-1 z-50 w-72 rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-3 flex flex-col gap-2"
+          className="absolute top-full left-0 mt-1 z-50 w-80 max-h-[70vh] overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-3 flex flex-col gap-2"
         >
           {/* WHO — the real identity from `claude auth status`. */}
           <div className="flex flex-col gap-0.5">
@@ -363,6 +502,91 @@ export function ClaudeLoginStatus() {
           </div>
 
           <div className="border-t border-border" />
+
+          {/* SWITCH ACCOUNT — only where this machine can keep sign-ins apart
+              (§5.3). Selecting is accepted even mid-turn; §5.4's lag is disclosed
+              by `switchInfo`, never refused. Adding an account is how a user
+              signs a SECOND account in from the chat bar itself. */}
+          {accounts?.supported && (
+            <>
+              {accounts.accounts.length > 0 && (
+                <div className="flex flex-col gap-1" data-testid="claude-account-switcher">
+                  <span className="text-[0.786rem] uppercase tracking-wide text-muted-foreground">
+                    {t('claudeAccount.switchAccount')}
+                  </span>
+                  {[
+                    {
+                      id: '',
+                      active: accounts.activeId === null,
+                      main: accounts.machineDefault?.email ?? t('claudeAccount.machineDefault'),
+                      sub: accounts.machineDefault?.email ? t('claudeAccount.machineDefault') : null,
+                    },
+                    ...accounts.accounts.map((a) => ({
+                      id: a.id,
+                      active: accounts.activeId === a.id,
+                      main: a.email ?? a.emailHint ?? t('claudeAccount.notSignedIn'),
+                      sub:
+                        a.status !== 'signed-in'
+                          ? t('claudeAccount.signInNeeded')
+                          : (a.orgName ?? null),
+                    })),
+                  ].map((row) => (
+                    <button
+                      key={row.id || 'machine-default'}
+                      type="button"
+                      onClick={() => void switchAccount(row.id)}
+                      disabled={busy || row.active}
+                      data-testid={`claude-account-switch-${row.id || 'default'}`}
+                      className={`text-left px-2 py-1 rounded border transition-colors disabled:cursor-default ${
+                        row.active
+                          ? 'border-brand bg-brand/5'
+                          : 'border-border hover:bg-accent disabled:opacity-50'
+                      }`}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate text-foreground">{row.main}</span>
+                        {row.active && (
+                          <span className="shrink-0 text-[0.786rem] text-brand">
+                            {t('claudeAccount.active')}
+                          </span>
+                        )}
+                      </span>
+                      {row.sub && (
+                        <span className="block truncate text-[0.786rem] text-muted-foreground">
+                          {row.sub}
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {switchInfo && (
+                <span
+                  className="text-[0.786rem] text-muted-foreground"
+                  data-testid="claude-account-switch-info"
+                >
+                  {switchInfo}
+                </span>
+              )}
+
+              <button
+                type="button"
+                onClick={() => void addAccount()}
+                disabled={loggingIn || busy}
+                data-testid="claude-account-add"
+                className="text-left px-2 py-1 rounded border border-border text-muted-foreground hover:bg-accent disabled:opacity-50"
+              >
+                {loggingIn
+                  ? t('claudeAccount.waitingForBrowser', {
+                      defaultValue: 'Waiting for browser sign-in…',
+                    })
+                  : t('claudeAccount.addAccount')}
+              </button>
+
+              <div className="border-t border-border" />
+            </>
+          )}
 
           {/* WHAT YOU CAN DO — depends on the current state. */}
           {signedIn ? (

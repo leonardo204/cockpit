@@ -743,7 +743,14 @@
     "copy": "복사",
     "copied": "복사됨",
     "recheck": "다시 확인",
-    "checking": "확인 중…"
+    "checking": "확인 중…",
+    "switchAccount": "계정 전환",
+    "machineDefault": "이 컴퓨터의 로그인",
+    "addAccount": "계정 추가",
+    "active": "사용 중",
+    "signInNeeded": "로그인 필요",
+    "appliesNextTurn": "지금 답변 중이라 이 계정은 다음 턴부터 답합니다.",
+    "notIsolated": "이 컴퓨터는 Claude 로그인을 한곳에만 보관해 계정을 더 둘 수 없습니다."
   },
   "claudeInstall": {
     "missing": "이 컴퓨터에 Claude Code가 설치되어 있지 않습니다.",
@@ -775,6 +782,10 @@
     "notSignedIn": "아직 로그인하지 않음",
     "signInNeeded": "로그인이 끝나지 않음",
     "busy": "아직 답변이 작성 중입니다. 끝난 뒤에 계정을 바꿔 주세요.",
+    "busyRemove": "아직 답변이 작성 중입니다. 끝난 뒤에 이 계정을 삭제해 주세요.",
+    "appliesNextTurn": "지금 답변 중이라 이 계정은 다음 턴부터 답합니다.",
+    "recheck": "다시 확인",
+    "rechecking": "확인 중…",
     "notIsolated": "이 컴퓨터는 Claude 로그인을 한곳에만 보관하므로 계정을 더 추가해도 같은 계정이 됩니다. 여기서는 여러 계정을 쓸 수 없습니다."
   },
   "engineSwitcher": {

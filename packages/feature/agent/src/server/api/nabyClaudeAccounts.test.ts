@@ -110,6 +110,37 @@ describe('GET /api/naby — the Claude account block', () => {
     expect(state.claudeAccounts.supported).toBe(false);
     expect(state.claudeAccounts.isolation).toBe('broken');
   });
+
+  it('carries the machine default identity so two max-plan sign-ins are told apart (§5.6)', async () => {
+    // The machine default's identity comes from its `.claude.json`, read WITHOUT a
+    // process. Point the default config dir at a throwaway folder and write one
+    // there; with CLAUDE_CONFIG_DIR set, the identity file lives INSIDE it (that
+    // relocation is the whole multi-account mechanism), which is where
+    // `describeClaudeAccounts` reads it from — so this needs no real ~/.claude.
+    const dir = mkdtempSync(join(tmpdir(), 'naby-machine-default-'));
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = dir;
+    try {
+      writeFileSync(
+        join(dir, '.claude.json'),
+        JSON.stringify({
+          oauthAccount: {
+            accountUuid: 'uuid-machine',
+            emailAddress: 'machine@example.com',
+            organizationName: 'Machine Org',
+          },
+        }),
+      );
+      const state = await readNabyState(null);
+      expect(state.claudeAccounts.machineDefault?.email).toBe('machine@example.com');
+      expect(state.claudeAccounts.machineDefault?.orgName).toBe('Machine Org');
+      // §5.6 — the identity crosses the wire but its folder never does.
+      expect(JSON.stringify(state.claudeAccounts)).not.toContain(dir);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+    }
+  });
 });
 
 describe('POST /api/naby — claude-account.select', () => {
@@ -130,7 +161,7 @@ describe('POST /api/naby — claude-account.select', () => {
     expect(result.claudeAccounts?.activeId).toBeNull();
   });
 
-  it('refuses a switch while a turn is still being written, and allows it once idle (§5.4)', async () => {
+  it('ACCEPTS a switch mid-turn and discloses the next-turn lag (§5.4)', async () => {
     // A REAL account row, made the way the app makes one: the fake CLI reports a
     // brand-new folder as signed out (so isolation reads ok) and its `auth login`
     // exits immediately instead of opening a browser.
@@ -140,33 +171,58 @@ describe('POST /api/naby — claude-account.select', () => {
     if (!added.ok || !added.accountId) return;
     const accountId = added.accountId;
 
-    // The environment is fixed into the child process at turn start, so a running
-    // turn keeps spending the account it started on. Switching now would leave the
-    // screen naming one account while the answer being written belongs to another
-    // — the refusal exists to stop that, not for safety.
+    // §5.4 — the environment is fixed into the child process at turn start, so a
+    // running turn keeps spending the account it began on. Refusing the switch
+    // used to make the user WAIT for the answer to finish; instead the selection
+    // is applied now and the reply says it takes effect next turn. The switch is
+    // NOT refused — it lands, globally (§5.5), one id and not a per-session choice.
     const key = 'run-key-for-account-switch-test';
     startRun(key, process.cwd());
-    let refused: Awaited<ReturnType<typeof runNabyAction>>;
+    let accepted: Awaited<ReturnType<typeof runNabyAction>>;
     try {
-      refused = await runNabyAction({ action: 'claude-account.select', accountId });
+      accepted = await runNabyAction({ action: 'claude-account.select', accountId });
     } finally {
       markRunIdle(key);
     }
-    expect(refused.ok).toBe(false);
-    if (!refused.ok) expect(refused.errorKey).toBe('claudeAccounts.busy');
-
-    // Nothing moved while it was refused.
-    expect((await readNabyState(null)).claudeAccounts.activeId).toBeNull();
-
-    // And with nothing running it goes through, globally (§5.5) — one id, not a
-    // per-session choice.
-    const accepted = await runNabyAction({ action: 'claude-account.select', accountId });
     expect(accepted.ok).toBe(true);
-    if (accepted.ok) expect(accepted.claudeAccounts?.activeId).toBe(accountId);
+    if (accepted.ok) {
+      // Applied at once...
+      expect(accepted.claudeAccounts?.activeId).toBe(accountId);
+      // ...and DISCLOSED as taking effect next turn, since a turn was running.
+      expect(accepted.appliesNextTurn).toBe(true);
+    }
+    // The selection is durable, not held back until the turn ends.
     expect((await readNabyState(null)).claudeAccounts.activeId).toBe(accountId);
 
+    // With nothing running, a real switch reports NO lag. Selecting the machine
+    // default is a genuine change here (the account is active), so this exercises
+    // the false case rather than the no-op one.
+    const idleSwitch = await runNabyAction({ action: 'claude-account.select', accountId: '' });
+    expect(idleSwitch.ok).toBe(true);
+    if (idleSwitch.ok) expect(idleSwitch.appliesNextTurn).toBe(false);
+
+    // Back to the account for the removal check below.
+    await runNabyAction({ action: 'claude-account.select', accountId });
+
+    // REMOVE still refuses mid-turn — that one is a SAFETY issue (logout + rmSync
+    // under a live child), not honesty — and it says so with its OWN key, distinct
+    // from the switch copy.
+    startRun(key, process.cwd());
+    let refusedRemove: Awaited<ReturnType<typeof runNabyAction>>;
+    try {
+      refusedRemove = await runNabyAction({ action: 'claude-account.remove', accountId });
+    } finally {
+      markRunIdle(key);
+    }
+    expect(refusedRemove.ok).toBe(false);
+    if (!refusedRemove.ok) expect(refusedRemove.errorKey).toBe('claudeAccounts.busyRemove');
+    // Nothing was removed while the turn was live.
+    expect((await readNabyState(null)).claudeAccounts.accounts.map((a) => a.id)).toContain(
+      accountId,
+    );
+
     // Clean up through the product path, which also exercises that removing the
-    // ACTIVE account clears the selection.
+    // ACTIVE account clears the selection now that nothing is running.
     const removed = await runNabyAction({ action: 'claude-account.remove', accountId });
     expect(removed.ok).toBe(true);
     const after = await readNabyState(null);

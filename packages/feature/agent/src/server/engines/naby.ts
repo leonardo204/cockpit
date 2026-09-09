@@ -772,9 +772,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // file — and everything downstream of it — never holds one. Undefined
             // is the ordinary case and leaves the turn byte-for-byte as it was.
             //
-            // READ HERE, at turn start, which is exactly what §5.4 promises: the
-            // account is pinned for the whole turn, and a switch that arrives
-            // mid-turn is refused rather than silently applied to the next event.
+            // READ HERE, at turn start, which is exactly what §5.4 rests on: the
+            // account is pinned for the whole turn. A switch that arrives mid-turn
+            // is ACCEPTED (the store is updated at once) but cannot reach this
+            // already-started turn — it takes effect the next time this line runs,
+            // which is why the select action discloses `appliesNextTurn` instead of
+            // refusing. Nothing downstream re-reads the store for the account.
             const claudeAccountId = activeClaudeAccountId(store);
             engine = new ClaudeAgentSdkEngine(
               claudeAccountId ? { accountId: claudeAccountId } : {},

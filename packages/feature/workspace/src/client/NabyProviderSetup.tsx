@@ -803,10 +803,20 @@ type ClaudeAccountRow = {
   id: string;
   addedAt: number;
   email: string | null;
+  /** The email read from this account's identity file WITHOUT spawning a process
+   *  (§5.6). Fills the label before `verify` confirms `email`, so a finished login
+   *  stops reading as "not signed in". Never overrides the confirmed `email`. */
+  emailHint: string | null;
   orgName: string | null;
   subscriptionType: string | null;
   status: 'signed-in' | 'signed-out' | 'unknown' | string;
   checkedAt: number | null;
+};
+
+type ClaudeMachineDefaultIdentity = {
+  email: string | null;
+  orgName: string | null;
+  subscriptionType: string | null;
 };
 
 type ClaudeAccountsBlock = {
@@ -817,6 +827,10 @@ type ClaudeAccountsBlock = {
   /** null = "the one sign-in this computer has", i.e. unchanged behaviour. */
   activeId: string | null;
   accounts: ClaudeAccountRow[];
+  /** The machine default's identity, so two max-plan accounts are told apart on
+   *  screen (§5.6). null when its identity file cannot be read. Absent from an
+   *  older server, which reads as "nothing to say". */
+  machineDefault?: ClaudeMachineDefaultIdentity | null;
 };
 
 type NabyEngineState = {
@@ -863,6 +877,10 @@ type NabyPostResult = {
   /** `claude-account.add`: the id of the account just created, which the caller
    *  polls `claude-account.verify` with until the browser sign-in lands. */
   accountId?: string;
+  /** `claude-account.select`: whether a turn was running when the switch was
+   *  applied (§5.4). The switch always lands; this drives a non-error info line
+   *  saying the new account answers from the next turn. */
+  appliesNextTurn?: boolean;
   /** An i18n key the server offers for a refusal it knows how to phrase (a
    *  missing preset field, a bad email, a missing uvx). Preferred over `error`,
    *  which stays the English truth for logs. */
@@ -1089,6 +1107,12 @@ function ClaudeAccountsCard({
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A NON-error notice — the §5.4 "answers from the next turn" line. Kept apart
+   *  from `error` so it renders calm, not amber, and is cleared by the next
+   *  successful mutation. */
+  const [info, setInfo] = useState<string | null>(null);
+  /** The account whose per-row "Check again" is in flight, if any. */
+  const [recheckingId, setRecheckingId] = useState<string | null>(null);
   /** The account whose browser sign-in we are waiting on, if any. */
   const [waitingId, setWaitingId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1100,6 +1124,30 @@ function ClaudeAccountsCard({
     },
     [],
   );
+
+  // §5.6 — VERIFY ONCE ON MOUNT for any row that is not already signed in. This is
+  // what writes the confirmed identity back, so a login that finished while the
+  // screen was closed stops reading as "not signed in". It is a bounded one-shot,
+  // NOT a poll: it fires each verify in the background (bypassing `run`, so a
+  // background failure never paints the amber error or disables the buttons),
+  // waits for all of them, then refreshes once. Guarded against an unmounted tree.
+  const didMountVerify = useRef(false);
+  useEffect(() => {
+    if (didMountVerify.current) return;
+    didMountVerify.current = true;
+    const stale = block.accounts.filter((a) => a.status !== 'signed-in').map((a) => a.id);
+    if (stale.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      await Promise.all(stale.map((id) => nabyPost({ action: 'claude-account.verify', accountId: id })));
+      if (!cancelled) await onChanged();
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only: `didMountVerify` makes it one-shot even if deps churned.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** Ask the server who is in this account's namespace now, until it says
    *  someone. The browser flow takes as long as the human takes, so this is a
@@ -1138,6 +1186,9 @@ function ClaudeAccountsCard({
     async (body: Record<string, unknown>) => {
       setBusy(true);
       setError(null);
+      // Clear the §5.4 notice on the next mutation — "cleared on the next
+      // successful mutation" comes for free from resetting it here at entry.
+      setInfo(null);
       try {
         const res = await nabyPost(body);
         if (!res.ok) {
@@ -1166,11 +1217,40 @@ function ClaudeAccountsCard({
     }
   }, [pollVerify, run]);
 
-  /** The label for one row. The email when the CLI has reported one; otherwise a
-   *  neutral placeholder — NEVER the id, which means nothing to a reader, and
-   *  never a folder name. */
+  /** Select an account (or '' for the machine default). §5.4 — the switch always
+   *  lands; when a turn was running the server says so with `appliesNextTurn`, and
+   *  we show a calm notice rather than a refusal. */
+  const select = useCallback(
+    async (accountId: string) => {
+      const res = await run({ action: 'claude-account.select', accountId });
+      if (res?.appliesNextTurn) setInfo(t('claudeAccounts.appliesNextTurn'));
+    },
+    [run, t],
+  );
+
+  /** Re-run `claude auth status` for ONE row on demand (§5.6). Uses `run` so it
+   *  shares the busy/refresh flow, and marks just this row so only its button
+   *  shows the "Checking…" label. */
+  const recheck = useCallback(
+    async (accountId: string) => {
+      setRecheckingId(accountId);
+      try {
+        await run({ action: 'claude-account.verify', accountId });
+      } finally {
+        setRecheckingId(null);
+      }
+    },
+    [run],
+  );
+
+  /** The label for one row. The CONFIRMED email first, then the identity-file
+   *  hint (§5.6) so a finished-but-unverified login shows who it is instead of
+   *  "not signed in", then a neutral placeholder — NEVER the id, which means
+   *  nothing to a reader, and never a folder name. */
   const rowLabel = (a: ClaudeAccountRow): string =>
-    a.email ?? (a.id === waitingId ? t('claudeAccounts.waiting') : t('claudeAccounts.notSignedIn'));
+    a.email ??
+    a.emailHint ??
+    (a.id === waitingId ? t('claudeAccounts.waiting') : t('claudeAccounts.notSignedIn'));
 
   const rowHint = (a: ClaudeAccountRow): string => {
     const parts = [a.orgName, a.subscriptionType].filter(Boolean) as string[];
@@ -1189,7 +1269,7 @@ function ClaudeAccountsCard({
         <button
           type="button"
           disabled={busy}
-          onClick={() => void run({ action: 'claude-account.select', accountId: '' })}
+          onClick={() => void select('')}
           data-testid="claude-account-default"
           className={`w-full text-left px-2 py-1.5 rounded border transition-colors ${
             block.activeId === null
@@ -1203,6 +1283,13 @@ function ClaudeAccountsCard({
               <span className="text-xs text-brand">{t('providerSetup.selected')}</span>
             )}
           </div>
+          {/* §5.6 — WHO the machine default is, so two max-plan sign-ins are not
+              two identical rows. Read from the identity file, no path, no process. */}
+          {block.machineDefault?.email ? (
+            <p className="text-xs text-foreground" data-testid="claude-account-default-email">
+              {block.machineDefault.email}
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">{t('claudeAccounts.machineDefaultHint')}</p>
         </button>
 
@@ -1219,7 +1306,7 @@ function ClaudeAccountsCard({
             <button
               type="button"
               disabled={busy}
-              onClick={() => void run({ action: 'claude-account.select', accountId: a.id })}
+              onClick={() => void select(a.id)}
               className="flex-1 text-left px-2 py-1.5"
             >
               <div className="flex items-center justify-between">
@@ -1229,6 +1316,15 @@ function ClaudeAccountsCard({
                 )}
               </div>
               <p className="text-xs text-muted-foreground">{rowHint(a)}</p>
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void recheck(a.id)}
+              className="shrink-0 px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+              data-testid={`claude-account-recheck-${a.id}`}
+            >
+              {recheckingId === a.id ? t('claudeAccounts.rechecking') : t('claudeAccounts.recheck')}
             </button>
             <button
               type="button"
@@ -1256,6 +1352,14 @@ function ClaudeAccountsCard({
       {error && (
         <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="claude-account-error">
           {error}
+        </p>
+      )}
+
+      {/* §5.4 — a calm notice, NOT the amber error: the switch succeeded, it just
+          takes effect next turn. */}
+      {info && (
+        <p className="text-xs text-muted-foreground" data-testid="claude-account-info">
+          {info}
         </p>
       )}
     </div>

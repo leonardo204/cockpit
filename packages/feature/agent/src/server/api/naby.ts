@@ -476,9 +476,12 @@ export async function readNabyState(
     // re-check (a user action or the post-login poll) bypasses the cache.
     // ABOUT THE ACCOUNT THAT ACTUALLY ANSWERS. With a second Claude account
     // selected, reading the machine's default sign-in here would put one identity
-    // in the chip while the turns spent another — the exact disagreement §5.4
-    // refuses a mid-turn switch to prevent. The id goes in, the runtime resolves
-    // the namespace; with no account selected this is the original call.
+    // in the chip while the turns spent another. This reads the SELECTED account's
+    // identity so the chip names whoever will answer the next turn — which, right
+    // after a mid-turn switch, is deliberately the new account while the in-flight
+    // turn still spends the old one (the §5.4 lag the UI discloses). The id goes
+    // in, the runtime resolves the namespace; with none selected this is the
+    // original call.
     claudeLogin: await describeClaudeLoginForAccount(
       activeClaudeAccountId(store),
       opts.recheckLogin ? { force: true } : {},
@@ -746,6 +749,11 @@ export type NabyActionResult =
       /** `claude-account.add`: the id of the account that was just created. The
        *  UI polls `claude-account.verify` with it until the browser flow lands. */
       accountId?: string;
+      /** `claude-account.select`: whether a turn was running when the switch was
+       *  applied (§5.4). The switch is ALWAYS applied; this is disclosure — the UI
+       *  shows a non-error info line that the new account answers next turn — not a
+       *  refusal. False for a no-op re-select of the already-active account. */
+      appliesNextTurn?: boolean;
       /** `claude-account.remove`: whether `claude auth logout` succeeded in that
        *  namespace before the folder was deleted. The removal is a success either
        *  way; this is what lets the UI say so honestly. */
@@ -2098,19 +2106,18 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (wanted && !listClaudeAccounts(store).some((a) => a.id === wanted)) {
         return { ok: false, error: 'unknown account' };
       }
+      // §5.4 — ACCEPT THE SWITCH, EVEN MID-TURN, AND DISCLOSE THE LAG. The
+      // environment is fixed into the child process at turn start (engines/naby.ts
+      // pins `activeClaudeAccountId` there), so a running turn keeps spending the
+      // account it began on. Refusing the switch until it finished only made the
+      // user wait; instead the selection always lands and, when a turn is running,
+      // the reply carries `appliesNextTurn` so the UI can say the new account
+      // answers from the NEXT turn. The disagreement is a stated fact, not a lie.
+      let appliesNextTurn = false;
       if (activeClaudeAccountId(store) !== (wanted || undefined)) {
-        // §5.4 — REFUSE MID-TURN, and the reason is honesty rather than safety.
-        // The environment is fixed into the child process at turn start, so a
-        // running turn keeps spending the account it started on; switching now
-        // would leave the screen naming one account while the answer being
-        // written belongs to another.
-        if (anyRunActive()) {
-          return {
-            ok: false,
-            error: 'A turn is still running, so the Claude account cannot be switched yet.',
-            errorKey: 'claudeAccounts.busy',
-          };
-        }
+        // Computed only for a switch that actually happens: a re-click on the
+        // already-active row must not announce a lag for a change that did not.
+        appliesNextTurn = anyRunActive();
         setActiveClaudeAccount(store, wanted || null);
         // The next status read must not be answered from the previous account's
         // ten-second-old entry.
@@ -2125,20 +2132,24 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           email: chosen?.email ?? null,
         });
       }
-      return { ok: true, claudeAccounts: describeClaudeAccounts(store) };
+      return { ok: true, appliesNextTurn, claudeAccounts: describeClaudeAccounts(store) };
     }
 
     case 'claude-account.remove': {
       if (!isClaudeAccountId(body.accountId)) {
         return { ok: false, error: 'accountId is required' };
       }
-      // Removing the ACTIVE account changes which account answers, so it is the
-      // same interruption a switch is and is refused for the same reason.
+      // §5.4 — REMOVE STILL REFUSES MID-TURN, and here the reason is SAFETY, not
+      // honesty: removing the active account logs it out of its namespace and
+      // rmSync's the directory out from under a child process that is still
+      // running as that account. A switch is now accepted (only its effect is
+      // deferred), but a removal cannot be — so it keeps its own message, distinct
+      // from the switch copy, which no longer talks about switching at all.
       if (activeClaudeAccountId(store) === body.accountId && anyRunActive()) {
         return {
           ok: false,
-          error: 'A turn is still running, so this Claude account cannot be removed yet.',
-          errorKey: 'claudeAccounts.busy',
+          error: 'An answer is still being written. Wait for it to finish, then remove this account.',
+          errorKey: 'claudeAccounts.busyRemove',
         };
       }
       const result = await removeClaudeAccount(store, body.accountId);

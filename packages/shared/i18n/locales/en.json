@@ -743,7 +743,14 @@
     "copy": "Copy",
     "copied": "Copied",
     "recheck": "Re-check",
-    "checking": "Checking…"
+    "checking": "Checking…",
+    "switchAccount": "Switch account",
+    "machineDefault": "This computer's sign-in",
+    "addAccount": "Add an account",
+    "active": "In use",
+    "signInNeeded": "sign-in needed",
+    "appliesNextTurn": "An answer is in progress, so this account will answer from the next turn.",
+    "notIsolated": "This computer keeps every Claude sign-in in one place, so more accounts are not possible here."
   },
   "claudeInstall": {
     "missing": "Claude Code is not installed on this computer.",
@@ -775,6 +782,10 @@
     "notSignedIn": "Not signed in yet",
     "signInNeeded": "sign-in not finished",
     "busy": "An answer is still being written. Wait for it to finish, then switch accounts.",
+    "busyRemove": "An answer is still being written. Wait for it to finish, then remove this account.",
+    "appliesNextTurn": "An answer is in progress, so this account will answer from the next turn.",
+    "recheck": "Check again",
+    "rechecking": "Checking…",
     "notIsolated": "This computer keeps every Claude sign-in in one place, so a second account would be the same account. Multiple accounts are not available here."
   },
   "engineSwitcher": {
@@ -2116,9 +2127,9 @@
       "hint": "A fast-growth session is a conversation of its own, where naby asks about you and sets practice decisions so it learns faster than ordinary work allows.",
       "weight": "Practice answers count for less than real check-ins, and they can never start the measurement.",
       "sessionTitle": "Fast-growth session",
-      "opening": "Opening\u2026",
+      "opening": "Opening…",
       "kickoff": "Starting the fast-growth session.",
-      "created": "The fast-growth session is open \u2014 naby asks the first question itself.",
+      "created": "The fast-growth session is open — naby asks the first question itself.",
       "createdNoOpen": "Created. Open \"Fast-growth session\" from the top of your session list.",
       "failed": "The session could not be created."
     },
