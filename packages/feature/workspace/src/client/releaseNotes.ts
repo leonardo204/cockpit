@@ -85,6 +85,34 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.36.4 — 2026-09-09
+
+### en
+
+Your Claude accounts, told apart and switched in a click.
+
+**New**
+
+- **Switch Claude accounts from the chat bar.** The account chip's menu now lists every Claude sign-in you keep — this computer's, and each one you have added — with the one in use marked. Click another to switch to it. If you have not added a second account yet, "Add an account" signs one in from right here, in its own browser flow.
+- **Switching no longer waits for the answer to finish.** Picking an account while a reply is still being written used to be refused. It is accepted now, with a calm note that the new account answers from the next turn. Removing the account that is answering still waits, because that one is not safe mid-answer.
+
+**Improved**
+
+- **Every account shows who it is.** Both in settings and in the chat-bar chip, each account is named by its email — including "this computer's sign-in" — so two accounts on the same plan are no longer indistinguishable. An account that is signed in but was showing "not signed in yet" now says who it is, and re-checks itself when the settings open. Each row also has its own "Check again".
+
+### ko
+
+Claude 계정을, 서로 구분하고 한 번에 전환해요.
+
+**새로 생긴 것**
+
+- **채팅 바에서 Claude 계정을 바꿔요.** 계정 칩 메뉴에 갖고 있는 Claude 로그인이 모두 나와요 — 이 컴퓨터 것과, 추가한 계정 각각이요. 사용 중인 계정이 표시되고, 다른 걸 누르면 바로 전환돼요. 아직 두 번째 계정이 없으면 "계정 추가"로 여기서 바로 로그인할 수 있어요.
+- **전환할 때 답변이 끝나길 기다리지 않아요.** 답이 작성되는 중에 계정을 고르면 예전에는 거절했어요. 이제는 받아들이고, "이 계정은 다음 턴부터 답한다"고 조용히 알려 줘요. 지금 답하고 있는 계정을 삭제하는 것은 답변 중에 안전하지 않아서 여전히 기다려요.
+
+**나아진 것**
+
+- **모든 계정이 누구인지 보여줘요.** 설정에서도 채팅 바 칩에서도 계정마다 이메일로 표시해요 — "이 컴퓨터의 로그인"까지요. 같은 플랜의 두 계정을 이제 구분할 수 있어요. 로그인은 됐는데 "아직 로그인하지 않음"으로 보이던 계정이 이제 누구인지 말하고, 설정을 열면 스스로 다시 확인해요. 행마다 "다시 확인"도 있어요.
+
 ## 1.36.3 — 2026-09-09
 
 ### en
