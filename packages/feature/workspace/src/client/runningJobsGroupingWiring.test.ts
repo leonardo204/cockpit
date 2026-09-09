@@ -32,6 +32,26 @@ describe('background jobs — grouped by project', () => {
     expect(src).toContain("t('jobs.thisProject'");
   });
 
+  it('shows only the open project’s jobs, and hides other projects entirely', () => {
+    // A project open → the rows are filtered to it BEFORE grouping, so another
+    // project's work is not merely under a divider but absent. The home view
+    // (no cwd) keeps everything.
+    const src = read('RunningJobsIndicator.tsx');
+    expect(src).toContain('cwd ? kept.filter((job) => isJobInProject(job, cwd)) : kept');
+    // Headers only make sense in the home view — one open project needs none.
+    expect(src).toContain('const showHeaders = !cwd');
+    expect(src).toMatch(/showHeaders && \(/);
+  });
+
+  it('drops a succeeded job at once and lets a failed one linger, then clear', () => {
+    const src = read('RunningJobsIndicator.tsx');
+    // Succeeded → gone immediately; anything else → kept until its TTL passes.
+    expect(src).toContain("if (job.status === 'succeeded') return false");
+    expect(src).toContain('now - ended < FAILED_JOB_TTL_MS');
+    // A single self-cancelling timer clears an expired row while the list is open.
+    expect(src).toMatch(/setTimeout\(\(\) => setNow\(Date\.now\(\)\)/);
+  });
+
   it('the badge stays a total, and says so when part of it is elsewhere', () => {
     const src = read('RunningJobsIndicator.tsx');
     // The number itself is untouched: it is the app's only "work is happening
@@ -41,15 +61,21 @@ describe('background jobs — grouped by project', () => {
     expect(src).toContain("t('jobs.runningElsewhere'");
   });
 
-  it('never claims this project has nothing running', () => {
-    // Waits the SDK owns itself (`Monitor`, a backgrounded Bash) never reach
-    // this registry, so an affirmative empty line would be false in exactly the
-    // moment someone is waiting on one. Only the whole-list empty state stays.
+  it('when a project is open, the empty line is scoped to THIS project', () => {
+    // The list now shows only the open project's jobs (field request 2026-09-09),
+    // so its empty state names that scope — "no background jobs in this project"
+    // — rather than the whole-list "nothing running". The wording is about
+    // background JOBS specifically: an SDK-owned wait (a Monitor) lives in the
+    // transcript and the running badge, not in this list, so this line does not
+    // claim nothing is happening.
     const src = read('RunningJobsIndicator.tsx');
     expect(src).toContain('rows.length === 0');
-    expect(src).not.toMatch(/noneHere|nothingHere|noJobsInProject/);
+    expect(src).toContain("t('jobs.noneHere'");
     for (const dict of [en, ko]) {
-      expect(Object.keys((dict as { jobs: Record<string, string> }).jobs)).not.toContain('noneHere');
+      const jobs = (dict as { jobs: Record<string, string> }).jobs;
+      expect(jobs.noneHere).toBeTruthy();
+      // Still scoped to jobs, never an absolute "nothing is happening".
+      expect(jobs.none).toBeTruthy();
     }
   });
 

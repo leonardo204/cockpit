@@ -1008,6 +1008,7 @@
   "jobs": {
     "title": "백그라운드 작업",
     "none": "돌고 있는 작업도, 최근 작업도 없어요.",
+    "noneHere": "이 프로젝트에는 백그라운드 작업이 없어요.",
     "running": "{{count}}개 실행 중",
     "runningElsewhere": "{{count}}개 실행 중 · 이 프로젝트 {{here}}개",
     "thisProject": "이 프로젝트",

@@ -76,6 +76,17 @@ import { groupJobsByProject, isJobInProject } from './jobGroups';
  */
 const LIVE_REFRESH_MS = 15_000;
 
+/**
+ * How long a job that DID NOT succeed stays in the list after it ended.
+ *
+ * A succeeded job leaves at once — it worked, there is nothing to go back for. A
+ * failed / stopped / lost job is the one a person may want to notice, so it
+ * lingers this long and then clears itself, rather than piling up forever. The
+ * transcript block for the job is unaffected: this is only the toolbar list's
+ * housekeeping.
+ */
+const FAILED_JOB_TTL_MS = 5 * 60_000;
+
 /** The event any part of the window can fire to make this re-read immediately —
  *  used when a turn ends, since a turn ending is when jobs most often start or
  *  finish. */
@@ -135,8 +146,47 @@ export function RunningJobsIndicator({ cwd }: RunningJobsIndicatorProps = {}) {
     return () => clearInterval(id);
   }, [runningCount, load]);
 
-  const rows = useMemo(() => [...data.running, ...data.recent], [data]);
+  // WHAT THE LIST MAY SHOW, after two rules the field asked for:
+  //
+  //   1. A succeeded job is dropped at once; a failed/stopped/lost one lingers
+  //      FAILED_JOB_TTL_MS and then clears itself. Running jobs always stay.
+  //   2. WHEN A PROJECT IS OPEN, only that project's jobs appear — another
+  //      project's work is hidden entirely, not merely separated by a divider,
+  //      so it cannot be mistaken for this project's. With no project open (the
+  //      home view), everything is shown, grouped by project.
+  const rows = useMemo(() => {
+    const kept = [
+      ...data.running,
+      ...data.recent.filter((job) => {
+        if (job.status === 'succeeded') return false;
+        const ended = job.endedAt ?? job.startedAt ?? 0;
+        return now - ended < FAILED_JOB_TTL_MS;
+      }),
+    ];
+    return cwd ? kept.filter((job) => isJobInProject(job, cwd)) : kept;
+  }, [data, cwd, now]);
+  // Grouped headers are only meaningful in the home view — a single open project
+  // needs none, because every row already belongs to it.
   const groups = useMemo(() => groupJobsByProject(rows, cwd), [rows, cwd]);
+  const showHeaders = !cwd;
+
+  // A FAILED ROW LEAVES WHILE YOU WATCH, with one self-cancelling timer and no
+  // poll: while the list is open, wake once at the soonest row's expiry to
+  // re-filter. Re-arms after each wake (it depends on `now`), and does not exist
+  // when the list is closed or nothing is expiring.
+  useEffect(() => {
+    if (!open) return;
+    let soonest = Infinity;
+    for (const job of data.recent) {
+      if (job.status === 'succeeded') continue;
+      const ended = job.endedAt ?? job.startedAt ?? 0;
+      const left = ended + FAILED_JOB_TTL_MS - now;
+      if (left < soonest) soonest = left;
+    }
+    if (!Number.isFinite(soonest)) return;
+    const id = setTimeout(() => setNow(Date.now()), Math.max(0, soonest) + 50);
+    return () => clearTimeout(id);
+  }, [open, data, now]);
   // Counted over RUNNING rows only, since the number beside it is `runningCount`.
   const runningHere = useMemo(
     () => (cwd ? data.running.filter((job) => isJobInProject(job, cwd)).length : 0),
@@ -210,24 +260,29 @@ export function RunningJobsIndicator({ cwd }: RunningJobsIndicatorProps = {}) {
             </div>
             {rows.length === 0 && (
               <div className="px-3 py-3 text-xs text-muted-foreground">
-                {t('jobs.none', { defaultValue: 'Nothing running, and nothing recent.' })}
+                {cwd
+                  ? t('jobs.noneHere', { defaultValue: 'No background jobs in this project.' })
+                  : t('jobs.none', { defaultValue: 'Nothing running, and nothing recent.' })}
               </div>
             )}
             {groups.map((group) => (
               <div key={group.cwd}>
-                {/* Whose work this is. `title` carries the full path, since two
-                    projects can share a basename. */}
-                <div
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-muted/40 border-b border-border text-[0.688rem] text-muted-foreground"
-                  title={group.cwd}
-                >
-                  {group.isCurrent && (
-                    <span className="rounded px-1 py-px bg-brand/15 text-brand text-[0.625rem]">
-                      {t('jobs.thisProject', { defaultValue: 'This project' })}
-                    </span>
-                  )}
-                  <span className="truncate font-medium text-foreground">{group.label}</span>
-                </div>
+                {/* The project header appears only in the home view (`showHeaders`).
+                    With a project open there is exactly one project's work here, so
+                    a header would only repeat what the whole panel already means. */}
+                {showHeaders && (
+                  <div
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-muted/40 border-b border-border text-[0.688rem] text-muted-foreground"
+                    title={group.cwd}
+                  >
+                    {group.isCurrent && (
+                      <span className="rounded px-1 py-px bg-brand/15 text-brand text-[0.625rem]">
+                        {t('jobs.thisProject', { defaultValue: 'This project' })}
+                      </span>
+                    )}
+                    <span className="truncate font-medium text-foreground">{group.label}</span>
+                  </div>
+                )}
                 {group.jobs.map((job) => (
                   <div key={job.id} className="px-3 py-2 border-b border-border last:border-0">
                     <div className="flex items-center gap-2">

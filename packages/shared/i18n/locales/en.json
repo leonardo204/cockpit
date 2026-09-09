@@ -1008,6 +1008,7 @@
   "jobs": {
     "title": "Background jobs",
     "none": "Nothing running, and nothing recent.",
+    "noneHere": "No background jobs in this project.",
     "running": "{{count}} running",
     "runningElsewhere": "{{count}} running · {{here}} in this project",
     "thisProject": "This project",
