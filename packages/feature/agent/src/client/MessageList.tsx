@@ -211,6 +211,16 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     });
   }, [messages]);
 
+  // Where the in-flight turn begins: the last user bubble. -1 when there is
+  // none, in which case every message counts as the turn (a run that has not
+  // yet flushed its user line still owns whatever is on screen).
+  const lastUserIndex = useMemo(() => {
+    for (let i = uniqueMessages.length - 1; i >= 0; i--) {
+      if (uniqueMessages[i].role === 'user') return i;
+    }
+    return -1;
+  }, [uniqueMessages]);
+
   // Record scroll position before loading more, to restore it afterward
   const scrollHeightBeforeLoadRef = useRef(0);
   const shouldRestoreScrollRef = useRef(false);
@@ -631,7 +641,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                 )}
               </div>
             )}
-            {uniqueMessages.map((message) => (
+            {uniqueMessages.map((message, index) => (
               <div key={message.id} data-message-id={message.id} className="transition-[box-shadow] duration-300">
                 <MessageBubble
                   message={message}
@@ -643,6 +653,13 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   // per-second clocks inside a turn are told to stand down.
                   isActive={isActive}
                   onResendMessage={onResendMessage}
+                  // WHICH MESSAGES ARE THE LIVE TURN: the last user bubble and
+                  // everything after it, while a turn is running. A background
+                  // job block reads this to know whether anyone is still
+                  // listening for its ending edge — scoped per message, so an
+                  // earlier turn's block cannot come back to life when a later
+                  // turn starts (see the prop doc in MessageBubble).
+                  inFlightTurn={!!isLoading && index >= lastUserIndex}
                 />
               </div>
             ))}

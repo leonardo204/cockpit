@@ -998,6 +998,8 @@
     "title": "Background jobs",
     "none": "Nothing running, and nothing recent.",
     "running": "{{count}} running",
+    "runningElsewhere": "{{count}} running · {{here}} in this project",
+    "thisProject": "This project",
     "lastOutput": "last output {{ago}} ago",
     "noOutputYet": "no output yet",
     "lost": "the app restarted while this was running — outcome unknown",

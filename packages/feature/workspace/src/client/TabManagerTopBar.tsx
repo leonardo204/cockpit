@@ -91,7 +91,9 @@ export function TabManagerTopBar({
               the native `title` attribute. The Windows build showed no native
               tooltips on these buttons at all, and the rest of the app already
               uses the provider — so this row now does too. */}
-          <RunningJobsIndicator />
+          {/* The open project, so the list can say which jobs are this
+              project's and which belong to another window's work. */}
+          <RunningJobsIndicator cwd={initialCwd} />
           {/* Toggle the right-side file browser (VSCode-style). */}
           {onToggleFiles && (
             <button

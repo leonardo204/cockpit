@@ -35,6 +35,25 @@
  * whatever it said when you last clicked. The interval exists only while there
  * is something to show and is cleared the moment the count reaches zero — it
  * never runs in an idle app, which is what the ban is about.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY GROUPED BY PROJECT
+ *
+ * The registry is global, the window is not. A 2026-09-07 field report had jobs
+ * from another project's server session listed under an unrelated project, and
+ * the reader took the list at face value both ways — "nothing is running here"
+ * when something was, "something is running here" when it was someone else's
+ * work. So the popover draws a heading per project directory and puts the open
+ * one first (jobGroups.ts).
+ *
+ * The count on the button stays the TOTAL, because it is the app's only "work
+ * is happening somewhere" signal; when some of it belongs elsewhere, the label
+ * says so instead of the number lying by omission.
+ *
+ * And there is no "nothing running in this project" line. Waits the SDK owns
+ * itself — `Monitor`, a backgrounded Bash — never reach this registry, so such
+ * a line would be false in exactly the moment a reader is waiting on one. An
+ * empty current project simply has no section.
  */
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -45,6 +64,7 @@ import {
   subscribeJobs,
   type JobRow,
 } from '@cockpit/feature-agent';
+import { groupJobsByProject, isJobInProject } from './jobGroups';
 
 
 /**
@@ -70,7 +90,13 @@ function elapsed(fromMs: number, nowMs: number): string {
   return `${hours}h ${mins % 60}m`;
 }
 
-export function RunningJobsIndicator() {
+export interface RunningJobsIndicatorProps {
+  /** The open project's directory, used to say which jobs are this project's.
+   *  Absent (no project open) means no group is the current one. */
+  cwd?: string;
+}
+
+export function RunningJobsIndicator({ cwd }: RunningJobsIndicatorProps = {}) {
   const { t } = useTranslation();
   // ONE STORE, TWO READERS. The transcript blocks read the same snapshot, so a
   // job cannot say "running" in the toolbar and "finished" in the conversation.
@@ -110,6 +136,12 @@ export function RunningJobsIndicator() {
   }, [runningCount, load]);
 
   const rows = useMemo(() => [...data.running, ...data.recent], [data]);
+  const groups = useMemo(() => groupJobsByProject(rows, cwd), [rows, cwd]);
+  // Counted over RUNNING rows only, since the number beside it is `runningCount`.
+  const runningHere = useMemo(
+    () => (cwd ? data.running.filter((job) => isJobInProject(job, cwd)).length : 0),
+    [data.running, cwd]
+  );
 
   // ALWAYS SHOWN, since 2026-09-03. It used to render nothing until a job had
   // run at least once, and while idle it drew a clock — and the field report
@@ -118,9 +150,19 @@ export function RunningJobsIndicator() {
   // have already used the feature cannot teach anyone the feature exists. So it
   // stays in the row, at rest as an activity line rather than a clock, and the
   // list it opens says plainly when there is nothing in it.
+  //
+  // THE NUMBER IS THE TOTAL; THE WORDS SAY WHERE. When some of the running work
+  // belongs to another project, the label carries that split so the count is not
+  // read as "this many here".
   const label =
     runningCount > 0
-      ? t('jobs.running', { defaultValue: '{{count}} running', count: runningCount })
+      ? cwd && runningHere < runningCount
+        ? t('jobs.runningElsewhere', {
+            defaultValue: '{{count}} running · {{here}} in this project',
+            count: runningCount,
+            here: runningHere,
+          })
+        : t('jobs.running', { defaultValue: '{{count}} running', count: runningCount })
       : t('jobs.title', { defaultValue: 'Background jobs' });
 
   return (
@@ -171,21 +213,38 @@ export function RunningJobsIndicator() {
                 {t('jobs.none', { defaultValue: 'Nothing running, and nothing recent.' })}
               </div>
             )}
-            {rows.map((job) => (
-              <div key={job.id} className="px-3 py-2 border-b border-border last:border-0">
-                <div className="flex items-center gap-2">
-                  <StatusDot status={job.status} />
-                  <span className="font-mono text-[0.688rem] text-muted-foreground">{job.id}</span>
-                  <span className="ml-auto text-[0.688rem] text-muted-foreground tabular-nums">
-                    {elapsed(job.startedAt, job.endedAt ?? now)}
-                  </span>
+            {groups.map((group) => (
+              <div key={group.cwd}>
+                {/* Whose work this is. `title` carries the full path, since two
+                    projects can share a basename. */}
+                <div
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-muted/40 border-b border-border text-[0.688rem] text-muted-foreground"
+                  title={group.cwd}
+                >
+                  {group.isCurrent && (
+                    <span className="rounded px-1 py-px bg-brand/15 text-brand text-[0.625rem]">
+                      {t('jobs.thisProject', { defaultValue: 'This project' })}
+                    </span>
+                  )}
+                  <span className="truncate font-medium text-foreground">{group.label}</span>
                 </div>
-                <div className="mt-0.5 truncate text-xs text-foreground" title={job.command}>
-                  {job.command}
-                </div>
-                <div className="text-[0.625rem] text-muted-foreground">
-                  {jobLine(job, (k, o) => String(t(k, o)), now)}
-                </div>
+                {group.jobs.map((job) => (
+                  <div key={job.id} className="px-3 py-2 border-b border-border last:border-0">
+                    <div className="flex items-center gap-2">
+                      <StatusDot status={job.status} />
+                      <span className="font-mono text-[0.688rem] text-muted-foreground">{job.id}</span>
+                      <span className="ml-auto text-[0.688rem] text-muted-foreground tabular-nums">
+                        {elapsed(job.startedAt, job.endedAt ?? now)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-foreground" title={job.command}>
+                      {job.command}
+                    </div>
+                    <div className="text-[0.625rem] text-muted-foreground">
+                      {jobLine(job, (k, o) => String(t(k, o)), now)}
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

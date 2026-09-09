@@ -318,6 +318,21 @@ interface MessageBubbleProps {
    *  in a tab that is `display:none`. Defaults to true — every existing caller
    *  and every test renders a visible turn. */
   isActive?: boolean;
+  /**
+   * Whether this message belongs to the turn that is IN FLIGHT right now.
+   *
+   * What a background job block reads to decide if anyone is still listening
+   * for its ending edge (backgroundJobs.ts `turnEnded`). Scoped to the message
+   * rather than the whole list on purpose: `isLoading` is true for every bubble
+   * while a turn runs, and a message from an EARLIER turn can still carry a
+   * lifecycle whose job never reported back (the disk merge keeps an in-memory
+   * bubble whose id and text match). Under a list-wide flag that old block
+   * would flip back to "running" with a ticking clock every time a later turn
+   * started. MessageList sets this for the messages at and after the last user
+   * bubble, while a turn is running. Defaults to false — a reloaded transcript
+   * has no lifecycle, so nothing there can be live.
+   */
+  inFlightTurn?: boolean;
   /** USER messages only: send this message again, verbatim (content + images).
    *  Wired by Chat down through MessageList; absent in read-only surfaces
    *  (subagent transcript modal), where the button simply does not render. */
@@ -325,7 +340,7 @@ interface MessageBubbleProps {
 }
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true, onResendMessage }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true, inFlightTurn = false, onResendMessage }: MessageBubbleProps) {
   const { t, i18n } = useTranslation();
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
@@ -385,17 +400,28 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   const background = useMemo(
     () =>
       partitionBackgroundJobs(displayToolCalls, message.subagents, {
-        // Once the turn is over, nothing is listening for the job's ending edge
-        // — the backend process winds down with the turn — so a block that had
-        // not heard back stops claiming the job is live (backgroundJobs.ts).
-        // That rule now applies only to jobs the STORE does not know: a naby job
+        // THE TURN IS WHAT STOPS LISTENING, NOT THE MESSAGE. Once the turn is
+        // over, nothing is left to hear the job's ending edge — the backend
+        // process winds down with the turn — so a block that never heard back
+        // stops claiming the job is live (backgroundJobs.ts).
+        //
+        // That is `inFlightTurn` — this message is part of the turn running
+        // now (MessageList derives it from `isLoading || liveRunning`, so a
+        // viewer tab watching someone else's turn counts too, and scopes it to
+        // the current turn's messages; see the prop doc) — and NOT
+        // `message.isStreaming`. A message stops streaming the moment the model
+        // starts a later one, while the same turn keeps running: a `Monitor`
+        // launched in an early message went on waiting for twenty-five minutes
+        // while its block already said the outcome was not recorded.
+        //
+        // The rule applies only to jobs the STORE does not know: a naby job
         // outlives its turn and can still be asked about, so it answers from
         // there instead of being downgraded for a reason that is about the
         // conversation rather than the work.
-        turnEnded: !message.isStreaming,
+        turnEnded: !inFlightTurn,
         jobStore: jobsById,
       }),
-    [displayToolCalls, message.subagents, message.isStreaming, jobsById]
+    [displayToolCalls, message.subagents, inFlightTurn, jobsById]
   );
   const partition = useMemo(
     () => groupSubagentCalls(background.calls, background.tasks),

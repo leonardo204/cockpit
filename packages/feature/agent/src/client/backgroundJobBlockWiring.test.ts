@@ -32,9 +32,23 @@ describe('background job block — wiring', () => {
     // And the partition has to run BEFORE the subagent grouping, on its output —
     // otherwise a shell job becomes a phantom "Subagent" block.
     expect(src).toContain('partitionBackgroundJobs(displayToolCalls, message.subagents');
-    // …told whether the turn is over, so a finished turn stops claiming a job
-    // is live (nothing is listening for its ending edge any more).
-    expect(src).toContain('turnEnded: !message.isStreaming');
+    // …told whether the TURN is over, so a finished turn stops claiming a job
+    // is live (nothing is listening for its ending edge any more). It must be
+    // the turn and not the message: an earlier message stops streaming as soon
+    // as a later one starts, and its still-running job was being downgraded
+    // while the turn — and the job — carried on. And it must be THIS message's
+    // turn, not "any turn is running": an earlier turn's bubble can keep a
+    // lifecycle whose job never reported back, and a list-wide flag would
+    // bring that block back to life whenever a later turn started.
+    expect(src).toContain('turnEnded: !inFlightTurn');
+    expect(src, 'the per-message flag is the bug this replaced').not.toContain(
+      'turnEnded: !message.isStreaming'
+    );
+    expect(src, 'a list-wide flag revives finished turns').not.toContain('turnEnded: !isLoading');
+    const list = read('MessageList.tsx');
+    expect(list, 'the list scopes the flag to the in-flight turn').toMatch(
+      /inFlightTurn=\{!!isLoading && index >= lastUserIndex\}/
+    );
     expect(src).toContain('groupSubagentCalls(background.calls, background.tasks)');
     expect(src).toContain('background.jobs');
   });

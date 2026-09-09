@@ -153,7 +153,14 @@ export function SubagentTranscriptModal({ cwd, sessionId, toolCall, workflowRef,
                 {loadAttempted ? t('chat.subagentEmpty') : t('common.loading')}
               </div>
             ) : (
-              messages.map((m) => <MessageBubble key={m.id} message={m} cwd={cwd} />)
+              // `inFlightTurn` is how a bubble learns its turn is still going —
+              // which here is the subagent still running (one run, so every
+              // bubble is that run's). Without it every bubble in an open, live
+              // transcript would treat its turn as finished and downgrade a
+              // background job that is still waiting.
+              messages.map((m) => (
+                <MessageBubble key={m.id} message={m} cwd={cwd} inFlightTurn={isRunning} />
+              ))
             )}
           </div>
         </div>
