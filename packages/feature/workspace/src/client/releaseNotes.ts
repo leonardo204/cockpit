@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.36.5 — 2026-09-09
+
+### en
+
+The background-jobs list shows this project's work, and tidies itself.
+
+**Improved**
+
+- **With a project open, only that project's jobs are listed.** Another project's background work no longer appears under a divider in the same list — it is hidden entirely, so it cannot be mistaken for the project you are in. On the home view, with no project open, every project's jobs are still shown, grouped by project. The count on the button stays the total, and says how many of them belong to this project.
+- **Finished jobs clear themselves.** A job that succeeded leaves the list at once. One that failed or was stopped lingers a few minutes — long enough to notice — and then clears on its own, instead of piling up.
+
+### ko
+
+백그라운드 작업 목록이 이 프로젝트 것만 보여주고, 스스로 정리돼요.
+
+**나아진 것**
+
+- **프로젝트를 열면 그 프로젝트의 작업만 나와요.** 다른 프로젝트의 백그라운드 작업이 같은 목록에 구분선으로 섞여 나오지 않고 아예 숨겨져요. 지금 있는 프로젝트 것으로 착각할 일이 없어요. 프로젝트를 열지 않은 홈 화면에서는 예전처럼 모든 프로젝트의 작업을 프로젝트별로 묶어 보여줘요. 버튼의 숫자는 전체 개수 그대로이고, 그중 이 프로젝트 것이 몇 개인지 알려줘요.
+- **끝난 작업이 스스로 사라져요.** 성공한 작업은 목록에서 곧바로 빠지고, 실패했거나 멈춘 작업은 몇 분만 — 눈치챌 만큼 — 남았다가 저절로 지워져요. 쌓이지 않아요.
+
 ## 1.36.4 — 2026-09-09
 
 ### en
