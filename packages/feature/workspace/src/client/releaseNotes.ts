@@ -85,6 +85,38 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.37.0 — 2026-09-14
+
+### en
+
+Auto picks a model per request, and cheap subagents keep the conversation light.
+
+**New**
+
+- **Auto in the model picker.** Choose Auto and naby picks Haiku, Sonnet, Opus or Fable for each request: a short chat goes to Haiku, code changes to Opus, plan mode and design questions to Fable, everything else to Sonnet. The chip shows what was chosen, and its tooltip says why. A long conversation keeps its model so the prompt cache stays warm, a model whose window is too small is never picked, and when the Opus or 5-hour limit is nearly used up the pick steps down to Sonnet.
+- **Two built-in subagents.** \`explorer\` (Haiku, read-only) searches files and returns paths and line numbers; \`implementer\` (Sonnet) makes a fully specified code change. naby is told to delegate multi-file reading to \`explorer\` so the main conversation stays small. Both appear in the harness list and can be turned off.
+- **A subagent block names its model.** The block title now reads "Subagent · explorer · haiku", so you can see which model actually answered.
+- **Environment variables that change the engine are visible.** Settings lists variables like \`CLAUDE_CODE_SUBAGENT_MODEL\` from your shell environment, with what each one does. Tokens and keys are shown as "set", never their value.
+
+**Improved**
+
+- An \`@explorer …\` line delegates the step to that subagent instead of pasting its instructions into the main conversation.
+
+### ko
+
+Auto가 요청마다 모델을 고르고, 값싼 서브에이전트가 대화를 가볍게 지켜줘요.
+
+**새로 생긴 것**
+
+- **모델 선택에 Auto가 생겼어요.** Auto를 고르면 naby가 요청마다 Haiku·Sonnet·Opus·Fable 중 하나를 골라요. 짧은 대화는 Haiku, 코드 변경은 Opus, 플랜 모드와 설계 질문은 Fable, 나머지는 Sonnet이에요. 칩에 고른 모델이 보이고 툴팁이 이유를 말해줘요. 긴 대화는 프롬프트 캐시가 유지되도록 모델을 바꾸지 않고, 창이 작은 모델은 고르지 않으며, Opus 한도나 5시간 한도가 거의 차면 Sonnet으로 한 단계 내려요.
+- **내장 서브에이전트 둘이 들어왔어요.** \`explorer\`(Haiku, 읽기 전용)는 파일을 찾아 경로와 줄 번호로 답하고, \`implementer\`(Sonnet)는 완전히 명세된 코드 변경을 맡아요. naby는 여러 파일을 읽는 일을 \`explorer\`에 맡기라고 안내받아서 메인 대화가 작게 유지돼요. 둘 다 하네스 목록에 보이고 끌 수 있어요.
+- **서브에이전트 블록에 모델이 보여요.** 제목이 "Subagent · explorer · haiku"처럼 나와서 실제로 어느 모델이 답했는지 알 수 있어요.
+- **엔진 동작을 바꾸는 환경변수가 보여요.** 설정에 셸 환경의 \`CLAUDE_CODE_SUBAGENT_MODEL\` 같은 변수와 그 효과가 나와요. 토큰과 키는 값 대신 "set"으로만 보여요.
+
+**나아진 것**
+
+- \`@explorer …\`로 부른 줄은 그 지시를 메인 대화에 붙여 넣는 대신 서브에이전트에 위임해요.
+
 ## 1.36.5 — 2026-09-09
 
 ### en
