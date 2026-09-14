@@ -114,3 +114,55 @@ describe('the Gemini model field', () => {
     expect(dict('ko').providerSetup!.modelListEmpty).toContain('직접 입력');
   });
 });
+
+/**
+ * THE VARIABLES THAT OVERRULE THE SENTENCE ABOVE THEM (subagent-delegation §4.4).
+ *
+ * The engine inherits the shell naby was launched from, so a
+ * `CLAUDE_CODE_SUBAGENT_MODEL` or an `ANTHROPIC_API_KEY` sitting in a profile can
+ * change which model answers — and how it is paid for — while the engine summary
+ * keeps saying what naby INTENDED. The list belongs directly under that summary
+ * for exactly that reason: it is the correction, and a correction placed anywhere
+ * else is a second, unrelated fact.
+ *
+ * Two rules, both here because neither is visible to a type checker: the list is
+ * BELOW the summary, and it is GATED on the server having something to say. The
+ * gate is what keeps an ordinary machine — no such variables set — from growing a
+ * permanent empty heading in a pane the IA regroup spent its time emptying.
+ */
+describe('the engine environment notes', () => {
+  it('are rendered directly under the engine summary', () => {
+    const summary = SETUP.indexOf('{state.engine.summary}');
+    const notes = SETUP.indexOf("t('providerSetup.engineEnv.title')");
+    expect(summary, 'engine summary paragraph not found').toBeGreaterThan(-1);
+    expect(notes, 'engine env list not found').toBeGreaterThan(-1);
+    expect(notes).toBeGreaterThan(summary);
+    // One row per note, keyed by the variable's name: `NAME=value — effect`.
+    expect(SETUP).toContain('{state.engineEnv.map((note) => (');
+    expect(SETUP).toMatch(/\{note\.name\}=\{note\.value\}/);
+    expect(SETUP).toContain('{note.effect}');
+  });
+
+  it('draw nothing when the server has nothing to say', () => {
+    expect(SETUP).toContain('{state.engineEnv && state.engineEnv.length > 0 && (');
+  });
+
+  it('read the list from the SERVER payload, never from the environment', () => {
+    // A settings screen that read `process.env` itself would describe the
+    // renderer's environment, not the engine's — and would contradict the
+    // runtime the moment the two differ.
+    expect(SETUP).toMatch(/engineEnv\?: \{ name: string; value: string; effect: string \}\[\];/);
+    expect(SETUP).not.toContain('process.env');
+  });
+
+  it('has the heading in both languages', () => {
+    for (const locale of ['en', 'ko']) {
+      const block = dict(locale).providerSetup as unknown as Record<string, { title?: string }>;
+      expect(block?.engineEnv?.title, `${locale}.providerSetup.engineEnv.title`).toBeTruthy();
+    }
+    const en = dict('en').providerSetup as unknown as { engineEnv: { title: string } };
+    const ko = dict('ko').providerSetup as unknown as { engineEnv: { title: string } };
+    expect(en.engineEnv.title).toMatch(/environment variables/i);
+    expect(ko.engineEnv.title).toContain('엔진');
+  });
+});

@@ -65,6 +65,11 @@ import {
   parseAgentSidecar,
   probeClaudeModels,
   claudeAgentSdkVersion,
+  // WHAT THE SHELL ENVIRONMENT IS DOING TO THE ENGINE (subagent-delegation §4.4).
+  // Pure, and it never returns token material: the two credential variables are
+  // reported as present and nothing more.
+  engineEnvironmentNotes,
+  type EngineEnvNote,
   listGoogleModels,
   type ClaudeModelInfo,
   // -- the plan-usage chip (5-hour / 7-day) ---------------------------------
@@ -116,6 +121,20 @@ import {
   runReflectionSweep,
   type ReflectionSweepResult,
 } from '../lib/reflection';
+// THE TWO SETTINGS-ROW PARSERS, moved out so the model router can read the same
+// rows from the engine side without importing this route (model-auto-routing
+// §4.5). This file is still their only writer; see the re-export below for why
+// the names are also still reachable at `./naby`.
+import {
+  isClaudeModel,
+  modelCacheKey,
+  readModelCache,
+  readUsageCache,
+  usageCacheState,
+  writeUsageCache,
+  type ModelCatalog,
+  type UsageCacheEntry,
+} from '../lib/usageCache';
 import { exportAgent } from '../lib/agentExport';
 import { applyAgentImport } from '../lib/agentImport';
 import type {
@@ -393,6 +412,20 @@ export async function readNabyState(
      *  here is machine-specific beyond the platform: a docs URL and commands. */
     installHelp: ClaudeInstallHelp | null;
   };
+  /** WHICH ENGINE-BEHAVIOUR ENVIRONMENT VARIABLES ARE SET on the machine running
+   *  naby (subagent-delegation §4.4), and what each one changes. naby never reads
+   *  these to DECIDE anything — it writes the model it wants into the subagent
+   *  definition (§2 principle 1) — but the backend is a child process that
+   *  inherits this environment, so a `CLAUDE_CODE_SUBAGENT_MODEL` left in a shell
+   *  profile silently changes what every delegation runs on. Listing them is how
+   *  that stops being silent.
+   *
+   *  ONLY VARIABLES THAT ARE SET are returned, and the list is empty on a clean
+   *  machine — the settings screen then draws nothing. NOT SECRET: the two
+   *  credential variables are reported with the literal value `set`, never their
+   *  contents, because a token on a settings screen is a token in every
+   *  screenshot of it. The client never reads the environment itself. */
+  engineEnv: EngineEnvNote[];
   /** MORE THAN ONE CLAUDE SUBSCRIPTION (claude-multi-account §5): the accounts
    *  naby keeps, which one answers turns, and whether this computer can keep them
    *  apart at all. IDS AND LABELS ONLY — the config directory each account lives
@@ -491,6 +524,12 @@ export async function readNabyState(
     // post-login poll) asks — `claude-account.verify` — because refreshing three
     // accounts on every GET would be three processes per poll.
     claudeAccounts: describeClaudeAccounts(store),
+    // The process environment, read HERE and nowhere else on this path, and passed
+    // EXPLICITLY so the seam is visible: the function defaults to `process.env`,
+    // but naming it keeps "what is read" at the call site where a reviewer looking
+    // for environment reads will find it (and lets a test state its own
+    // environment). Cheap — a table walk over a dozen names, no I/O, no process.
+    engineEnv: engineEnvironmentNotes(process.env),
     // CO-06 — read from the vault through the in-process account bridge (the exact
     // sibling of claudeLogin's `claude auth status` read). Seal-gated inside.
     chatgptLogin: await readChatgptLogin(),
@@ -944,54 +983,19 @@ export type NabyActionResult =
  * asks its own HTTP catalogue with the stored key. Everything AROUND that probe
  * is identical (a settings-row cache, a day's TTL, an explicit refresh, and a
  * failure that falls back to the cache rather than emptying a picker), so it is
- * written once below and parameterised by this name rather than copied.
+ * written once and parameterised by this name rather than copied.
+ *
+ * THE NAME, THE KEY AND THE PARSER NOW LIVE IN `../lib/usageCache` (model-auto-
+ * routing §4.5): the model router reads the same Claude row at turn start, from
+ * `engines/naby.ts`, and an engine must not import an API route to borrow a
+ * parser. What stayed here is everything about DECIDING TO PROBE — the TTL,
+ * `claudeModelCacheIsFresh` and `writeModelCache` — because only a route can
+ * probe, and a turn must never spawn a CLI to choose a model.
  */
-type ModelCatalog = 'claude' | 'google';
-
-/** Setting key holding the last successful probe, per catalogue. The names follow
- *  one rule — `models.<catalogue>.cache` — and `claude`'s is the pre-existing key,
- *  so nothing that was already cached is invalidated by the generalisation. */
-function modelCacheKey(catalog: ModelCatalog): string {
-  return `models.${catalog}.cache`;
-}
 
 /** How long a probed list is trusted before another probe is worth it. A day: new
  *  models do not ship hourly, and the user has an explicit refresh either way. */
 const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Read the cache defensively — it is JSON in a settings row, so a hand-edited or
- * half-written value must read as "no cache" rather than throwing in a chat
- * header or a settings screen.
- *
- * The payload field is NAMED AFTER THE CATALOGUE (`{ fetchedAt, claude: [...] }`,
- * `{ fetchedAt, google: [...] }`), which is what lets one reader serve both
- * without touching the shape Claude's cache is already written in.
- *
- * `sdk` is the Agent SDK version that PRODUCED a Claude list — absent on Google's
- * cache and on any row written before this existed, which is why it is optional
- * rather than required. See the `fresh` check in the Claude branch for what it is
- * for.
- */
-function readModelCache<T>(
-  raw: string | undefined,
-  catalog: ModelCatalog,
-  keep: (row: unknown) => row is T,
-): { fetchedAt: number; sdk: string | null; models: T[] } | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0;
-    const sdk = typeof parsed.sdk === 'string' ? parsed.sdk : null;
-    const rows = parsed[catalog];
-    return { fetchedAt, sdk, models: Array.isArray(rows) ? rows.filter(keep) : [] };
-  } catch {
-    return null;
-  }
-}
-
-const isClaudeModel = (row: unknown): row is ClaudeModelInfo =>
-  !!row && typeof row === 'object' && typeof (row as ClaudeModelInfo).value === 'string';
 
 /**
  * Whether a cached CLAUDE model list may still be served without probing.
@@ -1051,102 +1055,20 @@ function writeModelCache(
   }
 }
 
-/** What `usage.limits` keeps between calls. Shaped as the response minus the
- *  `cached` flag, which is a fact about the read rather than about the reading. */
-export type UsageCacheEntry = {
-  limits: SubscriptionUsage | null;
-  fetchedAt: number;
-  sources: ('sdk' | 'cli')[];
-  cliReason: ClaudeCliUsageReason;
-};
-
 /**
- * Read the usage cache defensively, and REJECT ANYTHING THAT IS NOT A COMPLETE,
- * TIMESTAMPED READING.
- *
- * The strictness is the point. A settings row can be hand-edited or half-written,
- * and every caller of this decides "is it too old" by subtracting `fetchedAt` —
- * so an entry that parses but has `fetchedAt: 0` would read as infinitely stale
- * (harmless), while one with a missing `limits` key would read as a successful
- * lookup that found no windows (not harmless: it would suppress a fresh probe for
- * fifteen minutes). Both are refused as "no cache" instead.
+ * THE USAGE CACHE PARSERS LIVE IN `../lib/usageCache` NOW (model-auto-routing
+ * §4.5), and are re-exported here because this route is still their only WRITER
+ * and because two suites address them at this name
+ * (`usageLimitsTranscript.test.ts`). Moving them was forced by a second reader:
+ * the model router reads `usage.limits.cache.<accountId>` at turn start from
+ * `engines/naby.ts`, and there is no import edge from an engine to an API route.
  */
-export function readUsageCache(raw: string | undefined): UsageCacheEntry | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const fetchedAt = typeof parsed.fetchedAt === 'number' ? parsed.fetchedAt : 0;
-    if (fetchedAt <= 0) return null;
-    // `null` is a legitimate stored value ("we asked and this account has no plan
-    // windows"), so it is distinguished from the key being absent entirely.
-    if (!('limits' in parsed)) return null;
-    const limits = (parsed.limits ?? null) as SubscriptionUsage | null;
-    if (limits !== null && typeof limits !== 'object') return null;
-    const sources = Array.isArray(parsed.sources)
-      ? parsed.sources.filter((s): s is 'sdk' | 'cli' => s === 'sdk' || s === 'cli')
-      : [];
-    const cliReason = (
-      parsed.cliReason === 'same-account' ||
-      parsed.cliReason === 'different-account' ||
-      parsed.cliReason === 'stale-cache'
-        ? parsed.cliReason
-        : 'no-cache'
-    ) as ClaudeCliUsageReason;
-    return { limits, fetchedAt, sources, cliReason };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * WHAT A CACHED READING IS STILL GOOD FOR, as a pure function of the clock.
- *
- * Extracted from the case body because it is the whole freshness policy of the
- * feature and it CANNOT BE REACHED FROM AN END-TO-END TEST: the branches that are
- * not `fresh` all continue into `probeClaudeUsage`, which spawns the Claude CLI
- * and takes up to a minute to fail on a machine that has no sign-in. So the two
- * thresholds are asserted here instead, at a fixed clock, and the case body reads
- * as the three sentences they are.
- *
- *   fresh          inside the TTL — serve it and touch no source at all. This is
- *                  what makes it safe for the client to ask on every turn end.
- *   stale-usable   past the TTL but inside the ceiling — worth a fresh look, and
- *                  still good enough to answer with IF that look fails.
- *   expired        past the ceiling — no longer a reading. A failed look now
- *                  answers with nothing, because serving a frozen percentage
- *                  forever is the exact defect that disqualified reading another
- *                  program's cache as a lone source.
- *
- * `refresh` (an explicit user action) skips straight past `fresh`; it can still
- * be `stale-usable`, so an explicit refresh that FAILS falls back rather than
- * blanking a number the user was already looking at.
- */
-export function usageCacheState(
-  cached: { fetchedAt: number } | null,
-  now: number,
-  refresh: boolean,
-): 'none' | 'fresh' | 'stale-usable' | 'expired' {
-  if (!cached) return 'none';
-  const age = now - cached.fetchedAt;
-  if (age >= SUBSCRIPTION_USAGE_MAX_STALE_MS) return 'expired';
-  if (!refresh && age < SUBSCRIPTION_USAGE_TTL_MS) return 'fresh';
-  return 'stale-usable';
-}
-
-/** Persist a reading. An unwritable cache costs one extra probe next time and
- *  nothing else, which is why this swallows rather than failing the request —
- *  the same rule `writeModelCache` follows. */
-function writeUsageCache(
-  store: { setSetting(k: string, v: string): void },
-  key: string,
-  entry: UsageCacheEntry,
-): void {
-  try {
-    store.setSetting(key, JSON.stringify(entry));
-  } catch {
-    /* see above */
-  }
-}
+export {
+  readUsageCache,
+  usageCacheState,
+  writeUsageCache,
+  type UsageCacheEntry,
+} from '../lib/usageCache';
 
 /** The in-house org scopeKey — kept in sync with the engine's gatherPolicyRules. */
 const DEFAULT_POLICY_ORG_ID = 'default';

@@ -307,6 +307,50 @@ describe('applyStreamEvent — subagent attribution + lifecycle absorption', () 
     expect(twice).toBe(once);
   });
 
+  it('the model a subagent actually ran on is filed under its block', () => {
+    // naby ASKED for haiku on `explorer`; what this records is what answered.
+    const out = reduce(seed(), [
+      taskEvent('a1', 'started', { harness_task_tool_use_id: 'task-1' }),
+      { type: 'subagent_model', agent_tool_call_id: 'task-1', model: 'claude-haiku-4-5-20251001' },
+    ]);
+    expect(out[0].subagents?.[0]?.model).toBe('claude-haiku-4-5-20251001');
+    // …and nothing of it leaked into the answer.
+    expect(out[0].content).toBe('');
+  });
+
+  it('a model event for an unknown call id is ignored (no phantom block)', () => {
+    const out = reduce(seed(), [
+      taskEvent('a1', 'started', { harness_task_tool_use_id: 'task-1' }),
+      { type: 'subagent_model', agent_tool_call_id: 'task-9', model: 'claude-opus-5' },
+    ]);
+    expect(out[0].subagents).toHaveLength(1);
+    expect(out[0].subagents?.[0]?.model).toBeUndefined();
+  });
+
+  it('a second event for the same id does not duplicate — same array, no re-render', () => {
+    const events: StreamEvent[] = [
+      taskEvent('a1', 'started', { harness_task_tool_use_id: 'task-1' }),
+      { type: 'subagent_model', agent_tool_call_id: 'task-1', model: 'claude-haiku-4-5-20251001' },
+    ];
+    const once = reduce(seed(), events);
+    const twice = reduce(once, events);
+    expect(twice[0].subagents).toHaveLength(1);
+    expect(twice[0].subagents?.[0]?.model).toBe('claude-haiku-4-5-20251001');
+    expect(twice).toBe(once);
+  });
+
+  it('the closing edge does not take the model away with it', () => {
+    const out = reduce(seed(), [
+      taskEvent('a1', 'started', { harness_task_tool_use_id: 'task-1' }),
+      { type: 'subagent_model', agent_tool_call_id: 'task-1', model: 'claude-sonnet-4-5-20250929' },
+      taskEvent('a1', 'ended', { harness_task_status: 'completed' }),
+    ]);
+    expect(out[0].subagents?.[0]).toMatchObject({
+      status: 'completed',
+      model: 'claude-sonnet-4-5-20250929',
+    });
+  });
+
   it('a harness event that is NOT a task still renders as its muted pill row', () => {
     const out = reduce(seed(), [
       { type: 'system', subtype: 'harness', harness_subtype: 'system/compact_boundary', harness_detail: 'trigger=auto' },

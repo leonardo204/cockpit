@@ -11,6 +11,7 @@ import type {
   RateLimitInfo,
   ApiRetryInfo,
   ChatEngine,
+  ModelRoute,
 } from './types';
 import i18n from '@cockpit/shared-i18n';
 import { useWebSocket } from '@cockpit/shared-ui';
@@ -55,6 +56,17 @@ interface UseChatStreamOptions {
    * instead of only the static engine name. Read-only; may fire every turn.
    */
   onEngineModel?: (model: string) => void;
+  /**
+   * WHAT THE AUTO ROUTER DECIDED for this turn, from the same `system/init`
+   * event (`model_route`) — the tier and the reason behind the model above.
+   *
+   * Fires on EVERY init, including with `null` when the event carries no route:
+   * a turn that ran on an explicit pick must clear the last decision rather than
+   * leave the chip claiming a tier nobody chose. Fires a SECOND time when the
+   * result event reports `context_model`, with `served` folded in, so the
+   * tooltip can name the id that actually answered.
+   */
+  onModelRoute?: (route: ModelRoute | null) => void;
   /**
    * WHO is answering this turn — the agent, not the engine — as the naby engine
    * reports it on the same `system/init` event (`acting_agent`). `null` when the
@@ -116,7 +128,7 @@ interface UseChatStreamReturn {
 export function useChatStream(
   messages: ChatMessage[],
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
-  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, onActingAgent, onRunError, getModel }: UseChatStreamOptions
+  { sessionId, cwd, engine, planMode, onSessionId, onFetchTitle, onRunComplete, onEngineModel, onModelRoute, onActingAgent, onRunError, getModel }: UseChatStreamOptions
 ): UseChatStreamReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
@@ -142,6 +154,15 @@ export function useChatStream(
   // the whole stream handler every render.
   const onEngineModelRef = useRef(onEngineModel);
   onEngineModelRef.current = onEngineModel;
+  // The auto route rides the same event and the same indirection.
+  const onModelRouteRef = useRef(onModelRoute);
+  onModelRouteRef.current = onModelRoute;
+  // THE ROUTE OF THE TURN THAT IS RUNNING, kept because the two halves of it
+  // arrive on two different events: the decision on `system/init`, the id that
+  // actually served it on the result. Cleared (to null) by every init that
+  // carries no route, so a result can never re-augment a decision that has
+  // already been superseded by an explicit pick.
+  const lastModelRouteRef = useRef<ModelRoute | null>(null);
   // The acting agent rides the same event and the same indirection.
   const onActingAgentRef = useRef(onActingAgent);
   onActingAgentRef.current = onActingAgent;
@@ -306,6 +327,17 @@ export function useChatStream(
       // the status indicator can show the actual model answering this turn.
       const initModel = event.model;
       if (typeof initModel === 'string' && initModel) onEngineModelRef.current?.(initModel);
+      // WHY that model, when the user left the choice to naby. Reported on EVERY
+      // init, absence included (→ null): a turn that ran on an explicit pick must
+      // clear the previous turn's route rather than keep explaining a decision
+      // that no longer applies.
+      const initRoute = event.model_route as ModelRoute | undefined;
+      const route =
+        initRoute && typeof initRoute === 'object' && typeof initRoute.tier === 'string'
+          ? ({ ...initRoute, requested: 'auto' } as ModelRoute)
+          : null;
+      lastModelRouteRef.current = route;
+      onModelRouteRef.current?.(route);
       // WHO is answering, from the same event. Reported on EVERY init, including
       // when it is absent (→ null): a turn that switched to an engine with no agent
       // identity must fall back to the engine brand rather than keep naming the
@@ -534,6 +566,16 @@ export function useChatStream(
       // The model that actually answered, so the gauge can estimate a denominator
       // by family when the registry knew no exact one.
       const contextModel = event.context_model as string | undefined;
+
+      // …and it is also the one string that can tell an auto-routed turn what it
+      // ACTUALLY ran on. Folded into the live route here — outside the `usage`
+      // branch below on purpose: the tooltip's honesty must not depend on the
+      // result event happening to carry a usage block.
+      if (typeof contextModel === 'string' && contextModel && lastModelRouteRef.current) {
+        const served: ModelRoute = { ...lastModelRouteRef.current, served: contextModel };
+        lastModelRouteRef.current = served;
+        onModelRouteRef.current?.(served);
+      }
 
       if (usage) {
         setTokenUsage({

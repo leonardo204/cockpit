@@ -843,6 +843,13 @@ type NabyEngineState = {
   /** The accounts to choose between. Absent from an older server — the section
    *  then does not render, which is the same as having one account. */
   claudeAccounts?: ClaudeAccountsBlock;
+  /** VARIABLES IN THIS SHELL'S ENVIRONMENT THAT CHANGE HOW THE ENGINE RUNS
+   *  (subagent-delegation §4.4). The runtime decides what is worth saying and
+   *  sends only what is SET; secrets arrive as `value: "set"` and never as
+   *  themselves. This screen never reads the environment itself — a second
+   *  reader is how a settings page ends up contradicting the process it
+   *  describes. Absent or empty ⇒ nothing is drawn. */
+  engineEnv?: { name: string; value: string; effect: string }[];
   providers: { id: string; label: string; model: string; ready: boolean }[];
   mcp: McpRow[];
   /** Every built-in System MCP preset's connection state, keyed by preset name.
@@ -1531,6 +1538,28 @@ export function NabyEngineSelector({
       <p className={`text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-amber-500'}`}>
         {state.engine.summary}
       </p>
+      {/* …AND WHAT THIS SHELL IS QUIETLY DOING TO IT (subagent-delegation §4.4).
+          The engine inherits the environment naby was launched from, so a
+          `CLAUDE_CODE_SUBAGENT_MODEL` or an `ANTHROPIC_API_KEY` left in a shell
+          profile can override the sentence above and bill differently — and
+          until now nothing on screen said so. The runtime decides what is worth
+          naming and sends only what is SET, so an ordinary machine sees nothing
+          at all and this is not one more permanent box in a settings pane. */}
+      {state.engineEnv && state.engineEnv.length > 0 && (
+        <div className="space-y-0.5 pt-1" data-testid="engine-env">
+          <p className="text-xs font-medium text-foreground">
+            {t('providerSetup.engineEnv.title')}
+          </p>
+          {state.engineEnv.map((note) => (
+            <p key={note.name} className="text-xs text-muted-foreground">
+              <code className="font-mono text-foreground">
+                {note.name}={note.value}
+              </code>
+              <span className="opacity-80"> — {note.effect}</span>
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -41,6 +41,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
+  AUTO_MODEL_VALUE,
   CHATGPT_OAUTH_PROVIDER_ID,
   CLAUDE_MODEL_SCOPE,
   GOOGLE_MODEL_SCOPE,
@@ -54,6 +55,8 @@ import {
   type LiveModel,
   type ModelOption,
 } from './modelCatalog';
+import { chipLabelFor, routeReasonKey, routeTooltip } from './modelRouteLabel';
+import type { ModelRoute } from './types';
 
 type ModelSwitcherProps = {
   /** The resolved engine identity from EngineSwitcher (the single owner of the
@@ -65,6 +68,14 @@ type ModelSwitcherProps = {
   /** The user PICKED a model here (not a passive scope re-read). The host uses
    *  this to drop a mid-conversation "switched" notice. */
   onUserSelect?: () => void;
+  /**
+   * WHAT NABY PICKED THIS TURN, when the selection is `auto` — the router's tier
+   * and reason from the turn's `system/init` (`model_route`), plus the id that
+   * actually served it once the result event says so. Null before the first
+   * routed turn of a session, and whenever the pick is explicit again. The chip
+   * reads it; THE MENU DOES NOT — a route is an observation, never a selection.
+   */
+  liveRoute?: ModelRoute | null;
 };
 
 /** What the /api/naby GET adds for this switcher: the persisted pick per scope. */
@@ -72,7 +83,7 @@ type NabyModelState = {
   selectedModels?: Record<string, string>;
 };
 
-export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: ModelSwitcherProps) {
+export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect, liveRoute }: ModelSwitcherProps) {
   const { t } = useTranslation();
   const scope = modelScopeFor(activeEngine?.engineId ?? null, activeEngine?.selectedProvider ?? null);
   // The live Claude catalog. Null until the first answer; the curated fallback
@@ -266,15 +277,48 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
   // No per-turn model choice for this engine (metered API-key provider, or no
   // engine resolved yet) → nothing to show.
   if (!scope) return null;
-  const options: ModelOption[] =
+  const catalogOptions: ModelOption[] =
     scope === CLAUDE_MODEL_SCOPE
       ? claudeOptionsFrom(liveClaude)
       : scope === GOOGLE_MODEL_SCOPE
         ? googleOptionsFrom(liveGoogle)
         : modelsForScope(scope);
-  if (options.length === 0) return null;
-  // Label from whatever list is in play, so a live-only id does not render raw.
-  const currentLabel = options.find((o) => o.value === value)?.label ?? modelLabel(scope, value);
+  if (catalogOptions.length === 0) return null;
+  // THE `auto` ROW IS THE ONLY ONE WHOSE WORDS ARE OURS. Every other row is named
+  // by the provider — the SDK's own `displayName` and description, which are
+  // English and which we would be MIS-translating if we replaced them. `auto` is
+  // naby's policy, not a model, so its label and hint come from the locale files
+  // and a Korean user reads "naby가 요청마다 고른다" instead of the English
+  // constant. Done to the OPTION rather than at the two render sites so the menu
+  // row and the chip label (which reads this same list) cannot disagree.
+  const options: ModelOption[] = catalogOptions.map((o) =>
+    o.value === AUTO_MODEL_VALUE
+      ? {
+          ...o,
+          label: t('modelSwitcher.auto', { defaultValue: o.label }),
+          ...(o.hint ? { hint: t('modelSwitcher.autoHint', { defaultValue: o.hint }) } : {}),
+        }
+      : o,
+  );
+  // Label from whatever list is in play, so a live-only id does not render raw —
+  // and, when naby is the one picking, the tier it picked this turn appended to
+  // it ("Auto · Sonnet"). The composition is pure and pinned in modelRouteLabel.
+  const currentLabel = chipLabelFor(value, liveRoute, options, modelLabel(scope, value));
+  // WHY that tier, and which id actually served it. GATED EXACTLY LIKE THE LABEL
+  // — `auto` is still the pick AND a route is in hand — and the two must agree
+  // or the chip explains a turn it is not naming. They come apart in a real
+  // sequence: an `auto` turn starts, the user switches the chip to Opus while it
+  // runs, and the result's `context_model` re-fires `onModelRoute` with the
+  // served id folded into the OLD route. `chipLabelFor` ignores it (the pick is
+  // explicit now), so the chip reads "Opus" while a tooltip on the same chip
+  // describes the tier and reason of the turn before it.
+  const routeTitle =
+    value === AUTO_MODEL_VALUE && liveRoute
+      ? routeTooltip(
+          t(routeReasonKey(liveRoute), { defaultValue: liveRoute.reason }),
+          liveRoute.served,
+        )
+      : null;
 
   return (
     <span ref={rootRef} className="relative inline-flex items-center text-xs">
@@ -286,7 +330,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect }: Mod
         data-testid="model-switcher"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={t('modelSwitcher.title', { defaultValue: 'Which model' })}
+        title={routeTitle ?? t('modelSwitcher.title', { defaultValue: 'Which model' })}
       >
         {t('modelSwitcher.label', { defaultValue: 'Model' })}
         <span className="text-foreground/70">{currentLabel}</span>

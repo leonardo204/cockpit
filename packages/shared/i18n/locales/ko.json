@@ -802,6 +802,19 @@
   "modelSwitcher": {
     "label": "모델",
     "title": "사용할 모델",
+    "auto": "Auto",
+    "autoHint": "naby가 요청마다 고른다",
+    "route": {
+      "plan-mode": "플랜 모드라 설계용 모델",
+      "design-ask": "설계·검토 요청",
+      "build-ask": "구현·수정 요청",
+      "full-mode": "나비 전면 모드",
+      "chat": "짧은 대화",
+      "default": "일반 요청",
+      "sticky": "대화가 커서 이전 모델 유지",
+      "window-fit": "대화가 커서 큰 창의 모델",
+      "budget-cap": "한도가 차서 한 단계 낮춤"
+    },
     "refresh": "새로 받기",
     "refreshing": "확인 중…",
     "refreshHint": "내 Claude 로그인이 쓸 수 있는 모델을 물어봅니다",
@@ -1213,6 +1226,9 @@
     "billedHint": "{{model}} — {{label}} 계정으로 청구됩니다.",
     "noKeyHint": "{{model}} — API 키가 없어서 답할 수 없습니다.",
     "selected": "선택됨",
+    "engineEnv": {
+      "title": "이 환경에서 엔진 동작을 바꾸는 변수"
+    },
     "mcpServers": "MCP 서버",
     "cancel": "취소",
     "add": "+ 추가",

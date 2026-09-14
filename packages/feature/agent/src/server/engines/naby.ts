@@ -101,6 +101,13 @@ import {
   resolveProviderCredential,
   type NabySettings,
   runTurn,
+  // specs/subagent-delegation.md M2. The three runtime facts this file needs
+  // about the `core` bundle: which bundles are on with no preset behind them,
+  // which subagents may run on this turn's engine, and the one delegation policy
+  // string both engine paths share.
+  ALWAYS_ON_HARNESS_BUNDLES,
+  subagentAllowedForEngine,
+  delegationPolicyFor,
   seedBuiltinHarness,
   seedBuiltinPersona,
   selectEngine,
@@ -150,6 +157,18 @@ import {
   sendFinalReport,
 } from '../lib/telegramEscalation';
 import { resolveContextWindow as resolveRunContextWindow } from '../lib/contextWindow';
+// WHICH MODEL ANSWERS A TURN THE USER LEFT ON `auto` (model-auto-routing §4.5),
+// and the one guard that keeps that chat-bar-only value out of every functional
+// model field. `resolveAutoModel` gathers the signals and calls the runtime's
+// pure router; `effectiveAgentModel` reads a STORED model (an agent's, a
+// subagent's) and answers `undefined` for both `''` and `auto`, which mean the
+// same thing to an engine: inherit the turn's model.
+import {
+  effectiveAgentModel,
+  resolveAutoModel,
+  AUTO_MODEL_VALUE,
+  type AutoModelResolution,
+} from '../lib/modelRoute';
 import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
@@ -275,8 +294,23 @@ function gatherPolicyRules(store: Store, cwd: string | undefined): PolicyRule[] 
 
 /** Gather enabled subagents (Phase 2.5 M4) across user + org + this project, as
  *  engine-neutral SubagentSpecs. Project overrides a same-named user/org one
- *  (last-write-wins on the ordered scan). Best-effort — never break a turn. */
-function gatherSubagents(store: Store, cwd: string | undefined): SubagentSpec[] {
+ *  (last-write-wins on the ordered scan). Best-effort — never break a turn.
+ *
+ *  ENGINE-FILTERED (specs/subagent-delegation.md §4.1). A stored subagent may
+ *  declare which engines it is written for, and the `core` built-ins declare
+ *  `dev-claude`: their tools are the Agent SDK's own names (`Read`/`Glob`/`Grep`)
+ *  and their models are Anthropic aliases, so on the AI-SDK engine they would be
+ *  a tool-less subagent asking a non-Anthropic provider for `haiku`. A row that
+ *  declares nothing runs everywhere — which is every subagent written before this
+ *  field existed, so no install sees its roster change.
+ *
+ *  Exported so the filter can be asserted directly (nabySubagentDelegation.test).
+ */
+export function gatherSubagents(
+  store: Store,
+  cwd: string | undefined,
+  engineId: string | undefined,
+): SubagentSpec[] {
   const items: HarnessItem[] = [];
   try {
     items.push(...store.listHarness('user', DEFAULT_USER_ID, { kind: 'subagent', status: 'enabled' }));
@@ -298,11 +332,25 @@ function gatherSubagents(store: Store, cwd: string | undefined): SubagentSpec[] 
   const byName = new Map<string, SubagentSpec>();
   for (const it of items) {
     if (it.kind !== 'subagent' || !it.subagent) continue;
+    // NOT FOR THIS ENGINE — dropped before it can take the name. Skipping the ROW
+    // (rather than filtering the finished map) keeps the rule per-row: a project
+    // row that cannot run here does not shadow a same-named user row that can.
+    if (!subagentAllowedForEngine(it.subagent, engineId)) continue;
+    // THE ONE PLACE A SUBAGENT'S STORED MODEL BECOMES AN ENGINE INPUT, which is
+    // why the `auto` guard belongs here rather than at the two consumers. This
+    // roster feeds BOTH of them: the Agent SDK's native `agents` map on
+    // dev-claude, and `naby_delegate`'s nested turns on every other engine. The
+    // subagent form's model field is free text and a subagent can arrive by
+    // import, so `auto` — a chat-bar value the SDK rejects (model-auto-routing
+    // §4.1) — can genuinely be in this row. `effectiveAgentModel` turns it into
+    // the absence it means: inherit the turn's model, which on an `auto` turn is
+    // already the model the router chose.
+    const subagentModel = effectiveAgentModel(it.subagent.model);
     byName.set(it.name, {
       name: it.name,
       ...(it.description ? { description: it.description } : {}),
       systemPrompt: it.subagent.systemPrompt,
-      ...(it.subagent.model ? { model: it.subagent.model } : {}),
+      ...(subagentModel ? { model: subagentModel } : {}),
       ...(it.subagent.toolRefs && it.subagent.toolRefs.length > 0
         ? { toolRefs: it.subagent.toolRefs }
         : {}),
@@ -349,9 +397,19 @@ export function getStore(): Store {
     // save it again — without this, `confluence-upload` would seed disabled and sit
     // there forever. Reading the registry here (rather than in the runtime) keeps
     // "is this preset configured" in the one module that owns the presets.
+    //
+    // AND `ALWAYS_ON_HARNESS_BUNDLES` (specs/subagent-delegation.md §4.1) covers
+    // the case no preset can: the `core` bundle — `explorer` and `implementer` —
+    // has no System MCP server behind it, so no credential will ever switch it on.
+    // The runtime owns that list, and the spread is the whole integration: the
+    // preset walk in `configuredHarnessBundles` stays a pure reading of the MCP
+    // registry and never learns about a bundle that has no server (§2.7.2).
+    // It means SEEDED ENABLED, not re-enabled every boot — the row is written once
+    // and belongs to the user from then on, so a disabled or deleted `explorer`
+    // stays gone.
     try {
       seedBuiltinHarness(sharedStore, {
-        activeBundles: configuredHarnessBundles(sharedStore),
+        activeBundles: [...configuredHarnessBundles(sharedStore), ...ALWAYS_ON_HARNESS_BUNDLES],
       });
     } catch {
       // Non-fatal, like every other boot-heal here: a store that cannot take the
@@ -721,8 +779,35 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // option, so a friendly label like "claude (local sign-in)" is sent as
         // a model id and the SDK rejects the turn with "there's an issue with
         // the selected model". A label must never reach a functional field.
+        //
+        // ON AN `auto` TURN THE TWO END UP EQUAL, AND STILL FOR THAT REASON: both
+        // are filled from whatever will actually answer — the routed agent's own
+        // model when it has one, otherwise the router's catalogue value (`haiku`,
+        // `opus[1m]`) — so the init event's `model` stays FUNCTIONAL. The consumer
+        // that makes that load-bearing is `contextWindowFor`, which measures the
+        // gauge's denominator off this string; a label here sizes the gauge as an
+        // unknown model. The tier and the reason ride beside it in `model_route`,
+        // and only on the turns a router really chose (model-auto-routing §4.5,
+        // §4.6).
         let modelLabel: string;
         let modelForEngine: string | undefined;
+        // `auto` reached us and nothing outranked it, so the router runs later in
+        // this function — after `turnText`, the routed stage and plan mode are
+        // bound, and before the init event names a model. Only ever true on
+        // dev-claude: `auto` is a value of the Claude scope's chip.
+        let autoRequested = false;
+        // What the router decided, for the init event. Absent on every turn the
+        // user pinned a model on, which is what tells the chip to show its own
+        // value rather than a routed one (§4.6).
+        let modelRoute: { requested: typeof AUTO_MODEL_VALUE } & Omit<AutoModelResolution, 'value'>
+          | undefined;
+        // THE SUBSCRIPTION PINNED FOR THIS TURN (claude-multi-account §5.4), read
+        // once in the dev-claude branch below and kept here so the router can key
+        // the limits cache to it. Hoisted rather than re-read: a second
+        // `activeClaudeAccountId` call could see a switch that landed mid-turn and
+        // would then read the limits of an account this turn is not running on —
+        // the same cross-account error the per-account cache key exists to prevent.
+        let claudeAccountId: string | undefined;
         // The id of the provider that actually answers. Captured from the
         // resolution rather than re-derived later, so the ModelSelection can
         // never name a different provider than the one whose key was used.
@@ -734,7 +819,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // A test-injected resolver supplies its own model, so no key and no
           // engine selection are needed — this is the SPIKE-02 seam.
           const resolveModel: ModelResolver = deps.resolveModel;
-          modelLabel = requestedModel || 'injected-model';
+          // `auto` IS NOT A MODEL ON THIS PATH EITHER. The router only runs on
+          // dev-claude, so everywhere else the word has to mean what it means to
+          // a stored agent model: nothing sendable, i.e. "no model" (§4.5). Here
+          // that keeps the injected resolver's own default in play instead of
+          // handing it a slug no provider answers to.
+          modelLabel = effectiveAgentModel(requestedModel) ?? 'injected-model';
           modelForEngine = modelLabel;
           engine = new AiSdkEngine({ resolveModel });
         } else {
@@ -778,7 +868,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // already-started turn — it takes effect the next time this line runs,
             // which is why the select action discloses `appliesNextTurn` instead of
             // refusing. Nothing downstream re-reads the store for the account.
-            const claudeAccountId = activeClaudeAccountId(store);
+            claudeAccountId = activeClaudeAccountId(store);
             engine = new ClaudeAgentSdkEngine(
               claudeAccountId ? { accountId: claudeAccountId } : {},
             );
@@ -788,8 +878,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // May be undefined — that means "the Agent SDK picks its own
             // default", which is the normal case and must stay undefined
             // rather than becoming a made-up string.
-            modelForEngine = selection.model ?? requestedModel;
-            modelLabel = modelForEngine ?? 'claude (local sign-in)';
+            //
+            // `auto` IS INTERCEPTED HERE AND ANSWERED LATER (model-auto-routing
+            // §4.5). It is not a model id: the server validates no model value,
+            // so left alone it would travel to the SDK's `model` option and be
+            // rejected. It is also not answerable YET — the rules read
+            // `turnText`, the routed stage and plan mode, none of which are bound
+            // this early — so the value is dropped, a flag is raised, and the
+            // router runs one statement before the init event.
+            //
+            // `NABY_DEV_MODEL` STILL WINS, and it wins by construction rather
+            // than by a check: `selection.model` is only ever set from that env
+            // var (runtime engines/select.ts), so a machine that exports it never
+            // sees `selection.model === undefined` and never sets the flag.
+            autoRequested = selection.model === undefined && requestedModel === AUTO_MODEL_VALUE;
+            modelForEngine = autoRequested ? undefined : selection.model ?? requestedModel;
+            modelLabel = autoRequested
+              ? AUTO_MODEL_VALUE
+              : modelForEngine ?? 'claude (local sign-in)';
             console.log(`[engine:naby] ${selection.summary}`);
           } else if (
             isChatgptOauthEnabled() &&
@@ -822,7 +928,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               });
               return;
             }
-            const model = requestedModel || CHATGPT_OAUTH_DEFAULT_MODEL;
+            // `auto` FALLS BACK TO THIS PROVIDER'S DEFAULT. The chip's Claude
+            // scope and the ChatGPT scope keep separate picks, but one saved
+            // `auto` can still arrive here — a scheduled task carrying it, or an
+            // engine switched between the pick and the send — and OpenAI has no
+            // model by that name (§4.5).
+            const model = effectiveAgentModel(requestedModel) ?? CHATGPT_OAUTH_DEFAULT_MODEL;
             const profile: ProviderProfile = {
               id: CHATGPT_OAUTH_PROVIDER_ID,
               label: CHATGPT_OAUTH_LABEL,
@@ -846,7 +957,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           } else {
             // The SAME settings the selection above ran on — so "Gemini will
             // answer" and "Gemini answers" cannot come apart.
-            const resolved = await resolveMeteredProvider(settings, requestedModel);
+            // Guarded for the same reason as the two branches above: a metered
+            // profile names its own model, and a requested `auto` must read as
+            // "no override" so the profile's model answers — not as an override
+            // the provider will reject (§4.5).
+            const resolved = await resolveMeteredProvider(
+              settings,
+              effectiveAgentModel(requestedModel),
+            );
             if (!resolved) {
               // selectEngine said a credential resolves, so this is a race
               // (a key cleared between the two calls), not a normal path.
@@ -1028,6 +1146,32 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 },
               })
             : undefined;
+        // THE TWO PERMISSION SWITCHES, read before the toolset because they
+        // decide which tools it contains — and before the delegation sink and the
+        // system prompt below, because the delegation policy
+        // (specs/subagent-delegation.md §4.2) is worded from the same pair.
+        //
+        // `gate.allowChanges` (default ON) is the app-wide toggle; read per turn
+        // so flipping it lands on the next message. `permissionMode: 'plan'` is
+        // the per-tab plan-mode checkbox — read-only, plan first, edit nothing.
+        // Plan mode used to be sent only to the Claude engine and was a NO-OP
+        // here, so the checkbox promised something this engine never did. It is
+        // honoured now, and it wins over the toggle: a user who asked for a plan
+        // has said what they want more recently than the global default.
+        const allowChanges =
+          (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
+        const planMode = ctx.params.permissionMode === 'plan';
+
+        // THIS TURN'S SUBAGENT ROSTER, gathered ONCE (specs/subagent-delegation
+        // §4.1-§4.2). Three things must agree about who is available: the
+        // `naby_delegate` sink below, the delegation policy block in the system
+        // prompt, and the `subagents` field handed to `runTurn`. Computing it
+        // three times invited exactly the drift the policy cannot survive — a
+        // prompt that names `explorer` while the engine was given a roster without
+        // it. `engineId` is settled by here (the engine selection above), which is
+        // what makes the engine filter possible at all.
+        const turnSubagents = gatherSubagents(store, projectCwd, engineId);
+
         // Phase 2.5 M4b: SUBAGENTS ON AN ENGINE WITH NO NATIVE ONES. dev-claude
         // maps SubagentSpec onto the Agent SDK's own `agents` (delegated through
         // its gated Task tool), so it needs nothing here. The AI-SDK engine had no
@@ -1043,16 +1187,33 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const delegationSink = nativeSubagents
           ? undefined
           : {
-              subagents: gatherSubagents(store, projectCwd),
+              subagents: turnSubagents,
               // The user's own turn. A nested run gets depth + 1, which is what the
               // runtime's cap counts against.
               depth: 0,
+              // WHAT THE `naby_delegate` DESCRIPTION IS ALLOWED TO RECOMMEND
+              // (§4.2). The same boolean the dev-claude system block is built
+              // from, so the two engines cannot disagree about whether this turn
+              // may hand a code change to `implementer`. On a read-only turn the
+              // editing tools are absent and the gate refuses the rest, so
+              // recommending it would be spending a round trip on a refusal.
+              canMutate: allowChanges && !planMode,
               run: (input: { spec: SubagentSpec; task: string }) =>
                 runNestedTurn(
                   {
                     store,
                     engine,
-                    model: { providerId, ...(modelForEngine ? { model: modelForEngine } : {}) },
+                    // A CLOSURE OVER THE `let`, read when a delegation actually
+                    // happens — which is inside the turn, long after the router
+                    // has assigned. So an `auto` turn delegates on the model it
+                    // chose, and `effectiveAgentModel` is belt-and-braces: it
+                    // holds the invariant locally ("no `auto` leaves this file
+                    // in a model field") instead of resting on the assignment
+                    // order of a function two thousand lines long.
+                    model: (() => {
+                      const m = effectiveAgentModel(modelForEngine);
+                      return { providerId, ...(m ? { model: m } : {}) };
+                    })(),
                     // THE PARENT'S GATE, passed down unchanged — see lib/delegation.
                     gate,
                     toolSchemas,
@@ -1065,20 +1226,6 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   input,
                 ),
             };
-
-        // THE TWO PERMISSION SWITCHES, read before the toolset because they
-        // decide which tools it contains.
-        //
-        // `gate.allowChanges` (default ON) is the app-wide toggle; read per turn
-        // so flipping it lands on the next message. `permissionMode: 'plan'` is
-        // the per-tab plan-mode checkbox — read-only, plan first, edit nothing.
-        // Plan mode used to be sent only to the Claude engine and was a NO-OP
-        // here, so the checkbox promised something this engine never did. It is
-        // honoured now, and it wins over the toggle: a user who asked for a plan
-        // has said what they want more recently than the global default.
-        const allowChanges =
-          (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
-        const planMode = ctx.params.permissionMode === 'plan';
 
         //
         // P3-M10 (§3): with learning off — app-wide or for this one session — the
@@ -1607,6 +1754,33 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // agreed, and it must never be able to talk the turn out of a rule that
             // follows it.
             handoffInstruction(sessionRef?.handoff),
+            // ---- WHEN TO HAND WORK TO A SUBAGENT (subagent-delegation §4.2)
+            //
+            // POLICY, AND THEREFORE HERE — after the handoff, which is context and
+            // must not be able to outrank it, and before the stage / check-in /
+            // style instructions, which are about how this turn answers rather
+            // than about what it should do itself.
+            //
+            // dev-claude ONLY. The Agent SDK learns about subagents through its own
+            // `agents` map, which has nowhere to put a policy, so the system prompt
+            // is the only place it can go. Every other engine reaches subagents
+            // through `naby_delegate`, and the runtime appends the SAME string to
+            // that tool's description — putting it here as well would state the
+            // policy twice on one turn.
+            //
+            // Built from `turnSubagents`, the roster the engine is actually given:
+            // `delegationPolicyFor` returns nothing unless `explorer` or
+            // `implementer` is really in it, so disabling both rows removes the
+            // block. `canMutate` is this turn's mutation allowance — the identical
+            // boolean the delegation sink carries — and with it false the
+            // `implementer` half is dropped, because a plan-mode turn cannot carry
+            // out a code change however well it delegates.
+            nativeSubagents
+              ? delegationPolicyFor(
+                  turnSubagents.map((s) => s.name),
+                  { canMutate: allowChanges && !planMode },
+                )
+              : undefined,
             stageLimited
               ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
               : undefined,
@@ -1924,6 +2098,80 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           return decision;
         };
 
+        // ---- `auto`: which model answers this turn (model-auto-routing §4.5) --
+        //
+        // THE LAST POSSIBLE MOMENT, AND THE EARLIEST. Everything the rules read is
+        // bound by now and nothing has read the model yet:
+        //
+        //   turnText       the user's words with the `@name` address stripped
+        //   subjectGrowth  the stage of whoever is answering
+        //   planMode       the per-tab read-only checkbox
+        //   addressedAgent whether this turn was addressed with `@` at all
+        //
+        // and the two places that DO read `modelForEngine` — the delegation sink
+        // above and `runTurn`'s model below — are closures over the `let`, called
+        // later in the turn. Assigning here is therefore enough for both; there is
+        // no captured copy to go stale.
+        //
+        // ONE DECISION PER USER TURN, not per autonomy step. `runTurn` reads the
+        // same `modelForEngine` on every step of an autonomous run, so a long run
+        // does not drift models halfway through — and the prompt cache, which is
+        // per model, is not thrown away mid-goal.
+        //
+        // A ROUTED AGENT'S OWN MODEL IS ANSWERED FIRST, AND THE ROUTER IS NOT
+        // CONSULTED AT ALL. §4.5 already said that model wins — `runTurn` prefers
+        // it below — but WINNING AT `runTurn` IS TOO LATE FOR THE INIT EVENT.
+        // Running the router anyway would put its pick in `model`, and its tier
+        // and reason in `model_route`, for a turn that opus is about to answer:
+        // the chip would read "Auto · Haiku" until the result's `context_model`
+        // arrived to contradict it. The init event must never describe a model
+        // that is not the one running (§4.6 — `model` is a functional value, not
+        // a guess), so the branch is decided here, once, and both fields are
+        // filled from the same answer.
+        //
+        // `model_route` IS LEFT ABSENT on this path, and that is the honest
+        // report: nothing was routed. Its presence is what tells the chip a
+        // router chose, so claiming a routing that did not happen would be the
+        // same lie in a different field.
+        const pinnedAgentModel = effectiveAgentModel(routedAgent?.model);
+        if (autoRequested && pinnedAgentModel) {
+          modelForEngine = pinnedAgentModel;
+          modelLabel = pinnedAgentModel;
+          console.log(
+            `[engine:naby] auto → agent model ${pinnedAgentModel} (routed agent pins it)`,
+          );
+        } else if (autoRequested) {
+          // The stage of whoever this turn's work belongs to. `subjectGrowth`
+          // first because it is the acting agent on every turn (the persona when
+          // nothing was addressed); `routedStage` only covers the routed case and
+          // is the fallback for an install with no persona row at all.
+          const routeStage = subjectGrowth?.stage ?? routedStage;
+          const routed = resolveAutoModel({
+            store,
+            sessionId,
+            turnText,
+            // FULL MODE IS "THIS TURN WAS ADDRESSED", not "naby is answering".
+            // Every turn is answered by the persona; what `@` changes is that the
+            // turn adopts an agent's identity and is expected to DRIVE — which is
+            // the expensive kind of turn the rule exists to catch. `addressedAgent`
+            // rather than `routedAgent` because a refused address was still an
+            // address, and rather than `addressed` because `@notanagent` is just
+            // text.
+            fullMode: addressedAgent != null,
+            ...(routeStage ? { stage: routeStage } : {}),
+            planMode,
+            // The same per-account key `usage.limits` writes, so the router reads
+            // the row that belongs to the subscription actually answering.
+            ...(claudeAccountId ? { accountId: claudeAccountId } : {}),
+          });
+          modelForEngine = routed.value;
+          modelLabel = routed.value;
+          modelRoute = { requested: AUTO_MODEL_VALUE, tier: routed.tier, reason: routed.reason };
+          console.log(
+            `[engine:naby] auto → ${routed.tier} (${routed.reason}) as ${routed.value}`,
+          );
+        }
+
         // ---- init --------------------------------------------------------
         ctx.rekey(sessionId);
         ctx.emit({
@@ -1931,6 +2179,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           subtype: 'init',
           session_id: sessionId,
           model: modelLabel,
+          // WHY `auto` CHOSE THIS (§4.6). Present only on a turn the user left on
+          // `auto`; a pinned model has no routing to explain, and an absent field
+          // is what tells the chip to show its own value instead of a routed one.
+          // The `model` field above is the functional value either way — this
+          // carries the tier and the reason code the chip renders beside it.
+          ...(modelRoute ? { model_route: modelRoute } : {}),
           // WHO IS ANSWERING (2026-08-04). The loading bubble used to name the
           // ENGINE ("Claude is thinking"), which is the one thing about a turn the
           // user did not ask about: whichever model answers, it is still naby, and
@@ -2198,8 +2452,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               sessionId,
               // A routed agent may prefer its own model; else the engine's resolved
               // model (or the provider default). Same field the model switcher uses.
+              //
+              // `effectiveAgentModel` IS WHAT MAKES `?? modelForEngine` REACHABLE
+              // for an agent stored with `auto` (model-auto-routing §4.5). The
+              // agent editor's model field is free text, so that string can be in
+              // the row; sent as-is the SDK rejects the turn, and read as a
+              // preference it would outrank the router on the very turn the user
+              // asked the router to decide. Treated as absent, the agent inherits
+              // this turn's model — which on an `auto` turn is the routed one, so
+              // the stored `auto` gets exactly what it asked for.
               model: (() => {
-                const m = routedAgent?.model ?? modelForEngine;
+                const m = effectiveAgentModel(routedAgent?.model) ?? modelForEngine;
                 return { providerId, ...(m ? { model: m } : {}) };
               })(),
               // Step 1 is the user's own words; every later step is the harness
@@ -2254,7 +2517,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // Phase 2.5 (M4): enabled subagents the model may delegate to. The
               // Claude Agent SDK engine maps these to native `agents` (spawned via
               // the gated Task tool); the AI-SDK engine ignores them.
-              subagents: gatherSubagents(store, projectCwd),
+              //
+              // THE SAME ROSTER the delegation sink and the system prompt's policy
+              // block were built from (§4.2) — gathered once, above the loop, so
+              // the prompt cannot name a subagent this input leaves out.
+              subagents: turnSubagents,
               // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
               // whose trigger matches (or that is always-on) has its instructions
               // appended to the system prompt; a tool-bearing skill participates
@@ -2402,6 +2669,29 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                       },
                     });
                   }
+                  break;
+                }
+
+                case 'subagent_model': {
+                  // WHICH MODEL ACTUALLY ANSWERED A DELEGATION (§4.3). naby writes
+                  // a model into the subagent definition but does not get to decide
+                  // the resolution order: the backend's own precedence, and
+                  // `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, can override it silently.
+                  // So the engine reports what the assistant message SAID it ran
+                  // on, once per delegation, and the client puts it in the block's
+                  // title — an override that changes the cost becomes visible
+                  // instead of staying quiet (§2 principle 2).
+                  //
+                  // `agent_tool_call_id` is the same attribution key as
+                  // `subagent_text` above, which is how the client finds the block
+                  // this belongs to. dev-claude only: an AI-SDK nested turn is its
+                  // own session and already records its own model in `usage`.
+                  ctx.emit({
+                    type: 'subagent_model',
+                    session_id: sessionId,
+                    agent_tool_call_id: ev.agentToolCallId,
+                    model: ev.model,
+                  });
                   break;
                 }
 

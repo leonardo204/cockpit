@@ -184,6 +184,11 @@ describe('contextGauge', () => {
     expect(modelFamily('claude-opus-5[1m]')).toBe('claude');
     expect(modelFamily('anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe('claude');
     expect(modelFamily('opus')).toBe('claude');
+    // …and an alias carrying the catalog's tier marker, which is the literal
+    // value an `auto` turn reports for its opus tier. Compared whole it is
+    // neither "claude" nor a bare alias, so it used to land on `unknown` (128k).
+    expect(modelFamily('opus[1m]')).toBe('claude');
+    expect(modelFamily('fable[1m]')).toBe('claude');
     expect(modelFamily('gpt-4o')).toBe('openai');
     expect(modelFamily('gpt-5.6-sol')).toBe('openai');
     expect(modelFamily('o4-mini')).toBe('openai');

@@ -151,6 +151,53 @@ export interface TokenUsage {
   contextModel?: string;
 }
 
+// -- the AUTO ROUTE (specs/model-auto-routing.md §4.5, §4.6) -----------------
+//
+// WHAT THE ROUTER DECIDED FOR THIS TURN, when — and only when — the user's pick
+// was `auto`. The server puts it on the turn's `system/init` event as
+// `model_route`, next to (not instead of) `model`: `model` stays the functional
+// catalog value the engine runs on (`sonnet`, `opus[1m]`), because
+// `contextWindowFor` measures the gauge's window with that string — the brand in
+// the "thinking" bubble does NOT depend on it, since `deriveEngineName` answers
+// "Claude" off the engine id long before it would sniff a model. This is the
+// EXPLANATION, which is a different question.
+//
+// A turn that ran on an explicit pick carries none, and that absence is
+// meaningful: the chip must stop claiming a tier the router did not choose.
+
+/** The tiers the router chooses between. Mirrors `ModelTier` in
+ *  src/runtime/model-router.ts; declared again here because the runtime bundle
+ *  is server-only (it pulls in `node:sqlite`) — same reason as UsageWindow. */
+export type ModelTier = 'haiku' | 'sonnet' | 'opus' | 'fable';
+
+/** WHY that tier. One code per rule in the router's ordered judgement, so the
+ *  chip's tooltip can say it in the user's language (i18n
+ *  `modelSwitcher.route.<reason>`) rather than showing a number. */
+export type ModelRouteReason =
+  | 'plan-mode'
+  | 'design-ask'
+  | 'build-ask'
+  | 'full-mode'
+  | 'chat'
+  | 'default'
+  | 'sticky'
+  | 'window-fit'
+  | 'budget-cap';
+
+export type ModelRoute = {
+  /** Always `'auto'`: the field only exists for turns the user left to naby. */
+  requested: 'auto';
+  tier: ModelTier;
+  reason: ModelRouteReason;
+  /**
+   * The CONCRETE id the provider reported it served, folded in when the result
+   * event's `context_model` arrives (the same string as `TokenUsage.contextModel`).
+   * Late by design — it is not known when the route is decided — so the chip's
+   * label never waits on it and only the tooltip gains a line.
+   */
+  served?: string;
+};
+
 // Retry info (from SDK system/api_retry event)
 export interface ApiRetryInfo {
   attempt: number;

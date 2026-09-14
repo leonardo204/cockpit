@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applySubagentTaskEvent,
   groupSubagentCalls,
+  setSubagentModel,
   type SubagentTask,
 } from './subagentGroups';
 import type { ToolCallInfo } from './types';
@@ -123,6 +124,69 @@ describe('groupSubagentCalls — attribution decides, never timing', () => {
     expect(out.groups).toHaveLength(1);
     expect(out.groups[0]!.status).toBe('running');
     expect(out.groups[0]!.calls).toEqual([]);
+  });
+});
+
+// WHAT ACTUALLY ANSWERED, not what was asked for.
+//
+// naby writes `haiku` on `explorer` and `sonnet` on `implementer`, and the CLI
+// may ignore both — the resolution order has moved between versions and
+// `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` beats everything. So the run reports the
+// model that served it and the block shows it, which is the whole of
+// subagent-delegation §2 rule 2 on this side of the wire.
+describe('setSubagentModel — the run’s receipt, keyed like its narration', () => {
+  const task = (over: Partial<SubagentTask> = {}): SubagentTask => ({
+    id: 'agent-1',
+    toolCallId: 'call-task-1',
+    status: 'running',
+    agentType: 'explorer',
+    ...over,
+  });
+
+  it('the model a subagent actually ran on is filed under its block', () => {
+    const out = setSubagentModel([task()], 'call-task-1', 'claude-haiku-4-5-20251001');
+    expect(out?.[0]!.model).toBe('claude-haiku-4-5-20251001');
+    // Matched on the SPAWNING CALL, the handle both sides share — not the id.
+    expect(out?.[0]!.id).toBe('agent-1');
+  });
+
+  it('a model event for an unknown call id is ignored', () => {
+    // Same contract as the narration: a block with no lifecycle would be a
+    // subagent that appears to exist and can never finish.
+    const tasks = [task()];
+    expect(setSubagentModel(tasks, 'call-unknown', 'claude-opus-5')).toBe(tasks);
+    expect(setSubagentModel(undefined, 'call-task-1', 'claude-opus-5')).toBeUndefined();
+    expect(setSubagentModel(tasks, 'call-task-1', '')).toBe(tasks);
+  });
+
+  it('a second event for the same id does not duplicate — same array back', () => {
+    const once = setSubagentModel([task()], 'call-task-1', 'claude-haiku-4-5-20251001');
+    const twice = setSubagentModel(once, 'call-task-1', 'claude-haiku-4-5-20251001');
+    expect(twice).toBe(once);
+    expect(twice).toHaveLength(1);
+  });
+
+  it('keeps two concurrent runs apart', () => {
+    let tasks: SubagentTask[] | undefined = [
+      task(),
+      task({ id: 'agent-2', toolCallId: 'call-task-2', agentType: 'implementer' }),
+    ];
+    tasks = setSubagentModel(tasks, 'call-task-1', 'claude-haiku-4-5-20251001');
+    tasks = setSubagentModel(tasks, 'call-task-2', 'claude-sonnet-4-5-20250929');
+    expect(tasks?.map((t) => t.model)).toEqual([
+      'claude-haiku-4-5-20251001',
+      'claude-sonnet-4-5-20250929',
+    ]);
+  });
+
+  it('carries onto the group the transcript renders', () => {
+    // The block reads `group.model`, and groups are DERIVED — without this the
+    // model would sit on the task and never reach the screen.
+    const tasks = setSubagentModel([task()], 'call-task-1', 'claude-haiku-4-5-20251001');
+    const { groups } = groupSubagentCalls([], tasks);
+    expect(groups[0]!.model).toBe('claude-haiku-4-5-20251001');
+    // A run that never reported one claims none rather than guessing.
+    expect(groupSubagentCalls([], [task()]).groups[0]!.model).toBeUndefined();
   });
 });
 

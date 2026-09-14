@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Portal } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { MessageBubble } from './MessageBubble';
+import { modelTierLabel } from './modelTierLabel';
 import { postSessionByPath } from './useChatHistory';
 import type { ChatMessage, ToolCallInfo } from './types';
 
@@ -38,10 +39,15 @@ interface SubagentTranscriptModalProps {
   toolCall?: ToolCallInfo;
   // Workflow run agent path. Mutually exclusive with `toolCall`.
   workflowRef?: WorkflowAgentRef;
+  // The model that ACTUALLY served this run, as the live stream reported it
+  // (subagent-delegation §4.3). Handed down by the block that owns the run —
+  // absent on a reloaded transcript, where the report is gone and the header
+  // simply says nothing rather than inventing a model.
+  model?: string;
   onClose: () => void;
 }
 
-export function SubagentTranscriptModal({ cwd, sessionId, toolCall, workflowRef, onClose }: SubagentTranscriptModalProps) {
+export function SubagentTranscriptModal({ cwd, sessionId, toolCall, workflowRef, model, onClose }: SubagentTranscriptModalProps) {
   const { t } = useTranslation();
   // null = not loaded yet (loading or transcript not found)
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
@@ -105,9 +111,13 @@ export function SubagentTranscriptModal({ cwd, sessionId, toolCall, workflowRef,
 
   const description =
     typeof toolCall?.input?.description === 'string' ? toolCall.input.description : '';
+  // The model sits between WHO ran and WHAT it was asked to do: the tier word is
+  // short enough to read at a glance, and the raw id stays in the header's
+  // tooltip for when the tier is a surprise.
+  const modelLabel = modelTierLabel(model);
   const subtitle = workflowRef
     ? workflowRef.label || ''
-    : [meta?.agentType, description].filter(Boolean).join(' · ');
+    : [meta?.agentType, modelLabel, description].filter(Boolean).join(' · ');
 
   return (
     <Portal>
@@ -126,7 +136,10 @@ export function SubagentTranscriptModal({ cwd, sessionId, toolCall, workflowRef,
               {t('chat.subagent')}
             </span>
             {subtitle && (
-              <span className="text-xs text-muted-foreground truncate flex-1 min-w-0" title={subtitle}>
+              <span
+                className="text-xs text-muted-foreground truncate flex-1 min-w-0"
+                title={model ? `${subtitle}\n${model}` : subtitle}
+              >
                 {subtitle}
               </span>
             )}

@@ -4,6 +4,7 @@ import { memo, useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle2, Loader, CircleAlert, CircleSlash } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ToolCallModal } from './ToolCallModal';
+import { modelTierLabel } from './modelTierLabel';
 import type { SubagentGroup } from './subagentGroups';
 
 /**
@@ -64,6 +65,13 @@ export const SubagentBlock = memo(function SubagentBlock({ group, cwd, sessionId
       })
     : t('chat.subagent', { defaultValue: 'Subagent' });
 
+  // WHICH MODEL ACTUALLY ANSWERED. Shown as its tier (`haiku`) because that is
+  // the question — was the cheap agent cheap — with the full id kept in the
+  // tooltip for the times the answer is "no". Untranslated on purpose: a model
+  // name is a name. Absent on a reloaded transcript, like the run's narration:
+  // the report is observational and never persisted.
+  const modelLabel = modelTierLabel(group.model);
+
   return (
     <div className="mt-0.5" data-testid="subagent-block" data-agent-id={group.id}>
       <button
@@ -78,7 +86,10 @@ export const SubagentBlock = memo(function SubagentBlock({ group, cwd, sessionId
         ) : (
           <ChevronRight className="w-3 h-3 opacity-60 flex-shrink-0" />
         )}
-        <span className="flex-shrink-0">{title}</span>
+        <span className="flex-shrink-0" title={group.model}>
+          {title}
+          {modelLabel && ` · ${modelLabel}`}
+        </span>
         {group.status !== 'unknown' && (
           <span className="flex items-center gap-1 flex-shrink-0" data-testid="subagent-status">
             <StatusIcon status={group.status} />
@@ -117,6 +128,10 @@ export const SubagentBlock = memo(function SubagentBlock({ group, cwd, sessionId
               toolCall={toolCall}
               cwd={cwd}
               sessionId={sessionId}
+              // Only the LAUNCHER opens this run's transcript, so only it carries
+              // the model into that modal's header. The subagent's own calls are
+              // rows of work, not entries to the same run.
+              subagentModel={toolCall.id === group.parentCall?.id ? group.model : undefined}
             />
           ))}
         </div>

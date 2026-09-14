@@ -1,12 +1,19 @@
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  AUTO_MODEL_VALUE,
   CHATGPT_OAUTH_PROVIDER_ID,
+  CLAUDE_AUTO_MODEL,
   CLAUDE_MODELS,
+  CLAUDE_MODELS_FOR_AGENTS,
   CLAUDE_MODEL_SCOPE,
   GOOGLE_MODEL_SCOPE,
+  agentModelOptions,
   claudeOptionsFrom,
   defaultModelForScope,
   googleOptionsFrom,
+  modelLabel,
   modelScopeFor,
   modelsForScope,
   scopeHasLiveCatalog,
@@ -35,12 +42,14 @@ const LIVE: LiveModel[] = [
 describe('claudeOptionsFrom', () => {
   it('uses the live list when there is one, values and labels verbatim', () => {
     const opts = claudeOptionsFrom(LIVE);
-    expect(opts.map((o) => o.value)).toEqual(['default', 'opus[1m]', 'sonnet']);
-    expect(opts[0]!.label).toBe('Default (recommended)');
+    // `auto` leads (it is ours, not the SDK's — see below); the SDK's own rows
+    // follow in its order.
+    expect(opts.map((o) => o.value)).toEqual(['auto', 'default', 'opus[1m]', 'sonnet']);
+    expect(opts[1]!.label).toBe('Default (recommended)');
     // The value is what gets SENT as the turn's model, so it must survive exactly —
     // `opus[1m]` is not `opus`.
-    expect(opts[1]!.value).toBe('opus[1m]');
-    expect(opts[2]!.hint).toContain('Efficient for routine tasks');
+    expect(opts[2]!.value).toBe('opus[1m]');
+    expect(opts[3]!.hint).toContain('Efficient for routine tasks');
   });
 
   it('does NOT add an empty "default" row on top of the SDK\'s own', () => {
@@ -67,7 +76,77 @@ describe('claudeOptionsFrom', () => {
 
   it('survives a row with no description', () => {
     const opts = claudeOptionsFrom([{ value: 'x', displayName: 'X' }]);
-    expect(opts).toEqual([{ value: 'x', label: 'X' }]);
+    expect(opts).toEqual([CLAUDE_AUTO_MODEL, { value: 'x', label: 'X' }]);
+  });
+});
+
+/**
+ * `auto` — THE ROW THAT IS NOT A MODEL (specs/model-auto-routing.md §4.1).
+ *
+ * It is a per-turn instruction the shell engine intercepts: naby runs a router
+ * and sends a real catalog value in its place. Two things make that safe, and
+ * both are pinned here. It must appear in BOTH lists — the live list REPLACES
+ * the curated one, so a row that lived only in the constant would vanish on
+ * every signed-in machine. And it must not redefine `''`: "let the SDK decide"
+ * and "let naby decide" are different answers and the user can still ask for
+ * either.
+ */
+describe('the auto row', () => {
+  it('leads the curated fallback', () => {
+    expect(CLAUDE_MODELS[0]).toBe(CLAUDE_AUTO_MODEL);
+    expect(CLAUDE_MODELS[0]!.value).toBe(AUTO_MODEL_VALUE);
+    expect(CLAUDE_MODELS[0]!.label).toBe('Auto');
+  });
+
+  it('is PREPENDED to a live list, which would otherwise replace it away', () => {
+    const opts = claudeOptionsFrom(LIVE);
+    expect(opts[0]).toBe(CLAUDE_AUTO_MODEL);
+    expect(opts.filter((o) => o.value === AUTO_MODEL_VALUE)).toHaveLength(1);
+  });
+
+  it('labels as "Auto" wherever a raw value has to be rendered', () => {
+    expect(modelLabel(CLAUDE_MODEL_SCOPE, AUTO_MODEL_VALUE)).toBe('Auto');
+  });
+
+  it('does NOT become the default — an untouched install still means SDK default', () => {
+    // Principle 6: `''` keeps its meaning. Turning auto on for everyone would be
+    // a different decision from offering it, and it is not this one.
+    expect(defaultModelForScope(CLAUDE_MODEL_SCOPE)).toBe('');
+    expect(defaultModelForScope(null)).toBe('');
+  });
+
+  it('is offered by the CHAT BAR ONLY, never by a picker whose choice is stored', () => {
+    // An agent saved with `model: 'auto'` would hand that literal to the SDK on
+    // every turn routed to it — the server validates no model string (spec §3).
+    // The routing happens per turn, so the value cannot be persisted anywhere.
+    expect(CLAUDE_MODELS_FOR_AGENTS.some((o) => o.value === AUTO_MODEL_VALUE)).toBe(false);
+    expect(CLAUDE_MODELS_FOR_AGENTS.map((o) => o.value)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku']);
+    // …and the filter works on a LIVE list too, which is what an agent picker
+    // would actually be showing.
+    expect(agentModelOptions(claudeOptionsFrom(LIVE)).map((o) => o.value)).toEqual([
+      'default',
+      'opus[1m]',
+      'sonnet',
+    ]);
+  });
+
+  it('and the lists that contain it have exactly one consumer: the chat-bar chip', () => {
+    // The guard above only helps if agent-facing code reaches for the filtered
+    // list. This is what makes a NEW picker notice: importing the raw option
+    // lists anywhere but the chip fails here, and the failure names the fix.
+    const dir = __dirname;
+    const offenders = readdirSync(dir)
+      .filter((f) => (f.endsWith('.ts') || f.endsWith('.tsx')) && !f.endsWith('.test.ts'))
+      .filter((f) => f !== 'modelCatalog.ts' && f !== 'ModelSwitcher.tsx')
+      .filter((f) => {
+        const src = readFileSync(join(dir, f), 'utf8');
+        const imports = /import\s*\{([^}]*)\}\s*from\s*'\.\/modelCatalog'/.exec(src)?.[1] ?? '';
+        return /\b(CLAUDE_MODELS|claudeOptionsFrom|modelsForScope)\b/.test(imports);
+      });
+    expect(
+      offenders,
+      'these list the raw catalog (auto included) — use CLAUDE_MODELS_FOR_AGENTS / agentModelOptions',
+    ).toEqual([]);
   });
 });
 

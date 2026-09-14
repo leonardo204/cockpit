@@ -25,6 +25,17 @@ export interface ModelOption {
   label: string;
   /** Short one-line capability note (English proper-noun descriptors). */
   hint?: string;
+  /**
+   * THIS ROW IS THE CHAT BAR'S ONLY (`auto`).
+   *
+   * `auto` is not a model: it is a per-TURN instruction that the shell engine
+   * intercepts and replaces with a real catalog value. Nothing else may offer
+   * it. The server does not validate model strings, so an agent saved with
+   * `model: 'auto'` would hand that literal to the SDK on every turn it is
+   * routed to (spec §3) — and the SDK rejects it. Any list that feeds a STORED
+   * model field must go through `agentModelOptions`.
+   */
+  chatBarOnly?: true;
 }
 
 /** The scope key a switcher persists/reads under. Mirrors accountChipForEngine:
@@ -35,6 +46,27 @@ export const CLAUDE_MODEL_SCOPE = 'dev-claude';
  *  stores as `provider.selected`, so the two cannot drift apart. */
 export const GOOGLE_MODEL_SCOPE = 'google';
 export { CHATGPT_OAUTH_PROVIDER_ID };
+
+/**
+ * THE VALUE THAT MEANS "naby picks, per request".
+ *
+ * It is a NEW value, not a new meaning for `''`. `''` still means "send no model
+ * → the SDK's own default answers"; `auto` never reaches the SDK at all — the
+ * shell engine intercepts it, runs the router, and sends a concrete catalog
+ * value instead (specs/model-auto-routing.md §2 principle 6, §4.5). The two must
+ * stay distinguishable: a user who wants the SDK default must still be able to
+ * ask for exactly that.
+ */
+export const AUTO_MODEL_VALUE = 'auto';
+
+/** The `auto` row itself, exported so the curated list and the live list can
+ *  offer the SAME row rather than two rows that drift apart. */
+export const CLAUDE_AUTO_MODEL: ModelOption = {
+  value: AUTO_MODEL_VALUE,
+  label: 'Auto',
+  hint: 'naby picks a model per request',
+  chatBarOnly: true,
+};
 
 /**
  * Claude Agent SDK (local subscription sign-in) — the FALLBACK only.
@@ -49,6 +81,7 @@ export { CHATGPT_OAUTH_PROVIDER_ID };
  * whatever the plan grants, so it cannot advertise a model the user does not have.
  */
 export const CLAUDE_MODELS: ModelOption[] = [
+  CLAUDE_AUTO_MODEL,
   { value: '', label: 'Default', hint: 'let Claude pick' },
   { value: 'fable', label: 'Fable', hint: 'most capable' },
   { value: 'opus', label: 'Opus', hint: 'strong all-round' },
@@ -71,18 +104,50 @@ export type LiveModel = {
  * two rows both meaning "let Claude pick" is the kind of duplication that makes a
  * picker look broken. When the list is empty (never probed, or not signed in) the
  * curated fallback is returned unchanged.
+ *
+ * `auto` IS PREPENDED, because it is ours and not the SDK's. The live list
+ * REPLACES the curated one entirely (see above), so a row that exists only in
+ * the constant would disappear the moment a probe answered — which is every
+ * signed-in machine. It leads the list for the same reason `default` leads the
+ * SDK's: it is the row that decides nothing for you.
  */
 export function claudeOptionsFrom(live: readonly LiveModel[] | null | undefined): ModelOption[] {
   if (!live || live.length === 0) return CLAUDE_MODELS;
-  return live.map((m) => ({
+  return [CLAUDE_AUTO_MODEL, ...live.map((m) => ({
     value: m.value,
     label: m.displayName || m.value,
     // The SDK descriptions read like "Opus 4.8 with 1M context · Best for …" —
     // already the one-line hint this needs, so it is passed through rather than
     // re-worded into something less accurate.
     ...(m.description ? { hint: m.description } : {}),
-  }));
+  }))];
 }
+
+/**
+ * The same candidates, MINUS the chat bar's own rows — for any picker whose
+ * choice is SAVED rather than spent on one turn (an agent's `model`, a subagent
+ * definition, a scheduled task). `auto` is resolved per turn by the shell
+ * engine; stored anywhere, it is a string the SDK will reject forever.
+ *
+ * Nothing consumes this today — the one per-agent model field in the app is a
+ * free-text input in feature-workspace. IT GETS A CONSUMER THE DAY THAT FIELD
+ * BECOMES A PICKER, which is the only change needed: a `<select>` built from this
+ * list offers every model the chat bar does, minus the rows that only mean
+ * something for one turn.
+ *
+ * AND UNTIL THEN IT GUARDS NOTHING. A free-text field takes whatever is typed,
+ * imported agents arrive from files this app never wrote, and the server does not
+ * validate model values (spec §3) — so what actually stops a stored `auto` from
+ * reaching a provider is `effectiveAgentModel` on the server, not this filter.
+ * This list is how the WRONG VALUE STOPS BEING OFFERED; that function is how it
+ * stops being sent.
+ */
+export function agentModelOptions(options: readonly ModelOption[]): ModelOption[] {
+  return options.filter((o) => !o.chatBarOnly);
+}
+
+/** The curated Claude list as an agent-facing picker should show it. */
+export const CLAUDE_MODELS_FOR_AGENTS: ModelOption[] = agentModelOptions(CLAUDE_MODELS);
 
 /** ChatGPT subscription (codex backend). Order = strongest → lightest. */
 export const CHATGPT_MODELS: ModelOption[] = [

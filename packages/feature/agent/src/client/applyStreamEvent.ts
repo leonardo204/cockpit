@@ -1,6 +1,11 @@
 import type { ChatMessage, ToolCallInfo } from './types';
 import { renderHarnessPill } from './harnessPill';
-import { appendSubagentText, applySubagentTaskEvent, type SubagentTaskPhase } from './subagentGroups';
+import {
+  appendSubagentText,
+  applySubagentTaskEvent,
+  setSubagentModel,
+  type SubagentTaskPhase,
+} from './subagentGroups';
 import { appendTextSegment, appendToolCallSegment } from './turnSegments';
 
 /**
@@ -55,6 +60,10 @@ export interface StreamEvent {
    *  call it belongs to. Kept off the answer — see the handler. */
   text?: string;
   agent_tool_call_id?: string;
+  /** `subagent_model`: the model that ACTUALLY served the run named by
+   *  `agent_tool_call_id` (subagent-delegation §4.3). Top-level, not under
+   *  `message`: this event describes a run, not a message. */
+  model?: string;
   _human?: boolean; // synthetic human-prompt user event (rendered by useLiveStream)
   _turnId?: string; // per-turn unique id (the dispatch runId) — identity for live-bubble dedup
   _ts?: number; // server clock at startRun — time boundary for disk-copy dedup
@@ -125,6 +134,33 @@ export function applyStreamEvent(
     return messages.map((m) =>
       m.id === assistantId ? { ...m, subagents: appendSubagentText(m.subagents, callId, text) } : m,
     );
+  }
+
+  // WHICH MODEL ACTUALLY ANSWERED A DELEGATED RUN — filed under the same block
+  // as its narration, and keyed the same way (the spawning `Task` call).
+  //
+  // naby asks for haiku on `explorer` and sonnet on `implementer`, but cannot
+  // insist: the CLI's resolution order has changed between versions and
+  // `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` overrides everything (subagent-delegation
+  // §2 rule 2). The answer is not to fight it but to show it, so an override
+  // stops being silent.
+  //
+  // Kept ABOVE the generic paths for the same reason as the narration: this
+  // event carries no `message`, so falling through would do nothing visible and
+  // the block would quietly never learn its model.
+  if (ev.type === 'subagent_model' && ev.agent_tool_call_id && ev.model) {
+    const idx = messages.findIndex((m) => m.id === assistantId);
+    if (idx < 0) return messages;
+    const target = messages[idx]!;
+    const nextTasks = setSubagentModel(target.subagents, ev.agent_tool_call_id, ev.model);
+    // Unknown run, or the same model twice (a reconnect replays the buffer): the
+    // helper hands the array back, and so does this — the SAME array out, so a
+    // memoized transcript is not woken by a no-op. `map` would not do: it
+    // allocates a new array even when every element is unchanged.
+    if (nextTasks === target.subagents) return messages;
+    const out = [...messages];
+    out[idx] = { ...target, subagents: nextTasks };
+    return out;
   }
 
   // claude/deepseek/PTY: streamed text deltas

@@ -64,6 +64,19 @@ export interface SubagentTask {
    * subagent and its block decides how much to show.
    */
   text?: string;
+  /**
+   * THE MODEL THIS RUN ACTUALLY ANSWERED ON, as the backend read it off the
+   * subagent's own assistant message (`subagent-delegation` §4.3).
+   *
+   * naby WRITES a model on the cheap built-in agents (`explorer` → haiku,
+   * `implementer` → sonnet) but cannot GUARANTEE it: the CLI's resolution order
+   * has moved between versions and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` overrides
+   * everything. Rather than pretend, the run reports what served it — so a drift
+   * shows up on screen instead of only on the bill.
+   *
+   * Observational, like `text` and the lifecycle: a reloaded transcript has none.
+   */
+  model?: string;
 }
 
 /** The backend's discriminant for a BACKGROUND SHELL JOB — the Claude Agent
@@ -95,6 +108,9 @@ export interface SubagentGroup {
   /** What the subagent said while it worked. Shown inside this block when
    *  expanded, never in the conversation — see `SubagentTask.text`. */
   text?: string;
+  /** The model that actually served this run, when the backend reported one —
+   *  see `SubagentTask.model`. The block shows its tier beside the agent type. */
+  model?: string;
 }
 
 export interface SubagentPartition {
@@ -133,6 +149,34 @@ export function appendSubagentText(
   const target = tasks[idx]!;
   const next = [...tasks];
   next[idx] = { ...target, text: (target.text ?? '') + text };
+  return next;
+}
+
+/**
+ * Record the model a delegated run actually answered on.
+ *
+ * MATCHED THE SAME WAY `appendSubagentText` matches — on the SPAWNING CALL id,
+ * not the backend's task id — because the event carries the same handle
+ * (`parent_tool_use_id`) and for the same reason: the model is read off the
+ * subagent's assistant message, which names its parent call and nothing else.
+ *
+ * TOTAL AND IDEMPOTENT. A model for a run this turn has never seen is dropped
+ * rather than conjuring a task (same contract as the narration), and re-applying
+ * the same model returns the SAME array so a reconnect replay wakes no memo. The
+ * backend emits one of these per run, but a replayed buffer delivers it again.
+ */
+export function setSubagentModel(
+  tasks: SubagentTask[] | undefined,
+  toolCallId: string,
+  model: string,
+): SubagentTask[] | undefined {
+  if (!tasks || !model) return tasks;
+  const idx = tasks.findIndex((t) => t.toolCallId === toolCallId);
+  if (idx < 0) return tasks;
+  const target = tasks[idx]!;
+  if (target.model === model) return tasks;
+  const next = [...tasks];
+  next[idx] = { ...target, model };
   return next;
 }
 
@@ -284,6 +328,10 @@ export function groupSubagentCalls(
     // What it said while it worked. Carried onto the group so the block can show
     // it in place, rather than it having gone into the conversation.
     if (task.text) g.text = task.text;
+    // …and WHICH MODEL said it. Carried for the same reason: the block is the
+    // only place the reader can see that a run naby asked to be cheap was served
+    // by something else.
+    if (task.model) g.model = task.model;
   }
 
   // The id of the call that spawned each run, from either source.

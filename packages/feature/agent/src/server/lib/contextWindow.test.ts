@@ -29,6 +29,14 @@ describe('contextWindowFor', () => {
     for (const alias of ['opus', 'sonnet', 'haiku', 'fable']) {
       expect(contextWindowFor('dev-claude', alias)).toBe(200_000);
     }
+    // AN ALIAS WITH THE CATALOG'S TIER MARKER, which is the literal value `auto`
+    // sends for its opus tier: before `isClaudeAlias` learned to strip a trailing
+    // `[…]`, `opus[1m]` matched neither "claude" nor a bare alias, reached no rule
+    // at all, and this answered `undefined` for the one value that names 1M.
+    expect(contextWindowFor('dev-claude', 'opus[1m]')).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    // And the stripping stops at aliases: `default` is still a name we cannot
+    // size, because what it resolves to is the plan's business, not ours.
+    expect(contextWindowFor('dev-claude', 'default')).toBeUndefined();
   });
 
   it('answers for the Claude sign-in even when NO model was requested', () => {

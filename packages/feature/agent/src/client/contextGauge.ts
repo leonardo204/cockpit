@@ -86,17 +86,29 @@ const FAMILY_DEFAULTS: Record<ModelFamily, number> = {
 
 type ModelFamily = 'claude' | 'openai' | 'gemini' | 'unknown';
 
+/** A tier marker appended to an ALIAS, as the live catalog writes it: `opus[1m]`.
+ *  Mirrors `ALIAS_TIER_SUFFIX` in src/runtime/context-window.ts — the id the chip
+ *  falls back to is a catalog VALUE, and those carry the bracket. */
+const ALIAS_TIER_SUFFIX = /\[[^\]]*\]$/;
+
 /**
  * Which family a concrete model id belongs to.
  *
  * The id here is what the PROVIDER reported it served (`context_model`), not what
  * we asked for — so the aliases are matched too, for the case where the run
  * reported nothing and the caller passed the requested label instead.
+ *
+ * THE ALIAS COMPARISON DROPS A TIER SUFFIX FIRST, for exactly the reason the
+ * runtime registry does (`isClaudeAlias`): with `auto` the requested label is a
+ * catalog value, and the catalog spells the 1M tier `opus[1m]`. Compared whole it
+ * matched no alias and contained no "claude", so the one value naby itself sends
+ * for its most expensive tier fell to the `unknown` family's 128k default.
  */
 export function modelFamily(model: string | undefined): ModelFamily {
   const id = (model ?? '').trim().toLowerCase();
   if (!id) return 'unknown';
-  if (id.includes('claude') || id === 'opus' || id === 'sonnet' || id === 'haiku' || id === 'fable') {
+  const bare = id.replace(ALIAS_TIER_SUFFIX, '');
+  if (id.includes('claude') || bare === 'opus' || bare === 'sonnet' || bare === 'haiku' || bare === 'fable') {
     return 'claude';
   }
   if (id.startsWith('gemini')) return 'gemini';

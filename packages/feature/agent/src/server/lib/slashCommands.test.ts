@@ -176,11 +176,65 @@ describe('resolveCommandPrompt — @agent collision rule (Phase 3 P3-M2)', () =>
     expect(out).toContain('You are a strict code reviewer.');
   });
 
-  it('without a registered agent, @subagent expands as before (no regression)', () => {
+  it('without a registered agent, @subagent becomes a DELEGATION, not a persona', () => {
     const store = fakeStore({
       [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('reviewer', 'You are a strict code reviewer.')],
     });
     const out = resolveCommandPrompt('@reviewer check', 'en', undefined, store);
-    expect(out).toContain('You are a strict code reviewer.');
+    expect(out).toContain('"reviewer" subagent');
+    expect(out).not.toContain('You are a strict code reviewer.');
+    expect(out).not.toContain('Adopt the following persona');
+  });
+});
+
+describe('resolveCommandPrompt — "@" delegates, "/" adopts (specs/subagent-delegation.md §4.1)', () => {
+  // The explorer's system prompt is WRITTEN FOR A SUBAGENT: it says the reader
+  // cannot see the conversation and cannot edit anything. Inlined into the main
+  // turn — which is what `@` used to do, back when there were no native
+  // subagents — both sentences are false, and the second one disarms the turn.
+  const EXPLORER_PROMPT =
+    'You cannot see the conversation you were called from. You cannot edit, run or install anything.';
+
+  it('@subagent names the subagent and inlines NONE of its system prompt', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('explorer', EXPLORER_PROMPT)],
+    });
+    const out = resolveCommandPrompt('@explorer find X', 'en', undefined, store);
+    expect(out).toContain('"explorer" subagent');
+    expect(out).toContain('Delegate this step');
+    expect(out).not.toContain('You cannot see the conversation');
+    expect(out).not.toContain('Adopt the following persona');
+    // The step header's claim is now true.
+    expect(out).toContain('run in a subagent');
+    // The task text still reaches the step.
+    expect(out).toContain('find X');
+  });
+
+  it('the delegation instruction follows the language, like the persona frame does', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('explorer', EXPLORER_PROMPT)],
+    });
+    const ko = resolveCommandPrompt('@explorer X 찾아줘', 'ko', undefined, store);
+    expect(ko).toContain('"explorer" 서브에이전트에 위임');
+    expect(ko).not.toContain('You cannot see the conversation');
+  });
+
+  it('/subagent is UNCHANGED — the main session still adopts the persona', () => {
+    const store = fakeStore({
+      [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('explorer', EXPLORER_PROMPT)],
+    });
+    const out = resolveCommandPrompt('/explorer find X', 'en', undefined, store);
+    expect(out).toContain('Adopt the following persona');
+    expect(out).toContain('You cannot see the conversation');
+    expect(out).not.toContain('Delegate this step');
+  });
+
+  it('a registered Agent still shadows the @verb entirely — the line stays literal', () => {
+    const store = fakeStore(
+      { [`user:${DEFAULT_USER_ID}`]: [ownedSubagent('explorer', EXPLORER_PROMPT)] },
+      ['explorer'],
+    );
+    const out = resolveCommandPrompt('@explorer find X', 'en', undefined, store);
+    expect(out).toBe('@explorer find X');
   });
 });

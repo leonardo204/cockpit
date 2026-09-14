@@ -37,9 +37,14 @@ interface ToolCallProps {
   cwd?: string;
   // Enables the subagent transcript entry on Agent/Task tool calls
   sessionId?: string | null;
+  // The model that actually served the run this call spawned, when the stream
+  // reported one (subagent-delegation §4.3). Passed straight through to the
+  // transcript header — this row never derives it, and a call that spawned
+  // nothing never receives it.
+  subagentModel?: string;
 }
 
-export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
+export function ToolCallModal({ toolCall, cwd, sessionId, subagentModel }: ToolCallProps) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [previewContent, setPreviewContent] = useState<{ title: string; content: string } | null>(null);
@@ -292,6 +297,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId }: ToolCallProps) {
           cwd={cwd}
           sessionId={sessionId}
           toolCall={toolCall}
+          model={subagentModel}
           onClose={() => setShowSubagent(false)}
         />
       )}

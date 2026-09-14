@@ -802,6 +802,19 @@
   "modelSwitcher": {
     "label": "Model",
     "title": "Which model",
+    "auto": "Auto",
+    "autoHint": "naby picks a model per request",
+    "route": {
+      "plan-mode": "plan mode — a model for designing",
+      "design-ask": "a design or review request",
+      "build-ask": "a build or fix request",
+      "full-mode": "naby in full mode",
+      "chat": "a short exchange",
+      "default": "an ordinary request",
+      "sticky": "big conversation — keeping the last model",
+      "window-fit": "big conversation — a model with a larger window",
+      "budget-cap": "limit nearly used — stepped down one tier"
+    },
     "refresh": "Refresh",
     "refreshing": "Checking…",
     "refreshHint": "Ask your Claude sign-in which models it can use",
@@ -1213,6 +1226,9 @@
     "billedHint": "{{model}} — billed to your {{label}} account.",
     "noKeyHint": "{{model}} — no API key saved yet, so this cannot answer.",
     "selected": "selected",
+    "engineEnv": {
+      "title": "Environment variables that change how the engine runs"
+    },
     "mcpServers": "MCP servers",
     "cancel": "cancel",
     "add": "+ add",

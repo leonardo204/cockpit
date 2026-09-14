@@ -215,18 +215,38 @@ function resolveStep(
   //   - skill   : the SKILL instructions are directives → inline as-is (an
   //               explicit "/" invocation activates the skill now, on top of the
   //               automatic trigger-based injection the runtime already does).
-  //   - subagent: real subagent orchestration is Phase 2.5; until then a "/"
-  //               invocation makes the MAIN session adopt the persona by framing
-  //               its systemPrompt as a persona directive for this conversation.
+  //   - subagent: the MARKER decides where it runs, and the two are different
+  //               things (specs/subagent-delegation.md §4.1).
+  //               "/" = the MAIN session adopts the persona, by framing the
+  //               systemPrompt as a persona directive for this conversation.
+  //               "@" = DELEGATE. Native subagents exist now, so inlining the
+  //               systemPrompt here would put a prompt written FOR a subagent
+  //               ("you cannot see the conversation", "you cannot edit") into the
+  //               main turn, which is both false there and actively harmful. The
+  //               pointer names the subagent instead and the engine spawns it.
   const entry = owned.get(step.cmd)!;
-  const pointer = entry.kind === 'subagent' ? framePersona(entry.body, lang) : entry.body;
+  const pointer =
+    entry.kind !== 'subagent'
+      ? entry.body
+      : step.marker === '@'
+        ? delegateToSubagent(step.cmd, lang)
+        : framePersona(entry.body, lang);
   return { marker: step.marker, body: step.body, pointer };
 }
 
+/** Tell the turn to hand this step to a named subagent rather than do it itself.
+ *  The step header already says "(run in a subagent)"; this is what makes that
+ *  true. No systemPrompt is inlined — the engine gives the subagent its own. */
+function delegateToSubagent(name: string, lang: 'ko' | 'en'): string {
+  return lang === 'ko'
+    ? `이 단계는 "${name}" 서브에이전트에 위임하고 직접 하지 마세요. 결과를 보고하세요.`
+    : `Delegate this step to the "${name}" subagent — do not do it yourself — and report its result.`;
+}
+
 /** Frame a subagent's system prompt as a persona directive for the MAIN session.
- *  Real subagent orchestration is Phase 2.5; until then, invoking `/persona`
- *  makes the current session adopt the persona for this conversation — a real
- *  behavior change, never a silent no-op. */
+ *  This is the `/persona` spelling and it is deliberate: the user asked the
+ *  session in front of them to answer AS that persona, in this conversation, with
+ *  this conversation's history. `@persona` delegates instead. */
 function framePersona(systemPrompt: string, lang: 'ko' | 'en'): string {
   return lang === 'ko'
     ? `다음 페르소나로 이번 대화에 응답하세요:\n\n${systemPrompt}`

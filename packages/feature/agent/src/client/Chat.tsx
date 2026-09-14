@@ -30,14 +30,14 @@ import { useSubscriptionUsage } from './subscriptionUsage';
 import { ChatInput } from './ChatInput';
 import type { ComposerViewport } from './composerHeight';
 import { buildComposerHistory, sameComposerHistory } from './composerHistory';
-import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo } from './types';
+import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo, ModelRoute } from './types';
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
 import { ChatgptLoginStatus } from './ChatgptLoginStatus';
 import { EngineSwitcher } from './EngineSwitcher';
 import { ModelSwitcher } from './ModelSwitcher';
-import { modelScopeFor, modelLabel } from './modelCatalog';
+import { modelScopeFor, modelLabel, AUTO_MODEL_VALUE } from './modelCatalog';
 import { AllowChangesToggle } from './AllowChangesToggle';
 import { deriveEngineName, accountChipForEngine } from './engineName';
 import { ASSUMED_ACTING_AGENT, thinkingDisplayName, type ActingAgent } from './actingAgent';
@@ -155,6 +155,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // session arrives; until then <EngineSwitcher/> shows the SELECTED engine's
   // label instead. Passed to the switcher, which prefers this once present.
   const [liveModel, setLiveModel] = useState<string | null>(null);
+  // WHAT NABY PICKED, when the model chip is set to `auto`: the router's tier and
+  // reason from the same system/init, plus the served id once the result arrives
+  // (specs/model-auto-routing.md §4.6). Null means "no routed turn to explain" —
+  // before the first turn, after an explicit pick, and in a different session.
+  // Only the chip reads it; the turn payload is unaffected.
+  const [liveRoute, setLiveRoute] = useState<ModelRoute | null>(null);
   // Short name of the engine that answers (Claude / GPT / Gemini / ChatGPT / AI).
   // It labels the ENGINE — the toolbar chip — and is now only the FALLBACK for the
   // "… is thinking" bubble, which names the acting agent (see `actingAgent` just
@@ -191,6 +197,11 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   const selectedModelRef = useRef<string>('');
   const handleModelChange = useCallback((model: string) => {
     selectedModelRef.current = model;
+    // A model chosen BY HAND ends the explanation: the chip must not keep saying
+    // "Auto · Sonnet" once the user has pinned Opus. `auto` is not such a choice
+    // — whatever route is in hand under it is still the truth about the last turn
+    // — so it is the one value that leaves this alone.
+    if (model !== AUTO_MODEL_VALUE) setLiveRoute(null);
   }, []);
   const getModel = useCallback(() => selectedModelRef.current, []);
 
@@ -391,6 +402,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onFetchTitle: fetchSessionTitle,
     onRunComplete: () => reconcileFromDiskRef.current?.(),
     onEngineModel: setLiveModel,
+    onModelRoute: setLiveRoute,
     onActingAgent: handleActingAgent,
     onRunError: handleRunError,
     getModel,
@@ -526,6 +538,32 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   useEffect(() => {
     dispatchRunFailure({ type: 'session', sessionId: liveSessionId ?? null });
   }, [liveSessionId, dispatchRunFailure]);
+
+  // …and neither is the previous session's ROUTE. Same trigger, same reasoning:
+  // the chip explains the turn the user is looking at, and after a session switch
+  // that turn is not the one the router decided.
+  //
+  // GUARDED ON THE PREVIOUS ID BEING A REAL ONE, WHICH IS WHAT MAKES THE CLEAR
+  // MEAN "SWITCHED" RATHER THAN "ARRIVED". `liveSessionId = loadedSessionId ||
+  // sessionId` (above) and both of those start empty — `useState<string | null>
+  // (null)` here and in useChatHistory — so a fresh tab's first `system/init` is
+  // one single moment in which the id goes empty → real AND the route is set. An
+  // effect without the `prev &&` would fire on exactly that transition and erase
+  // the first routed turn of every new session, which is the case the feature
+  // exists for.
+  //
+  // WRITTEN AS A FALSY TEST, NOT `prev !== null`, and the difference is only
+  // theoretical TODAY: nothing assigns `''` to either source, so the two forms
+  // agree. They stop agreeing the moment one of them is initialised to `''`
+  // instead of `null` — a one-word change in another file — and then `!== null`
+  // reads an empty string as a real previous session and clears the route on the
+  // first init after all. The falsy test is the one that survives that.
+  const routeSessionRef = useRef<string | null>(liveSessionId ?? null);
+  useEffect(() => {
+    const prev = routeSessionRef.current;
+    routeSessionRef.current = liveSessionId ?? null;
+    if (prev && prev !== (liveSessionId ?? null)) setLiveRoute(null);
+  }, [liveSessionId]);
 
   useLiveStream(liveSessionId, setMessages, liveViewerEnabled, engine, {
     // Update the ref synchronously (not just via the effect on liveRunning) so the initial
@@ -911,7 +949,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
                 picks WHICH model the selected engine uses (Claude aliases /
                 ChatGPT slugs). Self-hides for a metered API-key provider, which
                 has no per-turn model choice. */}
-            <ModelSwitcher activeEngine={activeEngine} onModelChange={handleModelChange} onUserSelect={handleUserSwitch} />
+            <ModelSwitcher activeEngine={activeEngine} onModelChange={handleModelChange} onUserSelect={handleUserSwitch} liveRoute={liveRoute} />
             {/* The account chip is ENGINE-AWARE: exactly one sign-in shows,
                 matching the engine that will answer.
                   • ChatGPT subscription  → the ChatGPT chip (dev-seal gated; it
