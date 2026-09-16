@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.38.0 — 2026-09-16
+
+### en
+
+Auto never answers the conversation with Haiku, and it reads what you ask, not how long it is.
+
+**Improved**
+
+- **Short questions that need real thinking go up.** "왜 이렇게 동작해?" or "how does the router pick a tier" goes to Opus even when it is ten words long, and so does a message that names a function or variable and asks about it. The chip's tooltip says "a question that needs deeper reasoning".
+- **Scripts, batch jobs and surveys stay on Sonnet.** Asking for a script, a bulk rename, a summary or a survey of where something is used is routed to Sonnet even when the wording says "build" or "make". The tooltip says "a script, batch or survey task". A diagnosis ("why does the script fail?") still goes to Opus.
+- **Delegation asks for verifiable reports.** naby is told that a subagent runs on a smaller model, so it gives one narrow task at a time, says exactly what to return, and checks the cited paths before building on the report.
+
+**Fixed**
+
+- **Short chat stays on Sonnet.** Auto used to send a short message to Haiku, which dropped naby's voice and answered from fragments of the conversation. Sonnet is now the floor for the conversation itself; Haiku is only used by the \`explorer\` subagent, which gets a fully spelled-out task and returns a fixed-format report.
+
+### ko
+
+Auto가 대화를 Haiku에 맡기지 않고, 길이가 아니라 무엇을 물었는지로 모델을 골라요.
+
+**나아진 것**
+
+- **짧아도 깊이 생각해야 하는 질문은 올라가요.** "왜 이렇게 동작해?"나 "how does the router pick a tier"는 열 단어여도 Opus로 가고, 함수나 변수 이름을 짚어 묻는 메시지도 그래요. 칩 툴팁에 "깊은 사고가 필요한 질문"이라고 나와요.
+- **스크립트·일괄 작업·조사는 Sonnet에 남아요.** 스크립트, 일괄 이름 바꾸기, 요약, 어디서 쓰이는지 조사하는 요청은 "만들어"·"build"가 있어도 Sonnet으로 가요. 툴팁에 "스크립트·일괄·조사 작업"이라고 나와요. 진단("스크립트 왜 실패해?")은 여전히 Opus예요.
+- **위임할 때 확인 가능한 보고를 요구해요.** naby는 서브에이전트가 더 작은 모델로 돈다는 걸 알고, 한 번에 좁은 과제 하나만 주고, 무엇을 돌려줄지 적어 주고, 보고에 인용된 경로를 열어 확인한 뒤에 써요.
+
+**고친 것**
+
+- **짧은 대화도 Sonnet이 답해요.** Auto가 짧은 메시지를 Haiku에 보내면 naby의 말투가 사라지고 대화의 단편만 보고 답했어요. 이제 대화 자체는 Sonnet이 바닥이에요. Haiku는 \`explorer\` 서브에이전트만 써요. 과제를 다 적어 받고 정해진 형식으로만 보고하는 자리예요.
+
 ## 1.37.0 — 2026-09-14
 
 ### en
