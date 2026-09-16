@@ -117,6 +117,8 @@ describe('the tooltip', () => {
       'plan-mode',
       'design-ask',
       'build-ask',
+      'deep-ask',
+      'routine',
       'full-mode',
       'chat',
       'default',

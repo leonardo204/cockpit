@@ -808,6 +808,8 @@
       "plan-mode": "플랜 모드라 설계용 모델",
       "design-ask": "설계·검토 요청",
       "build-ask": "구현·수정 요청",
+      "deep-ask": "깊은 사고가 필요한 질문",
+      "routine": "스크립트·일괄·조사 작업",
       "full-mode": "나비 전면 모드",
       "chat": "짧은 대화",
       "default": "일반 요청",

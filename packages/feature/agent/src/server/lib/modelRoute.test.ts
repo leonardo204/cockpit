@@ -14,7 +14,7 @@ import {
  * (specs/model-auto-routing.md §4.4–§4.5, milestone M2).
  *
  * The decision table itself belongs to `spike-model-router.ts` — it is a pure
- * function and the spike drives all six base branches and all three modifiers.
+ * function and the spike drives all seven base branches and all three modifiers.
  * Repeating that here would test the same code twice and neither copy would
  * notice if this file handed the router the wrong inputs. So everything below is
  * about the WIRING: which settings row is read, how a usage window becomes a
@@ -109,13 +109,45 @@ function route(store: ModelRouteStore, over: Partial<Parameters<typeof resolveAu
 }
 
 describe('the base decision, wired to a real catalogue row', () => {
-  it('a greeting on an empty session is answered by haiku', () => {
+  it('a greeting on an empty session is a `chat` turn, and `chat` is sonnet', () => {
     const r = route(makeStore({ settings: catalogSetting() }));
-    expect(r.tier).toBe('haiku');
+    // The main conversation's floor is sonnet (`MAIN_TURN_TIERS`): haiku dropped
+    // the persona's voice and read the injected context in fragments, so the
+    // quiet clause now picks the REASON and not a cheaper model.
+    expect(r.tier).toBe('sonnet');
     expect(r.reason).toBe('chat');
     // The VALUE is what reaches the SDK, and it has to be a value the catalogue
     // actually lists — not the tier name by coincidence.
-    expect(r.value).toBe('haiku');
+    expect(r.value).toBe('sonnet');
+  });
+
+  it('a SHORT question that has to be worked out is opus, not a `chat` turn', () => {
+    // Length is a ceiling for `chat`, never a criterion of its own (§4.2 rule 1,
+    // `deep-ask`): "왜 이렇게 동작해?" is shorter than the greeting above and the
+    // answer takes reading the code until the cause is found. Same empty session
+    // and same catalogue row as that case, so the only thing that differs is the
+    // text — which is the point being pinned.
+    const r = route(makeStore({ settings: catalogSetting() }), { turnText: '왜 이렇게 동작해?' });
+    expect(r.tier).toBe('opus');
+    expect(r.reason).toBe('deep-ask');
+    expect(r.value).toBe('opus[1m]');
+  });
+
+  it('a request for a SCRIPT is routed down to sonnet, not up to opus', () => {
+    // The one content rule that lowers a tier (`ROUTINE_KEYWORDS`): what it reads
+    // is the shape of the deliverable, and a one-off script is work whose
+    // correctness is visible the moment it comes back. THIS text used to come
+    // back as `chat` — `짜줘` is on no keyword list, so the turn was short and
+    // signal-free — while the same request phrased "스크립트 하나 만들어줘" or
+    // "build a batch script" carried a build verb and went to opus. The spike
+    // pins those; what this pins is the WIRING: the reason code crosses the
+    // runtime boundary and the value is one the catalogue actually lists. Same
+    // empty session and catalogue row as the greeting case above, so the text is
+    // the only thing that differs.
+    const r = route(makeStore({ settings: catalogSetting() }), { turnText: '스크립트 하나 짜줘' });
+    expect(r.tier).toBe('sonnet');
+    expect(r.reason).toBe('routine');
+    expect(r.value).toBe('sonnet');
   });
 
   it('a build request goes to the 1M opus value, never the bare alias', () => {
@@ -142,7 +174,7 @@ describe('with no catalogue cached at all', () => {
   const bare = makeStore();
 
   it('answers with aliases rather than failing', () => {
-    expect(route(bare).value).toBe('haiku');
+    expect(route(bare).value).toBe('sonnet');
     expect(route(bare, { turnText: BUILD_ASK }).value).toBe('opus[1m]');
     expect(route(bare, { planMode: true }).value).toBe('fable');
   });
@@ -182,7 +214,7 @@ describe('the previous tier, read off this session’s usage rows', () => {
     // silently testing nothing if the character rule or the system share moves.
     const tokens = estimateContextTokens(deep);
     expect(tokens).toBeGreaterThan(40_000);
-    // …and still inside haiku's 200k window, so `window-fit` is not what moves
+    // …and still inside sonnet's 200k window, so `window-fit` is not what moves
     // the tier in the next test. That is the whole point of this assertion.
     expect(Math.round(tokens * 1.5 + 20_000)).toBeLessThan(200_000);
   });
@@ -225,7 +257,8 @@ describe('the previous tier, read off this session’s usage rows', () => {
       usage: [{ providerId: 'dev-claude', model: 'default' }],
     });
     const r = route(store);
-    expect(r.tier).toBe('haiku');
+    // Unstuck means the base rule decides, and the base rule's floor is sonnet.
+    expect(r.tier).toBe('sonnet');
     expect(r.reason).toBe('chat');
   });
 });

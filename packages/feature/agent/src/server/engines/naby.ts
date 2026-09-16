@@ -782,7 +782,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         //
         // ON AN `auto` TURN THE TWO END UP EQUAL, AND STILL FOR THAT REASON: both
         // are filled from whatever will actually answer — the routed agent's own
-        // model when it has one, otherwise the router's catalogue value (`haiku`,
+        // model when it has one, otherwise the router's catalogue value (`sonnet`,
         // `opus[1m]`) — so the init event's `model` stays FUNCTIONAL. The consumer
         // that makes that load-bearing is `contextWindowFor`, which measures the
         // gauge's denominator off this string; a label here sizes the gauge as an

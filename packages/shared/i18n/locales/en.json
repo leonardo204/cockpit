@@ -808,6 +808,8 @@
       "plan-mode": "plan mode — a model for designing",
       "design-ask": "a design or review request",
       "build-ask": "a build or fix request",
+      "deep-ask": "a question that needs deeper reasoning",
+      "routine": "a script, batch or survey task",
       "full-mode": "naby in full mode",
       "chat": "a short exchange",
       "default": "an ordinary request",

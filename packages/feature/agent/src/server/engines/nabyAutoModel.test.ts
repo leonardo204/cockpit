@@ -13,7 +13,7 @@ import { join } from 'node:path';
  *   * THE ORDER. `resolveAutoModel` reads `turnText`, the routed stage and plan
  *     mode, and it must assign `modelForEngine` before the init event names a
  *     model. Move the call above the `turnText` binding and it routes on an empty
- *     string — every turn becomes a `chat` turn, the chip says "Auto · Haiku"
+ *     string — every turn becomes a `chat` turn, the chip says "Auto · Sonnet"
  *     forever, and nothing throws. Move it below the emit and the chip shows
  *     `auto` while the engine runs something else. BOTH FAILURES ARE SILENT, and
  *     both produce a passing end-to-end run.
