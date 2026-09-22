@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.38.1 — 2026-09-22
+
+### en
+
+The context gauge reads the window you are actually on again.
+
+**Fixed**
+
+- **A 1M-context conversation no longer reads as nearly full.** On the long-context tier the gauge was dividing by 200k, so a roomy conversation showed \`97% (194k/200k)\` in red and offered to continue in a new tab when it was in fact about a fifth full. It started when subagents moved to a cheaper model: a turn that bills two models reports its window under the name naby asked for (\`claude-opus-5[1m]\`) while the answer comes back under the plain name (\`claude-opus-5\`), and the two never matched. The gauge now matches them, and falls back to the tier you asked for when the model that answered is the same one.
+
+### ko
+
+컨텍스트 게이지가 실제로 쓰고 있는 창을 다시 제대로 읽어요.
+
+**고친 것**
+
+- **1M 대화가 거의 찬 것처럼 보이던 문제.** 긴 컨텍스트 티어에서 게이지가 200k로 나눠서, 사실 5분의 1쯤 찬 대화가 빨간 \`97% (194k/200k)\`로 뜨고 새 탭에서 이어가라고 권했어요. 서브에이전트를 더 싼 모델로 돌리기 시작하면서 생긴 일이에요. 모델을 두 개 쓴 턴은 창 크기를 naby가 요청한 이름(\`claude-opus-5[1m]\`)으로 보고하는데 답은 표식 없는 이름(\`claude-opus-5\`)으로 와서, 둘이 한 번도 맞지 않았거든요. 이제 두 이름을 맞춰 보고, 답한 모델이 요청한 모델과 같으면 요청한 티어를 분모로 써요.
+
 ## 1.38.0 — 2026-09-16
 
 ### en
