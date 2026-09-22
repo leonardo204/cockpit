@@ -86,9 +86,9 @@ const FAMILY_DEFAULTS: Record<ModelFamily, number> = {
 
 type ModelFamily = 'claude' | 'openai' | 'gemini' | 'unknown';
 
-/** A tier marker appended to an ALIAS, as the live catalog writes it: `opus[1m]`.
- *  Mirrors `ALIAS_TIER_SUFFIX` in src/runtime/context-window.ts — the id the chip
- *  falls back to is a catalog VALUE, and those carry the bracket. */
+/** A tier marker appended to a model name, as the live catalog writes it:
+ *  `opus[1m]`. Mirrors `TIER_SUFFIX` in src/runtime/context-window.ts — the id the
+ *  chip falls back to is a catalog VALUE, and those carry the bracket. */
 const ALIAS_TIER_SUFFIX = /\[[^\]]*\]$/;
 
 /**

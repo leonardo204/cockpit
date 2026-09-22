@@ -6,6 +6,7 @@ import {
   FALLBACK_CONTEXT_WINDOW,
   contextWindowFor,
   reportedContextWindow,
+  requestedOneMTier,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { resolveContextWindow } from './contextWindow';
 
@@ -48,14 +49,21 @@ describe('contextWindowFor', () => {
 
   // -- the long-context tier ------------------------------------------------
   //
-  // A Claude subscription run can be on a 1M window, and NOTHING IN OUR OWN
-  // CONFIGURATION SAYS SO — the plan decides it. Two signals reach us from the run
-  // itself, and each on its own has to be enough: a turn that reported 293k on
-  // what we called a 200k window is what sent us looking.
+  // A Claude subscription run can be on a 1M window, and the run does not always
+  // SAY so — the tier went GA, and a GA tier announces itself through neither of
+  // the two signals below. THREE signals reach this registry and each on its own
+  // has to be enough: the beta and the marker on the served id (both LEGACY, kept
+  // for older runs), and the id we REQUESTED (`opus[1m]`), which is the only one a
+  // live run still shows. A turn that reported 293k on what we called a 200k
+  // window is what sent us looking; a turn that showed `97% (194k/200k)` on a
+  // 1,000,000-token window is what added the third.
 
   it('reads the 1M tier off the CONCRETE model id', () => {
-    // Observed from a live subscription run: the SDK reports the tier in brackets
-    // on the id it actually served.
+    // LEGACY, AND KEPT FOR THE SAME REASON THE BETA IS. A served id that DOES name
+    // the tier still means the tier, and refusing to read it would gain nothing —
+    // but it is no longer what a live run looks like: the SDK strips the marker
+    // from the id it serves (0 of 24747 local transcript ids carry `[1m]`), so the
+    // requested id is what the tier is actually read from now.
     expect(contextWindowFor('dev-claude', 'claude-opus-5[1m]')).toBe(CLAUDE_1M_CONTEXT_WINDOW);
     expect(CLAUDE_1M_CONTEXT_WINDOW).toBe(1_000_000);
     // Other punctuations of the same marker, so a differently-formatted id is not
@@ -67,8 +75,10 @@ describe('contextWindowFor', () => {
   });
 
   it('reads the 1M tier off the betas the RUN negotiated', () => {
-    // The Agent SDK's init message reports what the CLI actually enabled, which is
-    // the only signal when the served id carries no marker.
+    // LEGACY, AND KEPT ON PURPOSE. The Agent SDK's init message reports what the
+    // CLI actually enabled; a live run on the GA tier sends no `betas` array at
+    // all, so this signal now only covers CLIs old enough to still negotiate the
+    // beta. It must keep answering for those.
     expect(CONTEXT_1M_BETA).toBe('context-1m-2025-08-07');
     expect(
       contextWindowFor('dev-claude', 'claude-opus-5', { betas: [CONTEXT_1M_BETA] }),
@@ -91,6 +101,66 @@ describe('contextWindowFor', () => {
     ).toBe(CLAUDE_CONTEXT_WINDOW);
     // …and the beta says nothing about a NON-Claude model.
     expect(contextWindowFor('ai-sdk', 'gpt-4o', { betas: [CONTEXT_1M_BETA] })).toBe(128_000);
+  });
+
+  it('reads the 1M tier off the id we REQUESTED, when the served id is the same model', () => {
+    // THE LIVE SHAPE (verified twice against @anthropic-ai/claude-agent-sdk): we
+    // ask for `claude-opus-5[1m]`, the init message echoes the marker back, and
+    // every assistant step then reports `claude-opus-5` WITHOUT it. No `betas`
+    // array is sent at all. So the served id — the one this registry is handed —
+    // names a 200k model while the run is on 1M, and the only surviving statement
+    // about the tier is what we asked for.
+    expect(
+      contextWindowFor('dev-claude', 'claude-opus-5', { requested: 'claude-opus-5[1m]' }),
+    ).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    // The catalog's ALIAS form of the same request, which is what `auto` sends.
+    expect(contextWindowFor('dev-claude', 'claude-opus-5', { requested: 'opus[1m]' })).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+    // …and the sign-in default, which names no served model at all.
+    expect(contextWindowFor('dev-claude', '', { requested: 'opus[1m]' })).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+  });
+
+  it('does NOT carry a requested 1M tier onto a DIFFERENT model', () => {
+    // THE REFUSAL FALLBACK, which is why this is a same-model check and not a
+    // `max(served, requested)`: the CLI can swap the model mid-turn, and a turn
+    // that ended up on haiku is on haiku's 200k window no matter what we asked
+    // for. Taking the larger of the two would overstate the window by five times
+    // on exactly the turn that changed under us.
+    expect(
+      contextWindowFor('dev-claude', 'claude-haiku-4-5-20251001', { requested: 'opus[1m]' }),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    expect(
+      contextWindowFor('dev-claude', 'claude-sonnet-5', { requested: 'claude-opus-5[1m]' }),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    // A request with no marker says nothing about the tier — the catalog names the
+    // two opus tiers as two different values, and GA did not merge them.
+    expect(contextWindowFor('dev-claude', 'claude-opus-5', { requested: 'opus' })).toBe(
+      CLAUDE_CONTEXT_WINDOW,
+    );
+    // And a non-Claude served id is sized by its own family, never by our request.
+    expect(contextWindowFor('ai-sdk', 'gpt-4o', { requested: 'opus[1m]' })).toBe(128_000);
+  });
+
+  it('exposes the same-model rule as its own predicate', () => {
+    // Asserted separately from the lookup because the rule is the load-bearing
+    // half: it is what keeps a requested tier from being carried onto whatever
+    // model the run actually ended on.
+    expect(requestedOneMTier('claude-opus-5[1m]', 'claude-opus-5')).toBe(true);
+    expect(requestedOneMTier('opus[1m]', 'claude-opus-5')).toBe(true);
+    expect(requestedOneMTier('claude-fable-5-1[1m]', 'claude-fable-5-1')).toBe(true);
+    // An empty served id names no OTHER model, so the request still stands (the
+    // caller gates this on the Claude engine, where an empty id has a default).
+    expect(requestedOneMTier('opus[1m]', '')).toBe(true);
+    expect(requestedOneMTier('opus[1m]', undefined)).toBe(true);
+    // A different model, a request with no marker, and no request at all.
+    expect(requestedOneMTier('opus[1m]', 'claude-haiku-4-5-20251001')).toBe(false);
+    expect(requestedOneMTier('claude-opus-5[1m]', 'claude-sonnet-5')).toBe(false);
+    expect(requestedOneMTier('opus', 'claude-opus-5')).toBe(false);
+    expect(requestedOneMTier(undefined, 'claude-opus-5')).toBe(false);
+    expect(requestedOneMTier('default', 'claude-opus-5')).toBe(false);
   });
 
   it('still answers UNDEFINED for the "default" row the Agent SDK offers', () => {
@@ -233,6 +303,58 @@ describe('resolveContextWindow', () => {
     ).toBeUndefined();
   });
 
+  it('takes the REQUESTED tier when the served id is the same model', () => {
+    // THE BUG THIS ROUND. A live 1M run reports `claude-opus-5` on its assistant
+    // steps, sends no `betas`, and — when a subagent is also billed — used to
+    // report no window either. The gauge read `97% (194k/200k)` with no `~` marker
+    // and offered to continue in a new tab, on a window five times larger. The id
+    // we ASKED for still carries the tier, and it is now read.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5',
+        modelLabel: 'claude-opus-5[1m]',
+      }),
+    ).toBe(1_000_000);
+    // The alias form `auto` sends for the same tier.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5',
+        modelLabel: 'opus[1m]',
+      }),
+    ).toBe(1_000_000);
+    // THE GUARD: a refusal fallback swapped the run down to haiku, so the window
+    // is haiku's however loudly the request named a tier. This is why the rule is
+    // a same-model check rather than the larger of the two answers.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-haiku-4-5-20251001',
+        modelLabel: 'opus[1m]',
+      }),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    // A plain opus turn stays 200k: the catalog names the two tiers as two
+    // different values, and the tier going GA did not merge them.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5',
+        modelLabel: 'claude-opus-5',
+      }),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    // And a window the RUN reported still outranks the requested tier — the
+    // measurement is first in the precedence, not second.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        reportedWindow: 200_000,
+        contextModel: 'claude-opus-5',
+        modelLabel: 'claude-opus-5[1m]',
+      }),
+    ).toBe(200_000);
+  });
+
   it('ignores a reported window that is not a size', () => {
     // A zero or a NaN forwarded from a backend would divide the gauge by nothing.
     // These fall THROUGH to the inference rather than poisoning the answer.
@@ -274,6 +396,46 @@ describe('reportedContextWindow', () => {
         'claude-fable-5',
       ),
     ).toBe(1_000_000);
+  });
+
+  it('matches the key that only differs by its TIER SUFFIX — the live shape', () => {
+    // THE REGRESSION, verified twice against a live @anthropic-ai/claude-agent-sdk
+    // run: `modelUsage` is keyed by the id we REQUESTED (`claude-opus-5[1m]`,
+    // marker kept) while the assistant steps report `claude-opus-5` (marker
+    // stripped), so the exact lookup never matched. A single-model turn survived
+    // on the sole-entry rule by accident; the moment a Task subagent is billed too
+    // — which naby's own cheap-subagent routing made ordinary — there are two keys
+    // and the window was dropped entirely. The gauge then read `97% (194k/200k)`
+    // on a 1,000,000-token window.
+    expect(
+      reportedContextWindow(
+        { 'claude-opus-5[1m]': usage(1_000_000), 'claude-haiku-4-5-20251001': usage(200_000) },
+        'claude-opus-5',
+      ),
+    ).toBe(1_000_000);
+    // The single-model turn, which both this rule and the sole-entry rule answer.
+    expect(reportedContextWindow({ 'claude-opus-5[1m]': usage(1_000_000) }, 'claude-opus-5')).toBe(
+      1_000_000,
+    );
+    // Suffix on the reported side instead of the key's, since which side carries
+    // the marker is the SDK's business and has already moved once.
+    expect(reportedContextWindow(
+      { 'claude-opus-5': usage(1_000_000), 'claude-haiku-4-5-20251001': usage(200_000) },
+      'claude-opus-5[1m]',
+    )).toBe(1_000_000);
+  });
+
+  it('will not choose between two keys that normalize to the SAME model', () => {
+    // Synthetic — no live run has produced two tiers of one model in one result —
+    // but it is the ambiguity the tier-stripped match creates, and it answers the
+    // same way the sole-entry rule does: two candidates and nothing to pick
+    // between them is `undefined`, never a coin flip.
+    expect(
+      reportedContextWindow(
+        { 'claude-opus-5[1m]': usage(1_000_000), 'claude-opus-5[2m]': usage(2_000_000) },
+        'claude-opus-5',
+      ),
+    ).toBeUndefined();
   });
 
   it('takes a SOLE entry when the exact key is missing', () => {

@@ -2246,12 +2246,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // WHAT THE RUN SAID ABOUT ITSELF — the concrete model the provider served
         // and the betas it negotiated, both reported on the engine's result event.
         //
-        // THE DENOMINATOR IS RESOLVED FROM THESE, NOT FROM `modelLabel`, and that
-        // is the whole fix. `modelLabel` is what we ASKED for, and on the app's
-        // most common path it is `default` — the Agent SDK's own "let Claude pick"
-        // row — which names no window, so the registry answered undefined and the
-        // gauge dropped its percentage. The run always knows the resolved id, and
-        // it is the only place the 1M tier is visible at all.
+        // THE DENOMINATOR IS RESOLVED FROM THESE FIRST, NOT FROM `modelLabel`.
+        // `modelLabel` is what we ASKED for, and on the app's most common path it
+        // is `default` — the Agent SDK's own "let Claude pick" row — which names no
+        // window, so the registry answered undefined and the gauge dropped its
+        // percentage. The run always knows the resolved id.
+        //
+        // BUT THE RESOLVED ID IS NOT WHERE THE 1M TIER LIVES, which a claim here
+        // used to say. The SDK strips the `[1m]` marker from the id it serves
+        // (verified twice on a live run), so `contextModel` reads as an ordinary
+        // 200k model on a 1,000,000-token turn. `modelLabel` KEEPS the marker, so
+        // both are handed to the resolver and it pairs them: the requested tier
+        // counts only when `contextModel` names the same model
+        // (lib/contextWindow.ts).
         let contextModel: string | undefined;
         let contextBetas: readonly string[] | undefined;
         // THE WINDOW THE RUN REPORTED FOR ITSELF, when the backend states one —
