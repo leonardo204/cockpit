@@ -85,6 +85,34 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.39.0 — 2026-09-28
+
+### en
+
+Opus now means Claude Opus 5.5.
+
+**New**
+
+- **Opus 5.5 is the Opus model.** Picking Opus — or letting Auto pick it — now runs Claude Opus 5.5, with its 1M-token window by default. The built-in Claude engine was updated to a newer Agent SDK, which is where the list of models comes from.
+
+**Fixed**
+
+- **Auto keeps opus on a 1M window.** The newer model list names Opus without the \`[1m]\` suffix. Auto now reads the window from the model each entry resolves to, so long conversations stay on Opus instead of drifting to Fable.
+- **Opus 5.5 is priced and named correctly.** Token stats show "Opus 5.5" at its own rates ($4 / $20 per million tokens, $0.20 cached), not at Opus 5 prices.
+
+### ko
+
+이제 Opus를 고르면 Claude Opus 5.5가 답해요.
+
+**새로 생긴 것**
+
+- **Opus가 Opus 5.5로 바뀌었어요.** Opus를 직접 고르거나 Auto가 고르면 Claude Opus 5.5가 돌아가고, 기본 창은 1M 토큰이에요. 모델 목록을 알려 주는 내장 Claude 엔진(Agent SDK)을 새 버전으로 올렸어요.
+
+**고친 것**
+
+- **Auto가 opus의 1M 창을 그대로 지켜요.** 새 모델 목록은 Opus 이름에 \`[1m]\` 표식을 붙이지 않아요. 이제 Auto는 각 항목이 실제로 가리키는 모델에서 창 크기를 읽어서, 긴 대화가 Fable로 옮겨 가지 않고 Opus에 남아요.
+- **Opus 5.5의 이름과 가격이 맞게 나와요.** 토큰 통계가 Opus 5 가격이 아니라 "Opus 5.5"의 가격(100만 토큰당 입력 $4 / 출력 $20, 캐시 $0.20)으로 보여 줘요.
+
 ## 1.38.1 — 2026-09-22
 
 ### en
