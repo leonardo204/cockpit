@@ -15,6 +15,7 @@ interface TokenStatsModalProps {
 const MODEL_PRICING: Record<string, { label: string; input: number; output: number; cacheRead: number; cacheWrite: number; color: string }> = {
   'claude-fable-5-1':           { label: 'Fable 5.1',  input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, color: '#a855f7' },
   'claude-fable-5':             { label: 'Fable 5',    input: 10, output: 50, cacheRead: 1.00, cacheWrite: 12.5, color: '#c084fc' },
+  'claude-opus-5-5':            { label: 'Opus 5.5',   input: 4,  output: 20, cacheRead: 0.20, cacheWrite: 5.00, color: '#dc2626' },
   'claude-opus-5':              { label: 'Opus 5',     input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#ea580c' },
   'claude-opus-4-8':            { label: 'Opus 4.8',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
   'claude-opus-4-7':            { label: 'Opus 4.7',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
@@ -34,6 +35,10 @@ function getPricing(modelId: string) {
   // `claude-fable-5-1[1m]` and the like: the concrete id the provider reports
   // can carry a tier suffix the exact-match table does not know.
   if (lower.includes('fable')) return { ...DEFAULT_PRICING, input: 10, output: 50, cacheRead: 1.00, cacheWrite: 12.5, color: '#a855f7' };
+  // Opus 5.5 is priced below the generic opus fallback, so a suffixed or dated
+  // 5.5 id (`claude-opus-5-5[1m]`, `claude-opus-5-5-20260901`) must not fall
+  // through to it.
+  if (lower.startsWith('claude-opus-5-5')) return MODEL_PRICING['claude-opus-5-5']!;
   if (lower.includes('opus')) return { ...DEFAULT_PRICING, input: 5, output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' };
   if (lower.includes('haiku')) return { ...DEFAULT_PRICING, input: 1, output: 5, cacheRead: 0.10, cacheWrite: 1.25, color: '#22c55e' };
   return DEFAULT_PRICING;

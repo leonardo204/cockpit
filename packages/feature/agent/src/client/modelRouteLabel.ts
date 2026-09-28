@@ -18,8 +18,10 @@ import type { ModelRoute, ModelTier } from './types';
 
 /**
  * The CATALOG ROW that stands for a tier, mirroring `pickCatalogValue` in the
- * runtime router (spec §4.3) — opus prefers the 1M row, fable is matched by
- * prefix because its value carries a version (`claude-fable-5-1[1m]`).
+ * runtime router (spec §4.3) — opus prefers the `opus[1m]` row, else the plain
+ * `opus` row (SDK 0.3.283 lists only that one, and it is Opus 5.5 at 1M), and
+ * never a concrete `claude-opus-*` row; fable is matched by prefix because its
+ * value carries a version (`claude-fable-5-1[1m]`, `claude-fable-5-1`).
  *
  * Matching is exact or prefixed, never "contains", so the `default` row can
  * never be mistaken for a tier: `default` resolves to opus on this machine, and

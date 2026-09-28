@@ -9,6 +9,7 @@ describe('modelTierOf — the runtime’s rule, restated on the client', () => {
     expect(modelTierOf('claude-haiku-4-5-20251001')).toBe('haiku');
     expect(modelTierOf('claude-sonnet-4-5-20250929')).toBe('sonnet');
     expect(modelTierOf('claude-opus-5-20260301')).toBe('opus');
+    expect(modelTierOf('claude-opus-5-5')).toBe('opus');
     expect(modelTierOf('claude-fable-5-1')).toBe('fable');
   });
 

@@ -5,6 +5,7 @@ import {
   CONTEXT_1M_BETA,
   FALLBACK_CONTEXT_WINDOW,
   contextWindowFor,
+  contextWindowForCatalogValue,
   reportedContextWindow,
   requestedOneMTier,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -150,6 +151,8 @@ describe('contextWindowFor', () => {
     // model the run actually ended on.
     expect(requestedOneMTier('claude-opus-5[1m]', 'claude-opus-5')).toBe(true);
     expect(requestedOneMTier('opus[1m]', 'claude-opus-5')).toBe(true);
+    // The no-catalog opus fallback (`opus[1m]`) served by Opus 5.5.
+    expect(requestedOneMTier('opus[1m]', 'claude-opus-5-5')).toBe(true);
     expect(requestedOneMTier('claude-fable-5-1[1m]', 'claude-fable-5-1')).toBe(true);
     // An empty served id names no OTHER model, so the request still stands (the
     // caller gates this on the Claude engine, where an empty id has a default).
@@ -469,5 +472,106 @@ describe('reportedContextWindow', () => {
     expect(
       reportedContextWindow({ 'claude-fable-5': usage(Number.NaN) }, 'claude-fable-5'),
     ).toBeUndefined();
+  });
+});
+
+// -- Opus 5.5: 1M by DEFAULT ------------------------------------------------
+//
+// SDK 0.3.283's catalog lists opus only as plain `opus`, resolving to
+// `claude-opus-5-5`, whose published default window is 1,000,000 — no `[1m]`
+// marker, beta or requested tier is involved. `claude-opus-5` keeps its 200k:
+// it is on the 1M tier only when a run shows it (the cases above).
+describe('Opus 5.5', () => {
+  it('measures 1M from the served id alone', () => {
+    expect(contextWindowFor('dev-claude', 'claude-opus-5-5')).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    expect(contextWindowFor('dev-claude', 'claude-opus-5-5-20260901')).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+    expect(contextWindowFor('dev-claude', 'claude-opus-5-5[1m]')).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    expect(contextWindowFor('ai-sdk', 'anthropic.claude-opus-5-5-v1:0')).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+  });
+
+  it('does not widen its neighbours', () => {
+    expect(contextWindowFor('dev-claude', 'claude-opus-5')).toBe(CLAUDE_CONTEXT_WINDOW);
+    expect(contextWindowFor('dev-claude', 'claude-opus-5-50')).toBe(CLAUDE_CONTEXT_WINDOW);
+    expect(contextWindowFor('dev-claude', 'claude-opus-4-8')).toBe(CLAUDE_CONTEXT_WINDOW);
+    // The bare alias is still an alias: it names no generation on its own.
+    expect(contextWindowFor('dev-claude', 'opus')).toBe(CLAUDE_CONTEXT_WINDOW);
+  });
+
+  it('gauges a run that asked for plain `opus` and was served 5.5 at 1M', () => {
+    // No measurement (a result billing two models), so the registry answers.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5-5',
+        modelLabel: 'opus',
+      }),
+    ).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+    // The same through `default`, the chip's most common value.
+    expect(
+      resolveContextWindow({
+        engineId: 'dev-claude',
+        contextModel: 'claude-opus-5-5',
+        modelLabel: 'default',
+      }),
+    ).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+  });
+});
+
+describe('contextWindowForCatalogValue', () => {
+  const rows0283 = [
+    { value: 'opus', resolvedModel: 'claude-opus-5-5' },
+    { value: 'claude-fable-5-1', resolvedModel: 'claude-fable-5-1' },
+    { value: 'sonnet', resolvedModel: 'claude-sonnet-5' },
+    { value: 'claude-opus-5', resolvedModel: 'claude-opus-5' },
+  ];
+  const rows0259 = [
+    { value: 'opus[1m]', resolvedModel: 'claude-opus-5[1m]' },
+    { value: 'claude-fable-5-1[1m]', resolvedModel: 'claude-fable-5-1' },
+    { value: 'sonnet', resolvedModel: 'claude-sonnet-5' },
+  ];
+
+  it('sizes an alias through the model its row resolves to', () => {
+    expect(contextWindowForCatalogValue('dev-claude', 'opus', rows0283)).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+    expect(contextWindowForCatalogValue('dev-claude', 'claude-fable-5-1', rows0283)).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+    expect(contextWindowForCatalogValue('dev-claude', 'sonnet', rows0283)).toBe(
+      CLAUDE_CONTEXT_WINDOW,
+    );
+    expect(contextWindowForCatalogValue('dev-claude', 'claude-opus-5', rows0283)).toBe(
+      CLAUDE_CONTEXT_WINDOW,
+    );
+  });
+
+  it('keeps the 0.3.259 shape at 1M, even if the resolved id lost its marker', () => {
+    expect(contextWindowForCatalogValue('dev-claude', 'opus[1m]', rows0259)).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+    expect(
+      contextWindowForCatalogValue('dev-claude', 'opus[1m]', [
+        { value: 'opus[1m]', resolvedModel: 'claude-opus-5' },
+      ]),
+    ).toBe(CLAUDE_1M_CONTEXT_WINDOW);
+  });
+
+  it('falls back to the bare value with no row, and never invents 1M for an old opus', () => {
+    expect(contextWindowForCatalogValue('dev-claude', 'opus', undefined)).toBe(
+      CLAUDE_CONTEXT_WINDOW,
+    );
+    expect(contextWindowForCatalogValue('dev-claude', 'opus[1m]', undefined)).toBe(
+      CLAUDE_1M_CONTEXT_WINDOW,
+    );
+    expect(
+      contextWindowForCatalogValue('dev-claude', 'opus', [
+        { value: 'opus', resolvedModel: 'claude-opus-5' },
+      ]),
+    ).toBe(CLAUDE_CONTEXT_WINDOW);
+    expect(contextWindowForCatalogValue('dev-claude', 'default', undefined)).toBeUndefined();
   });
 });

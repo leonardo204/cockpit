@@ -69,6 +69,21 @@ describe('tierDisplayName — the tier as the live catalog names it', () => {
     expect(tierDisplayName('opus', LIVE)).toBe('Opus');
   });
 
+  it('maps opus to plain `opus` on the SDK 0.3.283 catalog, never to `claude-opus-5`', () => {
+    // 0.3.283 lists no `opus[1m]`: `opus` resolves to Opus 5.5 (1M by default),
+    // and the concrete `claude-opus-5` row is an older 200k model. The chip must
+    // name what the router sends — `pickCatalogValue` picks `opus` here.
+    const live0283: ModelOption[] = claudeOptionsFrom([
+      { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'claude-fable-5-1' },
+      { value: 'claude-opus-5', displayName: 'Opus 5', resolvedModel: 'claude-opus-5' },
+      { value: 'opus', displayName: 'Opus 5.5', resolvedModel: 'claude-opus-5-5' },
+      { value: 'claude-fable-5-1', displayName: 'Fable 5.1', resolvedModel: 'claude-fable-5-1' },
+    ]);
+    expect(tierDisplayName('opus', live0283)).toBe('Opus 5.5');
+    expect(tierDisplayName('fable', live0283)).toBe('Fable 5.1');
+    expect(chipLabelFor('auto', route('opus', 'build-ask'), live0283)).toBe('Auto · Opus 5.5');
+  });
+
   it('finds fable by PREFIX, because its value carries a version', () => {
     // `claude-fable-5-1[1m]` — an exact match on `fable` would miss it and the
     // chip would fall back to the tier word for the one tier that has a name.

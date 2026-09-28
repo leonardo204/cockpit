@@ -197,6 +197,59 @@ describe('with no catalogue cached at all', () => {
   });
 });
 
+/** The same catalogue as SDK 0.3.283 caches it — the live probe of the bundled
+ *  CLI (2026-09-28), in the order it answered. There is no `opus[1m]` row any
+ *  more: plain `opus` resolves to Opus 5.5, which is 1M by default, and the older
+ *  `claude-opus-5` (a 200k model) is listed as a concrete row of its own. */
+const LIVE_ROWS_0283 = [
+  { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'claude-fable-5-1' },
+  { value: 'opus', displayName: 'Opus 5.5', resolvedModel: 'claude-opus-5-5' },
+  { value: 'claude-fable-5-1', displayName: 'Fable 5.1', resolvedModel: 'claude-fable-5-1' },
+  { value: 'sonnet', displayName: 'Sonnet 5', resolvedModel: 'claude-sonnet-5' },
+  { value: 'haiku', displayName: 'Haiku 4.5', resolvedModel: 'claude-haiku-4-5-20251001' },
+  { value: 'claude-opus-5', displayName: 'Opus 5', resolvedModel: 'claude-opus-5' },
+  { value: 'claude-fable-5', displayName: 'Fable 5', resolvedModel: 'claude-fable-5' },
+];
+
+describe('with the SDK 0.3.283 catalogue (Opus 5.5, no `opus[1m]` row)', () => {
+  const settings = catalogSetting(LIVE_ROWS_0283);
+
+  it('a build request goes to plain `opus` — the row that IS the 1M tier now', () => {
+    const r = route(makeStore({ settings }), { turnText: BUILD_ASK });
+    expect(r.tier).toBe('opus');
+    expect(r.reason).toBe('build-ask');
+    expect(r.value).toBe('opus');
+  });
+
+  it('never the concrete 200k `claude-opus-5`, whatever the row order', () => {
+    const first = [LIVE_ROWS_0283[5]!, ...LIVE_ROWS_0283.filter((_, i) => i !== 5)];
+    const r = route(makeStore({ settings: catalogSetting(first) }), { turnText: BUILD_ASK });
+    expect(r.value).toBe('opus');
+  });
+
+  it('plan mode takes the concrete fable id, which no longer carries `[1m]`', () => {
+    const r = route(makeStore({ settings }), { planMode: true });
+    expect(r.tier).toBe('fable');
+    expect(r.value).toBe('claude-fable-5-1');
+  });
+
+  it('a long conversation is moved UP to opus, because `opus` is sized through its row', () => {
+    // The regression this pins: sized as a bare alias, `opus` measures 200k, so
+    // `window-fit` would skip it and move the turn to fable. Its row says it
+    // resolves to `claude-opus-5-5`, which is 1M by default.
+    const r = route(makeStore({ settings, messages: bulkMessages(400) }));
+    expect(r.tier).toBe('opus');
+    expect(r.reason).toBe('window-fit');
+    expect(r.value).toBe('opus');
+  });
+
+  it('a build request in a long conversation stays on opus', () => {
+    const r = route(makeStore({ settings, messages: bulkMessages(400) }), { turnText: BUILD_ASK });
+    expect(r.tier).toBe('opus');
+    expect(r.reason).toBe('build-ask');
+  });
+});
+
 /** ~3,000 characters per message. `estimateTokens` counts ~3.5 chars/token, so
  *  the count is chosen against the ASSERTED estimate below rather than guessed. */
 function bulkMessages(count: number): { role: string; content: string }[] {

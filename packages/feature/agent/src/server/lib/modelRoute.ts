@@ -34,7 +34,7 @@
 // database can be asked for on demand.
 
 import {
-  contextWindowFor,
+  contextWindowForCatalogValue,
   estimateContextTokens,
   pickCatalogValue,
   routeModelTier,
@@ -247,9 +247,14 @@ export function resolveAutoModel(args: ResolveAutoModelArgs): AutoModelResolutio
 
     // §4.3 — sizes per tier, asked of the same values that will be sent. The two
     // callbacks are what keep the router from knowing either table.
+    //
+    // SIZED THROUGH THE CATALOG ROW, not the bare value: on SDK 0.3.283 opus is
+    // sent as plain `opus`, which as an alias measures 200k, while its row says it
+    // resolves to `claude-opus-5-5` — 1M by default. Measured by the alias,
+    // `window-fit` would move every long conversation off opus.
     const windows = windowsForTiers(
       (tier) => pickCatalogValue(tier, rows),
-      (value) => contextWindowFor(CLAUDE_PROVIDER_ID, value),
+      (value) => contextWindowForCatalogValue(CLAUDE_PROVIDER_ID, value, rows),
     );
 
     const previousTier = previousTierOf(store, sessionId);
