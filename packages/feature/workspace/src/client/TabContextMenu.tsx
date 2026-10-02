@@ -46,6 +46,12 @@ export interface TabContextMenuState {
    * happened for seconds, and a second click minted a second session.
    */
   isContinuing?: boolean;
+  /**
+   * Whether this tab's conversation is mid-turn. Live, like `isContinuing`.
+   * Clearing is refused while it is: `/clear` does not run mid-turn either, and a
+   * turn finishing into a tab that has already been replaced would land nowhere.
+   */
+  isBusy?: boolean;
 }
 
 interface TabContextMenuProps {
@@ -59,6 +65,9 @@ interface TabContextMenuProps {
   /** session-context-management §2.2: compress this conversation into a handoff and
    *  open a new tab carrying it. */
   onContinueInNewTab: (tabId: string) => void;
+  /** Clear context (`/clear`): this tab starts over as a blank chat in place; the
+   *  old conversation stays in the session history. */
+  onClearContext: (tabId: string) => void;
 }
 
 /** Keeps the menu on screen when the click lands near an edge. */
@@ -73,6 +82,7 @@ export function TabContextMenu({
   onRename,
   onToggleNoLearn,
   onContinueInNewTab,
+  onClearContext,
 }: TabContextMenuProps) {
   const { t } = useTranslation();
   const ref = useRef<HTMLDivElement>(null);
@@ -208,6 +218,27 @@ export function TabContextMenu({
         {state.isContinuing
           ? t('tabBar.continuing', { defaultValue: 'Writing the handoff…' })
           : t('tabBar.continueInNewTab', { defaultValue: 'Continue in a new tab' })}
+      </button>
+      {/* CLEAR CONTEXT — Claude Code's `/clear`. Beside "continue in a new tab"
+          because it is the other way to get a fresh context: that one carries a
+          summary into a new tab, this one starts the same tab over with nothing.
+          The old conversation is not deleted; it stays in the session history. */}
+      <button
+        role="menuitem"
+        disabled={!state.hasSession || state.isBusy === true}
+        className={`${item} disabled:opacity-40 disabled:cursor-not-allowed`}
+        data-testid="tab-menu-clear"
+        onClick={() => {
+          onClearContext(state.tabId);
+          onClose();
+        }}
+      >
+        <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          {/* A circular arrow: start over. */}
+          <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8" />
+          <path d="M3 3v5h5" />
+        </svg>
+        {t('tabBar.clearContext', { defaultValue: 'Clear context' })}
       </button>
     </div>
   );

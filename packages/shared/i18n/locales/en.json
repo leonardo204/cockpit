@@ -1922,6 +1922,7 @@
     "noLearnOff": "Include in learning",
     "noLearnBadge": "Not learned from",
     "continueInNewTab": "Continue in a new tab",
+    "clearContext": "Clear context",
     "continuing": "Writing the handoff…",
     "continueFailed": "Could not continue in a new tab",
     "continuedTitle": "Continued — {{title}}"

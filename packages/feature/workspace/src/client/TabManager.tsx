@@ -66,6 +66,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     dragTabIndex,
     dragOverTabIndex,
     closeTab,
+    clearTab,
     switchTab,
     handleSelectSession,
     handleNewTab,
@@ -726,12 +727,17 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                   // LIVE, unlike the flags the menu captured at open time: a
                   // handoff can start and finish while the menu is on screen,
                   // and the item has to disable itself when it does.
-                  state={{ ...menu, isContinuing: continuingTabs.has(menu.tabId) }}
+                  state={{
+                    ...menu,
+                    isContinuing: continuingTabs.has(menu.tabId),
+                    isBusy: tabs.find((t) => t.id === menu.tabId)?.isLoading === true,
+                  }}
                   onClose={() => setMenu(null)}
                   onTogglePin={handleTogglePin}
                   onRename={setRenamingTabId}
                   onToggleNoLearn={handleToggleNoLearn}
                   onContinueInNewTab={handleContinueInNewTab}
+                  onClearContext={clearTab}
                 />
               )}
               {/* ── WHERE `sendMessage` GOES WHILE A DOCUMENT TAB IS ACTIVE ──

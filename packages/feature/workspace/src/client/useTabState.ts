@@ -6,6 +6,7 @@ import { applyTitleUpdate } from './titleLock';
 // The name a tab wears before the conversation or the user names it — the same
 // `MMDD-HHmm-animal` string every list shows for the same session.
 import { untitledTabTitle } from './untitledTabTitle';
+import { clearTabInPlace } from './clearTab';
 import { closedSessionIdsForViewer } from './projectSessionTree';
 import { projectOpenPlan } from './projectOpenPlan';
 import {
@@ -487,6 +488,24 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     });
   }, [activeTabId, initialCwd]);
 
+  // Clear context (/clear): the tab starts over as a blank chat in the same
+  // place. The old session leaves the open-tab union exactly as a close would —
+  // the queue below is the only removal path — and stays in history. Rule in
+  // ./clearTab.
+  const clearTab = useCallback((tabId: string) => {
+    const out = clearTabInPlace(tabsRef.current, tabId, Date.now());
+    if (!out) return;
+    pendingClosedRef.current.add(out.closedSessionId);
+    setTabs(out.tabs);
+    setUnreadTabs((u) => {
+      if (!u.has(tabId)) return u;
+      const next = new Set(u);
+      next.delete(tabId);
+      return next;
+    });
+    if (activeTabIdRef.current === tabId) setActiveTabId(out.newTabId);
+  }, []);
+
   // Handle sidebar session click - add new tab (appended to end)
   const handleSelectSession = useCallback((sid: string, title?: string) => {
     const existingTab = tabs.find((t) => t.sessionId === sid);
@@ -747,6 +766,7 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
     // Tab operations
     addTab,
     closeTab,
+    clearTab,
     switchTab,
     handleSelectSession,
     handleNewTab,

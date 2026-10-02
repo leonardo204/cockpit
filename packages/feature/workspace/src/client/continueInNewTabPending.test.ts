@@ -69,7 +69,7 @@ describe('continue in a new tab — the wait is visible', () => {
     // them: their labels state what the click will do. This one describes a
     // request that can start and finish while the menu is on screen.
     const host = read('TabManager.tsx');
-    expect(host).toContain('state={{ ...menu, isContinuing: continuingTabs.has(menu.tabId) }}');
+    expect(host).toMatch(/state=\{\{\s*\.\.\.menu,\s*isContinuing: continuingTabs\.has\(menu\.tabId\),/);
     const menu = read('TabContextMenu.tsx');
     expect(menu).toContain('disabled={!state.hasSession || state.isContinuing === true}');
     expect(menu).toContain("t('tabBar.continuing'");
