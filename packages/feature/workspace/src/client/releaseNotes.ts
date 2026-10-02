@@ -85,6 +85,32 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.39.2 — 2026-10-02
+
+### en
+
+No more leftover MCP server processes, and a way to start a tab over.
+
+**New**
+
+- **Clear context.** Right-click a conversation tab and choose "Clear context" to start that tab over with an empty conversation — the same as Claude Code's \`/clear\`. The previous conversation is not deleted; it stays in your session history.
+
+**Fixed**
+
+- **MCP servers no longer pile up.** Every turn starts the MCP servers you have turned on and closes them when it ends. A server launched through a wrapper such as \`uvx\` (for example the Atlassian one) survived that close, so one \`uv\` + \`python\` pair was left behind per turn for as long as naby ran, slowly eating memory. naby now closes them the way the MCP spec says to — closing their input first, then asking, then insisting — so they end with the turn.
+
+### ko
+
+남아 쌓이던 MCP 서버 프로세스가 사라지고, 탭을 새로 시작할 수 있어요.
+
+**새로 생긴 것**
+
+- **컨텍스트 지우기.** 대화 탭을 우클릭하고 "컨텍스트 지우기"를 고르면 그 탭이 빈 대화로 다시 시작해요. Claude Code의 \`/clear\`와 같아요. 이전 대화는 지워지지 않고 세션 기록에 남아요.
+
+**고친 것**
+
+- **MCP 서버가 더는 쌓이지 않아요.** 턴마다 켜 둔 MCP 서버를 띄우고 턴이 끝나면 닫는데, \`uvx\`처럼 다른 프로그램을 거쳐 뜨는 서버(예: Atlassian)는 닫히지 않고 남았어요. 그래서 naby가 켜져 있는 동안 턴마다 \`uv\`와 \`python\`이 한 쌍씩 쌓여 메모리를 차지했어요. 이제 MCP 스펙이 정한 순서대로 닫아서 턴과 함께 끝나요.
+
 ## 1.39.1 — 2026-10-02
 
 ### en
