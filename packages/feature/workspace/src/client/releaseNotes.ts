@@ -85,6 +85,28 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.39.1 — 2026-10-02
+
+### en
+
+Background agents can use their tools again, and answers stay in your language.
+
+**Fixed**
+
+- **Background agents are no longer "refused by the user".** When the main reply finished while a background agent was still working, every tool that agent called next — web search, opening a page — was refused on the spot, with words that read as if you had declined it. No prompt was ever shown. naby now keeps the connection to the Claude engine open until every background agent is done, so their tools run normally.
+- **Answers stay in the language you wrote in.** In long turns full of English tool output and agent reports, replies could drift into English. Every turn now tells the model to answer in your language from the start, and naby's language check also catches a paragraph that is followed straight away by an agent's report.
+- **Polishing no longer changes how politely naby speaks.** The final restyle could turn a polite answer into the plain "~다" form. It now keeps the answer's own politeness level and refuses a rewrite that changes it.
+
+### ko
+
+백그라운드 에이전트가 다시 도구를 쓰고, 답이 쓰신 언어 그대로 나와요.
+
+**고친 것**
+
+- **백그라운드 에이전트가 더는 "사용자가 거부했다"고 멈추지 않아요.** 메인 답변이 끝났는데 백그라운드 에이전트가 아직 일하고 있으면, 그 뒤에 부른 웹 검색·페이지 열기가 모두 그 자리에서 거부됐어요. 거부 문구도 마치 사용자가 거절한 것처럼 나왔지만, 허용을 묻는 창은 한 번도 뜨지 않았어요. 이제 백그라운드 에이전트가 모두 끝날 때까지 Claude 엔진과의 연결을 열어 둬서 도구가 정상으로 실행돼요.
+- **답이 쓰신 언어로 나와요.** 영어 도구 출력과 에이전트 보고가 많이 쌓인 긴 턴에서는 답이 영어로 흘러가곤 했어요. 이제 매 턴 처음부터 쓰신 언어로 답하라고 모델에게 알려 주고, 바로 뒤에 에이전트 보고가 붙은 문단도 언어 검사로 잡아내요.
+- **다듬는 과정에서 말투가 바뀌지 않아요.** 마지막 다듬기가 존댓말 답을 "~다" 말투로 바꾸는 일이 있었어요. 이제 원래 답의 말투를 그대로 지키고, 말투를 바꾼 결과는 쓰지 않아요.
+
 ## 1.39.0 — 2026-09-28
 
 ### en
