@@ -6,7 +6,6 @@ import {
   BUILTIN_PERSONA_ID,
   serializeStyleFingerprint,
   STYLE_FINGERPRINT_KEY,
-  VOICE_PREVENTIVE_THRESHOLD,
   type EngineEvent,
   type EngineRunInput,
   type StyleFingerprint,
@@ -217,7 +216,7 @@ describe('the naby layer reads the stage from the ledger, not from the check-in 
 // Defect 6 — what repeated language drift actually buys
 // ---------------------------------------------------------------------------
 
-describe('repeated language drift adds a line to the turns that already carry one', () => {
+describe('the language directive rides on every persona turn', () => {
   /** Put the app in the state the preventive rule reacts to: a usable fingerprint
    *  and more language corrections than the threshold. */
   function seedDrift(store: ReturnType<typeof getStore>, languageDrift: number): void {
@@ -247,7 +246,7 @@ describe('repeated language drift adds a line to the turns that already carry on
 
   it('never widens the style fingerprint onto a SPECIALIST turn', async () => {
     const store = getStore();
-    seedDrift(store, VOICE_PREVENTIVE_THRESHOLD + 2);
+    seedDrift(store, 5);
     store.putAgent({
       name: 'drifter',
       kind: 'custom',
@@ -263,19 +262,19 @@ describe('repeated language drift adds a line to the turns that already carry on
     expect(seen.system ?? '').not.toContain(LANGUAGE_LINE_HEAD);
   });
 
-  it('adds an explicit language directive to the persona turn once drift is proven', async () => {
+  it('adds the language directive to every persona turn, drift or not', async () => {
     const store = getStore();
-    seedDrift(store, VOICE_PREVENTIVE_THRESHOLD);
+    seedDrift(store, 0);
     const seen = await runTurn(KOREAN_USER);
     expect(seen.system ?? '').toContain(STYLE_LINE_HEAD);
     expect(seen.system ?? '').toContain(LANGUAGE_LINE_HEAD);
   });
 
-  it('says nothing extra while the drift is still one bad turn', async () => {
-    const store = getStore();
-    seedDrift(store, VOICE_PREVENTIVE_THRESHOLD - 1);
+  it('adds the language directive even before a fingerprint exists', async () => {
+    // The store is shared across this file, so clear what earlier cases seeded.
+    getStore().setSetting(STYLE_FINGERPRINT_KEY, '');
     const seen = await runTurn(KOREAN_USER);
-    expect(seen.system ?? '').toContain(STYLE_LINE_HEAD);
-    expect(seen.system ?? '').not.toContain(LANGUAGE_LINE_HEAD);
+    expect(seen.system ?? '').not.toContain(STYLE_LINE_HEAD);
+    expect(seen.system ?? '').toContain(LANGUAGE_LINE_HEAD);
   });
 });

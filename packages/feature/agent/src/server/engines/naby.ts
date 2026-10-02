@@ -96,7 +96,6 @@ import {
   renderStyleFingerprintLine,
   renderVoiceLanguageLine,
   STYLE_FINGERPRINT_KEY,
-  VOICE_PREVENTIVE_THRESHOLD,
   readSettings,
   resolveProviderCredential,
   type NabySettings,
@@ -174,7 +173,7 @@ import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
 import { configuredHarnessBundles } from '../lib/systemMcp';
 import { kickReflectionSweep } from '../lib/reflection';
-import { createVoicePort, readVoiceStats } from '../lib/voice';
+import { createVoicePort } from '../lib/voice';
 import type { JudgeBackend } from '../lib/reflection';
 import { runNestedTurn } from '../lib/delegation';
 import { planTextRender } from './textRender';
@@ -1598,67 +1597,35 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // with learning off (§3, and the note above). The gate applies to the
         // sweep that WRITES the fingerprint.
         //
-        // Below `STYLE_FINGERPRINT_MIN_SAMPLES` the renderer returns undefined and
-        // this contributes nothing at all, so a fresh install's turn is
-        // byte-for-byte what it was.
+        // Below `STYLE_FINGERPRINT_MIN_SAMPLES` the fingerprint renderer returns
+        // undefined and only the language directive below is injected.
         //
-        // P3-M14a (naby-voice-layer §7): WHAT REPEATED LANGUAGE DRIFT BUYS,
-        // REDESIGNED AFTER THE REVIEW (defect 6).
+        // P3-M14a (naby-voice-layer §7): THE LANGUAGE DIRECTIVE, on every persona
+        // turn. It used to be bought by drift (three corrections in the totals),
+        // but the drift is a property of a LONG turn, not of a user: after enough
+        // English tool output and background-task notifications the model answers
+        // in the material's language, the first time included — and the layer
+        // cannot repair a block that is followed by more output. So the one
+        // imperative sentence rides along from the start; the fingerprint half
+        // is still gated on its own sample floor.
         //
-        // The first version widened the AUDIENCE: once the layer had corrected the
-        // language VOICE_PREVENTIVE_THRESHOLD times, the fingerprint line was
-        // injected on non-persona turns too. That was wrong in both directions.
-        // `growthSubject = routedAgent ?? persona`, so an ordinary turn IS a
-        // persona turn and already carries the line — the only turns the switch
-        // actually reached were SPECIALIST ones, i.e. exactly the audience the
-        // paragraph above excludes, and for the reason it gives.
-        //
-        // So the feedback changes shape instead: the block that is already being
-        // injected gets ONE MORE SENTENCE, in the imperative. The existing line
-        // describes a habit and ends by subordinating itself ("the current request
-        // always wins"), which is the right register for style and the wrong one
-        // for a rule a model has now demonstrably ignored three times.
-        // `renderVoiceLanguageLine` is pure and lives in the runtime with every
-        // other prompt fragment; this only carries the count to it.
-        //
-        // A SPECIALIST TURN GETS NEITHER HALF, whatever the totals say.
-        //
-        // Fails toward the old behaviour: an unreadable totals row counts as zero
-        // drift, and an unreadable fingerprint contributes nothing.
-        const languageDrift = (() => {
-          try {
-            return readVoiceStats(store).byReason.language ?? 0;
-          } catch {
-            return 0;
-          }
-        })();
+        // A SPECIALIST TURN GETS NEITHER HALF — the reason given above.
         const styleLine =
           growthSubject?.id === BUILTIN_PERSONA_ID
             ? (() => {
+                let fingerprintLine: string | undefined;
                 try {
-                  const parts = [
-                    renderStyleFingerprintLine(
-                      parseStyleFingerprint(store.getSetting(STYLE_FINGERPRINT_KEY)),
-                    ),
-                    renderVoiceLanguageLine(languageDrift),
-                  ].filter(Boolean);
-                  return parts.length > 0 ? parts.join(' ') : undefined;
+                  fingerprintLine = renderStyleFingerprintLine(
+                    parseStyleFingerprint(store.getSetting(STYLE_FINGERPRINT_KEY)),
+                  );
                 } catch {
-                  // An unreadable setting is not a reason to fail a turn; it is a
-                  // reason to send the turn naby would have sent last month.
-                  return undefined;
+                  // An unreadable setting is not a reason to fail a turn.
+                  fingerprintLine = undefined;
                 }
+                return [fingerprintLine, renderVoiceLanguageLine()].filter(Boolean).join(' ');
               })()
             : undefined;
-        if (styleLine) {
-          console.log(
-            `[engine:naby] style line: injected${
-              languageDrift >= VOICE_PREVENTIVE_THRESHOLD
-                ? ` (+ language directive — ${languageDrift} corrections)`
-                : ''
-            }`,
-          );
-        }
+        if (styleLine) console.log('[engine:naby] style line: injected (+ language directive)');
         // ---- the fast-growth session's THREE REAL NUMBERS (P3-M12b-5) --------
         //
         // Computed HERE and handed to the pure text builder, for the reason the
@@ -2324,10 +2291,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         //
         // NO EXTRA READS. The stage is the one reading this turn already took
         // (`subjectGrowth` — the growth subject's own ledger, reused by the
-        // check-in wording and by the fast-growth block), and the style line is the
-        // one already assembled above. An ordinary turn pays for the fingerprint
-        // lookup the layer makes itself and nothing more; an answer already in the
-        // user's voice never reaches a model at all.
+        // check-in wording and by the fast-growth block). The style line is NOT
+        // passed: the rewrite keeps the answer's own register (lib/voice.ts). An
+        // ordinary turn pays for the fingerprint lookup the layer makes itself and
+        // nothing more; an answer already in the user's voice never reaches a
+        // model at all.
         //
         // THE STAGE COMES FROM THE LEDGER, NOT FROM A SWITCH (review defect 5).
         // `routedStage` remains the fallback for the one case `subjectGrowth`
@@ -2344,7 +2312,6 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // so a rewrite is billed to the provider that answered the turn.
           store,
           stage: subjectGrowth?.stage ?? routedStage,
-          ...(styleLine ? { styleLine } : {}),
           // The gates decide what naby RECORDS, never whether it uses what it has
           // learned (§2 principle 5): a temporary session still gets a consistent
           // voice, and simply leaves no totals behind.

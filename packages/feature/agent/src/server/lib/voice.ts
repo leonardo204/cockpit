@@ -95,10 +95,6 @@ export type VoicePortDeps = {
    * measurably wrong and spend nothing on what is not.
    */
   stage: GrowthStage | undefined;
-  /** The one-line style profile, when this turn is already injecting one. Passed
-   *  in rather than re-read: the turn has already paid for that lookup, and two
-   *  reads could disagree if the sweep landed between them. */
-  styleLine?: string;
   /**
    * Whether this turn may LEARN (`canCaptureMemory`). It gates the totals and
    * nothing else — §2 principle 5: the switches decide what naby records, never
@@ -446,7 +442,10 @@ export function createVoicePort(deps: VoicePortDeps): VoicePort {
           answer: split.body,
           userText,
           mode: verifyOptions.mode,
-          ...(deps.styleLine ? { styleLine: deps.styleLine } : {}),
+          // NO STYLE LINE. The fingerprint describes how the user TYPES prompts
+          // ("uses the plain ~다 ending"), and handing it to the rewrite steered
+          // polite answers into the plain register — the opposite of what the
+          // user asked for in words. The rewrite keeps the answer's own register.
           ...(deviation ? { deviation } : {}),
         });
 
