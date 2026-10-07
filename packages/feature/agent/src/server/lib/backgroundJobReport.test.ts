@@ -267,11 +267,14 @@ describe('the wiring, asserted on the source', () => {
     expect(engine).toMatch(
       /projectCwd \? \{ cwd: projectCwd, sink: makeJobSink\(\), sessionId \} : undefined/,
     );
-    // And the workspace call takes its two options and nothing else, so a job
-    // sink cannot quietly move back into the kit dev-claude never receives.
-    expect(engine).toMatch(
-      /buildWorkspaceTools\(\{\s*cwd: projectCwd,\s*allowMutations: !planMode && allowChanges,\s*\}\)/,
-    );
+    // And the workspace call carries no job sink, so one cannot quietly move
+    // back into the kit dev-claude never receives. (Its options are the project,
+    // the mutation allowance and — since org-harness-sync M2 — the org package's
+    // read root and command env; none of them is a sink.)
+    const call = engine.match(/buildWorkspaceTools\(\{([\s\S]*?)\}\)\s*:\s*undefined/);
+    expect(call, 'the workspace call').toBeTruthy();
+    expect(call![1]).toMatch(/^\s*cwd: projectCwd,\s*allowMutations: !planMode && allowChanges,/);
+    expect(call![1]).not.toMatch(/sink|makeJobSink/);
   });
 
   it('hands the naby-layer schemas to EVERY engine — only the workspace kit is engine-gated', () => {

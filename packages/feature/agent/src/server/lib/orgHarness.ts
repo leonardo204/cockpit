@@ -26,6 +26,7 @@ import {
   applyOrgHarnessIfDue,
   keepUserCopy,
   nabyHomeDir,
+  pinOrgHarnessTurn,
   readOrgHarnessState,
   runOrgHarnessSync,
   setOrgHarnessEnabled,
@@ -36,10 +37,11 @@ import {
   type OrgHarnessFetch,
   type OrgHarnessState,
   type OrgHarnessSyncReport,
+  type OrgHarnessTurn,
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { anyRunActive } from '../sessionRunHub';
-import { orgHarnessKeyPreset } from './systemMcp';
+import { CIC_SERVER_NAME, findSystemMcpPreset, orgHarnessKeyPreset } from './systemMcp';
 
 /** Turns the BACKGROUND passes off (tests, CI). Not the kill switch: that is
  *  `NABY_ORG_HARNESS=0` (runtime), which turns the org harness itself off. */
@@ -71,6 +73,20 @@ function currentFetch(): OrgHarnessFetch | undefined {
  */
 export function readOrgHarnessKey(store: Pick<Store, 'listMcpEntries'>): string | undefined {
   const preset = orgHarnessKeyPreset();
+  if (!preset) return undefined;
+  const entry = store.listMcpEntries().find((e) => e.name === preset.name);
+  if (!entry || entry.status === 'proposed') return undefined;
+  const token = preset.readStoredFields(entry).token?.trim();
+  return token ? token : undefined;
+}
+
+/**
+ * The cic preset's token, or undefined when it is not configured (§3.4: scripts
+ * get `CLAUDE_PLUGIN_OPTION_CIC_TOKEN` only "if set"). Same reading rule as the
+ * Skill Hub key — an agent-proposed entry does not count.
+ */
+export function readOrgCicToken(store: Pick<Store, 'listMcpEntries'>): string | undefined {
+  const preset = findSystemMcpPreset(CIC_SERVER_NAME);
   if (!preset) return undefined;
   const entry = store.listMcpEntries().find((e) => e.name === preset.name);
   if (!entry || entry.status === 'proposed') return undefined;
@@ -194,6 +210,56 @@ export function applyOrgHarnessAtTurnBoundary(store: Store): OrgHarnessApplyResu
     console.warn(`[org-harness] apply skipped: ${e instanceof Error ? e.message : String(e)}`);
     return undefined;
   }
+}
+
+/**
+ * THE ORG HARNESS PINNED FOR ONE TURN (org-harness-sync §4.7, M2). Called once,
+ * right after the turn-boundary apply and before the toolset is built: the
+ * switch and the package folder it resolves are what the listing, every
+ * `naby_skill_load` and every package command of this turn use — including every
+ * step of an autonomous run. Never throws; an error is an "off" turn.
+ *
+ * The cic token is read lazily (only when a package command actually runs), so
+ * it is never resolved on a turn that does not use it.
+ */
+export function pinOrgHarnessForTurn(
+  store: Store,
+  opts: { projectDir?: string; nativeClaudeTools: boolean },
+): OrgHarnessTurn {
+  let ctx: OrgHarnessContext;
+  try {
+    ctx = orgHarnessContext(store);
+  } catch {
+    ctx = { home: nabyHomeDir(), env: process.env };
+  }
+  return pinOrgHarnessTurn(store, {
+    ...ctx,
+    nativeClaudeTools: opts.nativeClaudeTools,
+    ...(opts.projectDir ? { projectDir: opts.projectDir } : {}),
+    readCicToken: () => readOrgCicToken(store),
+  });
+}
+
+/**
+ * What a NEW session is told once, as harness pills on its first turn (§4.5
+ * "the notice shows once at session start", §3.6 "a rejected key is announced at
+ * session start"). Codes, not sentences: the server has no locale, and the client
+ * renders them (`client/harnessPill.ts`). Empty when there is nothing to say —
+ * which, with no skill-hub key, is always.
+ */
+export function orgHarnessSessionStartNotices(store: Store): string[] {
+  let state: OrgHarnessState;
+  try {
+    state = orgHarnessState(store);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  if (state.configured && state.auth === 'unauthorized') out.push('unauthorized');
+  if (state.on) {
+    for (const n of state.copyNotices) out.push(`copy-notice:${n.name}:${n.copy}`);
+  }
+  return out;
 }
 
 // -- what the HTTP actions call ----------------------------------------------

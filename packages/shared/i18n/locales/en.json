@@ -381,7 +381,10 @@
     "stageLimited": "@{{agent}} answered as itself, at the {{stage}} stage — it can read, draft and propose, and the actions it has not been measured on yet are held back.",
     "compaction": "folded the conversation into a summary",
     "compactionFolded": "Older parts of this conversation were folded into a summary ({{count}} messages).",
-    "compactionTruncated": "Older parts of this conversation were dropped to fit the window ({{count}} messages). No summary could be written."
+    "compactionTruncated": "Older parts of this conversation were dropped to fit the window ({{count}} messages). No summary could be written.",
+    "orgHarness": "org harness",
+    "orgUnauthorized": "Skill Hub did not accept your key, so the org harness is off. Enter the key again in Settings → Connections.",
+    "orgCopyNotice": "Your own {{skill}} ({{copyKind}}) is used instead of the org version, so it does not get org updates. Choose in Settings → Harness."
   },
   "agentExport": {
     "button": "Export",
@@ -2196,5 +2199,51 @@
     "reopen": "What changed",
     "dismiss": "Got it",
     "empty": "No release notes are available for this build."
+  },
+  "orgHarness": {
+    "title": "Org harness",
+    "loading": "Loading…",
+    "description": "The company's shared harness (altimedia-harness), which follows Skill Hub and updates itself when a new version is published.",
+    "status": {
+      "on": "On — org skills are offered in every session.",
+      "envOff": "Off — turned off by the NABY_ORG_HARNESS=0 environment variable.",
+      "userOff": "Off — you turned it off.",
+      "unauthorized": "Off — Skill Hub did not accept your key.",
+      "noKey": "Off — no Skill Hub key."
+    },
+    "activation": {
+      "ok": "Skill Hub key accepted.",
+      "needsKey": "Skill Hub rejected the key. Enter it again in Settings → Connections.",
+      "noKey": "Enter a Skill Hub key in Settings → Connections to turn the org harness on.",
+      "unchecked": "Skill Hub key not checked yet."
+    },
+    "version": "Version {{version}}",
+    "noPackage": "Not downloaded yet — it downloads when you are on the company network.",
+    "lastSync": "Last checked {{at}}",
+    "sync": {
+      "updated": "updated",
+      "current": "up to date",
+      "unreachable": "Skill Hub unreachable",
+      "no-plugin": "not offered by Skill Hub",
+      "integrity-mismatch": "download did not match its checksum and was discarded",
+      "invalid-package": "download was not a valid package and was discarded",
+      "other": "checked"
+    },
+    "toggle": "Use the org harness",
+    "envOffHint": "Turned off by NABY_ORG_HARNESS=0 in the environment.",
+    "skills": "Org skills",
+    "skillOn": "on",
+    "skillOff": "off",
+    "copiesTitle": "Skills you installed with the same name",
+    "copyPending": "Your {{skill}} ({{copyKind}}) is used instead of the org version and does not get its updates.",
+    "copyKept": "You chose to keep your own {{skill}}.",
+    "copyUnmodified": "unmodified copy",
+    "copyEdited": "edited copy",
+    "copyUnknown": "copy",
+    "useOrg": "Use the org version",
+    "keepMine": "Keep my copy",
+    "useOrgDone": "Now using the org {{skill}}.",
+    "checkNow": "Check for updates",
+    "checking": "Checking…"
   }
 }

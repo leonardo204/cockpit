@@ -38,6 +38,14 @@ const COMPACTION = 'context-compaction';
 const FOLDED = 'folded:';
 const TRUNCATED = 'truncated:';
 
+/** The org harness's session-start notices (org-harness-sync §4.5, §3.6).
+ *
+ *   `copy-notice:<skill>:<unmodified|edited|unknown>` — a same-name copy the user
+ *                         installed hides the org version of <skill>;
+ *   `unauthorized`      — Skill Hub rejected the key, so the org harness is off. */
+const ORG_HARNESS = 'org-harness';
+const COPY_NOTICE = 'copy-notice:';
+
 /** Render one harness pill. Returns the label and the detail as the transcript
  *  should show them; `detail` undefined means the pill is label-only.
  *
@@ -96,6 +104,40 @@ export function renderHarnessPill(
         agent: agentName,
         defaultValue:
           '@{{agent}} is not a butterfly yet, so it cannot take delegated work — this ran as a normal turn.',
+      }),
+    };
+  }
+
+  if (label === ORG_HARNESS && (detail === 'unauthorized' || detail?.startsWith(COPY_NOTICE))) {
+    const orgLabel = i18n.t('harnessPill.orgHarness', { defaultValue: 'org harness' });
+    if (detail === 'unauthorized') {
+      return {
+        label: orgLabel,
+        detail: i18n.t('harnessPill.orgUnauthorized', {
+          defaultValue:
+            'Skill Hub did not accept your key, so the org harness is off. Enter the key again in Settings → Connections.',
+        }),
+      };
+    }
+    // `copy-notice:<skill>:<copy>` — skill names carry no colon, so the LAST
+    // colon separates the copy kind.
+    const rest = detail!.slice(COPY_NOTICE.length);
+    const sep = rest.lastIndexOf(':');
+    const skill = sep >= 0 ? rest.slice(0, sep) : rest;
+    const copy = sep >= 0 ? rest.slice(sep + 1) : 'unknown';
+    const copyKind =
+      copy === 'unmodified'
+        ? i18n.t('orgHarness.copyUnmodified', { defaultValue: 'unmodified copy' })
+        : copy === 'edited'
+          ? i18n.t('orgHarness.copyEdited', { defaultValue: 'edited copy' })
+          : i18n.t('orgHarness.copyUnknown', { defaultValue: 'copy' });
+    return {
+      label: orgLabel,
+      detail: i18n.t('harnessPill.orgCopyNotice', {
+        skill,
+        copyKind,
+        defaultValue:
+          'Your own {{skill}} ({{copyKind}}) is used instead of the org version, so it does not get org updates. Choose in Settings → Harness.',
       }),
     };
   }

@@ -89,6 +89,16 @@ import {
   realPolicy,
   resolvePolicyEffect,
   makeModelResolver,
+  // org-harness-sync M2: the per-turn org harness (listing, `naby_skill_load`,
+  // the read root and command env of the compatibility layer, the write-protected
+  // org folder).
+  makeOrgSkillLoadTool,
+  ORG_SKILL_LISTING_TOKEN_BUDGET,
+  orgCommandEnv,
+  orgHarnessProtectedRoot,
+  orgReadRoots,
+  orgSkillPreloader,
+  orgTurnListsSkills,
   Outbox,
   preflightEngine,
   parseStyleFingerprint,
@@ -172,7 +182,13 @@ import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
 import { configuredHarnessBundles } from '../lib/systemMcp';
-import { applyOrgHarnessAtTurnBoundary, ensureOrgHarnessSyncStarted } from '../lib/orgHarness';
+import {
+  applyOrgHarnessAtTurnBoundary,
+  ensureOrgHarnessSyncStarted,
+  orgHarnessSessionStartNotices,
+  pinOrgHarnessForTurn,
+} from '../lib/orgHarness';
+import { unclaimedLineLedVerbs } from '../lib/slashCommands';
 import { kickReflectionSweep } from '../lib/reflection';
 import { createVoicePort } from '../lib/voice';
 import type { JudgeBackend } from '../lib/reflection';
@@ -1332,22 +1348,60 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // `background` flag — which meant dev-claude, the engine this whole
         // toolset is withheld from, had no background jobs at all. They are naby's
         // own capability and are injected into `buildToolset` above.
+        // THE ORG HARNESS, PINNED FOR THIS TURN (org-harness-sync §4.7, M2).
+        //
+        // Resolved ONCE, here, before anything that uses it: the kill switch as
+        // it stands now and the absolute folder of the `current` package. The
+        // skill listing, `naby_skill_load`, the workspace read root and the
+        // package-command env all read THIS value for the whole run, every
+        // autonomy step included — so a background sync that flips `current`
+        // mid-turn cannot split one turn across two package versions (M1 keeps
+        // the previous folder on disk for exactly this). Never throws.
+        const orgTurn = pinOrgHarnessForTurn(store, {
+          ...(projectCwd ? { projectDir: projectCwd } : {}),
+          nativeClaudeTools: engineId === 'dev-claude',
+        });
+        const orgListed = orgTurnListsSkills(orgTurn);
+
         const workspace =
           projectCwd && engineId !== 'dev-claude'
             ? buildWorkspaceTools({
                 cwd: projectCwd,
                 allowMutations: !planMode && allowChanges,
+                // §3.3: the org skill folders are readable by `read_file` /
+                // `list_dir` (never writable — the read root does not reach the
+                // writing tools, and the gate below refuses writes there).
+                readRoots: orgReadRoots(orgTurn),
+                // §3.4: a command that runs a package script gets the plugin env.
+                commandEnv: (command, cwd) => orgCommandEnv(orgTurn, command, cwd),
               })
             : undefined;
+
+        // WHETHER THIS TURN HAS A SHELL. Every org skill declares `run_command`
+        // (its scripts are Python), so with no shell none of them can be listed
+        // and a loader would be a tool the model can see but never use. On the
+        // ai-sdk path the shell is our `run_command`; on dev-claude it is the
+        // SDK's Bash, usable where a project is open and changes are allowed —
+        // the same conditions `buildWorkspaceTools` applies (§3.4: `Bash` ≡
+        // `run_command`).
+        const sdkShellUsable = engineId === 'dev-claude' && !!projectCwd && allowChanges && !planMode;
+        const turnHasShell = sdkShellUsable || workspace?.executors.run_command !== undefined;
+
+        // `naby_skill_load` — offered only when this turn can list org skills. On
+        // dev-claude it reaches the model through the in-process `nabytools`
+        // server like every other runtime tool, so both engines share it.
+        const orgLoad = orgListed && turnHasShell ? makeOrgSkillLoadTool(orgTurn) : undefined;
 
         const toolSchemas: ToolSchema[] = [
           ...builtin.toolSchemas,
           ...(workspace?.toolSchemas ?? []),
+          ...(orgLoad ? [orgLoad.schema] : []),
           ...(mcp?.toolSchemas ?? []),
         ];
         const executors: Record<string, Executor> = {
           ...builtin.executors,
           ...(workspace?.executors ?? {}),
+          ...(orgLoad ? { [orgLoad.schema.name]: orgLoad.executor } : {}),
           ...(mcp?.executors ?? {}),
         };
 
@@ -1415,9 +1469,21 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // text the user actually typed. `namedHarnessRows` drops line-led verbs
         // for the same reason: those were expanded already, and counting them
         // twice would inject the same body twice.
-        const namedRows = namedHarnessRows(
-          typeof ctx.params.prompt === 'string' ? ctx.params.prompt : '',
-        );
+        //
+        // PLUS the line-led verbs the dispatcher left unexpanded. Today those are
+        // the on-demand org skills (`/task start …`, org-harness-sync §3.3): the
+        // dispatcher has no body to inline for them, so naming them here is what
+        // makes the runtime preload the body from the package. A verb nobody
+        // registered changes nothing in the runtime, so no kind check is needed.
+        const rawPromptText = typeof ctx.params.prompt === 'string' ? ctx.params.prompt : '';
+        const namedRows = [...namedHarnessRows(rawPromptText)];
+        try {
+          for (const verb of unclaimedLineLedVerbs(rawPromptText, ctx.cwd || undefined, store)) {
+            if (!namedRows.includes(verb)) namedRows.push(verb);
+          }
+        } catch {
+          /* best effort: a store hiccup must not fail the turn */
+        }
         // ---- how much this turn is allowed to do on its own ----------------
         //
         // Phase 3 P3-M9 (G1): FOR THE PERSONA, THAT IS THE USER'S SETTING, NOT THE
@@ -1809,9 +1875,22 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // when all its toolRefs are here, so a skill never half-runs against a tool
         // the turn cannot call. The AI-SDK engine has no built-ins, so its set is
         // just the runtime/MCP tools.
+        //
+        // `run_command` ≡ `Bash` (org-harness-sync §3.4 — the compatibility
+        // table, read in this direction). A skill that declares `run_command`
+        // means "needs a shell", and on dev-claude the shell is the SDK's Bash. It
+        // counts only where a turn could actually use it (`sdkShellUsable`, bound
+        // with the org loader above) — exactly when the ai-sdk path offers
+        // `run_command`. Without this the org skills, which all declare
+        // `run_command`, would never list on the Claude engine.
         const availableTools =
           engineId === 'dev-claude'
-            ? [...runtimeToolNames, ...OBSERVATION_BUILTINS, ...DANGEROUS_BUILTINS]
+            ? [
+                ...runtimeToolNames,
+                ...OBSERVATION_BUILTINS,
+                ...DANGEROUS_BUILTINS,
+                ...(sdkShellUsable && !runtimeToolNames.includes('run_command') ? ['run_command'] : []),
+              ]
             : runtimeToolNames;
         // THE "ALLOW CHANGES" TOGGLE (setting `gate.allowChanges`, default ON).
         //
@@ -1936,7 +2015,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             }
           });
         };
-        const gated = makeGate(realPolicy({ rules: policyRules, fallback: baseline, requestApproval }));
+        // `writeProtectedRoots` (org-harness-sync §3.3): no file-writing tool — ours
+        // or the SDK's Write/Edit — may write under `<NABY_HOME>/org`, whatever
+        // the baseline or a user rule says. Always on: there is never a reason to
+        // edit the verified package, switch on or off.
+        const gated = makeGate(
+          realPolicy({
+            rules: policyRules,
+            fallback: baseline,
+            requestApproval,
+            writeProtectedRoots: [orgHarnessProtectedRoot(orgTurn.home)],
+            ...(projectCwd ? { cwd: projectCwd } : {}),
+          }),
+        );
         // Thin observer around the runtime's gate. The decision is still made
         // (and logged) by makeGate; this only reports it. Because it sits on
         // the return path, an observation is proof the gate ran — and the
@@ -2203,6 +2294,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           apiKeySource: 'env',
           uuid: randomUUID(),
         });
+
+        // ---- org harness notices, once per NEW session (org-harness-sync) ---
+        //
+        // §4.5: a same-name copy that hides an org skill is announced "once at
+        // session start" (the Settings card keeps it until the user chooses).
+        // §3.6: a rejected Skill Hub key is announced at session start too. Both
+        // ride the harness pill — the in-session notice channel this engine
+        // already uses — as CODES the client renders in the user's language
+        // (`client/harnessPill.ts`). A resumed session (`ctx.sessionId` set) is not
+        // told again. Nothing at all without a skill-hub key.
+        if (!ctx.sessionId) {
+          for (const detail of orgHarnessSessionStartNotices(store)) {
+            ctx.emit({
+              type: 'system',
+              subtype: 'harness',
+              session_id: sessionId,
+              harness_subtype: 'org-harness',
+              harness_detail: detail,
+            } satisfies RunEvent);
+          }
+        }
 
         // ---- drive the runtime, translating as we go ---------------------
         let assistantText = '';
@@ -2549,6 +2661,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 // `queryText` is: the user asked for this row for the work, and
                 // step 2's stored user message is the harness saying "carry on".
                 ...(namedRows.length > 0 ? { explicitNames: namedRows } : {}),
+                // On-demand (org) skills: listed by name + description on their
+                // own budget, body preloaded when named — all against the folder
+                // pinned above (org-harness-sync §3.3, §4.7). `enabled` is the
+                // kill switch as read at turn start, whatever the rows say.
+                onDemand: {
+                  enabled: orgListed,
+                  listingTokenBudget: ORG_SKILL_LISTING_TOKEN_BUDGET,
+                  loadBody: orgSkillPreloader(orgTurn),
+                },
               },
               onSkillInjection: (injected) => {
                 if (injected.skills.length > 0 || injected.excludedForTools > 0) {
@@ -2557,6 +2678,16 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                       `, excluded-for-tools ${injected.excludedForTools}` +
                       `, dropped-for-budget ${injected.droppedForBudget}` +
                       (namedRows.length > 0 ? `, named ${JSON.stringify(namedRows)}` : ''),
+                  );
+                }
+                const od = injected.onDemand;
+                if (od && (od.listed.length > 0 || od.switchedOff > 0 || od.listingDroppedForBudget > 0)) {
+                  console.log(
+                    `[engine:naby] org skills: listed ${od.listed.length} (${od.listingTokens} tok)` +
+                      `, preloaded ${JSON.stringify(od.preloaded.map((p) => p.item.name))}` +
+                      `, shadowed ${od.shadowed}, switched-off ${od.switchedOff}` +
+                      `, dropped-for-budget ${od.listingDroppedForBudget}` +
+                      (orgTurn.pkg ? `, package ${orgTurn.pkg.version}` : ''),
                   );
                 }
               },

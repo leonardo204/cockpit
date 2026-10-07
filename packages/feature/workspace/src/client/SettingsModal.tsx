@@ -42,6 +42,10 @@ import { NabyAgentManager } from './NabyAgentManager';
 // Phase 3 (P3-M3). The Telegram escalation channel config — how an agent reaches
 // the user for a critical decision and sends its final report.
 import { NabyTelegramSettings } from './NabyTelegramSettings';
+// org-harness-sync M2. The org harness card — version, Skill Hub key status, the
+// §4.8 kill switch, the org skills and the §4.5 same-name copy choices. Sits at
+// the top of Harness: it is the harness the company ships, above the user's own.
+import { NabyOrgHarnessSettings } from './NabyOrgHarnessSettings';
 // The four font knobs (family / size / chat size / code family). It sits under
 // General beside theme and language because it is the third thing in the same
 // question — what this app looks like — and because a nav row per one-control
@@ -399,6 +403,9 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
 
             {section === 'harness' ? (
               <>
+                <SettingsSection title={t('orgHarness.title', { defaultValue: 'Org harness' })}>
+                  <NabyOrgHarnessSettings isOpen={isOpen} />
+                </SettingsSection>
                 <SettingsSection title={t('harnessReview.title')}>
                   <NabyHarnessReview isOpen={isOpen} cwd={cwd} />
                 </SettingsSection>

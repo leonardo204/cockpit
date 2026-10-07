@@ -186,7 +186,10 @@ describe('every settings block is a section', () => {
     connections: 2, // MCP servers (system presets + user-added) / telegram
     agents: 1, // the naby agent list; its memory and telegram moved out
     memory: 1, // the memory tab (decisions inbox, switches, browser)
-    harness: 2, // harness review / commands
+    // org-harness-sync M2 (2026-10-07): NOT a move — the org harness card is new
+    // UI, and it sits on the Harness tab because it is the harness the company
+    // ships, above the user's own (review) and their commands.
+    harness: 3, // org harness / harness review / commands
     permissions: 1,
     about: 2, // version + updates; dev mode brings its own (see below)
   };
@@ -670,6 +673,8 @@ describe('a panel introduces itself in one sentence', () => {
     // established: a tooltip never appears in Electron.
     'fonts.description',
     'fonts.installHint',
+    // The org harness card's standing line (org-harness-sync M2).
+    'orgHarness.description',
   ] as const;
 
   for (const locale of LOCALES) {

@@ -19,6 +19,7 @@ import {
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
+import { slashTokens } from '../../shared/slashTokens';
 
 // A single parsed command step: its marker, verb, and the body text that
 // belongs to it (everything up to the next command line).
@@ -104,10 +105,22 @@ function ownedScopeRank(scope: HarnessItem['scope']): number {
 }
 
 /** Pull the kind-appropriate expansion body from an owned item, or null when its
- *  payload is missing (a malformed row must not shadow a builtin). */
+ *  payload is missing (a malformed row must not shadow a builtin).
+ *
+ *  AN ON-DEMAND SKILL HAS NO BODY TO INLINE (org-harness-sync §3.3). Its
+ *  `instructions` is only a description paragraph; the real SKILL.md lives in
+ *  the org package. Inlining it here turned `/task start …` into the description
+ *  stub, and — because a line-led verb counts as "already expanded" — kept the
+ *  real body from ever being preloaded. So the dispatcher leaves the line as the
+ *  user typed it, and the engine names the row for the runtime instead
+ *  (`unclaimedLineLedVerbs`), which preloads the body from the package. The
+ *  palette is unchanged: picking the row inserts `/task ` like any other. */
 function ownedBody(item: HarnessItem): string | null {
   if (item.kind === 'command') return item.command?.template ?? null;
-  if (item.kind === 'skill') return item.skill?.instructions ?? null;
+  if (item.kind === 'skill') {
+    if (item.skill?.loadMode === 'on-demand') return null;
+    return item.skill?.instructions ?? null;
+  }
   if (item.kind === 'subagent') return item.subagent?.systemPrompt ?? null;
   return null;
 }
@@ -192,6 +205,34 @@ export function resolveCommandPrompt(
   if (preamble) parts.push(preamble);
   parts.push(intro, blocks.join('\n\n'));
   return parts.join('\n\n');
+}
+
+/**
+ * The line-led `/verb`s in a prompt that the dispatcher above did NOT expand,
+ * lowercased, de-duplicated, in order.
+ *
+ * WHY THE ENGINE NEEDS THEM. `namedHarnessRows` skips line-led verbs on the
+ * reasoning that `resolveCommandPrompt` already inlined their bodies. That holds
+ * for every row the dispatcher claims, and for no other: an on-demand skill is
+ * deliberately not claimed (see `ownedBody`), so its line reaches the model
+ * verbatim and nothing would ever load it. Passing these to the runtime as
+ * `explicitNames` closes that gap with no kind-specific branch in the engine: a
+ * verb nobody registered matches nothing there and changes nothing, exactly as a
+ * mid-sentence one does.
+ */
+export function unclaimedLineLedVerbs(
+  prompt: string,
+  cwd: string | undefined,
+  store: CommandExpansionStore = getStore(),
+): string[] {
+  const owned = ownedCommandMap(loadOwnedCommands(cwd, store));
+  const claimed = new Set([...owned.keys()].map((k) => k.toLowerCase()));
+  const out: string[] = [];
+  for (const token of slashTokens(prompt)) {
+    if (!token.lineLed || claimed.has(token.verb) || out.includes(token.verb)) continue;
+    out.push(token.verb);
+  }
+  return out;
 }
 
 interface ResolvedStep {
