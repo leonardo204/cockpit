@@ -89,3 +89,16 @@ if (process.platform !== 'win32') {
   // the variable and dropping the whole suite onto the real CLI.
   process.env.NABY_TEST_FAKE_CLAUDE_BIN = fakeClaude;
 }
+
+/**
+ * NO SKILL HUB TRAFFIC FROM A TEST (org-harness-sync §4.2).
+ *
+ * The org harness starts a background sync on the first state read and on every
+ * key save — a real `fetch` to skills.altimedia.com. Several suites save a
+ * placeholder skill-hub token through `systemMcp.set`; without this, each of them
+ * would reach for the network, and the result would depend on whether the
+ * machine running the suite is on the company network. Set unconditionally for
+ * the same reason as NABY_DB_PATH above. Tests that cover the sync drive
+ * `syncOrgHarnessNow` with an injected fetch instead (lib/orgHarness.test.ts).
+ */
+process.env.NABY_ORG_HARNESS_SYNC = '0';

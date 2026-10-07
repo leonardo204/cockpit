@@ -172,6 +172,7 @@ import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
 import { configuredHarnessBundles } from '../lib/systemMcp';
+import { applyOrgHarnessAtTurnBoundary, ensureOrgHarnessSyncStarted } from '../lib/orgHarness';
 import { kickReflectionSweep } from '../lib/reflection';
 import { createVoicePort } from '../lib/voice';
 import type { JudgeBackend } from '../lib/reflection';
@@ -640,6 +641,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // rekey() to it below. providerId is left empty here — runTurn records
         // the provider that actually answers (it is a hint, not a constraint).
         const store = getStore();
+        // THE ORG HARNESS'S TURN BOUNDARY (org-harness-sync §4.2 step 3, §4.7). A
+        // package the background sync verified since the last turn becomes rows
+        // HERE, before this turn reads any skill — never in the middle of one. A
+        // no-op (a file read and a few settings reads) when nothing changed, and
+        // never throws. The first turn also starts the boot sync if no state read
+        // has yet.
+        ensureOrgHarnessSyncStarted(store);
+        applyOrgHarnessAtTurnBoundary(store);
         // Phase D — record the OWNING PROJECT on the session lifecycle (§6.1).
         // When this turn is about a directory (`ctx.cwd` is a non-empty string),
         // make sure the project row exists and bumps to the front of the MRU

@@ -107,6 +107,7 @@ import {
   type AgentKind,
   type AgentEscalation,
   type MemoryScope,
+  type OrgHarnessState,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 // "Is anything running anywhere" — the one question the account switch has to ask
@@ -175,6 +176,18 @@ import {
   type SystemMcpStatus,
 } from '../lib/systemMcp';
 import { resolveCommandPath } from '../lib/commandPath';
+// THE ORG HARNESS (specs/org-harness-sync.md, M1). The rules live in the runtime;
+// this lib resolves the Skill Hub key from the preset registry and owns the
+// background pass. Nothing it returns carries the key or the metrics token.
+import {
+  ensureOrgHarnessSyncStarted,
+  kickOrgHarnessSync,
+  orgHarnessKeepUserCopy,
+  orgHarnessSetEnabled,
+  orgHarnessState,
+  orgHarnessUseOrgVersion,
+  syncOrgHarnessNow,
+} from '../lib/orgHarness';
 // The key a user-supplied session rename lives under. IMPORTED rather than
 // respelled here: it is what the recent-session list reads and what the v1.6.0
 // rename writes, and a second copy of the string would be a second source of
@@ -459,8 +472,17 @@ export async function readNabyState(
    *  disagree. Nothing here can carry a secret: the shape is a boolean, a status
    *  word, and the values of the fields explicitly marked non-secret. */
   systemMcp: Record<string, SystemMcpStatus>;
+  /** THE ORG HARNESS (org-harness-sync §4.3, §4.5, §4.8): whether a Skill Hub key
+   *  is configured, whether it is on and why not, the package on disk, the rows,
+   *  and the pending same-name-copy notices. Labels and states only — the key,
+   *  its hash and the metrics token never appear here. */
+  orgHarness: OrgHarnessState;
 }> {
   const store = getStore();
+  // The first state read after startup schedules the background sync (§4.2):
+  // the window is up by the time anyone asks for state, and it runs in the same
+  // realm as the engine that applies the rows. Idempotent, no-op in tests.
+  ensureOrgHarnessSyncStarted(store);
   const settings = readSettings(store);
   const selection = await selectEngine(toSelectOptions(settings));
 
@@ -557,6 +579,7 @@ export async function readNabyState(
     usage: sessionId ? summarizeSessionUsage(store, sessionId) : null,
     mcp: store.listMcpEntries().map(redactEntry),
     systemMcp: readSystemMcpStatus(store),
+    orgHarness: orgHarnessState(store),
   };
 }
 
@@ -612,6 +635,16 @@ export type NabyAction =
   | { action: 'systemMcp.set'; preset: string; fields?: Record<string, string> }
   | { action: 'systemMcp.test'; preset: string }
   | { action: 'systemMcp.remove'; preset: string }
+  // THE ORG HARNESS (org-harness-sync M1). `get` is the state the GET also carries;
+  // `set` is the Settings switch (§4.8 — off disables the org rows and gives back
+  // any copy the user set aside, on restores exactly that); `sync` runs one pass
+  // now (activation + package + rows) for a "check now" button; the last two are
+  // the §4.5 choices for a same-name copy, keyed by skill name.
+  | { action: 'orgHarness.get' }
+  | { action: 'orgHarness.set'; enabled: boolean }
+  | { action: 'orgHarness.sync' }
+  | { action: 'orgHarness.useOrgVersion'; name: string }
+  | { action: 'orgHarness.keepUserCopy'; name: string }
   // Phase 2 (M1) tool-execution policy rules. `scopeKey` is optional for the
   // user scope (server-defaulted); required (a cwd) for project.
   | { action: 'policy.list'; scope?: string; scopeKey?: string }
@@ -807,6 +840,18 @@ export type NabyActionResult =
        *  The WHOLE map rather than the one preset that changed, so a UI showing
        *  several rows refreshes them all from one reply. */
       systemMcp?: Record<string, SystemMcpStatus>;
+      /** `orgHarness.*`: the org harness state after the operation. */
+      orgHarness?: OrgHarnessState;
+      /** `orgHarness.useOrgVersion`: ids of the copies that were set aside. */
+      changed?: string[];
+      /** `orgHarness.sync`: what the pass did, minus anything secret. */
+      orgHarnessSync?: {
+        skipped?: string;
+        activation?: string;
+        package?: string;
+        version?: string;
+        applied?: string;
+      };
       /** `systemMcp.test`: how many tools the server offered on connect. The
        *  number is the whole point of the test — "connected" without it does not
        *  tell the user whether their credentials reach a populated server. */
@@ -2253,6 +2298,11 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         }
       }
 
+      // SAVING THE SKILL HUB KEY IS THE ORG HARNESS'S INSTALL STEP (§3.6, §4.3).
+      // A new or changed key is checked right away (activation is per key hash),
+      // in the background so the save answers immediately.
+      if (preset.ownsOrgHarnessKey) kickOrgHarnessSync(store);
+
       // The status, and only the status. The secrets are now in the store and
       // have no way back out through this route.
       return { ok: true, systemMcp: readSystemMcpStatus(store) };
@@ -2292,7 +2342,49 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           /* removing the server is what was asked for; the bundle is best-effort */
         }
       }
+      // No key, no org harness: the rows switch off (not deleted) at once.
+      if (preset.ownsOrgHarnessKey) kickOrgHarnessSync(store);
       return { ok: true, systemMcp: readSystemMcpStatus(store) };
+    }
+
+    // -- the org harness (org-harness-sync M1) ------------------------------
+
+    case 'orgHarness.get':
+      return { ok: true, orgHarness: orgHarnessState(store) };
+
+    case 'orgHarness.set': {
+      if (typeof body.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' };
+      return { ok: true, orgHarness: orgHarnessSetEnabled(store, body.enabled) };
+    }
+
+    case 'orgHarness.sync': {
+      const report = await syncOrgHarnessNow(store);
+      const pkg = report.package;
+      return {
+        ok: true,
+        orgHarnessSync: {
+          ...(report.skipped ? { skipped: report.skipped } : {}),
+          ...(report.activation ? { activation: report.activation.status } : {}),
+          ...(pkg ? { package: pkg.outcome } : {}),
+          ...(pkg?.current ? { version: pkg.current } : {}),
+          ...(report.apply ? { applied: report.apply.ran } : {}),
+        },
+        orgHarness: orgHarnessState(store),
+      };
+    }
+
+    case 'orgHarness.useOrgVersion':
+    case 'orgHarness.keepUserCopy': {
+      if (typeof body.name !== 'string' || body.name.trim().length === 0) {
+        return { ok: false, error: 'name is required' };
+      }
+      const name = body.name.trim();
+      const result =
+        body.action === 'orgHarness.useOrgVersion'
+          ? orgHarnessUseOrgVersion(store, name)
+          : orgHarnessKeepUserCopy(store, name);
+      if (!result.ok) return { ok: false, error: result.error };
+      return { ok: true, changed: result.changed, orgHarness: orgHarnessState(store) };
     }
 
     default:

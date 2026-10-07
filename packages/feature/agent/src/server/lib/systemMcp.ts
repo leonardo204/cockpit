@@ -106,6 +106,14 @@ export type SystemMcpPreset = {
    * flipped and what the user has since claimed as theirs.
    */
   readonly harnessBundle?: string;
+  /**
+   * THIS PRESET'S TOKEN IS THE SKILL HUB API KEY the org harness runs on
+   * (org-harness-sync §3.6, §4.3). Saving it is the org harness's install step,
+   * removing it switches the org harness off. A registry fact for the same reason
+   * `harnessBundle` is one: the save/remove actions ask the preset instead of
+   * branching on its name. Exactly one preset may carry it (`orgHarnessKeyPreset`).
+   */
+  readonly ownsOrgHarnessKey?: boolean;
   /** Assemble the entry. PURE. */
   build(fields: Record<string, string>, opts?: SystemMcpBuildOptions): SystemMcpBuildResult;
   /** Read the field values back OUT of a stored entry — including secret ones.
@@ -161,6 +169,8 @@ export function normalizeBearerToken(raw: string): string {
 
 const SKILL_HUB_PRESET: SystemMcpPreset = {
   name: SKILL_HUB_SERVER_NAME,
+  // The skill-hub token is the key the org harness activates with (§3.6).
+  ownsOrgHarnessKey: true,
   titleKey: 'systemMcp.presets.skillHub.title',
   descriptionKey: 'systemMcp.presets.skillHub.description',
   defaultUrl: DEFAULT_SKILL_HUB_URL,
@@ -404,6 +414,11 @@ export const SYSTEM_MCP_PRESET_NAMES: readonly string[] = SYSTEM_MCP_PRESETS.map
 
 export function findSystemMcpPreset(name: string): SystemMcpPreset | undefined {
   return SYSTEM_MCP_PRESETS.find((p) => p.name === name);
+}
+
+/** The preset whose token is the org harness's Skill Hub key (§3.6). */
+export function orgHarnessKeyPreset(): SystemMcpPreset | undefined {
+  return SYSTEM_MCP_PRESETS.find((p) => p.ownsOrgHarnessKey === true);
 }
 
 /** The endpoint this install should use for a preset: the settings override when
