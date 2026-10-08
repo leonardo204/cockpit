@@ -64,6 +64,7 @@ import {
   subscribeJobs,
   type JobRow,
 } from '@cockpit/feature-agent';
+import { StatusDot, type StatusTone } from '@cockpit/shared-ui';
 import { groupJobsByProject, isJobInProject } from './jobGroups';
 
 
@@ -286,7 +287,7 @@ export function RunningJobsIndicator({ cwd }: RunningJobsIndicatorProps = {}) {
                 {group.jobs.map((job) => (
                   <div key={job.id} className="px-3 py-2 border-b border-border last:border-0">
                     <div className="flex items-center gap-2">
-                      <StatusDot status={job.status} />
+                      <StatusDot tone={jobTone(job.status)} pulse={job.status === 'running'} />
                       <span className="font-mono text-[0.688rem] text-muted-foreground">{job.id}</span>
                       <span className="ml-auto text-[0.688rem] text-muted-foreground tabular-nums">
                         {elapsed(job.startedAt, job.endedAt ?? now)}
@@ -309,16 +310,15 @@ export function RunningJobsIndicator({ cwd }: RunningJobsIndicatorProps = {}) {
   );
 }
 
-function StatusDot({ status }: { status: JobRow['status'] }) {
-  const cls =
-    status === 'running'
-      ? 'bg-brand animate-pulse'
-      : status === 'succeeded'
-        ? 'bg-emerald-500'
-        : status === 'lost'
-          ? 'bg-amber-500'
-          : 'bg-red-500';
-  return <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${cls}`} aria-hidden="true" />;
+/** A job's status as a dot tone — the shared StatusDot's colors (shared-ui). */
+function jobTone(status: JobRow['status']): StatusTone {
+  return status === 'running'
+    ? 'active'
+    : status === 'succeeded'
+      ? 'success'
+      : status === 'lost'
+        ? 'warning'
+        : 'danger';
 }
 
 /** The one line under a job. Says the thing that is true for THAT status rather

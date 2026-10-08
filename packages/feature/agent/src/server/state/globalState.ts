@@ -11,6 +11,7 @@ import { basename } from 'path';
 import { sendPushNotification } from '../push/push';
 import { generateTitle } from '../sessionTitle';
 import { getStore } from '../engines/naby';
+import { readPendingOrgUpdate } from '../lib/orgHarness';
 import {
   buildRecentSessions,
   statusKey,
@@ -188,6 +189,22 @@ export type GlobalSessionSnapshot = RecentSession;
  */
 export async function getGlobalSessionsSnapshot(limit = 15): Promise<GlobalSessionSnapshot[]> {
   return buildRecentSessions({ limit });
+}
+
+/**
+ * The org harness update popup still to show (org-harness-sync §3.1), for the
+ * same push. It rides this channel because the channel already re-sends on every
+ * store write: the sync recording a notice and any window acking it are both
+ * settings writes, so every open window learns of either within the debounce —
+ * which is what makes "once per version" hold across windows. `null` when there
+ * is nothing to show (also on any error: a push must not fail over a notice).
+ */
+export function getPendingOrgUpdateSnapshot(): ReturnType<typeof readPendingOrgUpdate> | null {
+  try {
+    return readPendingOrgUpdate(getStore()) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

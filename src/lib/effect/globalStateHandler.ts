@@ -13,7 +13,10 @@ import type { WebSocket } from "ws"
 import { FSError, WSError } from "@cockpit/effect-core"
 import type { WSConnection } from "@cockpit/effect-services"
 import { fromWebSocket } from "@cockpit/effect-runtime/server"
-import { getGlobalSessionsSnapshot } from "@cockpit/feature-agent/server/state/globalState"
+import {
+  getGlobalSessionsSnapshot,
+  getPendingOrgUpdateSnapshot,
+} from "@cockpit/feature-agent/server/state/globalState"
 import { recentSessionsSourcePath } from "@cockpit/feature-agent/server/state/recentSessions"
 
 const HEARTBEAT_INTERVAL = Schedule.spaced("30 seconds")
@@ -32,7 +35,12 @@ const sendGlobalState = (
         new FSError({ path: recentSessionsSourcePath(), op: "read", cause }),
     })
 
-    yield* conn.send({ type: "global-state", data: { sessions } })
+    // `orgUpdate`: the org harness update popup still to show, or null
+    // (org-harness-sync §3.1). Read on every push so an ack in one window
+    // retires the popup in all of them.
+    const orgUpdate = getPendingOrgUpdateSnapshot()
+
+    yield* conn.send({ type: "global-state", data: { sessions, orgUpdate } })
   })
 
 /**

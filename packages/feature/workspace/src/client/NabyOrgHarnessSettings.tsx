@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+import { announceConnectionsChanged } from '@cockpit/feature-agent';
 import { AtlassianLoginButton } from './AtlassianLoginButton';
 import {
   atlassianGateLine,
@@ -31,6 +32,7 @@ import {
   orgStatusKey,
   orgSyncOutcomeKey,
   orgToggleDisabled,
+  orgUpdateLogRows,
   type OrgHarnessView,
 } from './orgHarnessView';
 
@@ -66,6 +68,9 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
       if (res.ok) {
         if (res.orgHarness) setView(res.orgHarness);
         if (success) toast(success, 'success');
+        // A sync or a toggle can change what the chat status bars show; they
+        // live in other frames, so tell them (reads are not announced).
+        if (body.action !== 'orgHarness.get') announceConnectionsChanged();
       } else {
         toast(res.error, 'error');
       }
@@ -88,6 +93,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
   const migration = atlassian?.migration;
   const skills = orgSkillRows(view);
   const choices = orgChoiceRows(view);
+  const updateRows = orgUpdateLogRows(view);
   const lastSync = view.lastSync;
   const lastSyncAt = lastSync
     ? new Date(lastSync.at).toLocaleString(i18n.language || undefined)
@@ -237,6 +243,35 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
             {view.unsupportedHooks!.map((h) => (
               <li key={`${h.event}:${h.script}`}>
                 <code>{h.script}</code> ({h.event})
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {updateRows.length > 0 ? (
+        <div className="space-y-0.5" data-testid="org-update-log">
+          <p className="text-xs text-muted-foreground">
+            {t('orgHarness.updateLog.title', {
+              defaultValue: 'New hooks by version — installed, and run only after a naby update:',
+            })}
+          </p>
+          <ul className="text-[0.714rem] text-muted-foreground list-disc pl-4">
+            {updateRows.map((e) => (
+              <li key={e.version}>
+                {t('orgHarness.updateLog.entry', {
+                  version: e.version,
+                  previous: e.previous,
+                  at: new Date(e.at).toLocaleString(i18n.language || undefined),
+                  defaultValue: 'v{{previous}} → v{{version}} ({{at}})',
+                })}
+                {': '}
+                {e.newHooks.map((h, i) => (
+                  <span key={h.script}>
+                    {i > 0 ? ', ' : ''}
+                    <code>{h.script}</code> ({h.events.join(', ')})
+                  </span>
+                ))}
               </li>
             ))}
           </ul>

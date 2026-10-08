@@ -27,6 +27,7 @@ import { contextGauge } from './contextGauge';
 // chat tab stays mounted, and the reading belongs to the account, not the tab —
 // see that module's header for why this is a singleton and when it refetches.
 import { useSubscriptionUsage } from './subscriptionUsage';
+import { ConnectionStatusBar } from './ConnectionStatusBar';
 import { ChatInput } from './ChatInput';
 import type { ComposerViewport } from './composerHeight';
 import { buildComposerHistory, sameComposerHistory } from './composerHistory';
@@ -1088,6 +1089,10 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           // less to defend. `ephemeral` IS "this is the popup".
           compactPlaceholder={ephemeral}
         />
+        {/* Atlassian / Skill Hub at a glance, under the composer
+            (org-harness-sync §3.9). Hidden for a user with neither, and in the
+            selection popup, which is one throwaway question. */}
+        {!ephemeral && <ConnectionStatusBar />}
       </div>
 
       {/* Project Sessions Modal — chat-domain modal (per-cwd session list).

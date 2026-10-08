@@ -99,6 +99,11 @@ html, body {
   --ring: var(--teal-9);
   --brand: var(--teal-9);
   --brand-foreground: var(--teal-11);
+  /* Semantic status colors (StatusDot, the chat status bar). Step 9 of the green
+   * and amber scales is the solid-fill step in both themes, so a dot reads the
+   * same on a light and a dark surface. Red already has `--destructive`. */
+  --success: var(--green-9);
+  --warning: var(--amber-9);
 
   /* ---- Border radius ---- */
   --radius: 0.5rem;
@@ -212,6 +217,11 @@ html, body {
   --ring: var(--teal-9);
   --brand: var(--teal-9);
   --brand-foreground: var(--teal-11);
+  /* Semantic status colors (StatusDot, the chat status bar). Step 9 of the green
+   * and amber scales is the solid-fill step in both themes, so a dot reads the
+   * same on a light and a dark surface. Red already has `--destructive`. */
+  --success: var(--green-9);
+  --warning: var(--amber-9);
 }
 
 /* ---- Tailwind v4 theme registration ---- */
@@ -250,6 +260,8 @@ html, body {
   --color-ring: hsl(var(--ring));
   --color-brand: hsl(var(--brand));
   --color-brand-foreground: hsl(var(--brand-foreground));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
 
   /* Teal scale */
   --color-teal-1: hsl(var(--teal-1));

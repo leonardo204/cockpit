@@ -70,6 +70,24 @@ export { useScheduledTasks } from './useScheduledTasks';
 // The account's plan windows — a shared store, not per-tab state. See the
 // module header for why, and for when it refetches.
 export { useSubscriptionUsage, refreshSubscriptionUsage } from './subscriptionUsage';
+// The chat status bar (Atlassian / Skill Hub) and the org harness update popup
+// (org-harness-sync §3.1, §3.9). The Settings card's sign-in button shares the
+// sign-in requests; the workspace draws the popup from the global-state push.
+export { ConnectionStatusBar } from './ConnectionStatusBar';
+export { refreshConnectionStatus } from './connectionStatus';
+export {
+  announceConnectionsChanged,
+  cancelAtlassianLoginFlow,
+  readOrgHarnessForLogin,
+  startAtlassianLoginFlow,
+} from './atlassianLogin';
+export { OrgUpdateToast } from './OrgUpdateToast';
+export {
+  orgUpdateFromPush,
+  visibleOrgUpdate,
+  type ConnectionsStatusView,
+  type OrgUpdateNoticeView,
+} from './connectionStatusView';
 
 // Types
 export type {

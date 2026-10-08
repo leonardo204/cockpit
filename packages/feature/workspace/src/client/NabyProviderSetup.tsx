@@ -37,6 +37,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { announceConnectionsChanged } from '@cockpit/feature-agent';
+import { claimSettingsFocus } from './settingsFocus';
 import {
   SYSTEM_MCP_PRESETS,
   SYSTEM_MCP_PRESET_NAMES,
@@ -1894,6 +1896,9 @@ function SystemMcpForm({
     // dropped too, because the server state now carries it.
     setTyped({});
     onChanged();
+    // A Skill Hub key or an Atlassian row changes the chat status bars, which
+    // live in other frames.
+    announceConnectionsChanged();
     return true;
   }, [configured, failure, onChanged, preset.fields, preset.name, t, valueOf]);
 
@@ -1944,6 +1949,7 @@ function SystemMcpForm({
       setTyped({});
       setNote(null);
       onChanged();
+      announceConnectionsChanged();
     } finally {
       setBusy(false);
     }
@@ -2068,6 +2074,7 @@ function SystemMcpOAuthForm({
     setBusy(false);
     setNote(null);
     onChanged();
+    announceConnectionsChanged();
   }, [onChanged, preset.name]);
 
   return (
@@ -2117,6 +2124,13 @@ function SystemMcpRow({
   const { t } = useTranslation();
   const proposed = state.configured && state.status === 'proposed';
 
+  // "Open Settings at the Skill Hub key" (chat status bar): this row takes the
+  // focus if it is the entry a request is waiting for (settingsFocus.ts).
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    claimSettingsFocus(`system-mcp:${preset.name}`, rowRef.current);
+  }, [preset.name]);
+
   const approve = useCallback(async () => {
     // The EXISTING HITL path, not a second one: an agent-proposed server is
     // approved exactly like any other agent-proposed server.
@@ -2125,7 +2139,13 @@ function SystemMcpRow({
   }, [onChanged, preset.name]);
 
   return (
-    <div className="space-y-1.5 pt-2" data-testid={`system-mcp-row-${preset.name}`}>
+    <div
+      ref={rowRef}
+      className="space-y-1.5 pt-2"
+      data-testid={`system-mcp-row-${preset.name}`}
+      // Where "open Settings at the Skill Hub key" lands (the chat status bar).
+      data-settings-anchor={`system-mcp:${preset.name}`}
+    >
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-foreground">{t(preset.titleKey)}</p>
         <span className="text-xs">

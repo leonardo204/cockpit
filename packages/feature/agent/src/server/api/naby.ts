@@ -181,6 +181,7 @@ import { resolveCommandPath } from '../lib/commandPath';
 // this lib resolves the Skill Hub key from the preset registry and owns the
 // background pass. Nothing it returns carries the key or the metrics token.
 import {
+  ackOrgHarnessUpdate,
   cancelAtlassianLogin,
   ensureOrgHarnessSyncStarted,
   kickOrgHarnessSync,
@@ -188,8 +189,10 @@ import {
   orgHarnessSetEnabled,
   orgHarnessState,
   orgHarnessUseOrgVersion,
+  readConnectionsStatus,
   startAtlassianLogin,
   syncOrgHarnessNow,
+  type ConnectionsStatus,
   type OrgHarnessStateView,
 } from '../lib/orgHarness';
 // The key a user-supplied session rename lives under. IMPORTED rather than
@@ -658,6 +661,13 @@ export type NabyAction =
   // clears. `cancelLogin` closes the listener.
   | { action: 'atlassian.login' }
   | { action: 'atlassian.cancelLogin' }
+  // THE CHAT STATUS BAR AND THE UPDATE POPUP (org-harness-sync §3.1, §3.9).
+  // `status.connections` is the poller's light read: Atlassian and Skill Hub
+  // status words — no rows, no secrets. `orgHarness.ackUpdate` marks the popup
+  // for `version` seen in every window; the popup itself rides the global-state
+  // push (`orgUpdate`), not this reply.
+  | { action: 'status.connections' }
+  | { action: 'orgHarness.ackUpdate'; version: string }
   // Phase 2 (M1) tool-execution policy rules. `scopeKey` is optional for the
   // user scope (server-defaulted); required (a cwd) for project.
   | { action: 'policy.list'; scope?: string; scopeKey?: string }
@@ -855,6 +865,12 @@ export type NabyActionResult =
       systemMcp?: Record<string, SystemMcpStatus>;
       /** `orgHarness.*`: the org harness state after the operation. */
       orgHarness?: OrgHarnessStateView;
+      /** `status.connections`: what the chat status bar draws. Status words and
+       *  versions only. */
+      connections?: ConnectionsStatus;
+      /** `orgHarness.ackUpdate`: whether the named version's notice was marked
+       *  seen now (false: already seen, or not the current notice). */
+      acked?: boolean;
       /** `atlassian.login`: the authorization URL the CLIENT opens in the system
        *  browser (empty when the sign-in completed without one). */
       authorizationUrl?: string;
@@ -2414,6 +2430,18 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'atlassian.cancelLogin':
       cancelAtlassianLogin();
       return { ok: true, orgHarness: orgHarnessState(store) };
+
+    case 'status.connections':
+      // The first read of the app also starts the boot pass, like the GET does.
+      ensureOrgHarnessSyncStarted(store);
+      return { ok: true, connections: readConnectionsStatus(store) };
+
+    case 'orgHarness.ackUpdate': {
+      if (typeof body.version !== 'string' || body.version.trim().length === 0) {
+        return { ok: false, error: 'version is required' };
+      }
+      return { ok: true, acked: ackOrgHarnessUpdate(store, body.version.trim()) };
+    }
 
     case 'orgHarness.useOrgVersion':
     case 'orgHarness.keepUserCopy': {

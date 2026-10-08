@@ -52,6 +52,9 @@ export { rehypeSourceLines } from './rehypeSourceLines';
 // JSON content search (CSS Custom Highlight API + DOM Range mapping)
 export { useJsonSearch, JsonSearchBar } from './useJsonSearch';
 
+// Status dot (success / warning / danger / neutral / active)
+export { StatusDot, statusToneClass, type StatusTone } from './StatusDot';
+
 // Tooltip primitives
 export { Tooltip } from './Tooltip';
 export { TooltipProvider } from './TooltipProvider';

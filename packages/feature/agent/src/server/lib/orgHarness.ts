@@ -27,6 +27,7 @@
 // blocks a turn: rows land at the next turn boundary when a run is active.
 
 import {
+  ackOrgUpdateNotice,
   applyAtlassianOAuthSwapIfDue,
   applyOrgHarnessIfDue,
   ATLASSIAN_MCP_SERVER_NAME,
@@ -39,13 +40,16 @@ import {
   mcpOAuthStatus,
   nabyHomeDir,
   orgGateBlockFrom,
+  ORG_GATE_ENV_SWITCH,
   orgHarnessOnState,
+  pendingOrgUpdateNotice,
   pinOrgHarnessTurn,
   readAtlassianMigrationReport,
   readCurrentOrgPackage,
   readMcpOAuthRecord,
   readOrgDeps,
   readOrgHarnessState,
+  readOrgHarnessStatus,
   readOrgHookConfig,
   runOrgHarnessSync,
   setOrgHarnessEnabled,
@@ -68,6 +72,7 @@ import {
   type OrgHarnessState,
   type OrgHarnessSyncReport,
   type OrgHarnessTurn,
+  type OrgUpdateNotice,
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { anyRunActive } from '../sessionRunHub';
@@ -539,6 +544,87 @@ export function orgHarnessState(store: Store): OrgHarnessStateView {
     deps: readOrgDeps(store) ?? null,
     unsupportedHooks,
   };
+}
+
+// -- the chat status bar and the update popup (§3.1, §3.9 of the spec) --------
+
+/**
+ * What the status bar under the chat composer needs, and nothing else — the
+ * poller asks for this every minute from every open project, so it reads a few
+ * settings and the `current` pointer, never hooks.json and never a row list.
+ * No key, no token, no URL.
+ */
+export type ConnectionsStatus = {
+  atlassian: {
+    status: McpOAuthStatus;
+    row: AtlassianRowShape;
+    loginPending: boolean;
+    /** Why the last browser sign-in failed (the same text the Settings card
+     *  shows); absent after a success or a cancel. */
+    lastLoginError?: string;
+    /** The org harness's Atlassian gate applies now: the org harness is on, a
+     *  package is installed and `HARNESS_GATE=0` is not set (§3.6). */
+    required: boolean;
+    /** New sessions are blocked now (only ever true when `required`). */
+    blocking: boolean;
+    graceDaysLeft?: number;
+  };
+  skillHub: {
+    /** A Skill Hub key is configured (§4.3). */
+    configured: boolean;
+    on: boolean;
+    offReason?: OrgHarnessState['offReason'];
+    auth: OrgHarnessState['auth'];
+    /** The installed package version, if any. */
+    version?: string;
+    lastSync?: { at: number; outcome: string };
+    /** A pass (boot, re-check, "check now") is running now — the bar shows the
+     *  first download as in progress (amber), not as failed (red). */
+    syncing: boolean;
+  };
+};
+
+export function readConnectionsStatus(store: Store, now = Date.now()): ConnectionsStatus {
+  const ctx = orgHarnessContext(store);
+  const base = readOrgHarnessStatus(store, ctx);
+  const a = readAtlassianView(store, now);
+  const required =
+    base.on && base.version !== undefined && (process.env[ORG_GATE_ENV_SWITCH] ?? '').trim() !== '0';
+  return {
+    atlassian: {
+      status: a.status,
+      row: a.row,
+      loginPending: a.loginPending,
+      ...(a.lastLoginError ? { lastLoginError: a.lastLoginError } : {}),
+      required,
+      blocking: required && a.blocking,
+      ...(required && a.graceDaysLeft !== undefined ? { graceDaysLeft: a.graceDaysLeft } : {}),
+    },
+    skillHub: {
+      configured: base.configured,
+      on: base.on,
+      ...(base.offReason ? { offReason: base.offReason } : {}),
+      auth: base.auth,
+      ...(base.version ? { version: base.version } : {}),
+      ...(base.lastSync ? { lastSync: { at: base.lastSync.at, outcome: base.lastSync.outcome } } : {}),
+      syncing: inflight !== undefined,
+    },
+  };
+}
+
+/** The pending update notice alone — what the global-state push carries. Never
+ *  throws: a push must not fail over a notice. */
+export function readPendingOrgUpdate(store: Store): OrgUpdateNotice | undefined {
+  try {
+    return pendingOrgUpdateNotice(store);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The popup was dismissed in some window: mark that version seen. */
+export function ackOrgHarnessUpdate(store: Store, version: string): boolean {
+  return ackOrgUpdateNotice(store, version);
 }
 
 export function orgHarnessSetEnabled(store: Store, enabled: boolean): OrgHarnessStateView {

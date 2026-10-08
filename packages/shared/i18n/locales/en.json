@@ -2272,6 +2272,30 @@
       "python": "Python 3",
       "pyyaml": "PyYAML"
     },
-    "unsupportedHooks": "Hooks naby does not support yet (they are not run):"
+    "unsupportedHooks": "Hooks naby does not support yet (they are not run):",
+    "updateLog": {
+      "title": "New hooks by version — installed, and run only after a naby update:",
+      "entry": "v{{previous}} → v{{version}} ({{at}})"
+    }
+  },
+  "connectionStatus": {
+    "ariaLabel": "Connections",
+    "atlassian": "Atlassian",
+    "skillHub": "Skill Hub",
+    "atlassianNeeded": "The org harness needs this sign-in.",
+    "lastCheck": "Last checked {{at}} — {{outcome}}",
+    "clickLogin": "Click to sign in through the browser.",
+    "clickSettings": "Click to open Settings → Harness.",
+    "atlassianOther": "A server you defined yourself is named atlassian. The org harness needs the browser sign-in; signing in replaces it.",
+    "syncing": "Downloading the org harness…",
+    "clickSettingsKey": "Click to open Settings → Connections at the Skill Hub key."
+  },
+  "orgUpdate": {
+    "title": "The org harness was updated",
+    "versions": "v{{previous}} → v{{version}}. It was installed automatically and is in use from the next message.",
+    "newHooks_one": "{{count}} new hook ({{names}}) was installed. It runs after a future naby update.",
+    "newHooks_other": "{{count}} new hooks ({{names}}) were installed. They run after a future naby update.",
+    "details": "Details",
+    "dismiss": "Dismiss"
   }
 }

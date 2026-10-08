@@ -4,44 +4,28 @@
  * The Atlassian browser sign-in button (org-harness-sync §3.8), shared by the
  * org harness card and the System MCP row.
  *
- * `atlassian.login` starts the server's loopback listener and answers with the
- * authorization URL; this opens it with `window.open`, which the app hands to the
- * system browser (electron/boot.ts window-open handler), then polls
- * `orgHarness.get` until the sign-in lands or fails. No token ever reaches this
- * component — only the status the server reports.
+ * The requests themselves (`atlassian.login`, opening the authorization URL,
+ * `atlassian.cancelLogin`) are feature-agent's `atlassianLogin.ts`, which the
+ * chat status bar uses too. This button adds its own 2 s poll of
+ * `orgHarness.get` (the card wants the whole state) until the sign-in lands or
+ * fails. No token ever reaches this component — only the status the server
+ * reports.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+import {
+  announceConnectionsChanged,
+  cancelAtlassianLoginFlow,
+  readOrgHarnessForLogin,
+  startAtlassianLoginFlow,
+} from '@cockpit/feature-agent';
 import type { AtlassianView, OrgHarnessView } from './orgHarnessView';
 import { atlassianLoginKey } from './orgHarnessView';
 
 const POLL_MS = 2000;
 const POLL_LIMIT_MS = 5 * 60 * 1000 + 10_000;
-
-async function post(body: Record<string, unknown>): Promise<
-  { ok: true; orgHarness?: OrgHarnessView; authorizationUrl?: string } | { ok: false; error: string }
-> {
-  try {
-    const res = await fetch('/api/naby', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const json = (await res.json().catch(() => null)) as
-      | { ok?: boolean; orgHarness?: OrgHarnessView; authorizationUrl?: string; error?: string }
-      | null;
-    if (!res.ok || !json?.ok) return { ok: false, error: json?.error ?? `request failed (${res.status})` };
-    return {
-      ok: true,
-      ...(json.orgHarness ? { orgHarness: json.orgHarness } : {}),
-      ...(typeof json.authorizationUrl === 'string' ? { authorizationUrl: json.authorizationUrl } : {}),
-    };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  }
-}
 
 export function AtlassianLoginButton({
   atlassian,
@@ -66,13 +50,15 @@ export function AtlassianLoginButton({
     stopPolling();
     const started = Date.now();
     pollRef.current = setInterval(() => {
-      void post({ action: 'orgHarness.get' }).then((r) => {
+      void readOrgHarnessForLogin<OrgHarnessView>().then((r) => {
         if (!r.ok || !r.orgHarness) return;
         onState(r.orgHarness);
         const a = r.orgHarness.atlassian;
         if (!a?.loginPending || Date.now() - started > POLL_LIMIT_MS) {
           stopPolling();
           setUrl(null);
+          // The chat status bars in the project frames turn green/amber now.
+          announceConnectionsChanged();
           if (a?.status === 'connected') {
             toast(t('orgHarness.atlassian.loginDone', { defaultValue: 'Signed in to Atlassian.' }), 'success');
           } else if (a?.lastLoginError) {
@@ -85,7 +71,8 @@ export function AtlassianLoginButton({
 
   const login = useCallback(async () => {
     setBusy(true);
-    const r = await post({ action: 'atlassian.login' });
+    // Opens the authorization URL itself (system browser in the app).
+    const r = await startAtlassianLoginFlow<OrgHarnessView>();
     setBusy(false);
     if (!r.ok) {
       toast(t('orgHarness.atlassian.loginFailed', { error: r.error, defaultValue: 'Atlassian sign-in failed: {{error}}' }), 'error');
@@ -94,8 +81,6 @@ export function AtlassianLoginButton({
     if (r.orgHarness) onState(r.orgHarness);
     if (r.authorizationUrl) {
       setUrl(r.authorizationUrl);
-      // The app routes this to the OS browser; a plain browser opens a tab.
-      window.open(r.authorizationUrl, '_blank', 'noopener');
       poll();
     }
   }, [onState, poll, t]);
@@ -103,7 +88,7 @@ export function AtlassianLoginButton({
   const cancel = useCallback(async () => {
     stopPolling();
     setUrl(null);
-    const r = await post({ action: 'atlassian.cancelLogin' });
+    const r = await cancelAtlassianLoginFlow<OrgHarnessView>();
     if (r.ok && r.orgHarness) onState(r.orgHarness);
   }, [onState, stopPolling]);
 

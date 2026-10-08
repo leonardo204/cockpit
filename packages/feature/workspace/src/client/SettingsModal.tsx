@@ -55,6 +55,7 @@ import { FontSettingsPanel } from './FontSettingsPanel';
 // the full-width rule between them (`divide-y`). Cards were tried first and made
 // the multi-panel sections (Agents, Harness, About) boxes-inside-boxes.
 import { SettingsSection } from './SettingsSection';
+import { clearSettingsFocus, requestSettingsFocus } from './settingsFocus';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -65,6 +66,10 @@ interface SettingsModalProps {
   sessionId?: string;
   /** The active project's cwd, addressing `project`-scoped memory. */
   cwd?: string;
+  /** Land on this section when it changes (a new nonce re-applies the same
+   *  section). Unknown ids are ignored. `focus` names a `data-settings-anchor`
+   *  in that section to scroll to and focus once it has rendered. */
+  requestedSection?: { section: string; nonce: number; focus?: string };
 }
 
 type SettingsSectionId =
@@ -122,7 +127,7 @@ const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] 
   { id: 'about', labelKey: 'settings.about', icon: 'ℹ️' },
 ];
 
-export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModalProps) {
+export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSection }: SettingsModalProps) {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
   const [appVersion, setAppVersion] = useState<string>('');
@@ -150,6 +155,26 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd }: SettingsModal
   // out); this state is per-mount rather than persisted, so a rename simply
   // starts at the first tab instead of restoring an id nothing renders.
   const [section, setSection] = useState<SettingsSectionId>('general');
+
+  // A caller asked for a section (the chat status bar, the org harness update
+  // popup → Harness). Keyed on the nonce so asking twice lands twice.
+  useEffect(() => {
+    const id = requestedSection?.section;
+    if (id && NAV_SECTIONS.some((s) => s.id === id)) setSection(id as SettingsSectionId);
+  }, [requestedSection?.section, requestedSection?.nonce]);
+
+  // ...and, when asked, the entry to bring into view (the status bar's Skill Hub
+  // click lands on the Skill Hub key). A handoff, not a poll: the entry may not
+  // have rendered yet, and claims the focus itself when it mounts
+  // (settingsFocus.ts). A request nobody claimed is dropped when Settings closes.
+  useEffect(() => {
+    const anchor = requestedSection?.focus;
+    if (!isOpen) {
+      clearSettingsFocus();
+      return;
+    }
+    if (anchor) requestSettingsFocus(anchor);
+  }, [isOpen, requestedSection?.focus, requestedSection?.nonce]);
 
   const handleLanguageChange = useCallback((lang: string) => {
     setLanguageState(lang);

@@ -22,7 +22,8 @@ import { NabyOnboardingWizard } from './NabyProviderSetup';
 import { WhatsNewGate } from './WhatsNewModal';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
-import { SessionCompleteToastContainer, showSessionCompleteToast } from '@cockpit/feature-agent';
+import { SessionCompleteToastContainer, showSessionCompleteToast, OrgUpdateToast } from '@cockpit/feature-agent';
+import { useOrgUpdateNotice } from './useOrgUpdateNotice';
 import { APP_TITLE, appTitleForCwd, projectNameFromCwd } from '@cockpit/shared-utils';
 import { useEffectQuery } from '@cockpit/effect-react';
 import { useSessionDoneNotifications } from './useSessionDoneNotifications';
@@ -81,6 +82,16 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isSessionBrowserOpen, setIsSessionBrowserOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Which Settings section to land on when something asks for one (the chat
+  // status bar and the org harness update popup open Harness). The nonce makes
+  // a second request for the same section land again after the user moved away.
+  const [settingsRequest, setSettingsRequest] = useState<
+    { section: string; nonce: number; focus?: string } | undefined
+  >(undefined);
+  const openSettings = useCallback((section?: string, focus?: string) => {
+    if (section) setSettingsRequest({ section, nonce: Date.now(), ...(focus ? { focus } : {}) });
+    setIsSettingsOpen(true);
+  }, []);
   const [isTokenStatsOpen, setIsTokenStatsOpen] = useState(false);
   const [isNoteOpen, setIsNoteOpen] = useState(false);
   const [noteProjectCwd, setNoteProjectCwd] = useState<string | null>(null);
@@ -135,6 +146,17 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   // The visible session is read through a GETTER because it lives in a ref: it
   // arrives by postMessage from the project iframe and deliberately does not
   // re-render the workspace, so a captured value would go stale.
+  // The org harness update popup reads the same global-state push.
+  const orgUpdate = useOrgUpdateNotice();
+  const dismissOrgUpdate = orgUpdate.dismiss;
+  const handleOrgUpdateDetails = useCallback(
+    (version: string) => {
+      dismissOrgUpdate(version);
+      openSettings('harness');
+    },
+    [dismissOrgUpdate, openSettings],
+  );
+
   useSessionDoneNotifications({
     getVisibleSessionId: () => {
       const cwd = projects[activeIndex]?.cwd;
@@ -324,7 +346,10 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       // (the engine switcher's "Manage in Settings", the chat header gear). The
       // modal itself is this parent window's, so the iframe can only request it.
       if (event.data?.type === 'OPEN_SETTINGS') {
-        setIsSettingsOpen(true);
+        openSettings(
+          typeof event.data.section === 'string' ? event.data.section : undefined,
+          typeof event.data.focus === 'string' ? event.data.focus : undefined,
+        );
       }
       // Open project notes
       if (event.data?.type === 'OPEN_NOTE' && event.data?.cwd) {
@@ -412,7 +437,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [projects, activeIndex, collapsed, updateUrl, saveProjects]);
+  }, [projects, activeIndex, collapsed, updateUrl, saveProjects, openSettings]);
 
   // Parent-window keyboard safety net.
   // iframes don't bubble keydown to the parent window, so the per-panel
@@ -798,6 +823,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        requestedSection={settingsRequest}
         // Active project cwd + its current session, so the Memory section
         // (P15-06) can address `session`/`project`-scoped memory. Read from the
         // ref at render time — the modal only reloads while open, so the value
@@ -826,6 +852,14 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
       {/* Bottom-left session complete notification */}
       <SessionCompleteToastContainer onNavigate={handleSwitchProject} />
+
+      {/* "The org harness was updated to vX" — once per version, every window
+          (org-harness-sync §3.1). Both buttons acknowledge it server-side. */}
+      <OrgUpdateToast
+        notice={orgUpdate.notice}
+        onDismiss={orgUpdate.dismiss}
+        onDetails={handleOrgUpdateDetails}
+      />
 
       {/* First-run wizard (F1-06). Covers the workspace until a provider key
           exists or the user skips; re-enterable from Settings → AI provider. */}

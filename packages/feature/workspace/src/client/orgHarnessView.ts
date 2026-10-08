@@ -29,7 +29,32 @@ export type OrgHarnessView = {
   atlassian?: AtlassianView;
   deps?: OrgDepsView | null;
   unsupportedHooks?: { event: string; script: string; why: string }[];
+  /** 0.8.0 (§3.1, §3.5): the latest version change and the recent ones, each
+   *  with the hooks it added that wait for a naby update. Optional for an older
+   *  server. */
+  updateNotice?: OrgUpdateView | null;
+  updateLog?: OrgUpdateLogView[];
 };
+
+export type OrgHookWaitingView = { script: string; events: string[] };
+
+export type OrgUpdateView = {
+  version: string;
+  previous: string;
+  newHooks: OrgHookWaitingView[];
+  detectedAt: number;
+  notifiedAt?: number;
+};
+
+export type OrgUpdateLogView = { version: string; previous: string; newHooks: OrgHookWaitingView[]; at: number };
+
+/** The card's "recent updates" rows: newest first, each with the hooks that
+ *  version added and that still wait for a naby update (§3.5). Only versions
+ *  that added such hooks are listed — a plain version bump is already told by
+ *  the version line and the popup. */
+export function orgUpdateLogRows(v: OrgHarnessView): OrgUpdateLogView[] {
+  return (v.updateLog ?? []).filter((e) => e.newHooks.length > 0);
+}
 
 export type AtlassianView = {
   status: 'connected' | 'relogin' | 'none';

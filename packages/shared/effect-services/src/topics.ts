@@ -79,6 +79,17 @@ export interface GoHomePayload {
   readonly cwd: string
 }
 
+/**
+ * "Open Settings" may name the section to land on (the chat status bar opens
+ * Harness, or Connections at the Skill Hub key). Absent = wherever Settings was
+ * left. `focus` names a `data-settings-anchor` inside that section to scroll to
+ * and focus once it renders.
+ */
+export interface OpenSettingsPayload {
+  readonly section?: string
+  readonly focus?: string
+}
+
 // ─────────────────────────────────────────────────────────
 // Topics table — single source of truth; add new protocols here.
 // ─────────────────────────────────────────────────────────
@@ -100,7 +111,7 @@ export const Topics = {
   // but the engine switcher / chat header that ask for it live inside the
   // per-project iframe, so the request crosses the frame boundary like the other
   // parent-owned modals (token stats, notes). legacyType → "OPEN_SETTINGS".
-  OpenSettings: defineTopic<Record<string, never>>("open-settings"),
+  OpenSettings: defineTopic<OpenSettingsPayload>("open-settings"),
   PinnedSessionsChanged: defineTopic<Record<string, never>>(
     "pinned-sessions-changed"
   ),
@@ -118,6 +129,12 @@ export const Topics = {
   // `broadcastTopicToFrames` (parent → children); `publishTopic` alone only ever
   // reaches window.parent. legacyType → "HARNESS_CHANGED".
   HarnessChanged: defineTopic<Record<string, never>>("harness-changed"),
+  // "Atlassian or Skill Hub status may have changed — re-read it." The chat
+  // status bar polls per frame (each project iframe is its own JS realm), so a
+  // sign-in, a sync or a toggle done in the TOP window's Settings reaches the
+  // bars only through this. Publish with `announceTopic` (both directions).
+  // legacyType → "CONNECTIONS_CHANGED".
+  ConnectionsChanged: defineTopic<Record<string, never>>("connections-changed"),
   ScreenshotPrepare: defineTopic<ScreenshotPreparePayload>(
     "screenshot-prepare"
   ),

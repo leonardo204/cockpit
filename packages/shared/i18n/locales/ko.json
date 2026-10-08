@@ -2272,6 +2272,30 @@
       "python": "Python 3",
       "pyyaml": "PyYAML"
     },
-    "unsupportedHooks": "naby가 아직 지원하지 않는 훅(실행하지 않음):"
+    "unsupportedHooks": "naby가 아직 지원하지 않는 훅(실행하지 않음):",
+    "updateLog": {
+      "title": "버전별 새 훅 — 설치는 됐고, naby가 업데이트된 뒤부터 실행됩니다:",
+      "entry": "v{{previous}} → v{{version}} ({{at}})"
+    }
+  },
+  "connectionStatus": {
+    "ariaLabel": "연결 상태",
+    "atlassian": "Atlassian",
+    "skillHub": "Skill Hub",
+    "atlassianNeeded": "조직 하네스를 쓰려면 이 로그인이 필요합니다.",
+    "lastCheck": "마지막 확인 {{at}} — {{outcome}}",
+    "clickLogin": "누르면 브라우저로 로그인합니다.",
+    "clickSettings": "누르면 설정 → 하네스를 엽니다.",
+    "atlassianOther": "직접 만든 atlassian 서버가 있습니다. 조직 하네스에는 브라우저 로그인이 필요하고, 로그인하면 이 서버를 바꿉니다.",
+    "syncing": "조직 하네스를 받는 중…",
+    "clickSettingsKey": "누르면 설정 → 연결의 Skill Hub 키 입력칸을 엽니다."
+  },
+  "orgUpdate": {
+    "title": "조직 하네스가 업데이트됐습니다",
+    "versions": "v{{previous}} → v{{version}}. 자동으로 설치했고 다음 메시지부터 씁니다.",
+    "newHooks_one": "새 훅 {{count}}개({{names}})를 설치했습니다. naby가 업데이트된 뒤부터 실행됩니다.",
+    "newHooks_other": "새 훅 {{count}}개({{names}})를 설치했습니다. naby가 업데이트된 뒤부터 실행됩니다.",
+    "details": "자세히",
+    "dismiss": "닫기"
   }
 }

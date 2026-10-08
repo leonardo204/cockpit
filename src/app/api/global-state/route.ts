@@ -18,7 +18,10 @@ import {
   runtime,
   dynamic,
 } from "@cockpit/feature-agent/server/api/global-state"
-import { getGlobalSessionsSnapshot } from "@cockpit/feature-agent/server/state/globalState"
+import {
+  getGlobalSessionsSnapshot,
+  getPendingOrgUpdateSnapshot,
+} from "@cockpit/feature-agent/server/state/globalState"
 import { broadcastToGlobalState } from "../../../lib/globalStateBroadcast"
 
 export { GET, runtime, dynamic }
@@ -27,7 +30,10 @@ export { GET, runtime, dynamic }
 async function pushSidebarSnapshot(): Promise<void> {
   try {
     const sessions = await getGlobalSessionsSnapshot()
-    broadcastToGlobalState({ type: "global-state", data: { sessions } })
+    // Same envelope as the watcher's push (globalStateHandler.ts), so a client
+    // never reads a missing `orgUpdate` as "the popup was dismissed".
+    const orgUpdate = getPendingOrgUpdateSnapshot()
+    broadcastToGlobalState({ type: "global-state", data: { sessions, orgUpdate } })
   } catch {
     /* best-effort — a failed push never fails the originating request */
   }
