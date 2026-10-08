@@ -24,7 +24,74 @@ export type OrgHarnessView = {
   rows: { name: string; status: 'enabled' | 'disabled' | 'removed'; origin: string; withdrawn: boolean }[];
   copyNotices: { name: string; scope: 'user' | 'project'; scopeKey: string; itemId: string; copy: OrgCopyKind }[];
   keepUserCopy: string[];
+  /** M3 (org-harness-sync §3.6, §3.8, §4.4, §4.6). Optional so a server that
+   *  predates it still renders the card. */
+  atlassian?: AtlassianView;
+  deps?: OrgDepsView | null;
+  unsupportedHooks?: { event: string; script: string; why: string }[];
 };
+
+export type AtlassianView = {
+  status: 'connected' | 'relogin' | 'none';
+  /** `legacy` = the API-token connection still runs, waiting for the sign-in. */
+  row: 'none' | 'legacy' | 'oauth' | 'other';
+  loginPending: boolean;
+  lastLoginError?: string;
+  loggedInAt?: number;
+  migration?: {
+    at: number;
+    from: string;
+    confluenceUpload: 'withdrawn' | 'kept' | 'absent' | 'already';
+    legacyRefs: { kind: string; scope: string; scopeKey: string; id: string; name: string; ref: string }[];
+  };
+  graceDaysLeft?: number;
+  blocking: boolean;
+};
+
+export type OrgDepsView = { at: number; python: string | null; pythonCommand?: string; pyyaml: boolean };
+
+/** i18n key for the Atlassian status line. */
+export function atlassianStatusKey(a: AtlassianView): string {
+  if (a.status === 'connected') return 'orgHarness.atlassian.status.connected';
+  if (a.status === 'relogin') return 'orgHarness.atlassian.status.relogin';
+  if (a.row === 'legacy') return 'orgHarness.atlassian.status.legacy';
+  return 'orgHarness.atlassian.status.none';
+}
+
+/** The button: first sign-in or "sign in again". */
+export function atlassianLoginKey(a: AtlassianView): string {
+  return a.status === 'none' && a.loggedInAt === undefined && a.row !== 'oauth'
+    ? 'orgHarness.atlassian.login'
+    : 'orgHarness.atlassian.relogin';
+}
+
+/** The gate line (§4.6): blocking now, or N days of grace left; undefined when
+ *  there is nothing to warn about. */
+export function atlassianGateLine(a: AtlassianView): { key: string; days?: number } | undefined {
+  if (a.status === 'connected') return undefined;
+  if (a.blocking) return { key: 'orgHarness.atlassian.blocking' };
+  if (a.graceDaysLeft !== undefined) return { key: 'orgHarness.atlassian.grace', days: a.graceDaysLeft };
+  return undefined;
+}
+
+export type OrgDepMissing = { id: 'python' | 'pyyaml'; install: string };
+
+/** Install commands, by platform — commands are not translated. */
+const INSTALL: Record<'darwin' | 'win32' | 'linux', Record<'python' | 'pyyaml', string>> = {
+  darwin: { python: 'brew install python', pyyaml: 'python3 -m pip install --user pyyaml' },
+  win32: { python: 'winget install Python.Python.3.12', pyyaml: 'py -3 -m pip install --user pyyaml' },
+  linux: { python: 'sudo apt install python3 python3-pip', pyyaml: 'python3 -m pip install --user pyyaml' },
+};
+
+/** What the dependency check found missing (§3.6), with the install command. */
+export function orgDepsMissing(deps: OrgDepsView | null | undefined, platform: string): OrgDepMissing[] {
+  if (!deps) return [];
+  const os: 'darwin' | 'win32' | 'linux' = /win/i.test(platform) ? 'win32' : /mac|darwin/i.test(platform) ? 'darwin' : 'linux';
+  const out: OrgDepMissing[] = [];
+  if (!deps.python) out.push({ id: 'python', install: INSTALL[os].python });
+  if (!deps.pyyaml) out.push({ id: 'pyyaml', install: INSTALL[os].pyyaml });
+  return out;
+}
 
 /** Activation as the card states it (§3.6, §4.3). */
 export type OrgActivation = 'ok' | 'needsKey' | 'noKey' | 'unchecked';

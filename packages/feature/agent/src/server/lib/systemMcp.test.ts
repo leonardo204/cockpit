@@ -1,14 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import type { McpEntry } from '../../../../../../../dist/naby-runtime.mjs';
+import { ATLASSIAN_MCP_URL, type McpEntry } from '../../../../../../../dist/naby-runtime.mjs';
 import {
-  ATLASSIAN_LAUNCHER,
-  ATLASSIAN_PACKAGE,
   ATLASSIAN_SERVER_NAME,
   ATLASSIAN_URL_KEY,
   CIC_SERVER_NAME,
   CIC_URL_KEY,
   DEFAULT_CIC_URL,
-  DEFAULT_CONFLUENCE_URL,
   DEFAULT_SKILL_HUB_URL,
   SKILL_HUB_SERVER_NAME,
   SKILL_HUB_URL_KEY,
@@ -66,7 +63,25 @@ function built(
 }
 
 const UVX = '/opt/homebrew/bin/uvx';
-const ATLASSIAN_FIELDS = { username: 'lee@altimedia.com', apiToken: 'atl_secret' };
+/** The pre-OAuth row an existing install still has (org-harness-sync §4.4). */
+const LEGACY_ATLASSIAN: McpEntry = {
+  name: ATLASSIAN_SERVER_NAME,
+  transport: 'stdio',
+  command: UVX,
+  args: ['mcp-atlassian'],
+  env: {
+    CONFLUENCE_URL: 'https://altimedia.atlassian.net/wiki',
+    CONFLUENCE_USERNAME: 'lee@altimedia.com',
+    CONFLUENCE_API_TOKEN: 'atl_secret',
+  },
+  status: 'enabled',
+};
+/** What `readSystemMcpStatus` says about a browser-OAuth preset nobody signed in to. */
+const OAUTH_NONE = { status: 'none', legacy: false };
+const expectedEmpty = () =>
+  Object.fromEntries(
+    SYSTEM_MCP_PRESETS.map((p) => [p.name, p.oauth ? { configured: false, oauth: OAUTH_NONE } : { configured: false }]),
+  );
 
 describe('the registry itself', () => {
   it('holds every built-in preset, in display order', () => {
@@ -77,10 +92,15 @@ describe('the registry itself', () => {
     ]);
   });
 
-  it('gives every preset a unique name and at least one field', () => {
+  it('gives every preset a unique name, and a field unless it signs in through the browser', () => {
     const names = new Set(SYSTEM_MCP_PRESETS.map((p) => p.name));
     expect(names.size).toBe(SYSTEM_MCP_PRESETS.length);
     for (const preset of SYSTEM_MCP_PRESETS) {
+      if (preset.oauth) {
+        // org-harness-sync §3.8: a log-in button, no form.
+        expect(preset.fields, `${preset.name} is OAuth and still asks for fields`).toEqual([]);
+        continue;
+      }
       expect(preset.fields.length, `${preset.name} asks for nothing`).toBeGreaterThan(0);
       // Two fields with one id would silently overwrite each other in the payload.
       const ids = new Set(preset.fields.map((f) => f.id));
@@ -109,14 +129,14 @@ describe('the registry itself', () => {
     // The general-list filter, the status reader and `mcp.approve` all key on it;
     // a build that named the entry anything else would strand its own row.
     expect(built(skillHub, { token: 'shub_abc' }).name).toBe(SKILL_HUB_SERVER_NAME);
-    expect(built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX }).name).toBe(ATLASSIAN_SERVER_NAME);
+    expect(built(atlassian, {}).name).toBe(ATLASSIAN_SERVER_NAME);
   });
 
   it('enables what it builds, because typed credentials ARE the approval', () => {
     // 'proposed' exists for servers an AGENT added. A human who just typed a
     // credential should not then have to approve their own action.
     expect(built(skillHub, { token: 'shub_abc' }).status).toBe('enabled');
-    expect(built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX }).status).toBe('enabled');
+    expect(built(atlassian, {}).status).toBe('enabled');
   });
 
   it('refuses every preset when a required field is blank, naming the field', () => {
@@ -143,16 +163,13 @@ describe('the registry itself', () => {
     expect(skillHub.readStoredFields(built(skillHub, { token: 'shub_abc' }))).toEqual({
       token: 'shub_abc',
     });
-    expect(
-      atlassian.readStoredFields(built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX })),
-    ).toEqual(ATLASSIAN_FIELDS);
+    // An OAuth preset stores no field, so there is nothing to read back.
+    expect(atlassian.readStoredFields(built(atlassian, {}))).toEqual({});
   });
 
   it('is pure — two builds with the same inputs are indistinguishable', () => {
     expect(built(skillHub, { token: 'shub_x' })).toEqual(built(skillHub, { token: 'shub_x' }));
-    expect(built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX })).toEqual(
-      built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX }),
-    );
+    expect(built(atlassian, {})).toEqual(built(atlassian, {}));
   });
 });
 
@@ -226,87 +243,32 @@ describe('the skill-hub preset', () => {
   });
 });
 
-describe('the atlassian preset', () => {
-  it('assembles a stdio entry around the resolved uvx path', () => {
-    expect(built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX })).toEqual({
+describe('the atlassian preset (browser OAuth, org-harness-sync §3.8)', () => {
+  it('builds the official remote MCP over http, signed in with OAuth', () => {
+    expect(built(atlassian, {})).toEqual({
       name: ATLASSIAN_SERVER_NAME,
-      transport: 'stdio',
-      command: UVX,
-      args: [ATLASSIAN_PACKAGE],
-      env: {
-        CONFLUENCE_URL: DEFAULT_CONFLUENCE_URL,
-        CONFLUENCE_USERNAME: 'lee@altimedia.com',
-        CONFLUENCE_API_TOKEN: 'atl_secret',
-      },
+      transport: 'http',
+      url: ATLASSIAN_MCP_URL,
+      auth: 'oauth',
       status: 'enabled',
     });
   });
 
-  it('declares uvx as its launcher, so the server knows to resolve one', () => {
-    expect(atlassian.launcher).toBe(ATLASSIAN_LAUNCHER);
+  it('asks for nothing, launches nothing, and switches no built-in bundle', () => {
+    expect(atlassian.oauth).toBe(true);
+    expect(atlassian.fields).toEqual([]);
+    expect(atlassian.launcher).toBeUndefined();
+    // `confluence-upload` is withdrawn (§4.4): the preset no longer owns a bundle.
+    expect(atlassian.harnessBundle).toBeUndefined();
   });
 
-  it('REFUSES to build when uvx could not be resolved', () => {
-    // The refusal IS the feature (§2.1). An entry with a bare `uvx` command works
-    // in dev and ENOENTs in the packaged app, where the child process inherits a
-    // PATH with no user bin directories on it.
-    for (const opts of [undefined, {}, { commandPath: '' }, { commandPath: '   ' }]) {
-      const res = atlassian.build(ATLASSIAN_FIELDS, opts);
-      expect(res.ok).toBe(false);
-      if (res.ok) continue;
-      expect(res.errorKey).toBe('systemMcp.uvxMissing');
-      // The English fallback has to be actionable on its own, for a caller with
-      // no dictionary: it names the tool to install.
-      expect(res.error).toContain('uv');
-    }
+  it('ignores whatever a client sends — there is no field to fill', () => {
+    expect(built(atlassian, { username: 'lee@altimedia.com', apiToken: 'atl_secret' })).toEqual(built(atlassian, {}));
   });
 
-  it('trims the email and keeps the token verbatim', () => {
-    // The email is what a user pastes out of a profile page, so it arrives with
-    // whitespace. A token is not trimmed INTO a different token — a leading space
-    // in a real secret would be a real difference — but its own padding goes.
-    const entry = built(
-      atlassian,
-      { username: '  lee@altimedia.com \n', apiToken: '  atl_secret  ' },
-      { commandPath: UVX },
-    );
-    expect(entry.transport === 'stdio' && entry.env?.CONFLUENCE_USERNAME).toBe('lee@altimedia.com');
-    expect(entry.transport === 'stdio' && entry.env?.CONFLUENCE_API_TOKEN).toBe('atl_secret');
-  });
-
-  it('rejects a username that is not an email address', () => {
-    // Atlassian's Basic auth wants the account EMAIL; a bare username fails with
-    // an opaque 401 that reads like a bad token.
-    for (const username of ['lee', 'lee@altimedia', 'lee altimedia.com', '@altimedia.com']) {
-      const res = atlassian.build({ ...ATLASSIAN_FIELDS, username }, { commandPath: UVX });
-      expect(res.ok, `"${username}" was accepted`).toBe(false);
-      if (res.ok) continue;
-      expect(res.errorKey).toBe('systemMcp.presets.atlassian.badEmail');
-      expect(res.errorField).toBe('username');
-    }
-  });
-
-  it('accepts the shapes a real company email takes', () => {
-    for (const username of ['lee@altimedia.com', 'lee.yong-sub+naby@altimedia.co.kr']) {
-      expect(atlassian.build({ ...ATLASSIAN_FIELDS, username }, { commandPath: UVX }).ok).toBe(true);
-    }
-  });
-
-  it('takes the Confluence URL override, and defaults without one', () => {
-    const overridden = built(atlassian, ATLASSIAN_FIELDS, {
-      commandPath: UVX,
-      url: 'https://other.atlassian.net/wiki',
-    });
-    expect(overridden.transport === 'stdio' && overridden.env?.CONFLUENCE_URL).toBe(
-      'https://other.atlassian.net/wiki',
-    );
-    const blank = built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX, url: '  ' });
-    expect(blank.transport === 'stdio' && blank.env?.CONFLUENCE_URL).toBe(DEFAULT_CONFLUENCE_URL);
-  });
-
-  it('shows the email back and never the token', () => {
-    const entry = built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX });
-    expect(readNonSecretFields(atlassian, entry)).toEqual({ username: 'lee@altimedia.com' });
+  it('reads NOTHING back from the old API-token row — not the email, not the token', () => {
+    expect(atlassian.readStoredFields(LEGACY_ATLASSIAN)).toEqual({});
+    expect(readNonSecretFields(atlassian, LEGACY_ATLASSIAN)).toEqual({});
   });
 });
 
@@ -379,7 +341,7 @@ describe('the cic preset', () => {
 describe('readPresetUrl', () => {
   it('answers the built-in URL when nothing is overridden', () => {
     expect(readPresetUrl(fakeStore(), skillHub)).toBe(DEFAULT_SKILL_HUB_URL);
-    expect(readPresetUrl(fakeStore(), atlassian)).toBe(DEFAULT_CONFLUENCE_URL);
+    expect(readPresetUrl(fakeStore(), atlassian)).toBe(ATLASSIAN_MCP_URL);
     expect(readPresetUrl(fakeStore(), cic)).toBe(DEFAULT_CIC_URL);
     expect(readPresetUrl(fakeStore([], { [CIC_URL_KEY]: 'https://staging/cic/mcp' }), cic)).toBe(
       'https://staging/cic/mcp',
@@ -407,28 +369,37 @@ describe('readSystemMcpStatus', () => {
     // A map missing a key would render as a blank row rather than as "not
     // connected", so absence is stated explicitly. Derived from the REGISTRY, so a
     // fourth preset is covered by this case without anyone remembering to add it.
-    expect(readSystemMcpStatus(fakeStore())).toEqual(
-      Object.fromEntries(SYSTEM_MCP_PRESET_NAMES.map((n) => [n, { configured: false }])),
-    );
+    expect(readSystemMcpStatus(fakeStore())).toEqual(expectedEmpty());
   });
 
   it('reads enabled once an entry exists, per preset independently', () => {
     const store = fakeStore([built(skillHub, { token: 'shub_abc' })]);
     const status = readSystemMcpStatus(store);
     expect(status[SKILL_HUB_SERVER_NAME]).toEqual({ configured: true, status: 'enabled' });
-    expect(status[ATLASSIAN_SERVER_NAME]).toEqual({ configured: false });
+    expect(status[ATLASSIAN_SERVER_NAME]).toEqual({ configured: false, oauth: OAUTH_NONE });
   });
 
-  it('carries the non-secret fields, and only those', () => {
-    const store = fakeStore([built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX })]);
+  it('reports the old API-token row as configured-but-legacy, with nothing from it', () => {
+    const store = fakeStore([LEGACY_ATLASSIAN]);
     const status = readSystemMcpStatus(store)[ATLASSIAN_SERVER_NAME];
-    expect(status).toEqual({
-      configured: true,
-      status: 'enabled',
-      nonSecretFields: { username: 'lee@altimedia.com' },
-    });
+    expect(status).toEqual({ configured: true, status: 'enabled', oauth: { status: 'none', legacy: true } });
     // The serialized status is the thing that crosses the wire.
     expect(JSON.stringify(status)).not.toContain('atl_secret');
+    expect(JSON.stringify(status)).not.toContain('lee@altimedia.com');
+  });
+
+  it('reports the sign-in of a browser-OAuth preset', () => {
+    const store = fakeStore([built(atlassian, {})], {
+      'mcp.oauth.atlassian': JSON.stringify({
+        v: 1,
+        state: 'ok',
+        client: { client_id: 'c' },
+        tokens: { access_token: 'secret_access', token_type: 'Bearer', obtained_at: 1 },
+      }),
+    });
+    const status = readSystemMcpStatus(store)[ATLASSIAN_SERVER_NAME];
+    expect(status).toEqual({ configured: true, status: 'enabled', oauth: { status: 'connected', legacy: false } });
+    expect(JSON.stringify(status)).not.toContain('secret_access');
   });
 
   it('omits nonSecretFields entirely when there is nothing to show', () => {
@@ -465,30 +436,22 @@ describe('readSystemMcpStatus', () => {
       { name: 'filesystem', transport: 'stdio', command: 'npx' },
       { name: 'weather', transport: 'http', url: 'https://example.com/mcp' },
     ]);
-    expect(readSystemMcpStatus(store)).toEqual(
-      Object.fromEntries(SYSTEM_MCP_PRESET_NAMES.map((n) => [n, { configured: false }])),
-    );
+    expect(readSystemMcpStatus(store)).toEqual(expectedEmpty());
   });
 });
 
 describe('mergeSystemMcpFields', () => {
   it('keeps a stored secret the user did not retype', () => {
-    // THE FAILURE THIS PREVENTS: editing the Atlassian email with the token box
-    // left blank (as it always is — the value cannot be shown) would otherwise
-    // rebuild the entry with an empty token and silently break the connection.
-    const stored = built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX });
-    const merged = mergeSystemMcpFields(atlassian, stored, {
-      username: 'new@altimedia.com',
-      apiToken: '',
-    });
-    expect(merged).toEqual({ username: 'new@altimedia.com', apiToken: 'atl_secret' });
+    // THE FAILURE THIS PREVENTS: an edit with the token box left blank (as it
+    // always is — the value cannot be shown) would otherwise rebuild the entry
+    // with an empty token and silently break the connection.
+    const stored = built(cic, { token: CIC_TOKEN });
+    expect(mergeSystemMcpFields(cic, stored, { token: '' })).toEqual({ token: CIC_TOKEN });
   });
 
   it('replaces a secret the user DID retype', () => {
-    const stored = built(atlassian, ATLASSIAN_FIELDS, { commandPath: UVX });
-    const merged = mergeSystemMcpFields(atlassian, stored, { apiToken: 'atl_rotated' });
-    expect(merged.apiToken).toBe('atl_rotated');
-    expect(merged.username).toBe('lee@altimedia.com');
+    const stored = built(cic, { token: CIC_TOKEN });
+    expect(mergeSystemMcpFields(cic, stored, { token: 'cic_rotated' })).toEqual({ token: 'cic_rotated' });
   });
 
   it('treats whitespace as blank rather than as a new value', () => {
@@ -511,5 +474,7 @@ describe('mergeSystemMcpFields', () => {
       somethingElse: 'x',
     });
     expect(merged).toEqual({ token: 'shub_new' });
+    // Nor into a browser-OAuth preset, which declares none.
+    expect(mergeSystemMcpFields(atlassian, LEGACY_ATLASSIAN, { apiToken: 'x' })).toEqual({});
   });
 });

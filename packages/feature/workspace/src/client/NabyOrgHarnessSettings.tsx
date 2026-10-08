@@ -18,7 +18,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
+import { AtlassianLoginButton } from './AtlassianLoginButton';
 import {
+  atlassianGateLine,
+  atlassianStatusKey,
+  orgDepsMissing,
   orgActivation,
   orgActivationKey,
   orgChoiceRows,
@@ -78,6 +82,10 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
   }
 
   const activation = orgActivation(view);
+  const atlassian = view.atlassian;
+  const gateLine = atlassian ? atlassianGateLine(atlassian) : undefined;
+  const missingDeps = orgDepsMissing(view.deps, typeof navigator !== 'undefined' ? navigator.platform : '');
+  const migration = atlassian?.migration;
   const skills = orgSkillRows(view);
   const choices = orgChoiceRows(view);
   const lastSync = view.lastSync;
@@ -128,6 +136,111 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
         <p className="text-xs text-muted-foreground">
           {t('orgHarness.envOffHint', { defaultValue: 'Turned off by NABY_ORG_HARNESS=0 in the environment.' })}
         </p>
+      ) : null}
+
+      {atlassian ? (
+        <div className="space-y-1.5 rounded border border-border p-2" data-testid="org-harness-atlassian">
+          <p className="text-xs font-medium text-foreground">
+            {t('orgHarness.atlassian.title', { defaultValue: 'Atlassian (Confluence · Jira)' })}
+          </p>
+          <p
+            className={`text-xs ${
+              atlassian.status === 'connected'
+                ? 'text-green-600 dark:text-green-400'
+                : atlassian.status === 'relogin'
+                  ? 'text-amber-600 dark:text-amber-400'
+                  : 'text-muted-foreground'
+            }`}
+          >
+            {t(atlassianStatusKey(atlassian))}
+          </p>
+          {gateLine ? (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {t(gateLine.key, { ...(gateLine.days !== undefined ? { days: gateLine.days } : {}) })}
+            </p>
+          ) : null}
+          <AtlassianLoginButton atlassian={atlassian} onState={setView} />
+          {atlassian.lastLoginError && !atlassian.loginPending ? (
+            <p className="text-xs text-red-500">
+              {t('orgHarness.atlassian.loginFailed', {
+                error: atlassian.lastLoginError,
+                defaultValue: 'Atlassian sign-in failed: {{error}}',
+              })}
+            </p>
+          ) : null}
+          {migration ? (
+            <div className="space-y-1">
+              {migration.from === 'legacy' ? (
+                <p className="text-xs text-muted-foreground">
+                  {t('orgHarness.atlassian.migrated', {
+                    defaultValue: 'Switched from the API token to the browser sign-in. The stored API token was removed.',
+                  })}
+                </p>
+              ) : null}
+              {migration.confluenceUpload === 'kept' ? (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {t('orgHarness.atlassian.confluenceUploadKept', {
+                    defaultValue:
+                      'confluence-upload is no longer built in. You changed it, so it stays as yours — to publish to Confluence, use pdoc.',
+                  })}
+                </p>
+              ) : null}
+              {migration.legacyRefs.length > 0 ? (
+                <div className="space-y-0.5">
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {t('orgHarness.atlassian.legacyRefs', {
+                      count: migration.legacyRefs.length,
+                      defaultValue:
+                        '{{count}} of your rules or harness items still name the old Atlassian tools (for example atlassian__confluence_get_page). The new tools are named like atlassian__getConfluencePage. Nothing was changed automatically.',
+                    })}
+                  </p>
+                  <ul className="text-[0.714rem] text-muted-foreground list-disc pl-4">
+                    {migration.legacyRefs.map((r) => (
+                      <li key={`${r.kind}:${r.id}`}>
+                        <code>{r.name}</code> ({r.kind}, {r.scope}) — <code>{r.ref}</code>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {missingDeps.length > 0 ? (
+        <div className="space-y-1 rounded border border-amber-500/50 p-2" data-testid="org-harness-deps">
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            {t('orgHarness.deps.title', {
+              defaultValue: 'Some tools the org skills need are missing on this computer. The skills that use them are skipped until you install them.',
+            })}
+          </p>
+          <ul className="text-xs space-y-0.5">
+            {missingDeps.map((d) => (
+              <li key={d.id}>
+                {t(`orgHarness.deps.${d.id}`, { defaultValue: d.id === 'python' ? 'Python 3' : 'PyYAML' })}:{' '}
+                <code className="text-foreground">{d.install}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {(view.unsupportedHooks?.length ?? 0) > 0 ? (
+        <div className="space-y-0.5">
+          <p className="text-xs text-muted-foreground">
+            {t('orgHarness.unsupportedHooks', {
+              defaultValue: 'Hooks naby does not support yet (they are not run):',
+            })}
+          </p>
+          <ul className="text-[0.714rem] text-muted-foreground list-disc pl-4">
+            {view.unsupportedHooks!.map((h) => (
+              <li key={`${h.event}:${h.script}`}>
+                <code>{h.script}</code> ({h.event})
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       {skills.length > 0 ? (

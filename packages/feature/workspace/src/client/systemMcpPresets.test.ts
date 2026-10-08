@@ -35,6 +35,8 @@ describe('the client preset mirror', () => {
         placeholderKey: f.placeholderKey,
         secret: f.secret,
       })),
+      // org-harness-sync §3.8: a browser-OAuth preset renders a log-in button.
+      ...(p.oauth ? { oauth: true } : {}),
     }));
     expect(SYSTEM_MCP_PRESETS).toEqual(projected);
   });

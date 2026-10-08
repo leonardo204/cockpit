@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import {
   buildZip,
   DEFAULT_USER_ID,
+  mcpOAuthSettingKey,
   nabyHomeDir,
   ON_DEMAND_LISTING_HEADER,
   ORG_HARNESS_SCOPE_KEY,
@@ -86,6 +87,7 @@ function clear(): void {
   for (const key of Object.keys(store.listSettings())) {
     if (key.startsWith('harness.org.')) store.setSetting(key, '');
   }
+  store.setSetting(mcpOAuthSettingKey('atlassian'), '');
   rmSync(join(nabyHomeDir(), 'org'), { recursive: true, force: true });
   setOrgHarnessFetch(undefined);
   resetOrgHarnessBootForTests();
@@ -175,8 +177,15 @@ const orgPills = (events: RunEvent[]) =>
 beforeEach(() => {
   clear();
   mkdirSync(PROJECT, { recursive: true });
+  // M3 (§3.6): with the org harness on, a prompt needs the Atlassian sign-in. These
+  // M2 tests are about the turn itself, so the gate is switched off the plugin's
+  // way (`HARNESS_GATE=0`) — the gate has its own tests (nabyOrgHarnessM3.test.ts).
+  process.env.HARNESS_GATE = '0';
 });
-afterAll(() => clear());
+afterAll(() => {
+  clear();
+  delete process.env.HARNESS_GATE;
+});
 
 describe('org harness in a turn — listing and naby_skill_load (§3.3)', () => {
   it('lists the org skills (not their bodies) and offers naby_skill_load when a project is open', async () => {

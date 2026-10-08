@@ -35,6 +35,9 @@ export type SystemMcpPresetView = {
   titleKey: string;
   descriptionKey: string;
   fields: SystemMcpFieldView[];
+  /** Signs in through the browser (org-harness-sync §3.8): a log-in button, no
+   *  form. Mirrors the server registry's `oauth`. */
+  oauth?: boolean;
 };
 
 export const SYSTEM_MCP_PRESETS: readonly SystemMcpPresetView[] = [
@@ -52,23 +55,13 @@ export const SYSTEM_MCP_PRESETS: readonly SystemMcpPresetView[] = [
     ],
   },
   {
+    // Browser OAuth to the official remote MCP (org-harness-sync §3.8). No
+    // fields: the API-token form was retired with the OAuth release.
     name: 'atlassian',
     titleKey: 'systemMcp.presets.atlassian.title',
     descriptionKey: 'systemMcp.presets.atlassian.description',
-    fields: [
-      {
-        id: 'username',
-        labelKey: 'systemMcp.presets.atlassian.fields.username.label',
-        placeholderKey: 'systemMcp.presets.atlassian.fields.username.placeholder',
-        secret: false,
-      },
-      {
-        id: 'apiToken',
-        labelKey: 'systemMcp.presets.atlassian.fields.apiToken.label',
-        placeholderKey: 'systemMcp.presets.atlassian.fields.apiToken.placeholder',
-        secret: true,
-      },
-    ],
+    fields: [],
+    oauth: true,
   },
   {
     // `cic` — the name is not cosmetic. The built-in `confluence-researcher`
@@ -97,6 +90,9 @@ export const SYSTEM_MCP_PRESET_NAMES: readonly string[] = SYSTEM_MCP_PRESETS.map
 /** What the server says about one preset's connection (`systemMcp` on the GET). */
 export type SystemMcpStatus = {
   configured: boolean;
+  /** Browser-OAuth presets: the sign-in, and whether the old API-token row is
+   *  still the one in use (§4.4). */
+  oauth?: { status: 'connected' | 'relogin' | 'none'; legacy: boolean };
   status?: 'enabled' | 'proposed';
   /** Stored values of the fields marked NON-secret, so the form shows which
    *  account is connected instead of a blank box. Secrets are never in here. */

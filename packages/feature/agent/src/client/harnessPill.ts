@@ -45,6 +45,16 @@ const TRUNCATED = 'truncated:';
  *   `unauthorized`      — Skill Hub rejected the key, so the org harness is off. */
 const ORG_HARNESS = 'org-harness';
 const COPY_NOTICE = 'copy-notice:';
+/** M3 (org-harness-sync §3.6, §4.4, §4.6):
+ *
+ *   `atlassian-required:<status>` — the prompt was blocked: no Atlassian sign-in;
+ *   `atlassian-grace:<days>`      — not signed in; new sessions block in <days>;
+ *   `atlassian-migrate`           — the API-token connection still runs; log in once;
+ *   `atlassian-relogin`           — the sign-in expired; log in again. */
+const ATLASSIAN_REQUIRED = 'atlassian-required';
+const ATLASSIAN_GRACE = 'atlassian-grace:';
+const ATLASSIAN_MIGRATE = 'atlassian-migrate';
+const ATLASSIAN_RELOGIN = 'atlassian-relogin';
 
 /** Render one harness pill. Returns the label and the detail as the transcript
  *  should show them; `detail` undefined means the pill is label-only.
@@ -106,6 +116,47 @@ export function renderHarnessPill(
           '@{{agent}} is not a butterfly yet, so it cannot take delegated work — this ran as a normal turn.',
       }),
     };
+  }
+
+  if (label === ORG_HARNESS && detail) {
+    const orgLabel = i18n.t('harnessPill.orgHarness', { defaultValue: 'org harness' });
+    if (detail === ATLASSIAN_REQUIRED || detail.startsWith(`${ATLASSIAN_REQUIRED}:`)) {
+      return {
+        label: orgLabel,
+        detail: i18n.t('harnessPill.atlassianRequired', {
+          defaultValue:
+            'This message was not sent: the org harness needs an Atlassian sign-in first. Log in under Settings → Harness → Org harness, then send it again.',
+        }),
+      };
+    }
+    if (detail.startsWith(ATLASSIAN_GRACE)) {
+      const days = Number(detail.slice(ATLASSIAN_GRACE.length)) || 0;
+      return {
+        label: orgLabel,
+        detail: i18n.t('harnessPill.atlassianGrace', {
+          days,
+          defaultValue:
+            'Atlassian is not connected yet. Log in under Settings → Harness → Org harness — new conversations are blocked in {{days}} day(s).',
+        }),
+      };
+    }
+    if (detail === ATLASSIAN_MIGRATE) {
+      return {
+        label: orgLabel,
+        detail: i18n.t('harnessPill.atlassianMigrate', {
+          defaultValue:
+            'Atlassian now signs in through the browser. Log in once under Settings → Harness → Org harness; the API-token connection keeps working until you do.',
+        }),
+      };
+    }
+    if (detail === ATLASSIAN_RELOGIN) {
+      return {
+        label: orgLabel,
+        detail: i18n.t('harnessPill.atlassianRelogin', {
+          defaultValue: 'The Atlassian sign-in expired. Log in again under Settings → Harness → Org harness.',
+        }),
+      };
+    }
   }
 
   if (label === ORG_HARNESS && (detail === 'unauthorized' || detail?.startsWith(COPY_NOTICE))) {

@@ -183,11 +183,18 @@ import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
 import { configuredHarnessBundles } from '../lib/systemMcp';
 import {
+  applyAtlassianAtTurnBoundary,
   applyOrgHarnessAtTurnBoundary,
+  ATLASSIAN_GATE_MESSAGE,
   ensureOrgHarnessSyncStarted,
+  kickOrgHarnessDepsCheckForSession,
+  orgHarnessPromptGate,
   orgHarnessSessionStartNotices,
   pinOrgHarnessForTurn,
 } from '../lib/orgHarness';
+// org-harness-sync M3 (§3.5): the hook runner at naby's seven moments, the same
+// for both engines because every call site below is engine-independent.
+import { ensureOrgHarnessQuitHandler, makeOrgTurnHooks, orgHookContextBlock } from '../lib/orgHarnessHooks';
 import { unclaimedLineLedVerbs } from '../lib/slashCommands';
 import { kickReflectionSweep } from '../lib/reflection';
 import { createVoicePort } from '../lib/voice';
@@ -665,6 +672,45 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // has yet.
         ensureOrgHarnessSyncStarted(store);
         applyOrgHarnessAtTurnBoundary(store);
+        // §4.4 step 3: an Atlassian sign-in that landed since the last turn swaps
+        // the API-token row for the OAuth one HERE, between turns. No-op otherwise.
+        applyAtlassianAtTurnBoundary(store);
+        // App quit is a session end (§1): register the quit-time SessionEnd once.
+        ensureOrgHarnessQuitHandler(store);
+        // THE ATLASSIAN GATE (org-harness-sync §3.6, §4.6) — gate.js's job, done by
+        // naby from its own token store. Decided BEFORE a session is minted: a
+        // blocked prompt in a new tab must not leave an empty session behind, and
+        // "a session already in progress is never blocked" needs the existing
+        // session's age, not this turn's. Never throws (an error is "not blocked").
+        const orgGate = orgHarnessPromptGate(store, {
+          ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+          rawPrompt: typeof ctx.params.prompt === 'string' ? ctx.params.prompt : ctx.prompt ?? '',
+        });
+        if (orgGate.block) {
+          const blockedSessionId = ctx.sessionId ?? randomUUID();
+          console.log(`[engine:naby] org harness gate: blocked (atlassian ${orgGate.atlassian})`);
+          ctx.emit({
+            type: 'system',
+            subtype: 'harness',
+            session_id: blockedSessionId,
+            harness_subtype: 'org-harness',
+            harness_detail: `atlassian-required:${orgGate.atlassian}`,
+          } satisfies RunEvent);
+          ctx.emit({ type: 'error', error: ATLASSIAN_GATE_MESSAGE, session_id: blockedSessionId });
+          ctx.emit({
+            type: 'result',
+            subtype: 'error_during_execution',
+            session_id: blockedSessionId,
+            is_error: true,
+            result: ATLASSIAN_GATE_MESSAGE,
+            usage: toSdkUsage(undefined),
+            total_cost_usd: 0,
+            duration_ms: Date.now() - startedAt,
+            ended_at: Date.now(),
+            num_turns: 0,
+          });
+          return;
+        }
         // Phase D — record the OWNING PROJECT on the session lifecycle (§6.1).
         // When this turn is about a directory (`ctx.cwd` is a non-empty string),
         // make sure the project row exists and bumps to the front of the MRU
@@ -1238,8 +1284,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                       const m = effectiveAgentModel(modelForEngine);
                       return { providerId, ...(m ? { model: m } : {}) };
                     })(),
-                    // THE PARENT'S GATE, passed down unchanged — see lib/delegation.
-                    gate,
+                    // THE PARENT'S GATE — see lib/delegation — with one addition:
+                    // calls made inside the delegated run are ATTRIBUTED to it, so
+                    // an org harness hook sees `agent_id` there exactly as it does
+                    // for an Agent SDK subagent (and the H1–H4 metrics skip them,
+                    // §3.7). The decision itself is unchanged: attribution is
+                    // descriptive and nothing in the gate branches on it.
+                    gate: (call: ToolCall) =>
+                      gate(
+                        call.subagent
+                          ? call
+                          : { ...call, subagent: { agentId: `naby-delegate-${input.spec.name}` } },
+                      ),
                     toolSchemas,
                     executors,
                     signal: ctx.signal,
@@ -1315,7 +1371,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // Only ACTIVE servers become tools — an agent-proposed one
           // (status:'proposed') is stored and shown in Settings but never loaded
           // until the user approves it (isMcpEntryActive / mcp.approve).
-          mcp = await loadMcpToolset(store.listMcpEntries().filter(isMcpEntryActive));
+          // `oauth` hands a browser-OAuth entry (Atlassian, org-harness-sync §3.8)
+          // the runtime's token store: the ONE store both engines' MCP traffic
+          // reads, since the Agent SDK engine re-exports these same executors.
+          mcp = await loadMcpToolset(store.listMcpEntries().filter(isMcpEntryActive), {
+            oauth: { store },
+          });
           for (const failure of mcp.failures) {
             console.warn(`[engine:naby] MCP server "${failure.name}" unavailable: ${failure.message}`);
           }
@@ -1404,6 +1465,21 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ...(orgLoad ? { [orgLoad.schema.name]: orgLoad.executor } : {}),
           ...(mcp?.executors ?? {}),
         };
+
+        // ---- the org harness HOOKS for this turn (org-harness-sync §3.5, M3) --
+        //
+        // Over the package folder pinned above, so every hook of this turn — the
+        // Stop at the end of a long autonomous run included — runs from the same
+        // version. A no-op object when the org harness is off or has no package.
+        // The MCP names let a hook see `mcp__atlassian__createConfluencePage`
+        // whichever engine made the call.
+        const orgHooks = makeOrgTurnHooks({
+          store,
+          orgTurn,
+          sessionId,
+          ...(projectCwd ? { projectDir: projectCwd } : {}),
+          mcpToolNames: new Set((mcp?.toolSchemas ?? []).map((t) => t.name)),
+        });
 
         // ---- @agent routing, continued (Phase 3, P3-M2) -------------------
         //
@@ -1778,6 +1854,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               `${fastGrowthCounts.realCheckinsRemaining})`,
           );
         }
+        // ---- SessionStart + UserPromptSubmit (org-harness-sync §3.5, §4.7) ----
+        //
+        // SessionStart before this session's first turn IN THIS PROCESS: `startup`
+        // for a session this turn minted, `resume` for one carried over from before
+        // a restart (the hooks then do not count it as new). UserPromptSubmit with
+        // what the user typed, before the engine sees it. Both are awaited — their
+        // `additionalContext` belongs in THIS turn's system prompt — and neither can
+        // fail the turn (a slow hook costs at most its own timeout).
+        const orgHookContext: string[] = [];
+        if (orgHooks.enabled) {
+          orgHookContext.push(...(await orgHooks.sessionStart(!ctx.sessionId)));
+          orgHookContext.push(...(await orgHooks.userPromptSubmit(rawPromptText || turnText)));
+        }
+        // §3.6 deps-check replacement: Python 3 + PyYAML, once per session, in the
+        // background — the Settings card shows the result; nothing waits on it.
+        if (orgListed) kickOrgHarnessDepsCheckForSession(store, sessionId);
+        const orgHookBlock = orgHookContextBlock(orgHookContext);
+
         const turnSystem =
           [
             routedAgent?.systemPrompt,
@@ -1838,6 +1932,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             steersInstalls
               ? harnessHomeInstruction(projectCwd, undefined, readAutoEnableNabyHome(store))
               : undefined,
+            // What the org harness's SessionStart / UserPromptSubmit hooks added
+            // (§3.5 "additionalContext → that turn's system prompt"). Context, not
+            // policy, and placed before style for the same reason as the rest.
+            orgHookBlock,
             // LAST of the instruction blocks. Style is the weakest claim in the
             // prompt — it says how to phrase whatever the rest of it decided —
             // so it sits after everything it must not override.
@@ -1928,8 +2026,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // `approval_request` RunEvent for the UI, and resumes when the user resolves
         // it (POST /api/naby {approval.resolve}) — or denies on abort/timeout. The
         // gate is already async, so the whole turn naturally pauses at this call.
-        const requestApproval = (call: ToolCall): Promise<GateDecision> => {
-          const approvalId = `${sessionId}:${call.toolCallId}`;
+        const requestApproval = (
+          call: ToolCall,
+          opts?: { reason?: string; source?: 'hook'; script?: string },
+        ): Promise<GateDecision> => {
+          // A hook's `ask` (org-harness-sync §3.5) is its own prompt: a policy rule
+          // may ask about the same call afterwards, and the two must not share an id.
+          const approvalId = `${sessionId}:${call.toolCallId}${opts?.source === 'hook' ? ':hook' : ''}`;
           return new Promise<GateDecision>((resolve) => {
             let settled = false;
             const settle = (d: GateDecision) => {
@@ -1996,6 +2099,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               tool_name: call.toolName,
               input: call.input,
               session_id: sessionId,
+              // WHY IT IS ASKING, verbatim, when an org harness hook asked (§3.5:
+              // "사유 문구를 그대로 보여 준다"). `source: 'hook'` tells the prompt not
+              // to offer "always allow/block": that would write a policy rule for
+              // the whole TOOL, which is not what the hook asked about.
+              ...(opts?.reason ? { reason: opts.reason } : {}),
+              ...(opts?.source ? { source: opts.source } : {}),
+              ...(opts?.script ? { hook_script: opts.script } : {}),
             });
             // P3-M3b: ask REMOTELY too. Deliberately not awaited — the in-app
             // prompt is already up and the turn is already suspended on this
@@ -2085,6 +2195,37 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             policyForcesConsequential: effect === 'ask' || effect === 'deny',
           });
         };
+        // ---- PreToolUse (org-harness-sync §3.5) ---------------------------
+        //
+        // Right before the policy gate decides, on BOTH engines (each calls the
+        // gate below before every tool, the Agent SDK's built-ins included). A
+        // hook can only TIGHTEN: `deny` refuses, `ask` routes to the same
+        // approval prompt a policy `ask` uses — with the hook's reason — and
+        // `allow` is no opinion, so the policy gate still decides. A failing or
+        // slow hook is no opinion either (the runner never throws). Answers
+        // undefined to mean "carry on to the policy gate".
+        const orgHookGate = async (call: ToolCall): Promise<GateDecision | undefined> => {
+          if (!orgHooks.enabled) return undefined;
+          const hook = await orgHooks.preToolUse(call);
+          if (hook?.behavior === 'deny') {
+            const reason = `org harness hook (${hook.script}): ${hook.reason ?? 'denied'}`;
+            console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (${reason})`);
+            observeForGrowth(call, false, reason);
+            return { behavior: 'deny', reason };
+          }
+          if (hook?.behavior === 'ask') {
+            const answered = await requestApproval(call, {
+              source: 'hook',
+              script: hook.script,
+              ...(hook.reason ? { reason: hook.reason } : {}),
+            });
+            if (answered.behavior === 'deny') {
+              observeForGrowth(call, false, answered.reason);
+              return answered;
+            }
+          }
+          return undefined;
+        };
         const gate: Gate = async (call) => {
           // Phase 3 P3-M2: a routed agent restricted to `toolRefs` may use ONLY
           // those tools. This is the OUTERMOST check — it overrides even an
@@ -2151,6 +2292,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               return { behavior: 'deny', reason: refusal };
             }
           }
+          // PreToolUse (org-harness-sync §3.5) — see `orgHookGate` above.
+          const hooked = await orgHookGate(call);
+          if (hooked) return hooked;
           const decision = await gated.gate(call);
           const entry = gated.log[gated.log.length - 1];
           console.log(
@@ -2305,7 +2449,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // (`client/harnessPill.ts`). A resumed session (`ctx.sessionId` set) is not
         // told again. Nothing at all without a skill-hub key.
         if (!ctx.sessionId) {
-          for (const detail of orgHarnessSessionStartNotices(store)) {
+          for (const detail of orgHarnessSessionStartNotices(store, orgGate)) {
             ctx.emit({
               type: 'system',
               subtype: 'harness',
@@ -2487,6 +2631,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // extras is safe precisely because nothing downstream depends on
         // completeness — the events carry no state.
         const harnessSeen = new Set<string>();
+        // Tool calls awaiting their result, for PostToolUse (org-harness-sync §3.5).
+        const orgToolCalls = new Map<string, { toolName: string; input: unknown; agentId?: string }>();
         let harnessEmitted = 0;
         const HARNESS_EVENT_CAP = 20;
         // Subagent/background-task lifecycle edges, counted separately (see the
@@ -2597,6 +2743,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // the autonomy stop decision below reads the RESTYLED text, so if
               // that ever stopped working an autonomous run would stop stopping.
               voice,
+              // PreCompact / SessionStart(compact) (org-harness-sync §3.5), called by
+              // whichever engine compacts, at its own compaction point.
+              ...(orgHooks.compaction ? { compaction: orgHooks.compaction } : {}),
               // THE THREE FACTS THE RUNTIME CANNOT SEE (naby-activity-log §3).
               // Routing, the fast-growth flag and what dispatched the turn are all
               // decided here; the runtime stamps them on every record of the turn
@@ -2816,6 +2965,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // denies is still the agent trying to act, so a denied step
                   // gets to try something else rather than ending the run.
                   stepUsedTool = true;
+                  // Remembered for PostToolUse, whose result event carries only
+                  // the id (org-harness-sync §3.5).
+                  if (orgHooks.enabled) {
+                    orgToolCalls.set(ev.toolCallId, {
+                      toolName: ev.toolName,
+                      input: ev.input,
+                      ...(ev.subagent?.agentId ? { agentId: ev.subagent.agentId } : {}),
+                    });
+                  }
                   // tool_use must reach the client BEFORE its result so the UI
                   // has a call to merge the result into.
                   ctx.emit({
@@ -2872,6 +3030,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
                 case 'tool_result': {
                   emitToolResult(ev.toolCallId, ev.output.content, ev.isError);
+                  // PostToolUse (§3.5): an EXECUTED call — a denied one never gets
+                  // here (no tool_result follows a deny). Fire-and-forget.
+                  const requested = orgToolCalls.get(ev.toolCallId);
+                  if (requested) {
+                    orgToolCalls.delete(ev.toolCallId);
+                    orgHooks.postToolUse(requested, { content: ev.output.content, isError: ev.isError });
+                  }
                   break;
                 }
 
@@ -3084,6 +3249,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // a slow-motion resource exhaustion bug rather than a tidiness issue.
           // `finally` so it happens on the abort and throw paths too.
           await mcp?.closeAll();
+          // Stop (org-harness-sync §3.5): the run is over — once per run, not per
+          // autonomy step, on every ending (done, stopped, failed). Not awaited.
+          orgHooks.stop();
         }
 
         // The stream can end without a result — an abort mid-iteration, or a

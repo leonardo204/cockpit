@@ -38,6 +38,8 @@ import {
   readProjectState,
 } from "@cockpit/feature-agent/server/state/projectState"
 import { broadcastToGlobalState } from "../../../lib/globalStateBroadcast"
+// A closed tab is a SESSION END for the org harness (org-harness-sync §1, §3.5).
+import { endOrgSessionsOnClose } from "@cockpit/feature-agent/server/lib/orgHarnessHooks"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -71,7 +73,13 @@ export const POST = handler((req) =>
     const request = parsed.request
 
     const state = yield* Effect.try({
-      try: () => applyProjectStateRequest(getStore(), request),
+      try: () => {
+        // SessionEnd BEFORE the delete: it writes the session's transcript for the
+        // hooks (§3.5) and the delete below drops the messages. The hook processes
+        // themselves run in the background — this answer never waits for them.
+        if (request.closedSessionIds.length > 0) endOrgSessionsOnClose(getStore(), request.closedSessionIds)
+        return applyProjectStateRequest(getStore(), request)
+      },
       catch: (cause) => new FSError({ path: "app.db:project-state", op: "write", cause }),
     })
 

@@ -2,9 +2,9 @@
 //
 // SYSTEM MCP PRESETS — the in-house servers, declared once (skill-hub-builtin §2.1).
 //
-// An in-house MCP server is an ordinary MCP server. skill-hub is http+headers;
-// mcp-atlassian is stdio+env; the runtime loader (src/runtime/mcp.ts) has carried
-// both end to end for a long time. So NOTHING HERE IS A NEW TRANSPORT. What is
+// An in-house MCP server is an ordinary MCP server. skill-hub and cic are
+// http+headers; atlassian is http+browser OAuth (org-harness-sync §3.8); the
+// runtime loader (src/runtime/mcp.ts) carries all of them. So NOTHING HERE IS A NEW TRANSPORT. What is
 // new is that the product, not the user, knows the URL, the transport, the header
 // name and the env var names — the user knows a token, and maybe their own email
 // address.
@@ -34,10 +34,14 @@
 // belongs with app.db encryption.
 
 import {
-  ATLASSIAN_HARNESS_BUNDLE_ID,
+  ATLASSIAN_MCP_SERVER_NAME,
+  ATLASSIAN_MCP_URL,
+  atlassianOAuthEntry,
+  atlassianRowShape,
   CIC_HARNESS_BUNDLE_ID,
+  mcpOAuthStatus,
 } from '../../../../../../../dist/naby-runtime.mjs';
-import type { McpEntry, Store } from '../../../../../../../dist/naby-runtime.mjs';
+import type { McpEntry, McpOAuthStatus, Store } from '../../../../../../../dist/naby-runtime.mjs';
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -114,6 +118,14 @@ export type SystemMcpPreset = {
    * branching on its name. Exactly one preset may carry it (`orgHarnessKeyPreset`).
    */
   readonly ownsOrgHarnessKey?: boolean;
+  /**
+   * THIS PRESET SIGNS IN THROUGH THE BROWSER (org-harness-sync §3.8). It has no
+   * fields; the UI shows a "log in" button instead of a form, the tokens live in
+   * the runtime's OAuth store (never in the entry), and `build` makes the row a
+   * signed-in user should have. A registry fact for the same reason as the two
+   * above: the surfaces ask the preset, not its name.
+   */
+  readonly oauth?: boolean;
   /** Assemble the entry. PURE. */
   build(fields: Record<string, string>, opts?: SystemMcpBuildOptions): SystemMcpBuildResult;
   /** Read the field values back OUT of a stored entry — including secret ones.
@@ -126,6 +138,9 @@ export type SystemMcpPreset = {
 /** What any surface is ever told about a preset's connection. */
 export type SystemMcpStatus = {
   configured: boolean;
+  /** Browser-OAuth presets only: the sign-in state, and whether the row is
+   *  still the pre-OAuth one (§4.4 "OAuth 전환 대기"). */
+  oauth?: { status: McpOAuthStatus; legacy: boolean };
   /** Present only when configured. 'proposed' means an AGENT added a server under
    *  this name (`naby_add_mcp`) and it is still waiting on the human approval
    *  every agent-added server waits on — the row shows that state rather than
@@ -212,107 +227,57 @@ const SKILL_HUB_PRESET: SystemMcpPreset = {
 };
 
 // ---------------------------------------------------------------------------
-// atlassian — stdio (`uvx mcp-atlassian`) + env
+// atlassian — the official remote MCP, browser OAuth (org-harness-sync §3.8)
 // ---------------------------------------------------------------------------
+//
+// ONE WAY IN. Until the OAuth release this preset collected an email and an API
+// token and started `uvx mcp-atlassian` over stdio. That path is gone: the preset
+// has no fields, the connect button runs the browser sign-in (`atlassian.login`),
+// and the row is `http` to `https://mcp.atlassian.com/v1/mcp` with `auth:
+// 'oauth'`. The name stays `atlassian` — the plugin's server name too, which is
+// what makes the org skills' tool names (`getConfluencePage` …) line up.
+//
+// AN EXISTING API-TOKEN ROW KEEPS RUNNING until the user signs in (§4.4); the
+// runtime swaps it in place at the next turn boundary after the sign-in
+// (atlassian-migration.ts). Nothing here reads its stored token any more.
 
-export const ATLASSIAN_SERVER_NAME = 'atlassian';
-export const DEFAULT_CONFLUENCE_URL = 'https://altimedia.atlassian.net/wiki';
+export const ATLASSIAN_SERVER_NAME = ATLASSIAN_MCP_SERVER_NAME;
+/** Kept as a key so an existing per-install override does not error; the OAuth
+ *  preset has no URL to override (the remote MCP's address is fixed). */
 export const ATLASSIAN_URL_KEY = 'atlassian.confluenceUrl';
-/** The launcher. `uvx` runs a published Python tool without installing it, which
- *  is how mcp-atlassian is meant to be started. */
-export const ATLASSIAN_LAUNCHER = 'uvx';
-export const ATLASSIAN_PACKAGE = 'mcp-atlassian';
-
-/** Deliberately loose: "something@something.something, no spaces". The point is to
- *  catch the paste that was a USERNAME rather than an email (Atlassian's Basic
- *  auth wants the account email and fails with an opaque 401 otherwise), not to
- *  adjudicate RFC 5322. Anything stricter starts rejecting real addresses. */
-const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const ATLASSIAN_PRESET: SystemMcpPreset = {
   name: ATLASSIAN_SERVER_NAME,
   titleKey: 'systemMcp.presets.atlassian.title',
   descriptionKey: 'systemMcp.presets.atlassian.description',
-  defaultUrl: DEFAULT_CONFLUENCE_URL,
+  defaultUrl: ATLASSIAN_MCP_URL,
   urlSettingKey: ATLASSIAN_URL_KEY,
-  launcher: ATLASSIAN_LAUNCHER,
-  // The built-in harness bundle this credential switches: the `confluence-upload`
-  // skill (skill-hub-builtin §2.7). It belongs HERE rather than on `cic` because
-  // its three environment variables — base URL, account email, API token — are the
-  // three values this preset already collects. Configuring atlassian is the proof
-  // that the user has a Confluence account they can WRITE to; cic only proves they
-  // can read the index. naby does not forward the stored values to the skill (they
-  // reach the mcp-atlassian process and nothing else) — the preset is the opt-in
-  // signal, not the credential channel.
-  harnessBundle: ATLASSIAN_HARNESS_BUNDLE_ID,
-  fields: [
-    {
-      id: 'username',
-      labelKey: 'systemMcp.presets.atlassian.fields.username.label',
-      placeholderKey: 'systemMcp.presets.atlassian.fields.username.placeholder',
-      // The account email is not a secret and IS shown back: a user who returns
-      // to this row a month later should see which account is connected.
-      secret: false,
-    },
-    {
-      id: 'apiToken',
-      labelKey: 'systemMcp.presets.atlassian.fields.apiToken.label',
-      placeholderKey: 'systemMcp.presets.atlassian.fields.apiToken.placeholder',
-      secret: true,
-    },
-  ],
-  build(fields, opts) {
-    const username = (fields.username ?? '').trim();
-    if (!username) return missing('username');
-    if (!EMAIL_SHAPE.test(username)) {
-      return {
-        ok: false,
-        error: `"${username}" does not look like an email address; Atlassian authenticates with the account email.`,
-        errorKey: 'systemMcp.presets.atlassian.badEmail',
-        errorField: 'username',
-      };
-    }
-    const apiToken = (fields.apiToken ?? '').trim();
-    if (!apiToken) return missing('apiToken');
-
-    // The absolute path, resolved by the caller. Refusing here is the whole
-    // point of the launcher declaration: a `command: 'uvx'` that works in dev
-    // and ENOENTs in the packaged app is a bug the user reports as "Confluence
-    // stopped working", weeks later and with no way to connect it back.
-    const command = (opts?.commandPath ?? '').trim();
-    if (!command) {
-      return {
-        ok: false,
-        error: `${ATLASSIAN_LAUNCHER} was not found on this machine. Install uv (https://docs.astral.sh/uv/) and try again.`,
-        errorKey: 'systemMcp.uvxMissing',
-      };
-    }
-
-    return {
-      ok: true,
-      entry: {
-        name: ATLASSIAN_SERVER_NAME,
-        transport: 'stdio',
-        command,
-        args: [ATLASSIAN_PACKAGE],
-        env: {
-          CONFLUENCE_URL: (opts?.url ?? '').trim() || DEFAULT_CONFLUENCE_URL,
-          CONFLUENCE_USERNAME: username,
-          CONFLUENCE_API_TOKEN: apiToken,
-        },
-        status: 'enabled',
-      },
-    };
+  oauth: true,
+  fields: [],
+  build() {
+    // The row of a signed-in user. Saving it does not sign anyone in — the
+    // tokens come from `atlassian.login` — and a turn refuses to connect it
+    // until they exist (mcp.ts fast path), so building it early is harmless.
+    return { ok: true, entry: atlassianOAuthEntry() };
   },
-  readStoredFields(entry) {
-    if (entry.transport !== 'stdio') return {};
-    const env = entry.env ?? {};
-    const out: Record<string, string> = {};
-    if (env.CONFLUENCE_USERNAME) out.username = env.CONFLUENCE_USERNAME;
-    if (env.CONFLUENCE_API_TOKEN) out.apiToken = env.CONFLUENCE_API_TOKEN;
-    return out;
+  readStoredFields() {
+    // No field reads back from either shape: the OAuth row has none, and the
+    // legacy row's email/API token are never shown or reused again.
+    return {};
   },
 };
+
+/** Atlassian as a status (Settings, the org harness card). */
+export type AtlassianPresetState = {
+  /** The browser sign-in. */
+  oauth: McpOAuthStatus;
+  /** `legacy` = the API-token row still runs, waiting for the sign-in (§4.4). */
+  row: 'none' | 'legacy' | 'oauth' | 'other';
+};
+
+export function readAtlassianPresetState(store: Pick<Store, 'listMcpEntries' | 'getSetting'>): AtlassianPresetState {
+  return { oauth: mcpOAuthStatus(store, ATLASSIAN_SERVER_NAME), row: atlassianRowShape(store) };
+}
 
 // ---------------------------------------------------------------------------
 // cic — HTTP + Bearer, and the switch for the built-in Confluence bundle
@@ -473,14 +438,23 @@ export function configuredHarnessBundles(store: Pick<Store, 'listMcpEntries'>): 
 }
 
 export function readSystemMcpStatus(
-  store: Pick<Store, 'listMcpEntries'>,
+  store: Pick<Store, 'listMcpEntries'> & Partial<Pick<Store, 'getSetting'>>,
 ): Record<string, SystemMcpStatus> {
   const entries = store.listMcpEntries();
   const out: Record<string, SystemMcpStatus> = {};
   for (const preset of SYSTEM_MCP_PRESETS) {
     const entry = entries.find((e) => e.name === preset.name);
+    const oauth =
+      preset.oauth && store.getSetting
+        ? {
+            oauth: {
+              status: mcpOAuthStatus(store as Pick<Store, 'getSetting'>, preset.name),
+              legacy: entry?.transport === 'stdio',
+            },
+          }
+        : {};
     if (!entry) {
-      out[preset.name] = { configured: false };
+      out[preset.name] = { configured: false, ...oauth };
       continue;
     }
     const nonSecret = readNonSecretFields(preset, entry);
@@ -488,6 +462,7 @@ export function readSystemMcpStatus(
       configured: true,
       status: entry.status === 'proposed' ? 'proposed' : 'enabled',
       ...(Object.keys(nonSecret).length > 0 ? { nonSecretFields: nonSecret } : {}),
+      ...oauth,
     };
   }
   return out;

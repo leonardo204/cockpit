@@ -47,6 +47,7 @@ import {
   getCredentialBridge,
   isClaudeAgentSdkAvailable,
   loadMcpToolset,
+  clearMcpOAuth,
   readSettings,
   resolveProviderCredential,
   selectEngine,
@@ -99,6 +100,7 @@ import {
   type ClaudeInstallHelp,
   type ClaudeLoginAccount,
   type McpEntry,
+  type Store,
   type HarnessScope,
   type PolicyEffect,
   type PolicyRule,
@@ -107,7 +109,6 @@ import {
   type AgentKind,
   type AgentEscalation,
   type MemoryScope,
-  type OrgHarnessState,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 // "Is anything running anywhere" — the one question the account switch has to ask
@@ -180,13 +181,16 @@ import { resolveCommandPath } from '../lib/commandPath';
 // this lib resolves the Skill Hub key from the preset registry and owns the
 // background pass. Nothing it returns carries the key or the metrics token.
 import {
+  cancelAtlassianLogin,
   ensureOrgHarnessSyncStarted,
   kickOrgHarnessSync,
   orgHarnessKeepUserCopy,
   orgHarnessSetEnabled,
   orgHarnessState,
   orgHarnessUseOrgVersion,
+  startAtlassianLogin,
   syncOrgHarnessNow,
+  type OrgHarnessStateView,
 } from '../lib/orgHarness';
 // The key a user-supplied session rename lives under. IMPORTED rather than
 // respelled here: it is what the recent-session list reads and what the v1.6.0
@@ -308,12 +312,15 @@ type McpProbeResult =
   | { ok: false; error: string };
 
 async function probeMcpServer(
-  store: { listMcpEntries(): McpEntry[] },
+  store: Pick<Store, 'listMcpEntries' | 'getSetting' | 'setSetting'>,
   name: string,
 ): Promise<McpProbeResult> {
   const entry = store.listMcpEntries().find((e) => e.name === name);
   if (!entry) return { ok: false, error: `no MCP server named "${name}"` };
-  const load = await loadMcpToolset([entry]);
+  // The same token store a turn uses (org-harness-sync §3.8): a browser-OAuth
+  // entry is probed with the signed-in user's token, and a missing sign-in is
+  // reported as such rather than as a 401.
+  const load = await loadMcpToolset([entry], { oauth: { store } });
   try {
     const failure = load.failures[0];
     if (failure) return { ok: false, error: failure.message };
@@ -476,7 +483,7 @@ export async function readNabyState(
    *  is configured, whether it is on and why not, the package on disk, the rows,
    *  and the pending same-name-copy notices. Labels and states only — the key,
    *  its hash and the metrics token never appear here. */
-  orgHarness: OrgHarnessState;
+  orgHarness: OrgHarnessStateView;
 }> {
   const store = getStore();
   // The first state read after startup schedules the background sync (§4.2):
@@ -645,6 +652,12 @@ export type NabyAction =
   | { action: 'orgHarness.sync' }
   | { action: 'orgHarness.useOrgVersion'; name: string }
   | { action: 'orgHarness.keepUserCopy'; name: string }
+  // ATLASSIAN BROWSER SIGN-IN (org-harness-sync §3.8, M3). `login` starts the
+  // loopback listener and answers with the authorization URL for the client to
+  // open; the client then polls `orgHarness.get` until `atlassian.loginPending`
+  // clears. `cancelLogin` closes the listener.
+  | { action: 'atlassian.login' }
+  | { action: 'atlassian.cancelLogin' }
   // Phase 2 (M1) tool-execution policy rules. `scopeKey` is optional for the
   // user scope (server-defaulted); required (a cwd) for project.
   | { action: 'policy.list'; scope?: string; scopeKey?: string }
@@ -841,7 +854,10 @@ export type NabyActionResult =
        *  several rows refreshes them all from one reply. */
       systemMcp?: Record<string, SystemMcpStatus>;
       /** `orgHarness.*`: the org harness state after the operation. */
-      orgHarness?: OrgHarnessState;
+      orgHarness?: OrgHarnessStateView;
+      /** `atlassian.login`: the authorization URL the CLIENT opens in the system
+       *  browser (empty when the sign-in completed without one). */
+      authorizationUrl?: string;
       /** `orgHarness.useOrgVersion`: ids of the copies that were set aside. */
       changed?: string[];
       /** `orgHarness.sync`: what the pass did, minus anything secret. */
@@ -2236,6 +2252,16 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'systemMcp.set': {
       const preset = findSystemMcpPreset(body.preset);
       if (!preset) return { ok: false, error: `unknown system MCP preset "${body.preset}"` };
+      // A BROWSER-OAUTH preset is not saved, it is signed in to (`atlassian.login`).
+      // Building its row here would also replace a still-working API-token row
+      // before the user has logged in, which §4.4 forbids.
+      if (preset.oauth) {
+        return {
+          ok: false,
+          error: `"${preset.name}" signs in through the browser; use the log-in button`,
+          errorKey: 'systemMcp.oauthUseLogin',
+        };
+      }
 
       // Only strings, only declared field ids — `mergeSystemMcpFields` drops the
       // rest, so a client cannot smuggle an extra key into a built entry.
@@ -2329,6 +2355,12 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // Idempotent, like `mcp.remove`: removing a server that is not there is the
       // state the caller asked for, not an error.
       store.removeMcpEntry(preset.name);
+      // A browser-OAuth preset's sign-in goes with it: removing the server is
+      // "disconnect", and a token kept behind would quietly reconnect a later row.
+      if (preset.oauth) {
+        cancelAtlassianLogin();
+        clearMcpOAuth(store, preset.name);
+      }
       // The other half of the switch. Without this a removed cic would leave a
       // skill that still fires and a subagent that still runs — with no tools, so
       // every triggered turn would end in "I could not research Confluence". The
@@ -2372,6 +2404,16 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         orgHarness: orgHarnessState(store),
       };
     }
+
+    case 'atlassian.login': {
+      const started = await startAtlassianLogin(store);
+      if (!started.ok) return { ok: false, error: started.error };
+      return { ok: true, authorizationUrl: started.authorizationUrl, orgHarness: orgHarnessState(store) };
+    }
+
+    case 'atlassian.cancelLogin':
+      cancelAtlassianLogin();
+      return { ok: true, orgHarness: orgHarnessState(store) };
 
     case 'orgHarness.useOrgVersion':
     case 'orgHarness.keepUserCopy': {

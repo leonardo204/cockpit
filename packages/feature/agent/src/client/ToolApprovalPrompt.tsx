@@ -19,7 +19,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type Pending = { approvalId: string; toolName: string; inputPreview: string };
+type Pending = {
+  approvalId: string;
+  toolName: string;
+  inputPreview: string;
+  /** Why it is asking — set when an org harness hook asked (org-harness-sync
+   *  §3.5: the reason is shown verbatim). */
+  reason?: string;
+  /** `hook` = asked by a hook, not by a policy rule: "always" would write a
+   *  rule for the whole tool, which is not what was asked, so it is not offered. */
+  source?: 'hook';
+};
 
 function previewInput(input: unknown): string {
   try {
@@ -58,6 +68,8 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         approvalId: d.approvalId,
         toolName: typeof d.tool_name === 'string' ? d.tool_name : 'tool',
         inputPreview: previewInput(d.input),
+        ...(typeof d.reason === 'string' && d.reason ? { reason: d.reason } : {}),
+        ...(d.source === 'hook' ? { source: 'hook' as const } : {}),
       };
       setQueue((q) => (q.some((p) => p.approvalId === item.approvalId) ? q : [...q, item]));
     };
@@ -103,6 +115,13 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
       <div className="mt-1 text-sm font-mono text-foreground break-all" data-testid="tool-approval-name">
         {current.toolName}
       </div>
+      {current.reason ? (
+        <div className="mt-1 text-xs text-foreground whitespace-pre-wrap break-words" data-testid="tool-approval-reason">
+          {current.source === 'hook'
+            ? t('toolApproval.hookReason', { reason: current.reason, defaultValue: 'Org harness: {{reason}}' })
+            : current.reason}
+        </div>
+      ) : null}
       {current.inputPreview ? (
         <div className="mt-0.5 text-[0.786rem] font-mono text-muted-foreground break-all line-clamp-2">
           {current.inputPreview}
@@ -123,20 +142,24 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         >
           {t('toolApproval.denyOnce', { defaultValue: 'Deny once' })}
         </button>
-        <button
-          onClick={() => void act('allow', true)}
-          disabled={busy}
-          className={`${btn} border-border text-muted-foreground hover:text-foreground hover:bg-accent`}
-        >
-          {t('toolApproval.alwaysAllow', { defaultValue: 'Always allow' })}
-        </button>
-        <button
-          onClick={() => void act('deny', true)}
-          disabled={busy}
-          className={`${btn} border-border text-muted-foreground hover:text-foreground hover:bg-accent`}
-        >
-          {t('toolApproval.alwaysBlock', { defaultValue: 'Always block' })}
-        </button>
+        {current.source === 'hook' ? null : (
+          <>
+            <button
+              onClick={() => void act('allow', true)}
+              disabled={busy}
+              className={`${btn} border-border text-muted-foreground hover:text-foreground hover:bg-accent`}
+            >
+              {t('toolApproval.alwaysAllow', { defaultValue: 'Always allow' })}
+            </button>
+            <button
+              onClick={() => void act('deny', true)}
+              disabled={busy}
+              className={`${btn} border-border text-muted-foreground hover:text-foreground hover:bg-accent`}
+            >
+              {t('toolApproval.alwaysBlock', { defaultValue: 'Always block' })}
+            </button>
+          </>
+        )}
       </div>
       {queue.length > 1 ? (
         <div className="mt-1.5 text-[0.714rem] text-muted-foreground">

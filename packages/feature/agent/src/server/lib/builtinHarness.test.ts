@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import {
   ALWAYS_ON_HARNESS_BUNDLES,
   applyBuiltinHarnessActivation,
-  ATLASSIAN_HARNESS_BUNDLE_ID,
   builtinHarnessAutoStatusKey,
   bundleOwning,
   BUILTIN_HARNESS_ASSETS,
@@ -69,16 +68,17 @@ const IMPLEMENTER = 'implementer';
 
 /** Every built-in, in the order the generated table lists them — which is the
  *  order `seeded` and `kept` come back in. */
-const ALL_ASSETS = [SKILL, SUBAGENT, UPLOAD, EXPLORER, IMPLEMENTER];
+const ALL_ASSETS = [SKILL, SUBAGENT, EXPLORER, IMPLEMENTER];
 
 describe('the built-in assets themselves', () => {
-  it('ships the Confluence research pair, the upload skill and the two core delegates', () => {
+  it('ships the Confluence research pair and the two core delegates — no upload skill', () => {
+    // org-harness-sync §4.4: `confluence-upload` is withdrawn with the OAuth release
+    // (Confluence publishing is the org skill pdoc's job over the OAuth MCP).
     expect(BUILTIN_HARNESS_ASSETS.map((a) => `${a.kind}:${a.name}`)).toEqual([
       `skill:${SKILL}`,
       `subagent:${SUBAGENT}`,
-      `skill:${UPLOAD}`,
       // subagent-delegation §4.1: the `core` bundle, appended AFTER the existing
-      // three. Order matters to this suite only because `seeded`/`kept` follow it.
+      // ones. Order matters to this suite only because `seeded`/`kept` follow it.
       `subagent:${EXPLORER}`,
       `subagent:${IMPLEMENTER}`,
     ]);
@@ -102,34 +102,17 @@ describe('the built-in assets themselves', () => {
     expect(skill.toolRefs).toBeUndefined();
   });
 
-  it('gates the upload skill on run_command — the tool it does its work with', () => {
-    // The opposite call from the research skill above, for the opposite reason:
-    // this one RUNS a CLI, so a turn without a shell (an unprojected session has no
-    // `run_command`) must not be handed 1.1k tokens of instructions for one.
-    const upload = BUILTIN_HARNESS_ASSETS.find((a) => a.name === UPLOAD)!;
-    expect(upload.toolRefs).toEqual(['run_command']);
-    expect(upload.triggers).toContain('confluence');
-    expect(upload.triggers).toContain('컨플루언스');
-    // `업로드`/`upload` are deliberately NOT triggers: substring-matched they fire
-    // on every "파일 업로드 API" turn in a product codebase (spike-harness-seed (h)).
-    expect(upload.triggers).not.toContain('upload');
-    expect(upload.triggers).not.toContain('업로드');
-  });
-
   it('names each bundle from its own preset, so the save path needs no branch', () => {
     expect(findSystemMcpPreset(CIC_SERVER_NAME)!.harnessBundle).toBe(CIC_HARNESS_BUNDLE_ID);
     expect(BUILTIN_HARNESS_BUNDLES[CIC_HARNESS_BUNDLE_ID]).toEqual([SKILL, SUBAGENT]);
-    // The upload skill hangs off ATLASSIAN, not cic: its three environment
-    // variables are the three values that preset already collects, and a cic token
-    // only proves the user can READ the index.
-    expect(findSystemMcpPreset(ATLASSIAN_SERVER_NAME)!.harnessBundle).toBe(
-      ATLASSIAN_HARNESS_BUNDLE_ID,
-    );
-    expect(BUILTIN_HARNESS_BUNDLES[ATLASSIAN_HARNESS_BUNDLE_ID]).toEqual([UPLOAD]);
+    // The atlassian preset switches NO bundle any more (§4.4), and there is no
+    // `atlassian` bundle for it to switch.
+    expect(findSystemMcpPreset(ATLASSIAN_SERVER_NAME)!.harnessBundle).toBeUndefined();
+    expect(BUILTIN_HARNESS_BUNDLES).not.toHaveProperty('atlassian');
   });
 
   it('keeps the bundles disjoint, and leaves skill-hub owning none', () => {
-    expect(bundleOwning(UPLOAD)).toBe(ATLASSIAN_HARNESS_BUNDLE_ID);
+    expect(bundleOwning(UPLOAD)).toBeUndefined();
     expect(bundleOwning(SKILL)).toBe(CIC_HARNESS_BUNDLE_ID);
     expect(bundleOwning('nothing-of-ours')).toBeUndefined();
     expect(findSystemMcpPreset('skill-hub')!.harnessBundle).toBeUndefined();
@@ -138,6 +121,7 @@ describe('the built-in assets themselves', () => {
   it('reports the configured presets bundle by bundle, for the boot seed', () => {
     const store = new MemoryStore();
     expect(configuredHarnessBundles(store)).toEqual([]);
+    // An atlassian row — old or new — no longer contributes a bundle.
     store.upsertMcpEntry({
       name: ATLASSIAN_SERVER_NAME,
       transport: 'stdio',
@@ -145,15 +129,14 @@ describe('the built-in assets themselves', () => {
       args: ['mcp-atlassian'],
       status: 'enabled',
     });
-    expect(configuredHarnessBundles(store)).toEqual([ATLASSIAN_HARNESS_BUNDLE_ID]);
-    // A preset with no bundle contributes nothing, however it is configured.
+    expect(configuredHarnessBundles(store)).toEqual([]);
     store.upsertMcpEntry({
-      name: 'skill-hub',
+      name: CIC_SERVER_NAME,
       transport: 'http',
-      url: 'https://example.invalid/mcp',
+      url: 'https://example.invalid/cic/mcp',
       status: 'enabled',
     });
-    expect(configuredHarnessBundles(store)).toEqual([ATLASSIAN_HARNESS_BUNDLE_ID]);
+    expect(configuredHarnessBundles(store)).toEqual([CIC_HARNESS_BUNDLE_ID]);
   });
 });
 
@@ -317,103 +300,40 @@ describe('the cic credential as the switch', () => {
 
   it('does not reach into the other bundle', () => {
     // The generalization's load-bearing property: one credential moves its own
-    // items and nobody else's, so a user with cic but not atlassian gets research
-    // without an upload skill that has no account to upload to.
+    // items and nobody else's — `core` stays exactly as it was.
     const store = seeded();
     const res = applyBuiltinHarnessActivation(store, CIC_HARNESS_BUNDLE_ID, true);
     expect(res.changed).toEqual([SKILL, SUBAGENT]);
-    expect(rowFor(store, UPLOAD)!.status).toBe('disabled');
-  });
-});
-
-describe('the atlassian credential as the upload skill switch', () => {
-  function seeded() {
-    const store = new MemoryStore();
-    seedBuiltinHarness(store);
-    return store;
-  }
-
-  it('enables only the upload skill when the credential is saved', () => {
-    const store = seeded();
-    const res = applyBuiltinHarnessActivation(store, ATLASSIAN_HARNESS_BUNDLE_ID, true);
-    expect(res.changed).toEqual([UPLOAD]);
-    expect(rowFor(store, UPLOAD)!.status).toBe('enabled');
-    expect(rowFor(store, SKILL)!.status).toBe('disabled');
-    expect(rowFor(store, SUBAGENT)!.status).toBe('disabled');
-  });
-
-  it('disables it again when the preset is removed', () => {
-    const store = seeded();
-    applyBuiltinHarnessActivation(store, ATLASSIAN_HARNESS_BUNDLE_ID, true);
-    const res = applyBuiltinHarnessActivation(store, ATLASSIAN_HARNESS_BUNDLE_ID, false);
-    expect(res.changed).toEqual([UPLOAD]);
-    expect(rowFor(store, UPLOAD)!.status).toBe('disabled');
-  });
-
-  it('KEEPS OFF WHAT THE USER TURNED OFF, through a re-save', () => {
-    const store = seeded();
-    applyBuiltinHarnessActivation(store, ATLASSIAN_HARNESS_BUNDLE_ID, true);
-    store.setHarnessEnabled(rowFor(store, UPLOAD)!.id, false);
-    const res = applyBuiltinHarnessActivation(store, ATLASSIAN_HARNESS_BUNDLE_ID, true);
-    expect(res.userOwned).toEqual([UPLOAD]);
-    expect(res.changed).toEqual([]);
-    expect(rowFor(store, UPLOAD)!.status).toBe('disabled');
+    expect(rowFor(store, EXPLORER)!.status).toBe('disabled');
   });
 });
 
 describe('seeding a bundle whose server is ALREADY configured', () => {
-  /**
-   * The hole the save/remove switch cannot cover.
-   *
-   * The atlassian preset has existed since 0.2.0; `confluence-upload` ships now. An
-   * existing user saved that credential long ago and has no reason to save it again,
-   * so the switch never fires for them and the row would sit disabled forever —
-   * a shipped feature nobody is told to turn on. The boot seed answers it instead,
-   * by asking the registry which presets are configured.
-   */
-  it('arrives ENABLED for a user who configured the preset before the skill existed', () => {
+  it('arrives ENABLED for a user who configured the preset before the item existed', () => {
     const store = new MemoryStore();
     store.upsertMcpEntry({
-      name: ATLASSIAN_SERVER_NAME,
-      transport: 'stdio',
-      command: '/usr/bin/true',
-      args: ['mcp-atlassian'],
+      name: CIC_SERVER_NAME,
+      transport: 'http',
+      url: 'https://example.invalid/cic/mcp',
       status: 'enabled',
     });
     seedBuiltinHarness(store, { activeBundles: configuredHarnessBundles(store) });
-    expect(rowFor(store, UPLOAD)!.status).toBe('enabled');
-    // ...and only that one. cic is not configured here.
-    expect(rowFor(store, SKILL)!.status).toBe('disabled');
-    expect(rowFor(store, SUBAGENT)!.status).toBe('disabled');
-  });
-
-  it('records what it wrote, so the user can still take ownership afterwards', () => {
-    const store = new MemoryStore();
-    seedBuiltinHarness(store, { activeBundles: [ATLASSIAN_HARNESS_BUNDLE_ID] });
-    expect(store.getSetting(builtinHarnessAutoStatusKey(UPLOAD))).toBe('enabled');
-    // Turned off by hand, it stays off through a later save — the same rule as a
-    // row that was switched on rather than seeded on.
-    store.setHarnessEnabled(rowFor(store, UPLOAD)!.id, false);
-    const res = applyBuiltinHarnessActivation(store, ATLASSIAN_HARNESS_BUNDLE_ID, true);
-    expect(res.userOwned).toEqual([UPLOAD]);
-    expect(rowFor(store, UPLOAD)!.status).toBe('disabled');
+    expect(rowFor(store, SKILL)!.status).toBe('enabled');
+    expect(rowFor(store, SUBAGENT)!.status).toBe('enabled');
+    expect(store.getSetting(builtinHarnessAutoStatusKey(SKILL))).toBe('enabled');
   });
 
   it('changes nothing for a user with no System MCP configured at all', () => {
     const store = new MemoryStore();
     seedBuiltinHarness(store, { activeBundles: configuredHarnessBundles(store) });
-    for (const name of [SKILL, SUBAGENT, UPLOAD]) {
+    for (const name of [SKILL, SUBAGENT]) {
       expect(rowFor(store, name)!.status).toBe('disabled');
       expect(store.getSetting(builtinHarnessAutoStatusKey(name))).toBe('disabled');
     }
   });
 
-  it('cannot enable a row that already exists — seeding only ever adds', () => {
-    // The guard that keeps this from being a back door into "boot re-enables what
-    // the user disabled": the active-bundle branch is below the already-seeded
-    // check, so it is unreachable for any row that is already there.
+  it('never seeds the withdrawn upload skill, even for an old atlassian configuration', () => {
     const store = new MemoryStore();
-    seedBuiltinHarness(store);
     store.upsertMcpEntry({
       name: ATLASSIAN_SERVER_NAME,
       transport: 'stdio',
@@ -421,9 +341,9 @@ describe('seeding a bundle whose server is ALREADY configured', () => {
       args: ['mcp-atlassian'],
       status: 'enabled',
     });
-    const again = seedBuiltinHarness(store, { activeBundles: configuredHarnessBundles(store) });
-    expect(again.seeded).toEqual([]);
-    expect(rowFor(store, UPLOAD)!.status).toBe('disabled');
+    const res = seedBuiltinHarness(store, { activeBundles: [...configuredHarnessBundles(store), 'atlassian'] });
+    expect(res.seeded).not.toContain(UPLOAD);
+    expect(store.listHarness('user', DEFAULT_USER_ID, { kind: 'skill' }).some((r) => r.name === UPLOAD)).toBe(false);
   });
 });
 
@@ -442,7 +362,7 @@ describe('the always-on `core` bundle (subagent-delegation §4.1)', () => {
     expect(rowFor(store, IMPLEMENTER)!.status).toBe('enabled');
     // The credential-switched bundles are untouched by it: `core` being on says
     // nothing about whether a Confluence token exists.
-    for (const name of [SKILL, SUBAGENT, UPLOAD]) {
+    for (const name of [SKILL, SUBAGENT]) {
       expect(rowFor(store, name)!.status, name).toBe('disabled');
     }
   });
@@ -498,11 +418,9 @@ describe('the always-on `core` bundle (subagent-delegation §4.1)', () => {
       args: ['cic-mcp'],
       status: 'enabled',
     });
-    // Every bundle it reports is a bundle some preset names, in preset order.
-    expect(configuredHarnessBundles(store)).toEqual([
-      ATLASSIAN_HARNESS_BUNDLE_ID,
-      CIC_HARNESS_BUNDLE_ID,
-    ]);
+    // Every bundle it reports is a bundle some preset names, in preset order
+    // (atlassian names none since the OAuth release).
+    expect(configuredHarnessBundles(store)).toEqual([CIC_HARNESS_BUNDLE_ID]);
     expect(configuredHarnessBundles(store)).not.toContain(CORE_HARNESS_BUNDLE_ID);
   });
 

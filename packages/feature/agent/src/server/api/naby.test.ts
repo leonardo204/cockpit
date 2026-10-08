@@ -31,10 +31,8 @@ import { join } from 'node:path';
 import { readNabyState, runNabyAction } from './naby';
 import { getStore } from '../engines/naby';
 import {
-  ATLASSIAN_PACKAGE,
   ATLASSIAN_SERVER_NAME,
   ATLASSIAN_URL_KEY,
-  DEFAULT_CONFLUENCE_URL,
   DEFAULT_SKILL_HUB_URL,
   SKILL_HUB_SERVER_NAME,
   SKILL_HUB_URL_KEY,
@@ -48,8 +46,12 @@ import { customTitleKey } from '../state/recentSessions';
 import {
   BUILTIN_PERSONA_ID,
   DEFAULT_USER_ID,
+  mcpOAuthSettingKey,
+  mcpOAuthStatus,
   REFLECTION_IDLE_MS,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { setAtlassianOAuthServerUrl } from '../lib/orgHarness';
+import { startFakeAtlassian } from '../../../../../../../src/spikes/fixtures/fake-atlassian';
 import { AUTONOMY_STEP_CAP } from '../lib/autonomy';
 import {
   resetBotCommandRegistration,
@@ -411,6 +413,8 @@ const clear = () => {
   for (const name of SYSTEM_MCP_PRESET_NAMES) store.removeMcpEntry(name);
   store.setSetting(SKILL_HUB_URL_KEY, '');
   store.setSetting(ATLASSIAN_URL_KEY, '');
+  store.setSetting(mcpOAuthSettingKey(ATLASSIAN_SERVER_NAME), '');
+  store.setSetting('atlassian.oauth.migration', '');
 };
 
 /**
@@ -463,7 +467,10 @@ describe('POST /api/naby — the skill-hub preset', () => {
     });
     // The answer covers EVERY preset, not just the one that changed, so a UI with
     // several rows refreshes them all from one reply.
-    expect(result.systemMcp?.[ATLASSIAN_SERVER_NAME]).toEqual({ configured: false });
+    expect(result.systemMcp?.[ATLASSIAN_SERVER_NAME]).toEqual({
+      configured: false,
+      oauth: { status: 'none', legacy: false },
+    });
 
     // Read through the store the engine loads from, so this cannot pass on an
     // echo: the URL, the transport and the header name came from the server.
@@ -679,182 +686,166 @@ describe('POST /api/naby — the skill-hub preset', () => {
   });
 });
 
-describe('POST /api/naby — the atlassian preset', () => {
-  it('assembles a stdio entry around the RESOLVED uvx path', async () => {
-    clear();
-    withUvx();
-    const result = await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: `  ${ATLASSIAN_EMAIL}  `, apiToken: ATLASSIAN_TOKEN },
-    });
-    expect(result.ok).toBe(true);
-
-    const entry = storedEntry(ATLASSIAN_SERVER_NAME);
-    expect(entry?.transport).toBe('stdio');
-    if (!entry || entry.transport !== 'stdio') return;
-    // ABSOLUTE, not the bare name: the packaged app's children do not inherit a
-    // login-shell PATH, so a stored `uvx` would ENOENT on the user's machine.
-    expect(entry.command).toBe(fakeUvx);
-    expect(entry.command.startsWith('/')).toBe(true);
-    expect(entry.args).toEqual([ATLASSIAN_PACKAGE]);
-    expect(entry.env).toEqual({
-      CONFLUENCE_URL: DEFAULT_CONFLUENCE_URL,
+describe('POST /api/naby — the atlassian preset (browser OAuth, org-harness-sync §3.8)', () => {
+  /** The pre-OAuth row an existing install still has (§4.4). */
+  const legacyRow = () => ({
+    name: ATLASSIAN_SERVER_NAME,
+    transport: 'stdio' as const,
+    command: '/usr/bin/true',
+    args: ['mcp-atlassian'],
+    env: {
+      CONFLUENCE_URL: 'https://altimedia.atlassian.net/wiki',
       CONFLUENCE_USERNAME: ATLASSIAN_EMAIL,
       CONFLUENCE_API_TOKEN: ATLASSIAN_TOKEN,
-    });
-    clear();
+    },
+    status: 'enabled' as const,
   });
 
-  it('REFUSES the save when uvx cannot be resolved, and stores nothing', async () => {
-    // The refusal is the feature (§2.1): failing here, with the user still
-    // looking at the form, beats an entry that dies at the first turn weeks later.
+  it('REFUSES systemMcp.set — it is signed in to, not saved — and leaves a legacy row alone', async () => {
     clear();
-    withoutUvx();
+    getStore().upsertMcpEntry(legacyRow());
     const result = await runNabyAction({
       action: 'systemMcp.set',
       preset: ATLASSIAN_SERVER_NAME,
       fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
     });
     expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.errorKey).toBe('systemMcp.uvxMissing');
-    // The English fallback is actionable on its own.
-    expect(result.error).toContain('uv');
-    expect(storedEntry(ATLASSIAN_SERVER_NAME)).toBeUndefined();
+    if (!result.ok) expect(result.errorKey).toBe('systemMcp.oauthUseLogin');
+    // §4.4: the API-token row keeps running until the user signs in.
+    expect(storedEntry(ATLASSIAN_SERVER_NAME)).toEqual(legacyRow());
     clear();
   });
 
-  it('refuses a missing field and a username that is not an email', async () => {
+  it('reports the API-token row as configured and legacy, and never leaks its token or email', async () => {
     clear();
-    withUvx();
-    const missing = await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: ATLASSIAN_EMAIL },
-    });
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) {
-      expect(missing.errorKey).toBe('systemMcp.fieldRequired');
-      expect(missing.errorField).toBe('apiToken');
-    }
-
-    const badEmail = await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: 'tester', apiToken: ATLASSIAN_TOKEN },
-    });
-    expect(badEmail.ok).toBe(false);
-    if (!badEmail.ok) {
-      expect(badEmail.errorKey).toBe('systemMcp.presets.atlassian.badEmail');
-      expect(badEmail.errorField).toBe('username');
-    }
-    expect(storedEntry(ATLASSIAN_SERVER_NAME)).toBeUndefined();
-    clear();
-  });
-
-  it('keeps the stored API token when only the email is edited', async () => {
-    // THE MULTI-FIELD CASE the one-field version could not have. The token box is
-    // blank whenever the form opens, so a save that rebuilt from the typed values
-    // alone would silently disconnect the server the user was merely renaming.
-    clear();
-    withUvx();
-    await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
-    });
-    const edited = await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: 'other@altimedia.com', apiToken: '' },
-    });
-    expect(edited.ok).toBe(true);
-    const entry = storedEntry(ATLASSIAN_SERVER_NAME);
-    expect(entry && entry.transport === 'stdio' && entry.env).toEqual({
-      CONFLUENCE_URL: DEFAULT_CONFLUENCE_URL,
-      CONFLUENCE_USERNAME: 'other@altimedia.com',
-      CONFLUENCE_API_TOKEN: ATLASSIAN_TOKEN,
-    });
-    clear();
-  });
-
-  it('honours the atlassian.confluenceUrl override', async () => {
-    clear();
-    withUvx();
-    getStore().setSetting(ATLASSIAN_URL_KEY, 'https://other.atlassian.net/wiki');
-    const result = await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
-    });
-    expect(result.ok).toBe(true);
-    const entry = storedEntry(ATLASSIAN_SERVER_NAME);
-    expect(entry && entry.transport === 'stdio' && entry.env?.CONFLUENCE_URL).toBe(
-      'https://other.atlassian.net/wiki',
-    );
-    clear();
-  });
-
-  it('shows the email back and NEVER the token, in every response', async () => {
-    clear();
-    withUvx();
-    const set = await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
-    });
-    expect(leaks(set, ATLASSIAN_TOKEN)).toBe(false);
-    expect(set.ok && set.systemMcp?.[ATLASSIAN_SERVER_NAME]).toEqual({
+    getStore().upsertMcpEntry(legacyRow());
+    const state = await readNabyState(null);
+    expect(state.systemMcp[ATLASSIAN_SERVER_NAME]).toEqual({
       configured: true,
       status: 'enabled',
-      // Non-secret: the user should see WHICH account is connected.
-      nonSecretFields: { username: ATLASSIAN_EMAIL },
+      oauth: { status: 'none', legacy: true },
     });
-
-    // The probe spawns the stand-in, which exits without speaking MCP — so this
-    // is the failure path, where a naive implementation would report the command
-    // line (and with it the env) it just tried to run.
-    const probe = await runNabyAction({ action: 'systemMcp.test', preset: ATLASSIAN_SERVER_NAME });
-    expect(probe.ok, 'the stand-in uvx speaks no MCP').toBe(false);
-    expect(leaks(probe, ATLASSIAN_TOKEN)).toBe(false);
-
-    // The state read carries the entry in `mcp` too — through redactEntry, which
-    // must strip `env` VALUES exactly as it strips `headers` values.
-    const state = await readNabyState(null);
+    expect(state.orgHarness.atlassian.row).toBe('legacy');
     expect(leaks(state, ATLASSIAN_TOKEN)).toBe(false);
+    // The general list still redacts the stdio env to its key names.
     const row = state.mcp.find((e) => e.name === ATLASSIAN_SERVER_NAME);
-    expect(row?.envKeys).toEqual([
-      'CONFLUENCE_URL',
-      'CONFLUENCE_USERNAME',
-      'CONFLUENCE_API_TOKEN',
-    ]);
+    expect(row?.envKeys).toEqual(['CONFLUENCE_URL', 'CONFLUENCE_USERNAME', 'CONFLUENCE_API_TOKEN']);
     expect(row).not.toHaveProperty('env');
-
-    const removed = await runNabyAction({
-      action: 'systemMcp.remove',
-      preset: ATLASSIAN_SERVER_NAME,
-    });
+    const removed = await runNabyAction({ action: 'systemMcp.remove', preset: ATLASSIAN_SERVER_NAME });
     expect(leaks(removed, ATLASSIAN_TOKEN)).toBe(false);
     expect(storedEntry(ATLASSIAN_SERVER_NAME)).toBeUndefined();
     clear();
-  }, 30_000);
+  });
 
-  it('reports its status on the GET, alongside the other preset', async () => {
+  it('atlassian.login: the URL goes to the client, the browser comes back, the API-token row is swapped', async () => {
     clear();
-    withUvx();
-    await runNabyAction({
-      action: 'systemMcp.set',
-      preset: ATLASSIAN_SERVER_NAME,
-      fields: { username: ATLASSIAN_EMAIL, apiToken: ATLASSIAN_TOKEN },
-    });
-    const state = await readNabyState(null);
-    expect(state.systemMcp[ATLASSIAN_SERVER_NAME]?.configured).toBe(true);
-    expect(state.systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({ configured: false });
-    // Every preset in the registry has a key, so no row renders blank.
-    expect(Object.keys(state.systemMcp).sort()).toEqual([...SYSTEM_MCP_PRESET_NAMES].sort());
-    clear();
+    const fake = await startFakeAtlassian();
+    setAtlassianOAuthServerUrl(fake.mcpUrl);
+    try {
+      getStore().upsertMcpEntry(legacyRow());
+      const started = await runNabyAction({ action: 'atlassian.login' });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      expect(started.authorizationUrl).toMatch(/\/v1\/authorize\?/);
+      expect(started.orgHarness?.atlassian.loginPending).toBe(true);
+      // The user signs in in the browser.
+      const back = await fake.consent(started.authorizationUrl!);
+      expect(back.status).toBe(200);
+      // The callback stores the tokens; no turn is running, so the swap is immediate.
+      for (let i = 0; i < 50 && mcpOAuthStatus(getStore(), ATLASSIAN_SERVER_NAME) !== 'connected'; i += 1) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      for (let i = 0; i < 50 && storedEntry(ATLASSIAN_SERVER_NAME)?.transport !== 'http'; i += 1) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const row = storedEntry(ATLASSIAN_SERVER_NAME);
+      expect(row?.transport).toBe('http');
+      expect(row && row.transport === 'http' && row.auth).toBe('oauth');
+      expect(JSON.stringify(getStore().listMcpEntries())).not.toContain(ATLASSIAN_TOKEN);
+      const state = await readNabyState(null);
+      expect(state.orgHarness.atlassian.status).toBe('connected');
+      expect(state.orgHarness.atlassian.loginPending).toBe(false);
+      expect(state.orgHarness.atlassian.migration?.from).toBe('legacy');
+      expect(state.systemMcp[ATLASSIAN_SERVER_NAME]?.oauth).toEqual({ status: 'connected', legacy: false });
+      // No response carries a token.
+      const tokens = fake.current();
+      for (const t of [tokens.access, tokens.refresh]) {
+        expect(leaks(state, t!)).toBe(false);
+        expect(leaks(started, t!)).toBe(false);
+      }
+      // Removing the preset is "disconnect": the sign-in goes too.
+      await runNabyAction({ action: 'systemMcp.remove', preset: ATLASSIAN_SERVER_NAME });
+      expect(mcpOAuthStatus(getStore(), ATLASSIAN_SERVER_NAME)).toBe('none');
+    } finally {
+      setAtlassianOAuthServerUrl(undefined);
+      await fake.close();
+      clear();
+    }
   }, 20_000);
+
+  it('a reduced tool set on connect surfaces as "re-login needed" everywhere, tokens kept', async () => {
+    // Live behaviour (2026-10-08): a dead token gets 200 + a public subset with no
+    // getConfluencePage, not a 401. User decision: that is "sign in again".
+    clear();
+    const fake = await startFakeAtlassian();
+    setAtlassianOAuthServerUrl(fake.mcpUrl);
+    try {
+      const started = await runNabyAction({ action: 'atlassian.login' });
+      expect(started.ok).toBe(true);
+      if (!started.ok) return;
+      await fake.consent(started.authorizationUrl!);
+      for (let i = 0; i < 50 && mcpOAuthStatus(getStore(), ATLASSIAN_SERVER_NAME) !== 'connected'; i += 1) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      // Point the (swapped-in) row at the fake so the probe never reaches the real server.
+      getStore().upsertMcpEntry({ name: ATLASSIAN_SERVER_NAME, transport: 'http', url: fake.mcpUrl, auth: 'oauth', status: 'enabled' });
+      const ok = await runNabyAction({ action: 'systemMcp.test', preset: ATLASSIAN_SERVER_NAME });
+      expect(ok.ok).toBe(true);
+      fake.invalidTokenGetsReducedSet(true);
+      fake.revokeAccess();
+      const probe = await runNabyAction({ action: 'systemMcp.test', preset: ATLASSIAN_SERVER_NAME });
+      expect(probe.ok).toBe(false);
+      expect(mcpOAuthStatus(getStore(), ATLASSIAN_SERVER_NAME)).toBe('relogin');
+      const rec = JSON.parse(getStore().getSetting(mcpOAuthSettingKey(ATLASSIAN_SERVER_NAME)) ?? '{}');
+      expect(rec.tokens?.refresh_token).toBeTruthy();
+      expect(rec.client?.client_id).toBeTruthy();
+      const state = await readNabyState(null);
+      expect(state.orgHarness.atlassian.status).toBe('relogin');
+      expect(state.systemMcp[ATLASSIAN_SERVER_NAME]?.oauth).toEqual({ status: 'relogin', legacy: false });
+      expect(leaks(state, rec.tokens.refresh_token)).toBe(false);
+    } finally {
+      setAtlassianOAuthServerUrl(undefined);
+      await fake.close();
+      clear();
+    }
+  }, 20_000);
+
+  it('atlassian.cancelLogin closes a pending sign-in', async () => {
+    clear();
+    const fake = await startFakeAtlassian();
+    setAtlassianOAuthServerUrl(fake.mcpUrl);
+    try {
+      const started = await runNabyAction({ action: 'atlassian.login' });
+      expect(started.ok && started.orgHarness?.atlassian.loginPending).toBe(true);
+      const cancelled = await runNabyAction({ action: 'atlassian.cancelLogin' });
+      expect(cancelled.ok && cancelled.orgHarness?.atlassian.loginPending).toBe(false);
+      expect(mcpOAuthStatus(getStore(), ATLASSIAN_SERVER_NAME)).toBe('none');
+    } finally {
+      setAtlassianOAuthServerUrl(undefined);
+      await fake.close();
+      clear();
+    }
+  });
+
+  it('reports its status on the GET, alongside the other presets', async () => {
+    clear();
+    const state = await readNabyState(null);
+    expect(state.systemMcp[ATLASSIAN_SERVER_NAME]).toEqual({ configured: false, oauth: { status: 'none', legacy: false } });
+    expect(state.systemMcp[SKILL_HUB_SERVER_NAME]).toEqual({ configured: false });
+    expect(Object.keys(state.systemMcp).sort()).toEqual([...SYSTEM_MCP_PRESET_NAMES].sort());
+    expect(state.orgHarness.atlassian).toMatchObject({ status: 'none', row: 'none', loginPending: false, blocking: false });
+    clear();
+  });
 });
 
 describe('POST /api/naby — systemMcp rejects what it does not know', () => {

@@ -44,6 +44,8 @@ import {
   type SystemMcpStatus,
 } from './systemMcpPresets';
 import { SettingsDetails } from './SettingsDetails';
+import { AtlassianLoginButton } from './AtlassianLoginButton';
+import type { AtlassianView } from './orgHarnessView';
 
 // ---------------------------------------------------------------------------
 // The preload bridge (electron/preload.ts). Typed locally so this file compiles
@@ -639,18 +641,27 @@ export function NabyOnboardingWizard() {
             <div key={preset.name} className="space-y-1.5">
               <p className="text-xs font-medium text-foreground">{t(preset.titleKey)}</p>
               <p className="text-xs text-muted-foreground">{t(preset.descriptionKey)}</p>
-              <SystemMcpForm
-                preset={preset}
-                state={systemMcp[preset.name] ?? { configured: false }}
-                variant="wizard"
-                autoFocus={index === 0}
-                onChanged={() => void reloadSystemMcp()}
-                onConnected={() =>
-                  setConnected((prev) =>
-                    prev.includes(preset.name) ? prev : [...prev, preset.name],
-                  )
-                }
-              />
+              {preset.oauth ? (
+                <SystemMcpOAuthForm
+                  preset={preset}
+                  state={systemMcp[preset.name] ?? { configured: false }}
+                  variant="wizard"
+                  onChanged={() => void reloadSystemMcp()}
+                />
+              ) : (
+                <SystemMcpForm
+                  preset={preset}
+                  state={systemMcp[preset.name] ?? { configured: false }}
+                  variant="wizard"
+                  autoFocus={index === 0}
+                  onChanged={() => void reloadSystemMcp()}
+                  onConnected={() =>
+                    setConnected((prev) =>
+                      prev.includes(preset.name) ? prev : [...prev, preset.name],
+                    )
+                  }
+                />
+              )}
             </div>
           ))}
 
@@ -2003,6 +2014,93 @@ function SystemMcpForm({
   );
 }
 
+/**
+ * A BROWSER-OAUTH preset's controls (org-harness-sync §3.8): the sign-in state,
+ * the log-in button, and — in Settings — Test and Remove. No field, no secret:
+ * the tokens never reach the client. Shared by the wizard and the settings row,
+ * and chosen by the preset's `oauth` flag, not by its name.
+ */
+function SystemMcpOAuthForm({
+  preset,
+  state,
+  variant,
+  onChanged,
+}: {
+  preset: SystemMcpPresetView;
+  state: SystemMcpStatus;
+  variant: 'settings' | 'wizard';
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
+  const oauth = state.oauth ?? { status: 'none' as const, legacy: false };
+  const view: AtlassianView = {
+    status: oauth.status,
+    row: oauth.legacy ? 'legacy' : state.configured ? 'oauth' : 'none',
+    loginPending: false,
+    blocking: false,
+  };
+  const statusKey =
+    oauth.status === 'connected'
+      ? 'systemMcp.oauth.connected'
+      : oauth.status === 'relogin'
+        ? 'systemMcp.oauth.relogin'
+        : oauth.legacy
+          ? 'systemMcp.oauth.legacy'
+          : 'systemMcp.oauth.none';
+
+  const test = useCallback(async () => {
+    setBusy(true);
+    setNote({ text: t('systemMcp.connecting'), ok: true });
+    const res = await nabyPost({ action: 'systemMcp.test', preset: preset.name });
+    setBusy(false);
+    if (!res.ok) {
+      setNote({ text: t('systemMcp.failed', { error: res.error }), ok: false });
+      return;
+    }
+    setNote({ text: t('systemMcp.toolCount', { tools: res.toolCount ?? 0 }), ok: true });
+  }, [preset.name, t]);
+
+  const remove = useCallback(async () => {
+    setBusy(true);
+    await nabyPost({ action: 'systemMcp.remove', preset: preset.name });
+    setBusy(false);
+    setNote(null);
+    onChanged();
+  }, [onChanged, preset.name]);
+
+  return (
+    <div className="space-y-1.5" data-testid={`system-mcp-oauth-${preset.name}`}>
+      <p className={`text-xs ${oauth.status === 'relogin' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+        {t(statusKey)}
+      </p>
+      <AtlassianLoginButton atlassian={view} onState={() => onChanged()} />
+      {variant === 'settings' && state.configured ? (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void test()}
+            disabled={busy}
+            className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+          >
+            {t('systemMcp.test')}
+          </button>
+          <button
+            onClick={() => void remove()}
+            disabled={busy}
+            className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-red-500 disabled:opacity-40"
+          >
+            {t('systemMcp.remove')}
+          </button>
+        </div>
+      ) : null}
+      {note && (
+        <p className={`text-xs ${note.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>{note.text}</p>
+      )}
+    </div>
+  );
+}
+
 /** One preset's row: name, connection state, description, form, and — when an
  *  agent proposed the same server — the approval the existing HITL path expects.
  *  A single bordered interactive row: the description is plain muted text and the
@@ -2042,7 +2140,11 @@ function SystemMcpRow({
       </div>
       <p className="text-xs text-muted-foreground">{t(preset.descriptionKey)}</p>
       <div className="border border-border rounded px-2 py-2">
-        <SystemMcpForm preset={preset} state={state} variant="settings" onChanged={onChanged} />
+        {preset.oauth ? (
+          <SystemMcpOAuthForm preset={preset} state={state} variant="settings" onChanged={onChanged} />
+        ) : (
+          <SystemMcpForm preset={preset} state={state} variant="settings" onChanged={onChanged} />
+        )}
       </div>
       {proposed && (
         <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-1.5">

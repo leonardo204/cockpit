@@ -384,7 +384,11 @@
     "compactionTruncated": "Older parts of this conversation were dropped to fit the window ({{count}} messages). No summary could be written.",
     "orgHarness": "org harness",
     "orgUnauthorized": "Skill Hub did not accept your key, so the org harness is off. Enter the key again in Settings → Connections.",
-    "orgCopyNotice": "Your own {{skill}} ({{copyKind}}) is used instead of the org version, so it does not get org updates. Choose in Settings → Harness."
+    "orgCopyNotice": "Your own {{skill}} ({{copyKind}}) is used instead of the org version, so it does not get org updates. Choose in Settings → Harness.",
+    "atlassianRequired": "This message was not sent: the org harness needs an Atlassian sign-in first. Log in under Settings → Harness → Org harness, then send it again.",
+    "atlassianGrace": "Atlassian is not connected yet. Log in under Settings → Harness → Org harness — new conversations are blocked in {{days}} day(s).",
+    "atlassianMigrate": "Atlassian now signs in through the browser. Log in once under Settings → Harness → Org harness; the API-token connection keeps working until you do.",
+    "atlassianRelogin": "The Atlassian sign-in expired. Log in again under Settings → Harness → Org harness."
   },
   "agentExport": {
     "button": "Export",
@@ -1295,19 +1299,8 @@
         }
       },
       "atlassian": {
-        "title": "Atlassian (Confluence)",
-        "description": "Reads the company Confluence. Use your work email and an Atlassian API token; it runs locally through uvx.",
-        "badEmail": "Atlassian signs in with your account email address, not a username.",
-        "fields": {
-          "username": {
-            "label": "Work email",
-            "placeholder": "you@altimedia.com"
-          },
-          "apiToken": {
-            "label": "API token",
-            "placeholder": "Created at id.atlassian.com → API tokens"
-          }
-        }
+        "title": "Atlassian (Confluence · Jira)",
+        "description": "Confluence and Jira through Atlassian's official remote MCP. Sign in once in the browser — there is no token to paste."
       },
       "cic": {
         "title": "CIC (Confluence index)",
@@ -1319,6 +1312,13 @@
           }
         }
       }
+    },
+    "oauthUseLogin": "This server signs in through the browser. Use the log-in button.",
+    "oauth": {
+      "connected": "Signed in through the browser.",
+      "relogin": "The sign-in expired — log in again.",
+      "legacy": "Still using the old API-token connection. Log in once to switch; the API token is removed after that.",
+      "none": "Not signed in."
     }
   },
   "chatgptOauth": {
@@ -2063,7 +2063,8 @@
     "denyOnce": "Deny once",
     "alwaysAllow": "Always allow",
     "alwaysBlock": "Always block",
-    "more": "+{{count}} more waiting"
+    "more": "+{{count}} more waiting",
+    "hookReason": "Org harness: {{reason}}"
   },
   "checkin": {
     "title": "naby is asking how to proceed",
@@ -2244,6 +2245,33 @@
     "keepMine": "Keep my copy",
     "useOrgDone": "Now using the org {{skill}}.",
     "checkNow": "Check for updates",
-    "checking": "Checking…"
+    "checking": "Checking…",
+    "atlassian": {
+      "title": "Atlassian (Confluence · Jira)",
+      "status": {
+        "connected": "Signed in through the browser.",
+        "relogin": "The sign-in expired — log in again.",
+        "legacy": "Still using the old API-token connection. Log in once; the API token is removed after that.",
+        "none": "Not signed in."
+      },
+      "login": "Log in to Atlassian",
+      "relogin": "Log in to Atlassian again",
+      "waiting": "Waiting for the browser…",
+      "cancel": "Cancel",
+      "openHint": "If no browser window opened, open this address:",
+      "loginDone": "Signed in to Atlassian.",
+      "loginFailed": "Atlassian sign-in failed: {{error}}",
+      "blocking": "New conversations are blocked until you sign in. Conversations already open keep working.",
+      "grace": "Sign in within {{days}} day(s); after that new conversations are blocked until you do.",
+      "migrated": "Switched from the API token to the browser sign-in. The stored API token was removed.",
+      "confluenceUploadKept": "confluence-upload is no longer built in. You changed it, so it stays as yours — to publish to Confluence, use pdoc.",
+      "legacyRefs": "{{count}} of your rules or harness items still name the old Atlassian tools (for example atlassian__confluence_get_page). The new tools are named like atlassian__getConfluencePage. Nothing was changed automatically."
+    },
+    "deps": {
+      "title": "Some tools the org skills need are missing on this computer. The skills that use them are skipped until you install them.",
+      "python": "Python 3",
+      "pyyaml": "PyYAML"
+    },
+    "unsupportedHooks": "Hooks naby does not support yet (they are not run):"
   }
 }

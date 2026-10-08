@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  atlassianGateLine,
+  atlassianLoginKey,
+  atlassianStatusKey,
+  orgDepsMissing,
   orgActivation,
   orgActivationKey,
   orgChoiceRows,
@@ -130,5 +134,87 @@ describe('every key the card can produce exists in both locales', () => {
     const card = modal.indexOf('<NabyOrgHarnessSettings isOpen={isOpen} />');
     expect(card).toBeGreaterThan(harness);
     expect(card - harness).toBeLessThan(600);
+  });
+});
+
+describe('the Atlassian section (M3: §3.6, §3.8, §4.4, §4.6)', () => {
+  const a = (over: Partial<NonNullable<OrgHarnessView['atlassian']>> = {}): NonNullable<OrgHarnessView['atlassian']> => ({
+    status: 'none',
+    row: 'none',
+    loginPending: false,
+    blocking: false,
+    ...over,
+  });
+
+  it('names the state: connected, expired, still on the API token, not signed in', () => {
+    expect(atlassianStatusKey(a({ status: 'connected', row: 'oauth' }))).toBe('orgHarness.atlassian.status.connected');
+    expect(atlassianStatusKey(a({ status: 'relogin', row: 'oauth' }))).toBe('orgHarness.atlassian.status.relogin');
+    expect(atlassianStatusKey(a({ row: 'legacy' }))).toBe('orgHarness.atlassian.status.legacy');
+    expect(atlassianStatusKey(a())).toBe('orgHarness.atlassian.status.none');
+  });
+
+  it('offers "log in" the first time and "log in again" after that', () => {
+    expect(atlassianLoginKey(a())).toBe('orgHarness.atlassian.login');
+    expect(atlassianLoginKey(a({ status: 'relogin', row: 'oauth' }))).toBe('orgHarness.atlassian.relogin');
+    expect(atlassianLoginKey(a({ status: 'connected', row: 'oauth', loggedInAt: 1 }))).toBe('orgHarness.atlassian.relogin');
+  });
+
+  it('warns about the gate: blocking now, or the days left — never when signed in', () => {
+    expect(atlassianGateLine(a({ blocking: true }))).toEqual({ key: 'orgHarness.atlassian.blocking' });
+    expect(atlassianGateLine(a({ graceDaysLeft: 4 }))).toEqual({ key: 'orgHarness.atlassian.grace', days: 4 });
+    expect(atlassianGateLine(a({ status: 'connected', blocking: true }))).toBeUndefined();
+    expect(atlassianGateLine(a())).toBeUndefined();
+  });
+
+  it('lists the missing dependencies with the install command for the platform', () => {
+    expect(orgDepsMissing(null, 'MacIntel')).toEqual([]);
+    expect(orgDepsMissing({ at: 1, python: '3.12.0', pyyaml: true }, 'MacIntel')).toEqual([]);
+    expect(orgDepsMissing({ at: 1, python: '3.12.0', pyyaml: false }, 'MacIntel')).toEqual([
+      { id: 'pyyaml', install: 'python3 -m pip install --user pyyaml' },
+    ]);
+    expect(orgDepsMissing({ at: 1, python: null, pyyaml: false }, 'Win32').map((d) => d.install)).toEqual([
+      'winget install Python.Python.3.12',
+      'py -3 -m pip install --user pyyaml',
+    ]);
+  });
+
+  it('every Atlassian key the card can produce exists in both locales', () => {
+    const dict = (locale: string) =>
+      JSON.parse(readFileSync(join(__dirname, '../../../../shared/i18n/locales', `${locale}.json`), 'utf8')) as Record<string, unknown>;
+    const lookup = (src: Record<string, unknown>, key: string): unknown =>
+      key.split('.').reduce<unknown>((node, part) => (node && typeof node === 'object' ? (node as Record<string, unknown>)[part] : undefined), src);
+    const keys = [
+      'orgHarness.atlassian.title',
+      'orgHarness.atlassian.status.connected',
+      'orgHarness.atlassian.status.relogin',
+      'orgHarness.atlassian.status.legacy',
+      'orgHarness.atlassian.status.none',
+      'orgHarness.atlassian.login',
+      'orgHarness.atlassian.relogin',
+      'orgHarness.atlassian.waiting',
+      'orgHarness.atlassian.cancel',
+      'orgHarness.atlassian.openHint',
+      'orgHarness.atlassian.loginDone',
+      'orgHarness.atlassian.loginFailed',
+      'orgHarness.atlassian.blocking',
+      'orgHarness.atlassian.grace',
+      'orgHarness.atlassian.migrated',
+      'orgHarness.atlassian.confluenceUploadKept',
+      'orgHarness.atlassian.legacyRefs',
+      'orgHarness.deps.title',
+      'orgHarness.deps.python',
+      'orgHarness.deps.pyyaml',
+      'orgHarness.unsupportedHooks',
+      'systemMcp.oauth.connected',
+      'systemMcp.oauth.relogin',
+      'systemMcp.oauth.legacy',
+      'systemMcp.oauth.none',
+      'systemMcp.oauthUseLogin',
+      'toolApproval.hookReason',
+    ];
+    for (const locale of ['en', 'ko']) {
+      const d = dict(locale);
+      for (const key of keys) expect(typeof lookup(d, key), `${locale}: ${key}`).toBe('string');
+    }
   });
 });
