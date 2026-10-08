@@ -529,6 +529,19 @@ export interface NabyEngineDeps {
    * deterministic backend here instead.
    */
   resolveVoiceBackend?: () => Promise<JudgeBackend | undefined>;
+  /**
+   * Answer every turn AS THE DEV-CLAUDE ENGINE, with the engine this returns
+   * (org-harness-sync M4). The spike passes a real `ClaudeAgentSdkEngine` built
+   * over a scripted SDK stand-in, so one scripted turn can be run through BOTH
+   * engines and the org hooks compared — this path takes every dev-claude branch
+   * of this file (no workspace tools, the SDK's own Bash/Write, native subagents,
+   * `nabytools`), which `resolveModel` (always the AI-SDK engine) cannot reach.
+   *
+   * Like `resolveModel` it means "this process does not go to a provider on its
+   * own": preflight passes without a sign-in and the Naby layer stays silent
+   * unless `resolveVoiceBackend` says otherwise. Production never sets it.
+   */
+  devClaudeEngine?: () => Engine;
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +645,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
     async preflight(params: DispatchParams) {
       // A test-injected resolver supplies its own model, so no key is needed.
-      if (deps.resolveModel) return { ok: true as const };
+      if (deps.resolveModel || deps.devClaudeEngine) return { ok: true as const };
       const model = typeof params.model === 'string' ? params.model : undefined;
       // WHICH ENGINE WILL ANSWER — not just "is there a key". Since the dev
       // engine can answer with no key at all, "no API key configured" is no
@@ -885,7 +898,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         let engineId = 'ai-sdk';
         let costBasis: 'metered' | 'subscription' = 'metered';
 
-        if (deps.resolveModel) {
+        if (deps.devClaudeEngine) {
+          // The M4 spike seam (see `NabyEngineDeps.devClaudeEngine`): the
+          // dev-claude engine answers, scripted, with no sign-in. Everything
+          // below that branches on `engineId` takes its dev-claude side.
+          engine = deps.devClaudeEngine();
+          engineId = 'dev-claude';
+          costBasis = 'subscription';
+          providerId = 'dev-claude';
+          modelForEngine = undefined;
+          modelLabel = 'injected-claude';
+        } else if (deps.resolveModel) {
           // A test-injected resolver supplies its own model, so no key and no
           // engine selection are needed — this is the SPIKE-02 seam.
           const resolveModel: ModelResolver = deps.resolveModel;
@@ -1302,6 +1325,31 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     ...(projectCwd ? { cwd: projectCwd } : {}),
                     onSession: (childId, spec) =>
                       console.log(`[engine:naby] delegated to @${spec.name} in session ${childId}`),
+                    // PostToolUse for the subagent's own calls (org-harness-sync
+                    // §3.5), attributed like its PreToolUse above — the same
+                    // events the Agent SDK's native subagents produce, so a hook
+                    // (task's post-artifact) sees the subagent's writes on both
+                    // engines, and the H1–H4 metrics skip them on both (§3.7).
+                    // `orgHooks` is built further down; this closure only runs
+                    // inside the turn, long after it exists.
+                    onEvent: (() => {
+                      const agentId = `naby-delegate-${input.spec.name}`;
+                      const calls = new Map<string, { toolName: string; input: unknown }>();
+                      return (ev: EngineEvent) => {
+                        if (!orgHooks.enabled) return;
+                        if (ev.kind === 'tool_request') {
+                          calls.set(ev.toolCallId, { toolName: ev.toolName, input: ev.input });
+                        } else if (ev.kind === 'tool_result') {
+                          const call = calls.get(ev.toolCallId);
+                          if (!call) return;
+                          calls.delete(ev.toolCallId);
+                          orgHooks.postToolUse(
+                            { ...call, agentId },
+                            { content: ev.output.content, isError: ev.isError },
+                          );
+                        }
+                      };
+                    })(),
                   },
                   input,
                 ),
@@ -2587,7 +2635,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // for why an injected model resolver silences it instead.
           ...(deps.resolveVoiceBackend
             ? { resolveBackend: deps.resolveVoiceBackend }
-            : deps.resolveModel
+            : deps.resolveModel || deps.devClaudeEngine
               ? { resolveBackend: async () => undefined }
               : {}),
         });
@@ -3252,6 +3300,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // Stop (org-harness-sync §3.5): the run is over — once per run, not per
           // autonomy step, on every ending (done, stopped, failed). Not awaited.
           orgHooks.stop();
+          // The run no longer needs its package folder (§4.7, M4). Released
+          // AFTER Stop: the Stop hook holds its own lease for as long as its
+          // process runs, so the folder outlives this line exactly as long as
+          // something still reads from it.
+          orgTurn.release();
         }
 
         // The stream can end without a result — an abort mid-iteration, or a

@@ -32,12 +32,15 @@ import {
   orgHarnessOnState,
   orgHarnessRoot,
   orgHookEnv,
+  orgProjectHarnessTeam,
   orgSessionStartSource,
   orgTranscriptPath,
   ORG_HARNESS_SETTING,
+  readCurrentOrgPackage,
   readOrgHookConfig,
   takeAllOrgSessions,
   takeOrgSession,
+  touchOrgSession,
   writeOrgTranscript,
   type CompactionPort,
   type OrgHarnessTurn,
@@ -87,12 +90,16 @@ function runnerFor(store: Store, pkgDir: string, projectDir: string | undefined)
   } catch {
     cicToken = undefined;
   }
+  // The team code from the open project's `.claude/settings(.local).json`
+  // (§3.7) — read here, i.e. per turn and per SessionEnd, at the session's cwd.
+  const team = orgProjectHarnessTeam(projectDir);
   const env = orgHookEnv({
     base: process.env,
     pkgDir,
     ...(projectDir ? { projectDir } : {}),
     ...(cicToken ? { cicToken } : {}),
     ...(metricsToken ? { metricsToken } : {}),
+    ...(team ? { team } : {}),
   });
   return createOrgHookRunner({ config: orgHookConfigFor(pkgDir), env, executable: orgHookExecutable() });
 }
@@ -147,6 +154,9 @@ export function makeOrgTurnHooks(args: {
     return DISABLED;
   }
   if (!runner.config.entries.some((e) => e.disposition === 'run')) return DISABLED;
+  // A live session whose earlier turns ran on an older version now runs on this
+  // one (§4.7): its SessionEnd follows the folder of its latest turn.
+  touchOrgSession(args.sessionId, pkg.dir);
   const home = args.orgTurn.home;
   const transcriptPath = orgTranscriptPath(home, args.sessionId);
   const base = (event: OrgHookCall['event']): OrgHookCall => ({
@@ -275,10 +285,19 @@ function prepareFromInfo(store: Store, info: OrgHookSessionInfo, reason: string)
   }
   if (!on) return undefined;
   const home = nabyHomeDir();
-  // The folder must still be a package folder under this home (it may have been
-  // cleaned up by a later sync; one previous version is kept, §3.1).
-  const pkgDir =
+  // The folder must still be a package folder under this home. It may have been
+  // cleaned up by a later sync (one previous version is kept, §3.1, and a turn's
+  // lease ends with the turn) — then the session ends from `current`.
+  const kept =
     existsSync(info.pkgDir) && isInsideFolder(orgHarnessRoot(home), info.pkgDir) ? info.pkgDir : undefined;
+  let pkgDir = kept;
+  if (!pkgDir) {
+    try {
+      pkgDir = readCurrentOrgPackage(home)?.dir;
+    } catch {
+      pkgDir = undefined;
+    }
+  }
   if (!pkgDir) return undefined;
   let transcriptPath = orgTranscriptPath(home, info.sessionId);
   try {

@@ -143,6 +143,10 @@ export interface NestedRunDeps {
   cwd?: string;
   /** Called with the child session id so the caller can log or surface it. */
   onSession?: (sessionId: string, spec: SubagentSpec) => void;
+  /** Every event of the nested run, as it happens — what the parent needs to
+   *  fire the org harness's PostToolUse for a subagent's calls (with its
+   *  `agent_id`, org-harness-sync §3.5), as the Agent SDK does for its own. */
+  onEvent?: (ev: EngineEvent) => void;
 }
 
 /** Run one subagent as a nested turn. Never throws: a failure is a
@@ -179,6 +183,7 @@ export async function runNestedTurn(
       gate: deps.gate,
       signal: deps.signal,
       ...(deps.cwd ? { cwd: deps.cwd } : {}),
+      ...(deps.onEvent ? { onEvent: deps.onEvent } : {}),
     });
     return textFromEvents(events);
   } catch (e) {

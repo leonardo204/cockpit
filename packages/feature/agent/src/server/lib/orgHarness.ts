@@ -18,9 +18,13 @@
 // every background pass before it starts. Tests drive `syncOrgHarnessNow` with an
 // injected fetch instead, so the wiring is covered without touching Skill Hub.
 //
-// THE M4 TIMER. "Every six hours" (§3.1) is one `setInterval(kick, SIX_HOURS)` in
-// `ensureOrgHarnessSyncStarted`, next to the boot kick. The pass is idempotent
-// and single-flight, so adding it changes nothing else.
+// THE SIX-HOUR RE-CHECK (§3.1, M4). `ensureOrgHarnessSyncStarted` starts the
+// runtime's jittered clock (`startOrgHarnessRecheck`) next to the boot kick, in
+// this long-lived server realm. Each tick is the same pass as the boot one —
+// single-flight with it and with "check now" — and is skipped while the org
+// harness is switched off (`NABY_ORG_HARNESS=0` or the Settings toggle) or
+// background passes are disabled (`NABY_ORG_HARNESS_SYNC=0`). A tick never
+// blocks a turn: rows land at the next turn boundary when a run is active.
 
 import {
   applyAtlassianOAuthSwapIfDue,
@@ -45,6 +49,7 @@ import {
   readOrgHookConfig,
   runOrgHarnessSync,
   setOrgHarnessEnabled,
+  startOrgHarnessRecheck,
   startMcpOAuthLogin,
   unsupportedOrgHooks,
   useOrgVersion,
@@ -59,6 +64,7 @@ import {
   type OrgHarnessApplyResult,
   type OrgHarnessContext,
   type OrgHarnessFetch,
+  type OrgHarnessRecheck,
   type OrgHarnessState,
   type OrgHarnessSyncReport,
   type OrgHarnessTurn,
@@ -165,11 +171,17 @@ function backgroundDisabled(): boolean {
  * when background passes are disabled. Never throws, never rejects.
  */
 export function kickOrgHarnessSync(store: Store): void {
+  void backgroundPass(store);
+}
+
+/** The pass behind `kickOrgHarnessSync` and the re-check clock. Resolves when it
+ *  is over (the clock waits for it before scheduling the next tick); never rejects. */
+function backgroundPass(store: Store): Promise<void> {
   let ctx: OrgHarnessContext;
   try {
     ctx = orgHarnessContext(store);
   } catch {
-    return;
+    return Promise.resolve();
   }
   if (!ctx.apiKey) {
     // Key removed: no network, but the rows still have to switch off (§4.3).
@@ -179,10 +191,10 @@ export function kickOrgHarnessSync(store: Store): void {
     } catch {
       /* best effort */
     }
-    return;
+    return Promise.resolve();
   }
-  if (backgroundDisabled()) return;
-  void syncOrgHarnessNow(store)
+  if (backgroundDisabled()) return Promise.resolve();
+  return syncOrgHarnessNow(store)
     .then((r) => {
       const pkg = r.package;
       if (pkg && pkg.outcome !== 'current') {
@@ -199,18 +211,44 @@ export function kickOrgHarnessSync(store: Store): void {
 }
 
 let started = false;
+let recheck: OrgHarnessRecheck | undefined;
+
+/**
+ * Whether a re-check tick should run at all (§3.1 "skipped when off"). Off by
+ * the env kill switch or the Settings toggle ⇒ skip: a switched-off harness does
+ * not phone home. No key, or a key Skill Hub rejected ⇒ run: the pass is then
+ * local only, or is exactly the once-a-day re-ask that may lift the rejection.
+ */
+export function orgHarnessRecheckDue(store: Store): boolean {
+  if (backgroundDisabled()) return false;
+  try {
+    const state = orgHarnessOnState(store, orgHarnessContext(store));
+    return state.on || (state.reason !== 'env-off' && state.reason !== 'user-off');
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The boot pass, once per process (§3.1 "on app start", §4.2 "after the window
- * is up"). Called from the first state read and the first turn — whichever comes
- * first — so it runs in the same Next realm as the engine that applies rows.
+ * is up"), and the six-hour re-check after it (§3.1, M4). Called from the first
+ * state read and the first turn — whichever comes first — so both run in the
+ * same Next realm as the engine that applies rows.
  */
 export function ensureOrgHarnessSyncStarted(store: Store): void {
   if (started || backgroundDisabled()) return;
   started = true;
   const timer = setTimeout(() => kickOrgHarnessSync(store), BOOT_DELAY_MS);
   timer.unref?.();
-  // M4: const every = setInterval(() => kickOrgHarnessSync(store), 6 * 60 * 60 * 1000); every.unref?.();
+  recheck = startOrgHarnessRecheck({
+    run: () => backgroundPass(store),
+    shouldRun: () => orgHarnessRecheckDue(store),
+  });
+}
+
+/** The running re-check clock, if any (tests, diagnostics). */
+export function orgHarnessRecheckClock(): OrgHarnessRecheck | undefined {
+  return recheck;
 }
 
 /**
@@ -521,6 +559,8 @@ export function orgHarnessKeepUserCopy(store: Store, name: string): OrgHarnessAc
 /** Test-only: forget that the boot pass started. */
 export function resetOrgHarnessBootForTests(): void {
   started = false;
+  recheck?.stop();
+  recheck = undefined;
   inflight = undefined;
   pendingLogin?.login.cancel();
   pendingLogin = undefined;
