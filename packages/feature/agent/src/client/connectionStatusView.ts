@@ -8,14 +8,16 @@
  *
  * THE ORG HARNESS IS MANDATORY (user decision, 2026-10-08). The row always
  * shows in the desktop chat, both items always show, and the colors mean:
+ * (Since 2026-10-12 there is also no user switch to turn it off, so no
+ * "switched off in Settings" state exists.)
  *
  *   green  connected and working
  *   amber  in progress, settles on its own (a sign-in waiting on the browser, a
  *          key saved but not yet verified, the first download running)
  *   red    not connected — something the user has to do
  *
- * Gray is not used: "switched off" or "not set up" is not a neutral state when
- * the harness is required.
+ * Gray is not used: "not set up" (or the developer-only `NABY_ORG_HARNESS=0`)
+ * is not a neutral state when the harness is required.
  */
 
 import type { StatusTone } from '@cockpit/shared-ui';
@@ -35,7 +37,7 @@ export type ConnectionsStatusView = {
   skillHub: {
     configured: boolean;
     on: boolean;
-    offReason?: 'no-skill-hub' | 'env-off' | 'user-off' | 'unauthorized';
+    offReason?: 'no-skill-hub' | 'env-off' | 'unauthorized';
     auth: 'ok' | 'unauthorized' | 'unknown';
     version?: string;
     lastSync?: { at: number; outcome: string };
@@ -74,7 +76,7 @@ export function atlassianTone(a: ConnectionsStatusView['atlassian']): StatusTone
  *  not verified yet, or the first download not finished (running, or not yet
  *  attempted). */
 export function skillHubSettling(s: ConnectionsStatusView['skillHub']): boolean {
-  if (!s.configured || s.offReason === 'env-off' || s.offReason === 'user-off') return false;
+  if (!s.configured || s.offReason === 'env-off') return false;
   if (s.auth === 'unauthorized' || s.offReason === 'unauthorized') return false;
   if (s.auth === 'unknown') return true;
   return !s.version && (s.syncing === true || !s.lastSync);
@@ -83,7 +85,7 @@ export function skillHubSettling(s: ConnectionsStatusView['skillHub']): boolean 
 /**
  * Skill Hub, in priority order:
  *   no key                                              → red
- *   switched off (Settings toggle or NABY_ORG_HARNESS=0) → red
+ *   off by NABY_ORG_HARNESS=0 (developer escape hatch)  → red
  *   key rejected (401)                                  → red
  *   key saved, not verified yet                         → amber
  *   no package: first download running / not attempted → amber
@@ -92,7 +94,7 @@ export function skillHubSettling(s: ConnectionsStatusView['skillHub']): boolean 
  */
 export function skillHubTone(s: ConnectionsStatusView['skillHub']): StatusTone {
   if (!s.configured) return 'danger';
-  if (s.offReason === 'env-off' || s.offReason === 'user-off' || s.offReason === 'no-skill-hub') return 'danger';
+  if (s.offReason === 'env-off' || s.offReason === 'no-skill-hub') return 'danger';
   if (s.auth === 'unauthorized' || s.offReason === 'unauthorized') return 'danger';
   if (skillHubSettling(s)) return 'warning';
   if (!s.on || !s.version) return 'danger';
@@ -129,7 +131,6 @@ export function skillHubLines(s: ConnectionsStatusView['skillHub'], formatTime: 
   const out: Line[] = [];
   if (!s.configured) out.push({ key: 'orgHarness.status.noKey' });
   else if (s.offReason === 'env-off') out.push({ key: 'orgHarness.status.envOff' });
-  else if (s.offReason === 'user-off') out.push({ key: 'orgHarness.status.userOff' });
   else if (s.auth === 'unauthorized' || s.offReason === 'unauthorized') out.push({ key: 'orgHarness.activation.needsKey' });
   else if (s.auth === 'unknown') out.push({ key: 'orgHarness.activation.unchecked' });
   else out.push({ key: 'orgHarness.status.on' });
@@ -184,8 +185,8 @@ export const SKILL_HUB_KEY_ANCHOR = 'system-mcp:skill-hub';
 /**
  * What clicking the Skill Hub item opens. No key, or a key Skill Hub rejected:
  * Settings → Connections, scrolled to the Skill Hub key — the fix is there.
- * Anything else: Settings → Harness (the org harness card: the switch, "check
- * now", the version and the last check).
+ * Anything else: Settings → Harness (the org harness card: "check now", the
+ * version and the last check).
  */
 export function skillHubClick(
   s: ConnectionsStatusView['skillHub'],

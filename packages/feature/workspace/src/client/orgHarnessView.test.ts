@@ -13,7 +13,6 @@ import {
   orgSkillRows,
   orgStatusKey,
   orgSyncOutcomeKey,
-  orgToggleDisabled,
   type OrgHarnessView,
 } from './orgHarnessView';
 
@@ -29,7 +28,6 @@ import {
 const base: OrgHarnessView = {
   configured: true,
   on: true,
-  enabledSetting: true,
   envOff: false,
   auth: 'ok',
   package: { version: '0.8.1', skills: ['ctx', 'pdoc', 'task'] },
@@ -54,14 +52,30 @@ describe('activation and status', () => {
   it('the status line names why it is off', () => {
     expect(orgStatusKey(base)).toBe('orgHarness.status.on');
     expect(orgStatusKey({ ...base, on: false, offReason: 'env-off' })).toBe('orgHarness.status.envOff');
-    expect(orgStatusKey({ ...base, on: false, offReason: 'user-off' })).toBe('orgHarness.status.userOff');
     expect(orgStatusKey({ ...base, on: false, offReason: 'no-skill-hub' })).toBe('orgHarness.status.noKey');
   });
 
-  it('the toggle cannot override NABY_ORG_HARNESS=0 and needs a key', () => {
-    expect(orgToggleDisabled(base)).toBe(false);
-    expect(orgToggleDisabled({ ...base, envOff: true })).toBe(true);
-    expect(orgToggleDisabled({ ...base, configured: false })).toBe(true);
+});
+
+describe('the org harness is mandatory — no switch on the card (§4.8, 2026-10-12)', () => {
+  const card = readFileSync(join(__dirname, 'NabyOrgHarnessSettings.tsx'), 'utf8');
+
+  it('the card renders no checkbox and posts no on/off action', () => {
+    expect(card).not.toMatch(/type="checkbox"/);
+    expect(card).not.toContain("'orgHarness.set'");
+    expect(card).not.toContain('orgHarness.toggle');
+    expect(card).not.toContain('enabledSetting');
+  });
+
+  it('the toggle and "you turned it off" strings are gone from both locales', () => {
+    for (const lang of ['en', 'ko']) {
+      const d = JSON.parse(
+        readFileSync(join(__dirname, '..', '..', '..', '..', 'shared', 'i18n', 'locales', `${lang}.json`), 'utf8'),
+      ) as { orgHarness: Record<string, unknown> & { status: Record<string, unknown> } };
+      expect(d.orgHarness.toggle).toBeUndefined();
+      expect(d.orgHarness.envOffHint).toBeUndefined();
+      expect(d.orgHarness.status.userOff).toBeUndefined();
+    }
   });
 });
 
@@ -99,11 +113,11 @@ describe('every key the card can produce exists in both locales', () => {
 
   const keys = [
     ...(['ok', 'needsKey', 'noKey', 'unchecked'] as const).map(orgActivationKey),
-    ...(['on', 'envOff', 'userOff', 'unauthorized', 'noKey'] as const).map((k) => `orgHarness.status.${k}`),
+    ...(['on', 'envOff', 'unauthorized', 'noKey'] as const).map((k) => `orgHarness.status.${k}`),
     ...(['unmodified', 'edited', 'unknown'] as const).map(orgCopyKindKey),
     ...['updated', 'current', 'unreachable', 'no-plugin', 'integrity-mismatch', 'invalid-package', 'weird'].map(orgSyncOutcomeKey),
     ...[
-      'title', 'loading', 'description', 'version', 'noPackage', 'lastSync', 'toggle', 'envOffHint', 'skills',
+      'title', 'loading', 'description', 'version', 'noPackage', 'lastSync', 'skills',
       'skillOn', 'skillOff', 'copiesTitle', 'copyPending', 'copyKept', 'useOrg', 'keepMine', 'useOrgDone',
       'checkNow', 'checking',
     ].map((k) => `orgHarness.${k}`),

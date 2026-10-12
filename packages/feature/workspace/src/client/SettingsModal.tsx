@@ -43,7 +43,8 @@ import { NabyAgentManager } from './NabyAgentManager';
 // the user for a critical decision and sends its final report.
 import { NabyTelegramSettings } from './NabyTelegramSettings';
 // org-harness-sync M2. The org harness card — version, Skill Hub key status, the
-// §4.8 kill switch, the org skills and the §4.5 same-name copy choices. Sits at
+// org skills and the §4.5 same-name copy choices (no on/off switch: the org
+// harness is mandatory, §4.8). Sits at
 // the top of Harness: it is the harness the company ships, above the user's own.
 import { NabyOrgHarnessSettings } from './NabyOrgHarnessSettings';
 // The four font knobs (family / size / chat size / code family). It sits under

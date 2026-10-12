@@ -129,16 +129,36 @@ export function formatApprovalMessage(opts: {
   /** Resolved project name; '' when the session has none. Omit when the caller
    *  cannot resolve one — the header is then left off entirely. */
   project?: string;
+  /** Why it is asking, one line each — an org harness hook and/or the policy
+   *  rule when they ask together (org-harness-sync §7.10). */
+  reasons?: readonly string[];
 }): string {
   const who = opts.agentName ? `@${opts.agentName}` : 'naby';
   const lines: string[] = [];
   if (opts.project !== undefined) lines.push(projectHeader(opts.project));
   lines.push(`🔐 ${who} needs approval`, '', `Tool: ${opts.toolName}`);
   if (opts.cwd) lines.push(`Dir: ${opts.cwd}`);
+  for (const r of opts.reasons ?? []) lines.push(`Why: ${truncate(r, INPUT_PREVIEW_CHARS)}`);
   const input = formatInputPreview(opts.input);
   if (input) lines.push('', input);
   lines.push('', 'Approve or deny below (or reply yes / no).');
   return lines.join('\n');
+}
+
+/** The "Why:" lines of an approval request (org-harness-sync §7.10): the same
+ *  reasons the in-app prompt shows, so a merged hook+policy request reads as ONE
+ *  question on the phone too. Empty for a plain policy prompt (as before). */
+export function approvalReasonsForTelegram(opts: {
+  source?: 'hook' | 'hook+policy';
+  script?: string;
+  reason?: string;
+  rewrittenBy?: string;
+}): string[] {
+  const reasons: string[] = [];
+  if (opts.source) reasons.push(`Org harness (${opts.script ?? 'hook'}): ${opts.reason ?? 'asks to confirm this call'}`);
+  if (opts.source === 'hook+policy') reasons.push('Your policy rule: ask before this tool');
+  if (opts.rewrittenBy) reasons.push(`Input rewritten by the org harness (${opts.rewrittenBy})`);
+  return reasons;
 }
 
 /** Prefix of the in-chat confirmation after a check-in is answered. */
@@ -588,6 +608,8 @@ export async function escalateApproval(opts: {
   input?: unknown;
   agentName?: string;
   cwd?: string;
+  /** Why it is asking (see `formatApprovalMessage`). */
+  reasons?: readonly string[];
   /** caller's clock (this module keeps no clock of its own). */
   now: number;
 }): Promise<void> {
@@ -616,6 +638,7 @@ export async function escalateApproval(opts: {
       input: opts.input,
       ...(opts.agentName ? { agentName: opts.agentName } : {}),
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.reasons && opts.reasons.length > 0 ? { reasons: opts.reasons } : {}),
       project: projectDisplayName(opts.store, opts.cwd),
     }),
     { replyMarkup: buildApprovalKeyboard(ref) },

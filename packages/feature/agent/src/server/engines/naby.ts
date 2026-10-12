@@ -80,6 +80,9 @@ import {
   loadMcpToolset,
   logActivity,
   makeGate,
+  createApprovalMerger,
+  fromClaudeToolInput,
+  type HookOpinion,
   nabyDbPath,
   isBuiltinPersona,
   normalizeToolName,
@@ -95,6 +98,7 @@ import {
   makeOrgSkillLoadTool,
   ORG_SKILL_LISTING_TOKEN_BUDGET,
   orgCommandEnv,
+  orgProcessEnv,
   orgHarnessProtectedRoot,
   orgReadRoots,
   orgSkillPreloader,
@@ -132,6 +136,7 @@ import {
   type Gate,
   type GateDecision,
   type GateLogEntry,
+  type RefusalKind,
   type ToolCall,
   type Agent,
   type McpLoadResult,
@@ -159,6 +164,7 @@ import { ensureCockpitImport } from './cockpitImport';
 import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
 import { shellSystemNote } from '../lib/shellNote';
 import {
+  approvalReasonsForTelegram,
   escalateApproval,
   escalateCheckin,
   finishCheckinEscalation,
@@ -2074,12 +2080,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // `approval_request` RunEvent for the UI, and resumes when the user resolves
         // it (POST /api/naby {approval.resolve}) — or denies on abort/timeout. The
         // gate is already async, so the whole turn naturally pauses at this call.
+        //
+        // `source` says WHO is asking (org-harness-sync §7.10): absent = a policy
+        // rule, 'hook' = an org harness hook alone, 'hook+policy' = both, merged
+        // into this one prompt by `approvalMerger` below. `rewrittenBy` marks a
+        // policy prompt whose input an org hook rewrote.
         const requestApproval = (
           call: ToolCall,
-          opts?: { reason?: string; source?: 'hook'; script?: string },
+          opts?: { reason?: string; source?: 'hook' | 'hook+policy'; script?: string; rewrittenBy?: string },
         ): Promise<GateDecision> => {
-          // A hook's `ask` (org-harness-sync §3.5) is its own prompt: a policy rule
-          // may ask about the same call afterwards, and the two must not share an id.
+          // A hook-only prompt keeps its own id: when the hook rewrote the input,
+          // the policy may ask separately about the rewrite afterwards (§7.10),
+          // and the two must not share an id.
           const approvalId = `${sessionId}:${call.toolCallId}${opts?.source === 'hook' ? ':hook' : ''}`;
           return new Promise<GateDecision>((resolve) => {
             let settled = false;
@@ -2140,6 +2152,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               toolName: call.toolName,
               input: call.input,
               escalatedToTelegram: escalateToTelegram,
+              ...(opts?.source ? { askedBy: opts.source } : {}),
+              ...(opts?.script ? { hookScript: opts.script } : {}),
+              ...(opts?.rewrittenBy ? { rewrittenBy: opts.rewrittenBy } : {}),
             });
             ctx.emit({
               type: 'approval_request',
@@ -2151,9 +2166,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // "사유 문구를 그대로 보여 준다"). `source: 'hook'` tells the prompt not
               // to offer "always allow/block": that would write a policy rule for
               // the whole TOOL, which is not what the hook asked about.
+              // `source: 'hook+policy'` keeps them — they answer the POLICY part
+              // only; the hook part is never remembered (§7.10).
               ...(opts?.reason ? { reason: opts.reason } : {}),
               ...(opts?.source ? { source: opts.source } : {}),
               ...(opts?.script ? { hook_script: opts.script } : {}),
+              ...(opts?.rewrittenBy ? { rewritten_by: opts.rewrittenBy } : {}),
             });
             // P3-M3b: ask REMOTELY too. Deliberately not awaited — the in-app
             // prompt is already up and the turn is already suspended on this
@@ -2161,6 +2179,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // The bridge starts its polling loop and a button press / "yes" reply
             // lands on `settle` through the same approvalRegistry entry.
             if (escalateToTelegram) {
+              // The same reasons the in-app prompt shows, so a merged request
+              // reads as one question on the phone too (§7.10).
+              const reasons = approvalReasonsForTelegram(opts ?? {});
               void escalateApproval({
                 store,
                 approvalId,
@@ -2169,6 +2190,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 now: Date.now(),
                 ...(routedAgent ? { agentName: routedAgent.name } : {}),
                 ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+                ...(reasons.length > 0 ? { reasons } : {}),
               });
             }
           });
@@ -2177,14 +2199,41 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // or the SDK's Write/Edit — may write under `<NABY_HOME>/org`, whatever
         // the baseline or a user rule says. Always on: there is never a reason to
         // edit the verified package, switch on or off.
+        //
+        // ONE PROMPT PER DECISION (org-harness-sync §7.10). The org hook runs
+        // first (`orgHookGate` below) and, when it asks or rewrites the input,
+        // leaves its opinion in `hookOpinions` for the duration of this call's
+        // policy decision. `approvalMerger` then raises one prompt with both
+        // reasons when both ask about the same input, a hook-only prompt when the
+        // policy allowed, and two prompts only when the hook rewrote the input
+        // and the policy asks about the rewrite. A policy deny wins with no
+        // prompt; a hook deny never gets this far.
+        const hookOpinions = new Map<string, HookOpinion>();
+        const approvalMerger = createApprovalMerger((req) =>
+          requestApproval(
+            req.call,
+            req.askedBy === 'policy'
+              ? req.rewrittenBy
+                ? { rewrittenBy: req.rewrittenBy }
+                : undefined
+              : {
+                  source: req.askedBy,
+                  script: req.hook?.script ?? 'hook',
+                  ...(req.hook?.reason ? { reason: req.hook.reason } : {}),
+                },
+          ),
+        );
         const gated = makeGate(
-          realPolicy({
-            rules: policyRules,
-            fallback: baseline,
-            requestApproval,
-            writeProtectedRoots: [orgHarnessProtectedRoot(orgTurn.home)],
-            ...(projectCwd ? { cwd: projectCwd } : {}),
-          }),
+          approvalMerger.wrap(
+            realPolicy({
+              rules: policyRules,
+              fallback: baseline,
+              requestApproval: approvalMerger.policyAsk,
+              writeProtectedRoots: [orgHarnessProtectedRoot(orgTurn.home)],
+              ...(projectCwd ? { cwd: projectCwd } : {}),
+            }),
+            (call) => hookOpinions.get(call.toolCallId),
+          ),
         );
         // Thin observer around the runtime's gate. The decision is still made
         // (and logged) by makeGate; this only reports it. Because it sits on
@@ -2219,7 +2268,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // This feeds the OBSERVATION ONLY. The decision has already been made and
         // is being reported; nothing here can allow or deny anything.
         const mcpAnnotations = mcp?.toolAnnotations ?? {};
-        const observeForGrowth = (call: ToolCall, allowed: boolean, reason?: string): void => {
+        // `refusal` is the deny decision's own kind (checkin-contracts §2): a
+        // `capability` refusal writes no row. Absent ⇒ safety ⇒ a `tripwire`.
+        const observeForGrowth = (
+          call: ToolCall,
+          allowed: boolean,
+          reason?: string,
+          refusal?: RefusalKind,
+        ): void => {
           if (!growthSubject) return;
           // P3-M10 (§3): a TEMPORARY session leaves no trace in the growth ledger
           // either. An `eval_events` row names the session it came from and is
@@ -2239,6 +2295,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             toolName: call.toolName,
             allowed,
             ...(reason ? { reason } : {}),
+            ...(refusal ? { refusal } : {}),
             ...(readOnlyHint !== undefined ? { readOnlyHint } : {}),
             policyForcesConsequential: effect === 'ask' || effect === 'deny',
           });
@@ -2247,30 +2304,37 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         //
         // Right before the policy gate decides, on BOTH engines (each calls the
         // gate below before every tool, the Agent SDK's built-ins included). A
-        // hook can only TIGHTEN: `deny` refuses, `ask` routes to the same
-        // approval prompt a policy `ask` uses — with the hook's reason — and
-        // `allow` is no opinion, so the policy gate still decides. A failing or
-        // slow hook is no opinion either (the runner never throws). Answers
-        // undefined to mean "carry on to the policy gate".
+        // hook can only TIGHTEN: `deny` refuses here, with no prompt. `ask` — and
+        // an `updatedInput` rewrite — are left in `hookOpinions` for the policy
+        // gate's `approvalMerger`, which asks once for both when both ask
+        // (§7.10). `allow` without a rewrite is no opinion. A failing or slow
+        // hook is no opinion either (the runner never throws). Answers undefined
+        // to mean "carry on to the policy gate".
         const orgHookGate = async (call: ToolCall): Promise<GateDecision | undefined> => {
           if (!orgHooks.enabled) return undefined;
           const hook = await orgHooks.preToolUse(call);
           if (hook?.behavior === 'deny') {
-            const reason = `org harness hook (${hook.script}): ${hook.reason ?? 'denied'}`;
+            const reason = `org harness hook (${hook.label ?? hook.script}): ${hook.reason ?? 'denied'}`;
             console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (${reason})`);
             observeForGrowth(call, false, reason);
             return { behavior: 'deny', reason };
           }
-          if (hook?.behavior === 'ask') {
-            const answered = await requestApproval(call, {
-              source: 'hook',
-              script: hook.script,
-              ...(hook.reason ? { reason: hook.reason } : {}),
-            });
-            if (answered.behavior === 'deny') {
-              observeForGrowth(call, false, answered.reason);
-              return answered;
+          if (hook && (hook.behavior === 'ask' || hook.updatedInput)) {
+            if (hook.updatedInput) {
+              console.log(
+                `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) input rewritten by org hook (${hook.label ?? hook.script})`,
+              );
             }
+            hookOpinions.set(call.toolCallId, {
+              behavior: hook.behavior,
+              // The name the user can place (`task/pre-commit.py`), not the launcher.
+              script: hook.label ?? hook.script,
+              ...(hook.reason ? { reason: hook.reason } : {}),
+              // The hook saw (and answered in) Claude Code's spelling.
+              ...(hook.updatedInput
+                ? { updatedInput: fromClaudeToolInput(call.toolName, call.input, hook.updatedInput) }
+                : {}),
+            });
           }
           return undefined;
         };
@@ -2285,8 +2349,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (agent @${routedAgent?.name} toolRefs)`,
             );
             const reason = `agent @${routedAgent?.name} is limited to its allowed tools`;
-            observeForGrowth(call, false, reason);
-            return { behavior: 'deny', reason };
+            // A CAPABILITY refusal (checkin-contracts §2): this agent was never
+            // given the tool, and the toolset it sees is not narrowed to its
+            // `toolRefs`. Same trap as the stage contract below — a tripwire here
+            // would knock a butterfly to pupa for reaching for a tool it was shown.
+            observeForGrowth(call, false, reason, 'capability');
+            return { behavior: 'deny', reason, refusal: 'capability' };
           }
           // ---- THE STAGE CONTRACT (Phase 3, P3-M12a) ---------------------
           //
@@ -2343,7 +2411,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // PreToolUse (org-harness-sync §3.5) — see `orgHookGate` above.
           const hooked = await orgHookGate(call);
           if (hooked) return hooked;
-          const decision = await gated.gate(call);
+          // The hook's opinion lives exactly as long as this call's policy decision.
+          const decision = await gated.gate(call).finally(() => hookOpinions.delete(call.toolCallId));
           const entry = gated.log[gated.log.length - 1];
           console.log(
             `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${decision.behavior}`,
@@ -2352,6 +2421,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             call,
             decision.behavior === 'allow',
             decision.behavior === 'deny' ? decision.reason : undefined,
+            // The policy layer classifies its own refusals (`backgroundBashRefusal`
+            // is `capability`); everything it leaves unclassified is safety.
+            decision.behavior === 'deny' ? decision.refusal : undefined,
           );
           if (entry) deps.onGateDecision?.(entry);
           return decision;
@@ -2794,6 +2866,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // PreCompact / SessionStart(compact) (org-harness-sync §3.5), called by
               // whichever engine compacts, at its own compaction point.
               ...(orgHooks.compaction ? { compaction: orgHooks.compaction } : {}),
+              // §3.4 ON THE CLAUDE ENGINE (org-harness-sync §7.5). The SDK's own
+              // Bash has no per-command env, so `HARNESS_CLIENT`, the project dir
+              // and the cic token go on the CLI process for this step. A function:
+              // the engine reads it once when the step starts, so a token removed
+              // or a harness switched off is gone from the next step. The ai-sdk
+              // engine gets its env per command instead (`commandEnv` above).
+              ...(engineId === 'dev-claude' ? { backendEnv: () => orgProcessEnv(orgTurn) } : {}),
               // THE THREE FACTS THE RUNTIME CANNOT SEE (naby-activity-log §3).
               // Routing, the fast-growth flag and what dispatched the turn are all
               // decided here; the runtime stamps them on every record of the turn

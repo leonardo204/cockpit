@@ -186,7 +186,6 @@ import {
   ensureOrgHarnessSyncStarted,
   kickOrgHarnessSync,
   orgHarnessKeepUserCopy,
-  orgHarnessSetEnabled,
   orgHarnessState,
   orgHarnessUseOrgVersion,
   readConnectionsStatus,
@@ -651,7 +650,6 @@ export type NabyAction =
   // now (activation + package + rows) for a "check now" button; the last two are
   // the §4.5 choices for a same-name copy, keyed by skill name.
   | { action: 'orgHarness.get' }
-  | { action: 'orgHarness.set'; enabled: boolean }
   | { action: 'orgHarness.sync' }
   | { action: 'orgHarness.useOrgVersion'; name: string }
   | { action: 'orgHarness.keepUserCopy'; name: string }
@@ -1467,7 +1465,17 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
           : {}),
         systemPrompt,
         ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model.trim() } : {}),
-        ...(Array.isArray(body.toolRefs) ? { toolRefs: body.toolRefs.filter((r) => typeof r === 'string') } : {}),
+        // An update that does not MENTION toolRefs keeps the row's allowlist.
+        // `putAgent` replaces the whole row, and the Settings editor has no
+        // toolRefs field — so before this, saving an imported agent unchanged
+        // silently erased its restriction and WIDENED it to every tool. Widening
+        // an agent's tools has to be a deliberate request (send the field), never
+        // the side effect of editing its description.
+        ...(Array.isArray(body.toolRefs)
+          ? { toolRefs: body.toolRefs.filter((r) => typeof r === 'string') }
+          : targetId && store.getAgent(targetId)?.toolRefs
+            ? { toolRefs: store.getAgent(targetId)!.toolRefs! }
+            : {}),
         memoryScope,
         autonomy: {
           escalation,
@@ -2396,14 +2404,12 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     }
 
     // -- the org harness (org-harness-sync M1) ------------------------------
+    // There is no 'orgHarness.set': the org harness is mandatory and has no user
+    // off switch (org-harness-sync §4.8, 2026-10-12). An old client that still
+    // sends it gets 'unknown action'.
 
     case 'orgHarness.get':
       return { ok: true, orgHarness: orgHarnessState(store) };
-
-    case 'orgHarness.set': {
-      if (typeof body.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' };
-      return { ok: true, orgHarness: orgHarnessSetEnabled(store, body.enabled) };
-    }
 
     case 'orgHarness.sync': {
       const report = await syncOrgHarnessNow(store);

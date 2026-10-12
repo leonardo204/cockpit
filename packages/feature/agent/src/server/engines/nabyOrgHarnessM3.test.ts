@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { join, relative } from 'node:path';
 import {
   buildZip,
+  DEFAULT_USER_ID,
   mcpOAuthSettingKey,
   nabyHomeDir,
   ORG_HARNESS_SCOPE_KEY,
@@ -281,5 +282,146 @@ describe('a PreToolUse hook that asks (§3.5)', () => {
     expect(events.some((e) => e.type === 'user' && JSON.stringify(e).includes('m3-never') && !JSON.stringify(e).includes('Denied'))).toBe(false);
     const result = events.find((e) => e.type === 'result') as { subtype?: string } | undefined;
     expect(result?.subtype).toBe('success');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// ONE PROMPT PER DECISION (org-harness-sync §7.10) — a hook `ask` and a policy
+// `ask` on the same call. The AI-SDK engine here; `spike:org-harness-ask` runs
+// the same table through the Claude Agent SDK engine too.
+// ---------------------------------------------------------------------------
+
+describe('a hook ask and a policy ask on the same call (§7.10)', () => {
+  const askRule = (effect: 'ask' | 'deny') =>
+    getStore().putPolicyRule({ scope: 'user', scopeKey: DEFAULT_USER_ID, toolPattern: 'run_command', effect });
+  const hookSays = (out: Record<string, unknown> | undefined) =>
+    writeFileSync(
+      HOOK_CONTROL,
+      JSON.stringify(out ? { 'pre-commit.py': { stdout: { hookSpecificOutput: { hookEventName: 'PreToolUse', ...out } } } } : {}),
+    );
+  let ruleIds: string[] = [];
+  beforeEach(() => {
+    process.env.HARNESS_GATE = '0';
+    ruleIds = [];
+  });
+  afterAll(() => {
+    for (const r of getStore().listPolicyRules('user', DEFAULT_USER_ID)) {
+      if (r.toolPattern === 'run_command') getStore().removePolicyRule(r.id);
+    }
+  });
+  const cleanupRules = () => {
+    for (const id of ruleIds) getStore().removePolicyRule(id);
+  };
+
+  /** One run_command turn; every prompt is answered with `answer(i)`. */
+  async function askTurn(id: string, command: string, answer: (i: number) => 'allow' | 'deny' = () => 'allow') {
+    const approvals: Record<string, unknown>[] = [];
+    const { events } = await turn('run it', [{ tool: { id, name: 'run_command', input: { command } } }, { text: 'done.' }], {
+      onEvent: (e) => {
+        if (e.type !== 'approval_request') return;
+        const i = approvals.length;
+        approvals.push(e as Record<string, unknown>);
+        const decision = answer(i);
+        setTimeout(
+          () =>
+            resolveApproval(
+              String((e as unknown as { approvalId: string }).approvalId),
+              decision === 'allow' ? { behavior: 'allow' } : { behavior: 'deny', reason: 'no' },
+            ),
+          5,
+        );
+      },
+    });
+    await orgHooksIdle(8000);
+    cleanupRules();
+    const ran = (marker: string) =>
+      events.some((e) => e.type === 'user' && JSON.stringify(e).includes(marker) && !JSON.stringify(e).includes('Denied'));
+    return { approvals, events, ran };
+  }
+
+  it('both ask → ONE prompt with both reasons; "always" stays (policy part); allowed, the call runs', async () => {
+    ruleIds.push(askRule('ask').id);
+    hookSays({ permissionDecision: 'ask', permissionDecisionReason: 'commit check' });
+    const { approvals, ran } = await askTurn('m1', 'echo m710-both');
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({ source: 'hook+policy', reason: 'commit check', tool_name: 'run_command' });
+    expect(approvals[0]!.hook_script).toBe('task/pre-commit.py');
+    expect(String(approvals[0]!.approvalId)).not.toMatch(/:hook$/);
+    expect(ran('m710-both')).toBe(true);
+  });
+
+  it('both ask, denied once → the call does not run, still one prompt', async () => {
+    ruleIds.push(askRule('ask').id);
+    hookSays({ permissionDecision: 'ask', permissionDecisionReason: 'commit check' });
+    const { approvals, ran } = await askTurn('m2', 'echo m710-denied', () => 'deny');
+    expect(approvals).toHaveLength(1);
+    expect(ran('m710-denied')).toBe(false);
+  });
+
+  it('policy ask alone → one plain policy prompt (no source, no hook fields)', async () => {
+    ruleIds.push(askRule('ask').id);
+    hookSays(undefined);
+    const { approvals, ran } = await askTurn('m3', 'echo m710-policy');
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.source).toBeUndefined();
+    expect(approvals[0]!.hook_script).toBeUndefined();
+    expect(ran('m710-policy')).toBe(true);
+  });
+
+  it('hook ask alone (policy allows) → one hook prompt', async () => {
+    hookSays({ permissionDecision: 'ask', permissionDecisionReason: 'commit check' });
+    const { approvals, ran } = await askTurn('m4', 'echo m710-hook');
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({ source: 'hook', reason: 'commit check' });
+    expect(String(approvals[0]!.approvalId)).toMatch(/:hook$/);
+    expect(ran('m710-hook')).toBe(true);
+  });
+
+  it('hook ask + updatedInput + policy ask → TWO prompts: original input, then the rewrite; the rewrite runs', async () => {
+    ruleIds.push(askRule('ask').id);
+    hookSays({
+      permissionDecision: 'ask',
+      permissionDecisionReason: 'commit check',
+      updatedInput: { command: 'echo m710-rewritten' },
+    });
+    const { approvals, ran } = await askTurn('m5', 'echo m710-original');
+    expect(approvals).toHaveLength(2);
+    expect(approvals[0]).toMatchObject({ source: 'hook', reason: 'commit check', input: { command: 'echo m710-original' } });
+    expect(String(approvals[0]!.approvalId)).toMatch(/:hook$/);
+    expect(approvals[1]!.source).toBeUndefined();
+    expect(approvals[1]).toMatchObject({ input: { command: 'echo m710-rewritten' } });
+    expect(approvals[1]!.rewritten_by).toBe('task/pre-commit.py');
+    expect(ran('m710-rewritten')).toBe(true);
+  });
+
+  it('hook ask + updatedInput, first prompt denied → no second prompt, nothing runs', async () => {
+    ruleIds.push(askRule('ask').id);
+    hookSays({ permissionDecision: 'ask', updatedInput: { command: 'echo m710-rw2' } });
+    const { approvals, ran } = await askTurn('m6', 'echo m710-orig2', () => 'deny');
+    expect(approvals).toHaveLength(1);
+    expect(ran('m710-rw2')).toBe(false);
+    expect(ran('m710-orig2')).toBe(false);
+  });
+
+  it('hook ask + policy deny → no prompt; hook deny + policy ask → no prompt', async () => {
+    ruleIds.push(askRule('deny').id);
+    hookSays({ permissionDecision: 'ask', permissionDecisionReason: 'commit check' });
+    const a = await askTurn('m7', 'echo m710-pdeny');
+    expect(a.approvals).toHaveLength(0);
+    expect(a.ran('m710-pdeny')).toBe(false);
+
+    ruleIds.push(askRule('ask').id);
+    hookSays({ permissionDecision: 'deny', permissionDecisionReason: 'no commits' });
+    const b = await askTurn('m8', 'echo m710-hdeny');
+    expect(b.approvals).toHaveLength(0);
+    expect(b.ran('m710-hdeny')).toBe(false);
+  });
+
+  it('hook allow + updatedInput, policy allows → no prompt, the rewrite runs', async () => {
+    hookSays({ permissionDecision: 'allow', updatedInput: { command: 'echo m710-silent' } });
+    const { approvals, ran } = await askTurn('m9', 'echo m710-before');
+    expect(approvals).toHaveLength(0);
+    expect(ran('m710-silent')).toBe(true);
   });
 });

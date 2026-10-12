@@ -109,9 +109,16 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         ['growth.eggHintWithDrills', ['{{needed}}', '{{drills}}', '{{drillHits}}']],
         ['growth.tripwireBlocked', ['{{count}}']],
         ['growth.axis.hitRateValue', ['{{hits}}', '{{trials}}']],
-        ['growth.calibrationGood', ['{{count}}']],
-        ['growth.calibrationPoor', ['{{count}}']],
+        // The calibration verdicts (trust-meter §9.3). The two percentages ARE the
+        // sentence: "it says it is X% sure and was right Y%" is the only part a
+        // user can check against their own memory of the answers.
+        ['growth.calibration.notMeasured', ['{{count}}']],
+        ['growth.calibration.overconfident', ['{{claimed}}', '{{actual}}', '{{count}}']],
+        ['growth.calibration.underconfident', ['{{claimed}}', '{{actual}}', '{{count}}']],
+        ['growth.calibration.informative', ['{{claimed}}', '{{actual}}', '{{count}}']],
+        ['growth.calibration.flat', ['{{claimed}}', '{{actual}}', '{{count}}']],
         ['growth.askQuality', ['{{warranted}}', '{{asked}}', '{{silent}}', '{{missed}}']],
+        ['growth.askUnreviewed', ['{{count}}']],
         ['agentExport.included', ['{{count}}']],
         ['agentExport.ledger', ['{{count}}']],
         ['agentExport.stage', ['{{stage}}']],

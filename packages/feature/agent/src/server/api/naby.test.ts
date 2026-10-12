@@ -193,6 +193,40 @@ describe('POST /api/naby — agent.put refuses the built-in persona', () => {
 
     store.removeAgent(result.agent!.id);
   });
+
+  it('an edit that does not send toolRefs keeps the allowlist (it never widens by omission)', async () => {
+    // The Settings editor has no toolRefs field. An imported agent restricted to
+    // two tools used to lose that restriction the first time anyone saved it —
+    // even with nothing changed — because the row is replaced wholesale.
+    const store = getStore();
+    const name = `limited-${Date.now()}`;
+    const created = await runNabyAction({
+      action: 'agent.put',
+      name,
+      systemPrompt: 'review release notes',
+      toolRefs: ['echo_note', 'fetch_url'],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const id = created.agent!.id;
+
+    const edited = await runNabyAction({
+      action: 'agent.put',
+      id,
+      name,
+      description: 'now with a description',
+      systemPrompt: 'review release notes',
+    });
+    expect(edited.ok).toBe(true);
+    expect(store.getAgent(id)?.description).toBe('now with a description');
+    expect(store.getAgent(id)?.toolRefs).toEqual(['echo_note', 'fetch_url']);
+
+    // Sending the field is still how the list is changed on purpose.
+    await runNabyAction({ action: 'agent.put', id, name, systemPrompt: 'x', toolRefs: ['echo_note'] });
+    expect(store.getAgent(id)?.toolRefs).toEqual(['echo_note']);
+
+    store.removeAgent(id);
+  });
 });
 
 /**

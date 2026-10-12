@@ -222,6 +222,10 @@ type Form = {
   memoryScope: MemoryScope;
   escalation: Escalation;
   maxSteps: string;
+  /** The row's tool allowlist, SHOWN but not edited. Not sent back on save: the
+   *  route keeps the stored list when the field is absent, so an edit here can
+   *  never widen what an imported agent may call. */
+  toolRefs?: string[];
 };
 
 function toForm(a: Agent): Form {
@@ -234,6 +238,7 @@ function toForm(a: Agent): Form {
     memoryScope: a.memoryScope,
     escalation: a.autonomy.escalation,
     maxSteps: a.autonomy.maxSteps != null ? String(a.autonomy.maxSteps) : '',
+    ...(a.toolRefs && a.toolRefs.length > 0 ? { toolRefs: a.toolRefs } : {}),
   };
 }
 
@@ -290,7 +295,17 @@ const AgentRow = memo(function AgentRow({
               : t('agentManager.kindCustom', { defaultValue: 'Custom' })}
           </span>
         </div>
-        {agent.description ? (
+        {/* The persona's description is SEED text, stored in English because the
+            row is locale-free; read verbatim it put an English sentence on the
+            Korean pane. The persona row shows the localized line instead. Custom
+            rows show what their author wrote. */}
+        {isPersona ? (
+          <p className="mt-0.5 text-[0.786rem] text-muted-foreground line-clamp-2">
+            {t('agentManager.personaDescription', {
+              defaultValue: 'naby — your personal agent. Learns how you decide and acts on your behalf.',
+            })}
+          </p>
+        ) : agent.description ? (
           <p className="mt-0.5 text-[0.786rem] text-muted-foreground line-clamp-2">{agent.description}</p>
         ) : null}
         {/* Says WHY there are no Edit/Remove buttons on this row. Without it the
@@ -339,6 +354,7 @@ const AgentRow = memo(function AgentRow({
     <GrowthPanel
       agentId={agent.id}
       agentName={agent.name}
+      fastGrowth={isPersona}
       {...(cwd ? { cwd } : {})}
       {...(onLeaveSettings ? { onLeaveSettings } : {})}
     />
@@ -502,6 +518,18 @@ export function NabyAgentManager({
               className="text-xs px-2 py-1 rounded border border-border bg-background text-foreground leading-relaxed resize-y"
             />
           </label>
+
+          {/* Read-only: an imported agent's tool limit is part of what was
+              imported, and the turn's gate enforces it. Showing it here is what
+              tells the user why this agent refuses a tool naby itself would use. */}
+          {form.toolRefs ? (
+            <p className="text-[0.714rem] text-muted-foreground" data-testid="agent-tool-refs">
+              {t('agentManager.toolRefs', {
+                defaultValue: 'Allowed tools (from the import, not editable here): {{tools}}',
+                tools: form.toolRefs.join(', '),
+              })}
+            </p>
+          ) : null}
 
           <div className="flex gap-2 flex-wrap">
             <label className="flex flex-col gap-0.5">

@@ -25,6 +25,7 @@ import {
   nabyHomeDir,
   ORG_HARNESS_RECHECK_JITTER_MS,
   ORG_HARNESS_RECHECK_MS,
+  ORG_HARNESS_RETIRED_ENABLED_SETTING,
   ORG_HARNESS_SETTING,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import {
@@ -155,7 +156,7 @@ describe('org harness — the six-hour re-check (§3.1)', () => {
     expect(orgHarnessRecheckClock()).toBe(first);
   });
 
-  it('a tick is skipped, with no request, while the kill switch or the toggle is off', async () => {
+  it('a tick is skipped, with no request, only under the env escape hatches — a stored "off" is ignored', async () => {
     const calls = installHub();
     const store = getStore();
     ensureOrgHarnessSyncStarted(store);
@@ -170,24 +171,26 @@ describe('org harness — the six-hour re-check (§3.1)', () => {
     expect(clock.stats.skipped).toBe(1);
     delete process.env.NABY_ORG_HARNESS;
 
-    store.setSetting(ORG_HARNESS_SETTING.enabled, 'false');
-    expect(orgHarnessRecheckDue(store)).toBe(false);
+    // The org harness is mandatory (§4.8, 2026-10-12): a 'false' left by the
+    // retired Settings toggle does not skip the tick.
+    store.setSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING, 'false');
+    expect(orgHarnessRecheckDue(store)).toBe(true);
     await vi.advanceTimersByTimeAsync(MAX_WAIT);
-    expect(calls.length).toBe(afterBoot);
-    expect(clock.stats.skipped).toBe(2);
-    store.setSetting(ORG_HARNESS_SETTING.enabled, 'true');
+    expect(marketplaceCalls(calls)).toBe(2);
+    expect(clock.stats.skipped).toBe(1);
+    const afterStale = calls.length;
 
     process.env[ORG_HARNESS_SYNC_ENV] = '0';
     expect(orgHarnessRecheckDue(store)).toBe(false);
     await vi.advanceTimersByTimeAsync(MAX_WAIT);
-    expect(calls.length).toBe(afterBoot);
-    expect(clock.stats.skipped).toBe(3);
+    expect(calls.length).toBe(afterStale);
+    expect(clock.stats.skipped).toBe(2);
     delete process.env[ORG_HARNESS_SYNC_ENV];
 
     // Back on: the next tick goes out again.
     expect(orgHarnessRecheckDue(store)).toBe(true);
     await vi.advanceTimersByTimeAsync(MAX_WAIT);
-    expect(marketplaceCalls(calls)).toBe(2);
+    expect(marketplaceCalls(calls)).toBe(3);
   });
 
   it('a pass that fails keeps the clock going and the installed version in place', async () => {

@@ -22,8 +22,9 @@
 // runtime's jittered clock (`startOrgHarnessRecheck`) next to the boot kick, in
 // this long-lived server realm. Each tick is the same pass as the boot one —
 // single-flight with it and with "check now" — and is skipped while the org
-// harness is switched off (`NABY_ORG_HARNESS=0` or the Settings toggle) or
-// background passes are disabled (`NABY_ORG_HARNESS_SYNC=0`). A tick never
+// harness is switched off by the developer escape hatch `NABY_ORG_HARNESS=0`
+// or background passes are disabled (`NABY_ORG_HARNESS_SYNC=0`). Neither is
+// user-facing: the org harness is mandatory and Settings has no switch (§4.8). A tick never
 // blocks a turn: rows land at the next turn boundary when a run is active.
 
 import {
@@ -52,7 +53,6 @@ import {
   readOrgHarnessStatus,
   readOrgHookConfig,
   runOrgHarnessSync,
-  setOrgHarnessEnabled,
   startOrgHarnessRecheck,
   startMcpOAuthLogin,
   unsupportedOrgHooks,
@@ -78,8 +78,9 @@ import {
 import { anyRunActive } from '../sessionRunHub';
 import { CIC_SERVER_NAME, findSystemMcpPreset, orgHarnessKeyPreset } from './systemMcp';
 
-/** Turns the BACKGROUND passes off (tests, CI). Not the kill switch: that is
- *  `NABY_ORG_HARNESS=0` (runtime), which turns the org harness itself off. */
+/** Turns the BACKGROUND passes off (tests, CI; not user-facing). Not the kill
+ *  switch: that is `NABY_ORG_HARNESS=0` (runtime, developer/test escape hatch),
+ *  which turns the org harness itself off. */
 export const ORG_HARNESS_SYNC_ENV = 'NABY_ORG_HARNESS_SYNC';
 
 /** How long after the first request the boot pass starts — long enough that the
@@ -220,15 +221,17 @@ let recheck: OrgHarnessRecheck | undefined;
 
 /**
  * Whether a re-check tick should run at all (§3.1 "skipped when off"). Off by
- * the env kill switch or the Settings toggle ⇒ skip: a switched-off harness does
- * not phone home. No key, or a key Skill Hub rejected ⇒ run: the pass is then
- * local only, or is exactly the once-a-day re-ask that may lift the rejection.
+ * the developer escape hatch `NABY_ORG_HARNESS=0` ⇒ skip: a switched-off harness
+ * does not phone home. There is no Settings toggle to consult — the org harness
+ * is mandatory (§4.8). No key, or a key Skill Hub rejected ⇒ run: the pass is
+ * then local only, or is exactly the once-a-day re-ask that may lift the
+ * rejection.
  */
 export function orgHarnessRecheckDue(store: Store): boolean {
   if (backgroundDisabled()) return false;
   try {
     const state = orgHarnessOnState(store, orgHarnessContext(store));
-    return state.on || (state.reason !== 'env-off' && state.reason !== 'user-off');
+    return state.on || state.reason !== 'env-off';
   } catch {
     return false;
   }
@@ -625,13 +628,6 @@ export function readPendingOrgUpdate(store: Store): OrgUpdateNotice | undefined 
 /** The popup was dismissed in some window: mark that version seen. */
 export function ackOrgHarnessUpdate(store: Store, version: string): boolean {
   return ackOrgUpdateNotice(store, version);
-}
-
-export function orgHarnessSetEnabled(store: Store, enabled: boolean): OrgHarnessStateView {
-  setOrgHarnessEnabled(store, enabled, orgHarnessContext(store));
-  // Turning it back on may need today's activation and a package check.
-  if (enabled) kickOrgHarnessSync(store);
-  return orgHarnessState(store);
 }
 
 export function orgHarnessUseOrgVersion(store: Store, name: string): OrgHarnessActionResult {

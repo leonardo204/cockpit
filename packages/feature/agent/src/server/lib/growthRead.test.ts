@@ -463,6 +463,34 @@ describe('growthRead — heavy use must not bury the record (the egg regression)
     expect(isAddressable(fakeStore(rows), 'a1')).toBe(false);
   });
 
+  // checkin-contracts §2, trust-meter §11 (2026-10-12): the first real ledger's 34
+  // tripwires were all this one capability refusal, written before refusals
+  // carried a kind. They stay on disk and stop counting where they are read.
+  it('legacy CAPABILITY tripwire rows no longer block butterfly; a safety row beside them still does', () => {
+    const bgReason =
+      'Backgrounding through Bash is not available: its progress and completion events stop when ' +
+      'this turn ends, so the job would run on with nobody able to report it.';
+    const legacy = flooded({ checkins: 10, hits: 10, autonomous: 30 });
+    for (let i = 0; i < 3; i += 1) {
+      legacy.push(row({ at: 5_000 + i, kind: 'tripwire', toolName: 'Bash', reason: bgReason }));
+    }
+    const g = readGrowth(fakeStore(legacy), 'a1');
+    expect(g.tripwires).toBe(0);
+    expect(g.blockedByTripwire).toBeUndefined();
+    expect(g.stage).toBe('butterfly');
+    expect(isAddressable(fakeStore(legacy), 'a1')).toBe(true);
+    expect(growthReport(fakeStore(legacy), 'a1').stage).toBe('butterfly');
+
+    const mixed = [
+      ...legacy,
+      row({ at: 6_000, kind: 'tripwire', toolName: 'Write', reason: "blocked by your policy rule for 'Write'" }),
+    ];
+    const blocked = readGrowth(fakeStore(mixed), 'a1');
+    expect(blocked.tripwires).toBe(1);
+    expect(blocked.stage).toBe('pupa');
+    expect(isAddressable(fakeStore(mixed), 'a1')).toBe(false);
+  });
+
   it('the implicit pool still fills when reviewed rows sit at the real density', () => {
     // THE SECOND HALF OF THE SAME BUG, and the one that decided the autonomous
     // budget. `implicitPool` wants the newest IMPLICIT_WINDOW autonomous rows

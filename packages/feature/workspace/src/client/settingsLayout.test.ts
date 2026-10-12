@@ -501,6 +501,29 @@ describe('the fast-growth button explains itself and opens what it creates', () 
     expect(body.indexOf("setDrillSession('failed')")).toBeGreaterThan(-1);
   });
 
+  it('is offered on the persona row only', () => {
+    // The session carries no agent, and the engine runs the sitting only when the
+    // turn's growth subject is the persona. Under an imported agent's row the
+    // button opened a session that interviewed for naby, and the row it sat
+    // under learned nothing from it.
+    expect(AGENTS).toContain('fastGrowth={isPersona}');
+    expect(GROWTH).toContain('fastGrowth = false');
+    const gateAt = GROWTH.indexOf('{fastGrowth ? (');
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(GROWTH.slice(gateAt, gateAt + 200)).toContain('startFastGrowth');
+    const hintAt = GROWTH.indexOf('data-testid="growth-fast-session-hint"');
+    expect(GROWTH.lastIndexOf('{fastGrowth ? (', hintAt)).toBeGreaterThan(gateAt);
+  });
+
+  it('shows the persona its localized description, not the English seed text', () => {
+    expect(AGENTS).toContain("t('agentManager.personaDescription'");
+    for (const locale of LOCALES) {
+      for (const key of ['agentManager.personaDescription', 'agentManager.toolRefs']) {
+        expect(String(lookup(dict(locale), key) ?? ''), `${key} missing from ${locale}.json`).not.toBe('');
+      }
+    }
+  });
+
   it('degrades honestly when there is no project to open into', () => {
     // `cwd` is the open project and Workspace keys the whole open path on it.
     // With none there is nowhere to navigate, so the button says CREATED rather

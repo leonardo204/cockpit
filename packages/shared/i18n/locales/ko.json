@@ -353,6 +353,8 @@
     "noLimit": "끔 (1턴)",
     "stepsHint": "비우거나 1이면 한 번만 답합니다. 2 이상이면 에이전트가 스스로 작업을 이어갑니다(최대 20). 다 했다고 선언하거나, 도구를 쓰지 않거나, 단계를 다 쓰면 멈춥니다.",
     "personaReadOnly": "나비 자신입니다. 고치거나 지울 수 없습니다. 고쳐 쓰는 대신, 나를 배우면서 자랍니다.",
+    "personaDescription": "나의 개인 에이전트입니다. 내가 어떻게 판단하는지 배우고 나를 대신해 일합니다.",
+    "toolRefs": "쓸 수 있는 도구(가져올 때 정해짐, 여기서는 바꿀 수 없음): {{tools}}",
     "cancel": "취소",
     "save": "저장",
     "saved": "에이전트를 저장했습니다.",
@@ -2064,7 +2066,12 @@
     "alwaysAllow": "항상 허용",
     "alwaysBlock": "항상 차단",
     "more": "+{{count}}개 대기 중",
-    "hookReason": "조직 하네스: {{reason}}"
+    "hookReason": "조직 하네스: {{reason}}",
+    "hookReasonScript": "조직 하네스({{script}}): {{reason}}",
+    "hookAsksScript": "조직 하네스({{script}})가 이 호출의 확인을 요청했습니다",
+    "policyReason": "내 정책 규칙: 이 도구는 실행 전에 묻습니다",
+    "rewrittenBy": "조직 하네스({{script}})가 바꾼 입력입니다",
+    "rememberPolicyOnly": "'항상' 버튼은 내 정책 규칙에만 적용됩니다. 조직 하네스는 호출마다 따로 판단합니다."
   },
   "checkin": {
     "title": "나비가 어떻게 진행할지 묻습니다",
@@ -2106,9 +2113,15 @@
     "byTaskType": "일의 종류별",
     "byTaskTypeHint": "새로 들어온 종류의 일은 전체 숫자를 끌어내리지 않고 자기 알 단계에서 시작합니다.",
     "secondTier": "함께 알아 둘 것 두 가지",
-    "calibrationGood": "이 에이전트가 '얼마나 확실하다'고 말하면 그 숫자를 믿어도 됩니다. 답한 {{count}}번 동안 말한 만큼 맞혔습니다.",
-    "calibrationPoor": "'얼마나 확실하다'는 말이 실제 적중률과 아직 맞지 않습니다({{count}}번 기준). 확신도가 아니라 추천 내용을 보세요.",
-    "askQuality": "물어본 것 중 {{asked}}번에서 {{warranted}}번은 물어볼 값이 있었습니다. 혼자 처리해서 손댈 필요가 없던 것이 {{silent}}번, 나중에 고쳐야 했던 것이 {{missed}}번입니다.",
+    "calibration": {
+      "notMeasured": "확신도를 함께 말한 답이 아직 {{count}}번뿐이라, 그 숫자를 믿어도 되는지 판단하기에는 적습니다.",
+      "overconfident": "평균 {{claimed}}% 확실하다고 말했지만 추천이 맞은 것은 {{actual}}%입니다({{count}}번 기준). 말하는 만큼 맞히지 못하니 확신도가 아니라 추천 내용을 보세요.",
+      "underconfident": "평균 {{claimed}}% 확실하다고 말했지만 실제로는 {{actual}}% 맞혔습니다({{count}}번 기준). 스스로 말하는 것보다 더 자주 맞힙니다.",
+      "informative": "평균 {{claimed}}% 확실하다고 말했고 실제로 {{actual}}% 맞혔습니다({{count}}번 기준). 더 확실하다고 할 때 실제로 더 자주 맞으니 확신도를 참고해도 됩니다.",
+      "flat": "평균 {{claimed}}% 확실하다고 말했고 실제로 {{actual}}% 맞혔습니다({{count}}번 기준). 전체로는 정직하지만, 쉬운 결정과 어려운 결정을 확신도로는 아직 가르지 못합니다."
+    },
+    "askQuality": "물어본 것 중 {{asked}}번에서 {{warranted}}번은 물어볼 값이 있었습니다. 혼자 처리한 일 중 나중에 돌아본 것에서는 손댈 필요가 없던 것이 {{silent}}번, 고쳐야 했던 것이 {{missed}}번입니다.",
+    "askUnreviewed": "아직 아무도 돌아보지 않은 혼자 처리한 일이 {{count}}번 더 있고, 이것은 어느 쪽으로도 세지 않습니다.",
     "recent": "무엇을 물었고 무엇을 골랐는지",
     "recentChose": "고른 것: {{option}}",
     "recentCorrected": "직접 적어 준 답: {{text}}",
@@ -2204,11 +2217,10 @@
   "orgHarness": {
     "title": "조직 하네스",
     "loading": "불러오는 중…",
-    "description": "Skill Hub에서 받는 회사 공통 하네스(altimedia-harness)로, 새 버전이 나오면 알아서 갱신합니다.",
+    "description": "Skill Hub에서 받는 회사 공통 하네스(altimedia-harness)로, 필수라 끌 수 없고 새 버전이 나오면 알아서 갱신합니다.",
     "status": {
       "on": "켜짐 — 모든 세션에서 조직 스킬을 씁니다.",
       "envOff": "꺼짐 — 환경 변수 NABY_ORG_HARNESS=0으로 꺼져 있습니다.",
-      "userOff": "꺼짐 — 직접 껐습니다.",
       "unauthorized": "꺼짐 — Skill Hub가 키를 받지 않았습니다.",
       "noKey": "꺼짐 — Skill Hub 키가 없습니다."
     },
@@ -2230,8 +2242,6 @@
       "invalid-package": "받은 파일이 올바른 패키지가 아니라 버림",
       "other": "확인함"
     },
-    "toggle": "조직 하네스 쓰기",
-    "envOffHint": "환경 변수 NABY_ORG_HARNESS=0으로 꺼져 있습니다.",
     "skills": "조직 스킬",
     "skillOn": "켜짐",
     "skillOff": "꺼짐",

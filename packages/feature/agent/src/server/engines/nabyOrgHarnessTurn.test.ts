@@ -8,6 +8,7 @@ import {
   mcpOAuthSettingKey,
   nabyHomeDir,
   ON_DEMAND_LISTING_HEADER,
+  ORG_HARNESS_RETIRED_ENABLED_SETTING,
   ORG_HARNESS_SCOPE_KEY,
   type HarnessItem,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -215,13 +216,28 @@ describe('org harness in a turn — listing and naby_skill_load (§3.3)', () => 
     expect(seen.tools ?? []).not.toContain('naby_skill_load');
   });
 
-  it('the kill switch hides the listing and the loader (§4.8)', async () => {
+  it('the developer escape hatch NABY_ORG_HARNESS=0 hides the listing and the loader (§4.8)', async () => {
     await installOrgHarness();
-    const off = await runNabyAction({ action: 'orgHarness.set', enabled: false });
-    expect(off.ok).toBe(true);
-    const { seen } = await turn('/task start', { cwd: PROJECT });
-    expect(seen.system ?? '').not.toContain(ON_DEMAND_LISTING_HEADER);
-    expect(seen.tools ?? []).not.toContain('naby_skill_load');
+    process.env.NABY_ORG_HARNESS = '0';
+    try {
+      const { seen } = await turn('/task start', { cwd: PROJECT });
+      expect(seen.system ?? '').not.toContain(ON_DEMAND_LISTING_HEADER);
+      expect(seen.tools ?? []).not.toContain('naby_skill_load');
+    } finally {
+      delete process.env.NABY_ORG_HARNESS;
+    }
+  });
+
+  it('a stored "off" from the retired Settings toggle does not hide anything (mandatory, §4.8)', async () => {
+    await installOrgHarness();
+    getStore().setSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING, 'false');
+    try {
+      const { seen } = await turn('/task start', { cwd: PROJECT });
+      expect(seen.system ?? '').toContain(ON_DEMAND_LISTING_HEADER);
+      expect(seen.tools ?? []).toContain('naby_skill_load');
+    } finally {
+      getStore().setSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING, '');
+    }
   });
 
   it('with no skill-hub key nothing about the turn changes', async () => {

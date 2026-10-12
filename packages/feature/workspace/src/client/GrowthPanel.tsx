@@ -71,6 +71,7 @@ export function GrowthPanel({
   agentName,
   cwd,
   onLeaveSettings,
+  fastGrowth = false,
 }: {
   agentId: string;
   /** The `@handle` this summary is about — passed through to the report, which
@@ -83,6 +84,12 @@ export function GrowthPanel({
    *  is rendered somewhere that has no modal to close, in which case the button
    *  falls back to telling the user where the session is. */
   onLeaveSettings?: () => void;
+  /** Offer the fast-growth session. ONLY for the built-in persona: the session
+   *  carries no agent, and the engine runs the sitting only when the turn's
+   *  growth subject is the persona — so under a custom agent's row the button
+   *  opened a session that interviewed for naby, and the agent it sat under
+   *  never learned a thing from it. */
+  fastGrowth?: boolean;
 }) {
   const { t } = useTranslation();
   const [g, setG] = useState<GrowthWire | null>(null);
@@ -344,22 +351,24 @@ export function GrowthPanel({
         >
           {t('growth.report.open', { defaultValue: 'Growth report' })}
         </button>
-        <button
-          type="button"
-          onClick={() => void startFastGrowth()}
-          disabled={drillSession === 'creating'}
-          // The SECOND-ORDER fact — that practice answers are discounted — stays
-          // on the control, because it is the kind of thing a person looks for
-          // once they already know what the button does. What the button IS is
-          // below, in the open, where hovering is not a prerequisite.
-          title={t('growth.fastSession.weight', {
-            defaultValue:
-              'Practice answers count for less than real check-ins, and they can never start the measurement.',
-          })}
-          className="rounded border border-border px-2 py-1 text-[0.786rem] text-foreground hover:bg-accent disabled:opacity-50"
-        >
-          {t('growth.fastSession.button', { defaultValue: 'Fast-growth session' })}
-        </button>
+        {fastGrowth ? (
+          <button
+            type="button"
+            onClick={() => void startFastGrowth()}
+            disabled={drillSession === 'creating'}
+            // The SECOND-ORDER fact — that practice answers are discounted — stays
+            // on the control, because it is the kind of thing a person looks for
+            // once they already know what the button does. What the button IS is
+            // below, in the open, where hovering is not a prerequisite.
+            title={t('growth.fastSession.weight', {
+              defaultValue:
+                'Practice answers count for less than real check-ins, and they can never start the measurement.',
+            })}
+            className="rounded border border-border px-2 py-1 text-[0.786rem] text-foreground hover:bg-accent disabled:opacity-50"
+          >
+            {t('growth.fastSession.button', { defaultValue: 'Fast-growth session' })}
+          </button>
+        ) : null}
       </div>
 
       {/* WHAT THE BUTTON ABOVE IS, ALWAYS VISIBLE, IN ONE SENTENCE.
@@ -370,15 +379,17 @@ export function GrowthPanel({
           (settingsLayout.test.ts), and one sentence is all this needs; the
           discount caveat stayed on the button, where a second-order fact
           belongs. */}
-      <p
-        className="text-[0.714rem] leading-relaxed text-muted-foreground"
-        data-testid="growth-fast-session-hint"
-      >
-        {t('growth.fastSession.hint', {
-          defaultValue:
-            'A fast-growth session is a conversation of its own, where naby asks about you and sets practice decisions so it learns faster than ordinary work allows.',
-        })}
-      </p>
+      {fastGrowth ? (
+        <p
+          className="text-[0.714rem] leading-relaxed text-muted-foreground"
+          data-testid="growth-fast-session-hint"
+        >
+          {t('growth.fastSession.hint', {
+            defaultValue:
+              'A fast-growth session is a conversation of its own, where naby asks about you and sets practice decisions so it learns faster than ordinary work allows.',
+          })}
+        </p>
+      ) : null}
 
       {/* The OUTCOME of that click, which is the one thing a button that opens
           something elsewhere owes the person who pressed it. Three outcomes, not

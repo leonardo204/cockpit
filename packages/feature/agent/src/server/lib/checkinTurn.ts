@@ -35,6 +35,7 @@ import {
   CHECKIN_MIN_OPTIONS,
   isConsequentialTool,
   isReversibleAction,
+  isSafetyRefusal,
   logActivity,
   normalizeToolName,
   type Agent,
@@ -44,6 +45,7 @@ import {
   type CheckinSink,
   type EvalEventInput,
   type GrowthStage,
+  type RefusalKind,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { registerCheckin, unregisterCheckin } from './checkinRegistry';
 import { recentQuestions, type GrowthLedgerStore } from './growthRead';
@@ -322,7 +324,15 @@ export function makeCheckinSink(deps: CheckinTurnDeps): CheckinSink {
  * time this runs the gate has already decided, and `allowed` is being reported,
  * not chosen.
  *
+ * A CAPABILITY REFUSAL WRITES NOTHING (checkin-contracts §2, 2026-10-12). The
+ * gate's decision says what kind of "no" it was (`GateDecision.refusal`); one
+ * refused because the thing cannot be done here (`capability`) is neither a
+ * safety event — so not a `tripwire` — nor an action, since nothing ran — so not
+ * an `autonomous` row either. The same reasoning the stage contract's refusal
+ * already follows. An unclassified refusal is `safety` and still lands.
+ *
  * @returns the kind written, or undefined when the call was not consequential
+ *   or was refused for capability
  */
 export function recordGateOutcome(deps: {
   store: { appendEvalEvent(event: EvalEventInput): unknown };
@@ -335,6 +345,8 @@ export function recordGateOutcome(deps: {
   readOnlyHint?: boolean;
   /** The user has an ask/deny rule matching this tool (P3-M8d §7.4). */
   policyForcesConsequential?: boolean;
+  /** The deny decision's kind. Absent ⇒ safety. Ignored when `allowed`. */
+  refusal?: RefusalKind;
 }): 'autonomous' | 'tripwire' | undefined {
   const bare = normalizeToolName(deps.toolName);
   // A denied READ is not a tripwire: the meter's hard block is for
@@ -349,6 +361,8 @@ export function recordGateOutcome(deps: {
   ) {
     return undefined;
   }
+  // Not a safety event and not an action: no row (see above).
+  if (!deps.allowed && !isSafetyRefusal(deps.refusal)) return undefined;
   try {
     if (deps.allowed) {
       deps.store.appendEvalEvent({

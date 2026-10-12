@@ -18,17 +18,22 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  approvalAskerFrom,
+  approvalOffersRemember,
+  approvalReasonLines,
+  approvalRememberNote,
+  type ApprovalAsker,
+  type ApprovalCopyLine,
+} from './toolApprovalCopy';
 
-type Pending = {
+/** Who is asking and why (`ApprovalAsker`, org-harness-sync §3.5, §7.10): a
+ *  hook-only prompt offers no "always" buttons; a merged hook+policy prompt
+ *  shows both reasons and keeps them, for the policy part only. */
+type Pending = ApprovalAsker & {
   approvalId: string;
   toolName: string;
   inputPreview: string;
-  /** Why it is asking — set when an org harness hook asked (org-harness-sync
-   *  §3.5: the reason is shown verbatim). */
-  reason?: string;
-  /** `hook` = asked by a hook, not by a policy rule: "always" would write a
-   *  rule for the whole tool, which is not what was asked, so it is not offered. */
-  source?: 'hook';
 };
 
 function previewInput(input: unknown): string {
@@ -68,8 +73,7 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         approvalId: d.approvalId,
         toolName: typeof d.tool_name === 'string' ? d.tool_name : 'tool',
         inputPreview: previewInput(d.input),
-        ...(typeof d.reason === 'string' && d.reason ? { reason: d.reason } : {}),
-        ...(d.source === 'hook' ? { source: 'hook' as const } : {}),
+        ...approvalAskerFrom(d),
       };
       setQueue((q) => (q.some((p) => p.approvalId === item.approvalId) ? q : [...q, item]));
     };
@@ -105,6 +109,11 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
 
   if (!current) return null;
 
+  const say = (line: ApprovalCopyLine): string =>
+    'text' in line ? line.text : t(line.key, { ...line.params, defaultValue: line.defaultValue });
+  const reasonLines = approvalReasonLines(current);
+  const rememberNote = approvalRememberNote(current);
+
   const btn = 'text-xs px-2.5 py-1 rounded border disabled:opacity-50 transition-colors';
 
   return (
@@ -115,13 +124,15 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
       <div className="mt-1 text-sm font-mono text-foreground break-all" data-testid="tool-approval-name">
         {current.toolName}
       </div>
-      {current.reason ? (
-        <div className="mt-1 text-xs text-foreground whitespace-pre-wrap break-words" data-testid="tool-approval-reason">
-          {current.source === 'hook'
-            ? t('toolApproval.hookReason', { reason: current.reason, defaultValue: 'Org harness: {{reason}}' })
-            : current.reason}
+      {reasonLines.map((line, i) => (
+        <div
+          key={i}
+          className="mt-1 text-xs text-foreground whitespace-pre-wrap break-words"
+          data-testid="tool-approval-reason"
+        >
+          {say(line)}
         </div>
-      ) : null}
+      ))}
       {current.inputPreview ? (
         <div className="mt-0.5 text-[0.786rem] font-mono text-muted-foreground break-all line-clamp-2">
           {current.inputPreview}
@@ -142,7 +153,7 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         >
           {t('toolApproval.denyOnce', { defaultValue: 'Deny once' })}
         </button>
-        {current.source === 'hook' ? null : (
+        {!approvalOffersRemember(current) ? null : (
           <>
             <button
               onClick={() => void act('allow', true)}
@@ -161,6 +172,11 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
           </>
         )}
       </div>
+      {rememberNote ? (
+        <div className="mt-1.5 text-[0.714rem] text-muted-foreground" data-testid="tool-approval-remember-note">
+          {say(rememberNote)}
+        </div>
+      ) : null}
       {queue.length > 1 ? (
         <div className="mt-1.5 text-[0.714rem] text-muted-foreground">
           {t('toolApproval.more', { defaultValue: '+{{count}} more waiting', count: queue.length - 1 })}

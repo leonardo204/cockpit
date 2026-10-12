@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { runNabyAction } from '../api/naby';
 import { getStore } from '../engines/naby';
 import { getPendingOrgUpdateSnapshot } from '../state/globalState';
-import { buildZip, nabyHomeDir } from '../../../../../../../dist/naby-runtime.mjs';
+import { buildZip, nabyHomeDir, ORG_HARNESS_RETIRED_ENABLED_SETTING } from '../../../../../../../dist/naby-runtime.mjs';
 import {
   readConnectionsStatus,
   resetOrgHarnessBootForTests,
@@ -209,16 +209,34 @@ describe('status.connections — what the chat status bar reads (§3.9)', () => 
     expect(raw).not.toContain('skills.altimedia.com');
   });
 
-  it('switched off: Skill Hub reads off and Atlassian is no longer required', async () => {
+  it('off by the developer escape hatch: Skill Hub reads off and Atlassian is no longer required', async () => {
     const hub = installHub();
     hub.publish('0.8.1', BASE_HOOKS);
     await sync();
-    const off = await runNabyAction({ action: 'orgHarness.set', enabled: false });
-    expect(off.ok).toBe(true);
-    const c = readConnectionsStatus(getStore());
-    expect(c.skillHub).toMatchObject({ on: false, offReason: 'user-off' });
-    expect(c.atlassian.required).toBe(false);
-    expect(c.atlassian.blocking).toBe(false);
+    process.env.NABY_ORG_HARNESS = '0';
+    try {
+      const c = readConnectionsStatus(getStore());
+      expect(c.skillHub).toMatchObject({ on: false, offReason: 'env-off' });
+      expect(c.atlassian.required).toBe(false);
+      expect(c.atlassian.blocking).toBe(false);
+    } finally {
+      delete process.env.NABY_ORG_HARNESS;
+    }
+  });
+
+  it('a stored "off" from the retired Settings toggle is ignored: Skill Hub stays on (§4.8)', async () => {
+    const hub = installHub();
+    hub.publish('0.8.1', BASE_HOOKS);
+    await sync();
+    getStore().setSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING, 'false');
+    try {
+      const c = readConnectionsStatus(getStore());
+      expect(c.skillHub).toMatchObject({ on: true, version: '0.8.1' });
+      expect(c.skillHub).not.toHaveProperty('offReason');
+      expect(c.atlassian.required).toBe(true);
+    } finally {
+      getStore().setSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING, '');
+    }
   });
 
   it('reports a running pass as syncing, and not once it settles', async () => {

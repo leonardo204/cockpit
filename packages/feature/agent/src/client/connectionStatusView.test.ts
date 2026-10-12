@@ -60,9 +60,8 @@ describe('Skill Hub tone', () => {
     ['key accepted, on, package installed', {}, 'success'],
     ['no key', { configured: false, on: false, offReason: 'no-skill-hub', auth: 'unknown', version: undefined }, 'danger'],
     ['key rejected', { on: false, offReason: 'unauthorized', auth: 'unauthorized' }, 'danger'],
-    ['switched off in Settings', { on: false, offReason: 'user-off' }, 'danger'],
-    ['kill switch NABY_ORG_HARNESS=0', { on: false, offReason: 'env-off' }, 'danger'],
-    ['switched off with a rejected key', { on: false, offReason: 'user-off', auth: 'unauthorized' }, 'danger'],
+    ['dev escape hatch NABY_ORG_HARNESS=0', { on: false, offReason: 'env-off' }, 'danger'],
+    ['escape hatch with a rejected key', { on: false, offReason: 'env-off', auth: 'unauthorized' }, 'danger'],
     ['key saved, not verified yet', { auth: 'unknown', version: undefined, lastSync: undefined }, 'warning'],
     ['key saved, not verified, a check running', { auth: 'unknown', version: undefined, syncing: true }, 'warning'],
     ['key accepted, first download running', { version: undefined, syncing: true, lastSync: undefined }, 'warning'],
@@ -87,7 +86,6 @@ describe('gray is never used in the bar', () => {
     {},
     { configured: false },
     { offReason: 'env-off', on: false },
-    { offReason: 'user-off', on: false },
     { auth: 'unauthorized' },
     { auth: 'unknown' },
     { version: undefined },
@@ -129,9 +127,8 @@ describe('what a Skill Hub click opens', () => {
   const table: [string, Partial<S>, object][] = [
     ['no key', { configured: false, on: false, offReason: 'no-skill-hub', auth: 'unknown' }, keyFix],
     ['key rejected', { on: false, offReason: 'unauthorized', auth: 'unauthorized' }, keyFix],
-    ['rejected key, switched off too', { on: false, offReason: 'user-off', auth: 'unauthorized' }, keyFix],
-    ['switched off in Settings', { on: false, offReason: 'user-off' }, { section: 'harness' }],
-    ['kill switch', { on: false, offReason: 'env-off' }, { section: 'harness' }],
+    ['rejected key, escape hatch set too', { on: false, offReason: 'env-off', auth: 'unauthorized' }, keyFix],
+    ['dev escape hatch', { on: false, offReason: 'env-off' }, { section: 'harness' }],
     ['key not verified yet', { auth: 'unknown' }, { section: 'harness' }],
     ['no package after a check', { version: undefined }, { section: 'harness' }],
     ['green', {}, { section: 'harness' }],
@@ -143,7 +140,7 @@ describe('what a Skill Hub click opens', () => {
     const last = (x: Partial<S>) => skillHubLines({ ...S0, ...x }, () => 'now').at(-1)!.key;
     expect(last({ configured: false })).toBe('connectionStatus.clickSettingsKey');
     expect(last({ auth: 'unauthorized' })).toBe('connectionStatus.clickSettingsKey');
-    expect(last({ on: false, offReason: 'user-off' })).toBe('connectionStatus.clickSettings');
+    expect(last({ on: false, offReason: 'env-off' })).toBe('connectionStatus.clickSettings');
     expect(last({})).toBe('connectionStatus.clickSettings');
   });
 });
@@ -165,7 +162,6 @@ describe('the tooltip says why', () => {
       keys(skillHubLines({ ...S0, configured: false, on: false, version: undefined, lastSync: undefined }, fmt)),
     ).toEqual(['orgHarness.status.noKey', 'connectionStatus.clickSettingsKey']);
     expect(keys(skillHubLines({ ...S0, on: false, offReason: 'env-off' }, fmt))[0]).toBe('orgHarness.status.envOff');
-    expect(keys(skillHubLines({ ...S0, on: false, offReason: 'user-off' }, fmt))[0]).toBe('orgHarness.status.userOff');
     expect(keys(skillHubLines({ ...S0, auth: 'unauthorized' }, fmt))[0]).toBe('orgHarness.activation.needsKey');
     expect(keys(skillHubLines({ ...S0, version: undefined, syncing: true }, fmt))).toContain('connectionStatus.syncing');
     expect(keys(skillHubLines({ ...S0, version: undefined, lastSync: { at: 1, outcome: 'unreachable' } }, fmt))).toContain(
@@ -213,7 +209,6 @@ describe('every sentence the bar and the popup use exists in en and ko', () => {
     {},
     { configured: false },
     { offReason: 'env-off' },
-    { offReason: 'user-off' },
     { auth: 'unauthorized' },
     { auth: 'unknown', version: undefined, lastSync: { at: 1, outcome: 'unreachable' } },
     { version: undefined, syncing: true },

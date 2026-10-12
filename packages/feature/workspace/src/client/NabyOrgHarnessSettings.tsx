@@ -5,10 +5,12 @@
  * Settings → Harness.
  *
  * What it shows: the package version and the last check, whether the Skill Hub
- * key was accepted, the on/off switch (the §4.8 kill switch — the env variable
- * wins over it), the org skills and whether each is on, and the same-name copy
- * choices ("use the org version" / "keep my copy") with whether the copy was
- * edited. It holds no secret: `/api/naby` answers with the runtime's
+ * key was accepted, the org skills and whether each is on, and the same-name
+ * copy choices ("use the org version" / "keep my copy") with whether the copy
+ * was edited. There is NO on/off switch: the org harness is mandatory (§4.8,
+ * user decision 2026-10-12). The status line still says why it is not running
+ * when it is not (no key, rejected key, or the developer-only
+ * `NABY_ORG_HARNESS=0`). It holds no secret: `/api/naby` answers with the runtime's
  * `OrgHarnessState`, which carries neither the key nor the metrics token.
  *
  * Every decision about what a state MEANS lives in `orgHarnessView.ts`; this
@@ -31,7 +33,6 @@ import {
   orgSkillRows,
   orgStatusKey,
   orgSyncOutcomeKey,
-  orgToggleDisabled,
   orgUpdateLogRows,
   type OrgHarnessView,
 } from './orgHarnessView';
@@ -68,7 +69,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
       if (res.ok) {
         if (res.orgHarness) setView(res.orgHarness);
         if (success) toast(success, 'success');
-        // A sync or a toggle can change what the chat status bars show; they
+        // A sync or a copy choice can change what the chat status bars show; they
         // live in other frames, so tell them (reads are not announced).
         if (body.action !== 'orgHarness.get') announceConnectionsChanged();
       } else {
@@ -104,7 +105,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
       <p className="text-xs text-muted-foreground leading-relaxed">
         {t('orgHarness.description', {
           defaultValue:
-            "The company's shared harness (altimedia-harness), which follows Skill Hub and updates itself when a new version is published.",
+            "The company's shared harness (altimedia-harness) from Skill Hub, required and always on, which updates itself when a new version is published.",
         })}
       </p>
 
@@ -128,21 +129,6 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
           </p>
         ) : null}
       </div>
-
-      <label className="flex items-center gap-2 text-xs text-foreground">
-        <input
-          type="checkbox"
-          checked={view.enabledSetting && !view.envOff}
-          disabled={busy || orgToggleDisabled(view)}
-          onChange={(e) => void run({ action: 'orgHarness.set', enabled: e.target.checked })}
-        />
-        {t('orgHarness.toggle', { defaultValue: 'Use the org harness' })}
-      </label>
-      {view.envOff ? (
-        <p className="text-xs text-muted-foreground">
-          {t('orgHarness.envOffHint', { defaultValue: 'Turned off by NABY_ORG_HARNESS=0 in the environment.' })}
-        </p>
-      ) : null}
 
       {atlassian ? (
         <div className="space-y-1.5 rounded border border-border p-2" data-testid="org-harness-atlassian">

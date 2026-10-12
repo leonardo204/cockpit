@@ -28,6 +28,7 @@ import {
   buildZip,
   DEFAULT_USER_ID,
   nabyHomeDir,
+  ORG_HARNESS_RETIRED_ENABLED_SETTING,
   ORG_HARNESS_SCOPE_KEY,
   ORG_HARNESS_SETTING,
   ORG_SUPERSEDED_BY,
@@ -237,7 +238,7 @@ describe('org harness — HTTP actions', () => {
     expect(applyOrgHarnessAtTurnBoundary(getStore())?.ran).toBe('copies');
   });
 
-  it('useOrgVersion sets a same-name copy aside; the switch gives it back and takes it again', async () => {
+  it('useOrgVersion sets a same-name copy aside; the env escape hatch gives it back and takes it again', async () => {
     await saveHubKey();
     installHub('0.7.1');
     const copy = putTaskCopy(TASK_BODY);
@@ -259,19 +260,79 @@ describe('org harness — HTTP actions', () => {
     expect(marked.status).toBe('disabled');
     expect(marked.provenance.supersededBy).toBe(ORG_SUPERSEDED_BY);
 
-    const off = await runNabyAction({ action: 'orgHarness.set', enabled: false });
-    if (!off.ok) throw new Error(off.error);
-    expect(off.orgHarness?.on).toBe(false);
-    expect(off.orgHarness?.offReason).toBe('user-off');
-    expect(orgRows().every((r) => r.status === 'disabled')).toBe(true);
-    expect(getStore().getHarnessItem(copy.id)?.status).toBe('enabled');
+    // The only off switch left is the developer escape hatch NABY_ORG_HARNESS=0.
+    process.env.NABY_ORG_HARNESS = '0';
+    try {
+      applyOrgHarnessAtTurnBoundary(getStore());
+      const off = await runNabyAction({ action: 'orgHarness.get' });
+      if (!off.ok) throw new Error(off.error);
+      expect(off.orgHarness?.on).toBe(false);
+      expect(off.orgHarness?.offReason).toBe('env-off');
+      expect(orgRows().every((r) => r.status === 'disabled')).toBe(true);
+      expect(getStore().getHarnessItem(copy.id)?.status).toBe('enabled');
+    } finally {
+      delete process.env.NABY_ORG_HARNESS;
+    }
 
-    const on = await runNabyAction({ action: 'orgHarness.set', enabled: true });
+    applyOrgHarnessAtTurnBoundary(getStore());
+    const on = await runNabyAction({ action: 'orgHarness.get' });
     if (!on.ok) throw new Error(on.error);
     expect(on.orgHarness?.on).toBe(true);
     expect(orgRows().every((r) => r.status === 'enabled')).toBe(true);
     expect(getStore().getHarnessItem(copy.id)?.status).toBe('disabled');
     expect(getStore().getHarnessItem(copy.id)?.provenance.supersededBy).toBe(ORG_SUPERSEDED_BY);
+  });
+
+  it('the org harness is mandatory: there is no on/off action (§4.8, 2026-10-12)', async () => {
+    await saveHubKey();
+    installHub('0.7.1');
+    await runNabyAction({ action: 'orgHarness.sync' });
+    for (const enabled of [false, true]) {
+      const r = await runNabyAction({ action: 'orgHarness.set', enabled } as unknown as Parameters<
+        typeof runNabyAction
+      >[0]);
+      expect(r.ok).toBe(false);
+    }
+    expect(getStore().getSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING) ?? '').toBe('');
+    const got = await runNabyAction({ action: 'orgHarness.get' });
+    if (!got.ok) throw new Error(got.error);
+    expect(got.orgHarness?.on).toBe(true);
+    expect(got.orgHarness).not.toHaveProperty('enabledSetting');
+  });
+
+  it('a user who switched it off before the update gets it back on — the stored "off" is ignored', async () => {
+    await saveHubKey();
+    installHub('0.7.1');
+    const copy = putTaskCopy(TASK_BODY);
+    await runNabyAction({ action: 'orgHarness.sync' });
+    const used = await runNabyAction({ action: 'orgHarness.useOrgVersion', name: 'task' });
+    if (!used.ok) throw new Error(used.error);
+
+    // Recreate what v1.40.0's toggle left behind: rows off, the copy given back,
+    // `applied` = {on:false}, and the toggle row itself. (The escape hatch walks
+    // the same off path the toggle did, so the stored state is identical.)
+    process.env.NABY_ORG_HARNESS = '0';
+    try {
+      applyOrgHarnessAtTurnBoundary(getStore());
+    } finally {
+      delete process.env.NABY_ORG_HARNESS;
+    }
+    getStore().setSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING, 'false');
+    expect(orgRows().every((r) => r.status === 'disabled')).toBe(true);
+    expect(getStore().getHarnessItem(copy.id)?.status).toBe('enabled');
+
+    // After the update: the first turn boundary turns everything back on.
+    const applied = applyOrgHarnessAtTurnBoundary(getStore());
+    expect(applied?.on).toBe(true);
+    expect(applied?.ran).toBe('full');
+    expect(orgRows().every((r) => r.status === 'enabled')).toBe(true);
+    expect(getStore().getHarnessItem(copy.id)?.status).toBe('disabled');
+    const got = await runNabyAction({ action: 'orgHarness.get' });
+    if (!got.ok) throw new Error(got.error);
+    expect(got.orgHarness?.on).toBe(true);
+    expect(got.orgHarness?.offReason).toBeUndefined();
+    // Ignored, not deleted.
+    expect(getStore().getSetting(ORG_HARNESS_RETIRED_ENABLED_SETTING)).toBe('false');
   });
 
   it('keepUserCopy stops the notice and changes nothing', async () => {
@@ -313,8 +374,6 @@ describe('org harness — HTTP actions', () => {
   });
 
   it('refuses malformed requests', async () => {
-    const badSet = await runNabyAction({ action: 'orgHarness.set', enabled: 'yes' as unknown as boolean });
-    expect(badSet.ok).toBe(false);
     const noName = await runNabyAction({ action: 'orgHarness.useOrgVersion', name: '' });
     expect(noName.ok).toBe(false);
     // The org harness is off (no key): choosing the org version is refused.

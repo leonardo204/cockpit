@@ -15,8 +15,8 @@ export type OrgCopyKind = 'unmodified' | 'edited' | 'unknown';
 export type OrgHarnessView = {
   configured: boolean;
   on: boolean;
-  offReason?: 'no-skill-hub' | 'env-off' | 'user-off' | 'unauthorized';
-  enabledSetting: boolean;
+  /** No user-off reason: the org harness is mandatory (§4.8). */
+  offReason?: 'no-skill-hub' | 'env-off' | 'unauthorized';
   envOff: boolean;
   auth: 'ok' | 'unauthorized' | 'unknown';
   package: { version: string; skills: string[] } | null;
@@ -139,19 +139,11 @@ export function orgStatusKey(v: OrgHarnessView): string {
   switch (v.offReason) {
     case 'env-off':
       return 'orgHarness.status.envOff';
-    case 'user-off':
-      return 'orgHarness.status.userOff';
     case 'unauthorized':
       return 'orgHarness.status.unauthorized';
     default:
       return 'orgHarness.status.noKey';
   }
-}
-
-/** The toggle cannot move what the environment pinned (§4.8: `NABY_ORG_HARNESS=0`
- *  wins), and there is nothing to switch without a key. */
-export function orgToggleDisabled(v: OrgHarnessView): boolean {
-  return v.envOff || !v.configured;
 }
 
 /** The skills the card lists: live org rows (not withdrawn, not deleted), by name. */

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   truncate,
+  approvalReasonsForTelegram,
   formatApprovalMessage,
   formatCheckinMessage,
   escalateCheckin,
@@ -59,6 +60,23 @@ describe('telegramEscalation — message formatting (P3-M3b)', () => {
     expect(msg).toContain('rm -rf build');
     expect(msg).toContain('/tmp/x');
     expect(msg.toLowerCase()).toContain('reply yes');
+  });
+
+  it('a merged hook+policy request carries both reasons in ONE message (org-harness-sync §7.10)', () => {
+    const reasons = approvalReasonsForTelegram({ source: 'hook+policy', script: 'task/pre-commit.py', reason: 'commit check' });
+    expect(reasons).toEqual(['Org harness (task/pre-commit.py): commit check', 'Your policy rule: ask before this tool']);
+    const msg = formatApprovalMessage({ toolName: 'run_command', input: { command: 'git commit' }, reasons });
+    expect(msg).toContain('Why: Org harness (task/pre-commit.py): commit check');
+    expect(msg).toContain('Why: Your policy rule: ask before this tool');
+    expect(approvalReasonsForTelegram({ source: 'hook', script: 'task/pre-commit.py' })).toEqual([
+      'Org harness (task/pre-commit.py): asks to confirm this call',
+    ]);
+    expect(approvalReasonsForTelegram({ rewrittenBy: 'task/pre-commit.py' })).toEqual([
+      'Input rewritten by the org harness (task/pre-commit.py)',
+    ]);
+    // A plain policy prompt reads as it always did.
+    expect(approvalReasonsForTelegram({})).toEqual([]);
+    expect(formatApprovalMessage({ toolName: 'Bash', input: {} })).not.toContain('Why:');
   });
 
   it('omits the input block when there is nothing to show', () => {

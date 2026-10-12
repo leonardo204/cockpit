@@ -65,13 +65,26 @@ export type GrowthWire = {
   blockedByTripwire?: boolean;
   brier?: number;
   brierSamples: number;
+  /** The calibration axis with its verdict (trust-meter §9.3). Absent exactly
+   *  when `brier` is. */
+  calibration?: {
+    score: number;
+    samples: number;
+    meanConfidence: number;
+    hitRate: number;
+    reference: number;
+    verdict: 'not-measured' | 'overconfident' | 'underconfident' | 'informative' | 'flat';
+  };
   ask?: {
     precision: number;
     recall: number;
     warrantedAsks: number;
     unnecessaryAsks: number;
     missedAsks: number;
+    /** Reviewed actions that needed no fix — NOT every action it took alone. */
     correctSilences: number;
+    /** Actions nobody has looked back over yet: neither right nor wrong. */
+    unreviewedActs: number;
     samples: number;
   };
   ledgerRows: number;
@@ -337,41 +350,78 @@ export function GrowthReportModal({
           {/* the second tier. Shown as SENTENCES, not scores: "Brier 0.09" means
               nothing to a person deciding whether to delegate, while "it is right
               about as often as it says it is" does. */}
-          {g.brier !== undefined || g.ask ? (
+          {g.calibration || g.ask ? (
             <div className="space-y-1 border-t border-border pt-2">
               <div className="text-[0.714rem] font-medium text-muted-foreground">
                 {t('growth.secondTier', { defaultValue: 'Two other things worth knowing' })}
               </div>
-              {g.brier !== undefined ? (
-                <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
-                  {/* 0.25 is what an agent scores by always saying "50% sure", so
-                      it is the line where stated confidence starts carrying
-                      information. */}
-                  {g.brier < 0.25
-                    ? t('growth.calibrationGood', {
+              {g.calibration ? (
+                <p className="text-[0.786rem] leading-relaxed text-muted-foreground" data-testid="growth-calibration">
+                  {/* The verdict comes from the runtime (trust-meter §9.3), not
+                      from a threshold typed here. Every sentence carries the two
+                      numbers a user can check — what it claimed on average, how
+                      often it was right — because "0.214" means nothing to the
+                      person deciding whether to delegate. */}
+                  {g.calibration.verdict === 'not-measured'
+                    ? t('growth.calibration.notMeasured', {
                         defaultValue:
-                          'When it says how sure it is, that number is worth reading — it has been about as right as it claimed, across {{count}} answer(s).',
-                        count: g.brierSamples,
+                          'Only {{count}} answer(s) so far came with a stated confidence — too few to tell whether that number means anything.',
+                        count: g.calibration.samples,
                       })
-                    : t('growth.calibrationPoor', {
-                        defaultValue:
-                          'How sure it says it is does not track how often it is right yet ({{count}} answer(s)). Read the recommendation, not its confidence.',
-                        count: g.brierSamples,
-                      })}
+                    : g.calibration.verdict === 'overconfident'
+                      ? t('growth.calibration.overconfident', {
+                          defaultValue:
+                            'It says it is about {{claimed}}% sure on average, but its recommendations landed {{actual}}% of the time ({{count}} answer(s)). It claims more than it delivers, so read the recommendation, not its confidence.',
+                          claimed: Math.round(g.calibration.meanConfidence * 100),
+                          actual: Math.round(g.calibration.hitRate * 100),
+                          count: g.calibration.samples,
+                        })
+                      : g.calibration.verdict === 'underconfident'
+                        ? t('growth.calibration.underconfident', {
+                            defaultValue:
+                              'It says it is about {{claimed}}% sure on average, yet its recommendations landed {{actual}}% of the time ({{count}} answer(s)). It is right more often than it admits.',
+                            claimed: Math.round(g.calibration.meanConfidence * 100),
+                            actual: Math.round(g.calibration.hitRate * 100),
+                            count: g.calibration.samples,
+                          })
+                        : g.calibration.verdict === 'informative'
+                          ? t('growth.calibration.informative', {
+                              defaultValue:
+                                'It says it is about {{claimed}}% sure on average and was right {{actual}}% of the time ({{count}} answer(s)), and when it says it is surer it is right more often. Its confidence is worth reading.',
+                              claimed: Math.round(g.calibration.meanConfidence * 100),
+                              actual: Math.round(g.calibration.hitRate * 100),
+                              count: g.calibration.samples,
+                            })
+                          : t('growth.calibration.flat', {
+                              defaultValue:
+                                'It says it is about {{claimed}}% sure on average and was right {{actual}}% of the time ({{count}} answer(s)) — honest overall, but its confidence does not yet tell easy calls from hard ones.',
+                              claimed: Math.round(g.calibration.meanConfidence * 100),
+                              actual: Math.round(g.calibration.hitRate * 100),
+                              count: g.calibration.samples,
+                            })}
                 </p>
               ) : null}
               {g.ask ? (
-                <p className="text-[0.786rem] leading-relaxed text-muted-foreground">
+                <p className="text-[0.786rem] leading-relaxed text-muted-foreground" data-testid="growth-ask-quality">
                   {/* The PAIR, never precision alone: a flawless agent scores 0
                       precision because every ask turned out to be unnecessary. */}
                   {t('growth.askQuality', {
                     defaultValue:
-                      'Of the times it asked, {{warranted}} of {{asked}} turned out to be worth asking. It acted alone {{silent}} time(s) without needing a fix, and {{missed}} time(s) you had to correct it.',
+                      'Of the times it asked, {{warranted}} of {{asked}} turned out to be worth asking. Of the things it did alone that were looked back over, {{silent}} needed no fix and {{missed}} you had to correct.',
                     warranted: g.ask.warrantedAsks,
                     asked: g.ask.warrantedAsks + g.ask.unnecessaryAsks,
                     silent: g.ask.correctSilences,
                     missed: g.ask.missedAsks,
                   })}
+                  {/* Unreviewed actions are named, not folded into "needed no
+                      fix": nobody has had the chance to object to them yet. */}
+                  {g.ask.unreviewedActs > 0
+                    ? ` ${t('growth.askUnreviewed', {
+                        defaultValue:
+                          'It also acted alone {{count}} more time(s) that nobody has looked back over yet, so those count neither way.',
+                        count: g.ask.unreviewedActs,
+                      })}`
+                    : null}
                 </p>
               ) : null}
             </div>

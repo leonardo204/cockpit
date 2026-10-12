@@ -355,6 +355,44 @@ describe('checkinTurn — what the GATE records (not the agent)', () => {
     });
   });
 
+  // checkin-contracts §2 (2026-10-12): every real tripwire on the first ledger was
+  // "Backgrounding through Bash is not available" — the engine path cannot report
+  // back, nothing unsafe about it — and three of them held a butterfly at pupa.
+  it('a CAPABILITY refusal writes no row at all — not a tripwire, and not an action', () => {
+    const store = fakeStore();
+    expect(
+      recordGateOutcome({
+        store,
+        ...base,
+        toolName: 'Bash',
+        allowed: false,
+        reason: 'Backgrounding through Bash is not available: …',
+        refusal: 'capability',
+      }),
+    ).toBeUndefined();
+    expect(store.appended).toHaveLength(0);
+  });
+
+  it('a SAFETY refusal — marked or unmarked — is still a tripwire', () => {
+    const store = fakeStore();
+    expect(
+      recordGateOutcome({ store, ...base, toolName: 'Write', allowed: false, reason: 'protected', refusal: 'safety' }),
+    ).toBe('tripwire');
+    // Unclassified is safety: a refusal nobody labelled must still block, never
+    // quietly not count.
+    expect(
+      recordGateOutcome({ store, ...base, toolName: 'Write', allowed: false, reason: 'org hook: denied' }),
+    ).toBe('tripwire');
+    expect(store.appended.map((r) => r.kind)).toEqual(['tripwire', 'tripwire']);
+  });
+
+  it('`refusal` is ignored on an ALLOWED call — it still counts as autonomous', () => {
+    const store = fakeStore();
+    expect(
+      recordGateOutcome({ store, ...base, toolName: 'Write', allowed: true, refusal: 'capability' }),
+    ).toBe('autonomous');
+  });
+
   it('reads are not scored at all — neither allowed nor denied', () => {
     const store = fakeStore();
     expect(recordGateOutcome({ store, ...base, toolName: 'Read', allowed: true })).toBeUndefined();
@@ -483,5 +521,30 @@ describe('naby engine wiring — the check-in instruction gets a stage', () => {
     expect(source.match(/readGrowth\(store, growthSubject\.id\)/g) ?? []).toHaveLength(2);
     expect(source).toContain('subjectGrowth ?? readGrowth(store, growthSubject.id)');
     expect(source).toContain('stage: subjectGrowth?.stage ?? routedStage');
+  });
+});
+
+/**
+ * A SOURCE ASSERTION for the wiring no unit test here can execute: the engine's
+ * gate must hand the deny decision's own `refusal` kind to the ledger writer.
+ * If it ever dropped the argument, every capability refusal (a backgrounded
+ * `Bash`) would land as a `tripwire` again — which is exactly how the first real
+ * ledger came to hold 34 of them and a butterfly stuck at pupa (2026-10-12).
+ */
+describe('the engine passes the refusal kind to the ledger', () => {
+  const source = readFileSync(join(__dirname, '..', 'engines', 'naby.ts'), 'utf8');
+
+  it('observeForGrowth forwards `refusal` into recordGateOutcome', () => {
+    const start = source.indexOf('const observeForGrowth = (');
+    expect(start).toBeGreaterThan(0);
+    const body = source.slice(start, source.indexOf('recordGateOutcome({', start) + 600);
+    expect(body).toContain('refusal?: RefusalKind');
+    expect(body).toContain('...(refusal ? { refusal } : {})');
+  });
+
+  it('the policy path reports `decision.refusal`, and the toolRefs refusal is a capability one', () => {
+    const policyCall = source.slice(source.indexOf('const decision = await gated.gate(call)'));
+    expect(policyCall.slice(0, 900)).toContain("decision.behavior === 'deny' ? decision.refusal : undefined");
+    expect(source).toContain("observeForGrowth(call, false, reason, 'capability');");
   });
 });
