@@ -194,6 +194,19 @@ import {
   type ConnectionsStatus,
   type OrgHarnessStateView,
 } from '../lib/orgHarness';
+// BROWSER SIGN-IN FOR ANY REMOTE MCP (specs/mcp-oauth-catalog.md): quick connect,
+// the URL check of the add form, and the per-row sign-in. Status words only —
+// no token, no client id crosses this route.
+import {
+  cancelMcpOAuthAction,
+  disconnectMcpOAuthAction,
+  forgetMcpServer,
+  isPresetName,
+  probeMcpOAuthAction,
+  readMcpOAuthStatusView,
+  startMcpOAuthAction,
+  type McpOAuthStatusView,
+} from '../lib/mcpOAuthServers';
 // The key a user-supplied session rename lives under. IMPORTED rather than
 // respelled here: it is what the recent-session list reads and what the v1.6.0
 // rename writes, and a second copy of the string would be a second source of
@@ -486,6 +499,10 @@ export async function readNabyState(
    *  and the pending same-name-copy notices. Labels and states only — the key,
    *  its hash and the metrics token never appear here. */
   orgHarness: OrgHarnessStateView;
+  /** BROWSER-OAUTH ROWS AND QUICK CONNECT (mcp-oauth-catalog §3.1, §3.3): per
+   *  OAuth row `{status, pending, lastError}`, and per quick-connect entry its
+   *  state and whether its name is taken by another row. No token. */
+  mcpOAuth: McpOAuthStatusView;
 }> {
   const store = getStore();
   // The first state read after startup schedules the background sync (§4.2):
@@ -589,6 +606,7 @@ export async function readNabyState(
     mcp: store.listMcpEntries().map(redactEntry),
     systemMcp: readSystemMcpStatus(store),
     orgHarness: orgHarnessState(store),
+    mcpOAuth: readMcpOAuthStatusView(store),
   };
 }
 
@@ -659,6 +677,25 @@ export type NabyAction =
   // clears. `cancelLogin` closes the listener.
   | { action: 'atlassian.login' }
   | { action: 'atlassian.cancelLogin' }
+  // BROWSER SIGN-IN FOR ANY REMOTE MCP (mcp-oauth-catalog §4.1). `probe` is the
+  // add form's URL check and stores nothing; `login` answers with the
+  // authorization URL and writes the row ONLY after the sign-in succeeds
+  // (`url` defaults to the quick-connect URL for a catalog name;
+  // `resourceMetadataUrl` is what a probe found; `replace` = the edit form of
+  // that very row); `disconnect` removes the row and the sign-in; `status` is the
+  // login button's 2 s poll. System MCP preset names are refused by all of them.
+  | { action: 'mcpOAuth.probe'; url: string; transport?: 'http' | 'sse' }
+  | {
+      action: 'mcpOAuth.login';
+      server: string;
+      url?: string;
+      transport?: 'http' | 'sse';
+      resourceMetadataUrl?: string;
+      replace?: boolean;
+    }
+  | { action: 'mcpOAuth.cancel'; server: string }
+  | { action: 'mcpOAuth.disconnect'; server: string }
+  | { action: 'mcpOAuth.status' }
   // THE CHAT STATUS BAR AND THE UPDATE POPUP (org-harness-sync §3.1, §3.9).
   // `status.connections` is the poller's light read: Atlassian and Skill Hub
   // status words — no rows, no secrets. `orgHarness.ackUpdate` marks the popup
@@ -869,9 +906,19 @@ export type NabyActionResult =
       /** `orgHarness.ackUpdate`: whether the named version's notice was marked
        *  seen now (false: already seen, or not the current notice). */
       acked?: boolean;
-      /** `atlassian.login`: the authorization URL the CLIENT opens in the system
-       *  browser (empty when the sign-in completed without one). */
+      /** `atlassian.login`, `mcpOAuth.login`: the authorization URL the CLIENT
+       *  opens in the system browser (empty when the sign-in completed without one). */
       authorizationUrl?: string;
+      /** `mcpOAuth.*`: every browser-OAuth row's and quick-connect entry's state
+       *  after the operation. Status words only. */
+      mcpOAuth?: McpOAuthStatusView;
+      /** `mcpOAuth.probe`: the verdict (mcp-oauth-catalog §3.2). */
+      probe?: {
+        verdict: 'open' | 'oauth' | 'no-registration' | 'unreachable';
+        status?: number;
+        error?: string;
+        resourceMetadataUrl?: string;
+      };
       /** `orgHarness.useOrgVersion`: ids of the copies that were set aside. */
       changed?: string[];
       /** `orgHarness.sync`: what the pass did, minus anything secret. */
@@ -2219,7 +2266,24 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'mcp.upsert': {
       const problems = validateMcpEntry(body.entry);
       if (problems.length > 0) return { ok: false, error: problems.join('; ') };
-      store.upsertMcpEntry(body.entry as McpEntry);
+      const incoming = body.entry as McpEntry;
+      // A BROWSER-OAUTH ROW IS SIGNED IN TO, NOT SAVED (mcp-oauth-catalog §3.1,
+      // §3.3). Writing one here would create a row before its sign-in; editing one
+      // here could move its stored tokens to another URL or strip `auth`. The
+      // tokens are keyed by the name, so the row is changed only by a sign-in
+      // (`mcpOAuth.login`) or removed.
+      const stored = store.listMcpEntries().find((e) => e.name === incoming.name);
+      if (
+        (incoming.transport !== 'stdio' && incoming.auth === 'oauth') ||
+        (stored && stored.transport !== 'stdio' && stored.auth === 'oauth')
+      ) {
+        return {
+          ok: false,
+          error: `"${incoming.name}" signs in through the browser; use its log-in button, or remove it and add it again`,
+          errorKey: 'mcpOAuth.oauthRowLocked',
+        };
+      }
+      store.upsertMcpEntry(incoming);
       return { ok: true };
     }
 
@@ -2227,7 +2291,11 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (typeof body.name !== 'string' || !body.name) {
         return { ok: false, error: 'name is required' };
       }
-      store.removeMcpEntry(body.name);
+      // The sign-in goes with the row (mcp-oauth-catalog §3.3): the tokens are
+      // keyed by name, and a token left behind would quietly sign in a later row
+      // that reused it. A preset's sign-in belongs to `systemMcp.remove`.
+      if (isPresetName(body.name)) store.removeMcpEntry(body.name);
+      else forgetMcpServer(store, body.name);
       return { ok: true };
     }
 
@@ -2436,6 +2504,45 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     case 'atlassian.cancelLogin':
       cancelAtlassianLogin();
       return { ok: true, orgHarness: orgHarnessState(store) };
+
+    // -- browser sign-in for any remote MCP (mcp-oauth-catalog §4.1) ---------
+    // The rules live in lib/mcpOAuthServers.ts; these cases only route.
+
+    case 'mcpOAuth.probe': {
+      const r = await probeMcpOAuthAction(body);
+      if (!r.ok) return r;
+      const p = r.probe;
+      return {
+        ok: true,
+        probe: {
+          verdict: p.verdict,
+          ...(p.status !== undefined ? { status: p.status } : {}),
+          ...(p.error ? { error: p.error } : {}),
+          ...(p.resourceMetadataUrl ? { resourceMetadataUrl: p.resourceMetadataUrl } : {}),
+        },
+      };
+    }
+
+    case 'mcpOAuth.login': {
+      const r = await startMcpOAuthAction(store, body);
+      if (!r.ok) return r;
+      return { ok: true, authorizationUrl: r.authorizationUrl, mcpOAuth: readMcpOAuthStatusView(store) };
+    }
+
+    case 'mcpOAuth.cancel': {
+      const r = cancelMcpOAuthAction(body);
+      if (!r.ok) return r;
+      return { ok: true, mcpOAuth: readMcpOAuthStatusView(store) };
+    }
+
+    case 'mcpOAuth.disconnect': {
+      const r = disconnectMcpOAuthAction(store, body);
+      if (!r.ok) return r;
+      return { ok: true, mcpOAuth: readMcpOAuthStatusView(store) };
+    }
+
+    case 'mcpOAuth.status':
+      return { ok: true, mcpOAuth: readMcpOAuthStatusView(store) };
 
     case 'status.connections':
       // The first read of the app also starts the boot pass, like the GET does.

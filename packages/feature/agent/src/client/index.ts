@@ -81,6 +81,20 @@ export {
   readOrgHarnessForLogin,
   startAtlassianLoginFlow,
 } from './atlassianLogin';
+// Browser sign-in for any remote MCP (mcp-oauth-catalog §4.1): quick connect,
+// the add form's URL check, and the general list's per-row login.
+export {
+  cancelMcpOAuthLoginFlow,
+  disconnectMcpOAuth,
+  probeMcpOAuthUrl,
+  readMcpOAuthStatus,
+  startMcpOAuthLoginFlow,
+  type McpOAuthCatalogView,
+  type McpOAuthProbeView,
+  type McpOAuthReply,
+  type McpOAuthServerView,
+  type McpOAuthStatusView,
+} from './mcpOAuthLogin';
 export { OrgUpdateToast } from './OrgUpdateToast';
 export {
   orgUpdateFromPush,

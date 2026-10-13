@@ -37,7 +37,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { announceConnectionsChanged } from '@cockpit/feature-agent';
+import {
+  announceConnectionsChanged,
+  probeMcpOAuthUrl,
+  type McpOAuthProbeView,
+  type McpOAuthStatusView,
+} from '@cockpit/feature-agent';
 import { claimSettingsFocus } from './settingsFocus';
 import {
   SYSTEM_MCP_PRESETS,
@@ -48,6 +53,7 @@ import {
 import { SettingsDetails } from './SettingsDetails';
 import { AtlassianLoginButton } from './AtlassianLoginButton';
 import type { AtlassianView } from './orgHarnessView';
+import { McpOAuthLoginButton, McpOAuthStatusBadge, McpQuickConnectSection } from './NabyMcpOAuth';
 
 // ---------------------------------------------------------------------------
 // The preload bridge (electron/preload.ts). Typed locally so this file compiles
@@ -870,6 +876,10 @@ type NabyEngineState = {
    *  from the `mcp` list, because two answers to "is this connected" is how a row
    *  ends up disagreeing with the list under it. */
   systemMcp?: Record<string, SystemMcpStatus>;
+  /** Browser-OAuth rows and quick connect (mcp-oauth-catalog §3): per OAuth row
+   *  `{status, pending, lastError}`, per quick-connect entry its state and
+   *  whether another row holds its name. Absent from an older server. */
+  mcpOAuth?: McpOAuthStatusView;
 };
 
 /**
@@ -1606,6 +1616,10 @@ type McpRow = {
   /** 'proposed' = added by the chat agent, awaiting the user's approval before it
    *  runs; absent/'enabled' = active. */
   status?: 'enabled' | 'proposed';
+  /** 'oauth' = signs in through the browser (mcp-oauth-catalog §3.3): a status
+   *  badge and a log-in button, no header field, no edit (the tokens are keyed
+   *  by the name and belong to the URL they were issued for). */
+  auth?: 'oauth';
 };
 
 /** Parse a "Key<sep>Value" textarea (one per line) into a record; blank/keyless
@@ -1624,6 +1638,22 @@ function parseKeyVals(text: string, sep: ':' | '='): Record<string, string> | un
   return Object.keys(out).length ? out : undefined;
 }
 
+/**
+ * THE URL CHECK ON SAVE (mcp-oauth-catalog §3.2). An `http`/`sse` server saved
+ * with NO headers is asked once, without credentials, whether it needs a sign-in
+ * (`mcpOAuth.probe`) before anything is stored:
+ *
+ *   open             saved as before
+ *   oauth            "this server connects with a browser sign-in" + a log-in
+ *                    button; the row is written by the server only after the
+ *                    sign-in succeeds, as `auth: 'oauth'`
+ *   no-registration  "no automatic sign-in — put a token in a header", and the
+ *                    header box is highlighted
+ *   unreachable      the error, and "Save anyway" (what saving always did)
+ *
+ * Headers typed by the user skip the check: they already chose how to sign in.
+ * The check runs on save only — never while the list is merely open.
+ */
 function McpAddForm({
   onAdded,
   onCancel,
@@ -1649,51 +1679,89 @@ function McpAddForm({
   );
   const [envText, setEnvText] = useState((initial?.envKeys ?? []).map((k) => `${k}=`).join('\n'));
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The last URL check's verdict, for the inputs it was run on. Any edit to
+   *  those inputs drops it — a verdict about another URL means nothing. */
+  const [probe, setProbe] = useState<McpOAuthProbeView | null>(null);
+  const headersRef = useRef<HTMLTextAreaElement>(null);
   const editing = !!initial;
 
-  const submit = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const entry =
-        transport === 'stdio'
-          ? {
-              name: name.trim(),
-              transport,
-              command: command.trim(),
-              // Split on whitespace: the common case is `-y some-package`, and
-              // a full shell-quoting parser here would be a lie anyway since
-              // the command is spawned without a shell.
-              ...(args.trim() ? { args: args.trim().split(/\s+/) } : {}),
-              ...(parseKeyVals(envText, '=') ? { env: parseKeyVals(envText, '=') } : {}),
-            }
-          : {
-              name: name.trim(),
-              transport,
-              url: url.trim(),
-              ...(parseKeyVals(headersText, ':') ? { headers: parseKeyVals(headersText, ':') } : {}),
-            };
-      const res = await nabyPost({ action: 'mcp.upsert', entry });
-      if (!res.ok) {
-        setError(res.error ?? t('providerSetup.couldNotSave'));
-        return;
+  useEffect(() => {
+    setProbe(null);
+  }, [transport, url, name, headersText]);
+
+  const reset = useCallback(() => {
+    setName('');
+    setCommand('');
+    setArgs('');
+    setUrl('');
+    setHeadersText('');
+    setEnvText('');
+    setProbe(null);
+  }, []);
+
+  const submit = useCallback(
+    async (opts: { skipCheck?: boolean } = {}) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const headers = parseKeyVals(headersText, ':');
+        if (transport !== 'stdio' && !headers && !opts.skipCheck) {
+          setChecking(true);
+          const checked = await probeMcpOAuthUrl(url.trim(), transport);
+          setChecking(false);
+          if (!checked.ok) {
+            setError(checked.error);
+            return;
+          }
+          if (checked.probe && checked.probe.verdict !== 'open') {
+            setProbe(checked.probe);
+            if (checked.probe.verdict === 'no-registration') headersRef.current?.focus();
+            return;
+          }
+        }
+        const entry =
+          transport === 'stdio'
+            ? {
+                name: name.trim(),
+                transport,
+                command: command.trim(),
+                // Split on whitespace: the common case is `-y some-package`, and
+                // a full shell-quoting parser here would be a lie anyway since
+                // the command is spawned without a shell.
+                ...(args.trim() ? { args: args.trim().split(/\s+/) } : {}),
+                ...(parseKeyVals(envText, '=') ? { env: parseKeyVals(envText, '=') } : {}),
+              }
+            : {
+                name: name.trim(),
+                transport,
+                url: url.trim(),
+                ...(headers ? { headers } : {}),
+              };
+        const res = await nabyPost({ action: 'mcp.upsert', entry });
+        if (!res.ok) {
+          setError(
+            res.errorKey
+              ? t(res.errorKey, { defaultValue: res.error ?? '' })
+              : (res.error ?? t('providerSetup.couldNotSave')),
+          );
+          return;
+        }
+        reset();
+        onAdded();
+      } finally {
+        setChecking(false);
+        setBusy(false);
       }
-      setName('');
-      setCommand('');
-      setArgs('');
-      setUrl('');
-      setHeadersText('');
-      setEnvText('');
-      onAdded();
-    } finally {
-      setBusy(false);
-    }
-  }, [args, command, name, onAdded, transport, url, headersText, envText, t]);
+    },
+    [args, command, name, onAdded, reset, transport, url, headersText, envText, t],
+  );
 
   const canSave =
     name.trim().length > 0 &&
     (transport === 'stdio' ? command.trim().length > 0 : url.trim().length > 0);
+  const remote = transport === 'http' || transport === 'sse';
 
   return (
     <div className="space-y-2 border border-border rounded p-2">
@@ -1750,29 +1818,73 @@ function McpAddForm({
             className={inputClass}
           />
           <textarea
+            ref={headersRef}
             value={headersText}
             onChange={(e) => setHeadersText(e.target.value)}
             placeholder={t('providerSetup.headersPlaceholder')}
             rows={2}
-            className={`${inputClass} font-mono`}
+            className={`${inputClass} font-mono ${
+              probe?.verdict === 'no-registration' ? 'ring-1 ring-amber-500/70' : ''
+            }`}
           />
         </>
       )}
       {editing && (initial?.headerKeys?.length || initial?.envKeys?.length) ? (
         <p className="text-xs text-amber-600 dark:text-amber-400">{t('providerSetup.secretReentry')}</p>
       ) : null}
+      {remote && probe?.verdict === 'oauth' ? (
+        <div className="space-y-1.5 border-l-2 border-brand/60 pl-2.5" data-testid="mcp-add-oauth">
+          <p className="text-xs text-foreground">{t('mcpOAuth.probe.oauth')}</p>
+          <McpOAuthLoginButton
+            server={name.trim()}
+            displayName={name.trim()}
+            pending={false}
+            label={t('mcpOAuth.login')}
+            url={url.trim()}
+            transport={transport}
+            {...(probe.resourceMetadataUrl ? { resourceMetadataUrl: probe.resourceMetadataUrl } : {})}
+            replace={editing}
+            onSettled={(st) => {
+              if (!st.connected) return;
+              reset();
+              onAdded();
+            }}
+          />
+        </div>
+      ) : null}
+      {remote && probe?.verdict === 'no-registration' ? (
+        <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="mcp-add-no-registration">
+          {t('mcpOAuth.probe.noRegistration')}
+        </p>
+      ) : null}
+      {remote && probe?.verdict === 'unreachable' ? (
+        <div className="space-y-1" data-testid="mcp-add-unreachable">
+          <p className="text-xs text-red-500 break-words">
+            {t('mcpOAuth.probe.unreachable', { error: probe.error ?? '' })}
+          </p>
+          <button
+            onClick={() => void submit({ skipCheck: true })}
+            disabled={busy}
+            className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground disabled:opacity-40"
+          >
+            {t('mcpOAuth.probe.saveAnyway')}
+          </button>
+        </div>
+      ) : null}
       {error && <p className="text-xs text-red-500">{error}</p>}
       <div className="flex items-center gap-2">
         <button
           onClick={() => void submit()}
-          disabled={!canSave || busy}
+          disabled={!canSave || busy || probe?.verdict === 'oauth'}
           className="px-3 py-1.5 text-xs font-medium rounded bg-brand text-white disabled:opacity-40"
         >
-          {busy
-            ? t('providerSetup.saving')
-            : editing
-              ? t('providerSetup.saveChanges')
-              : t('providerSetup.addServer')}
+          {checking
+            ? t('mcpOAuth.probe.checking')
+            : busy
+              ? t('providerSetup.saving')
+              : editing
+                ? t('providerSetup.saveChanges')
+                : t('providerSetup.addServer')}
         </button>
         {onCancel && (
           <button
@@ -2219,17 +2331,29 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<McpRow[] | null>(null);
   const [systemMcp, setSystemMcp] = useState<Record<string, SystemMcpStatus>>({});
+  const [oauth, setOauth] = useState<McpOAuthStatusView | undefined>(undefined);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<McpRow | null>(null);
   const [status, setStatus] = useState<Record<string, { text: string; ok: boolean }>>({});
+  /** Approving an agent's remote proposal runs the URL check first
+   *  (mcp-oauth-catalog §3.2): per row, the check in flight or its verdict. */
+  const [approval, setApproval] = useState<Record<string, { checking: boolean; probe?: McpOAuthProbeView }>>({});
 
   const reload = useCallback(async () => {
     const state = await nabyGet();
+    const catalog = state?.mcpOAuth?.catalog ?? {};
     // Each preset has its own row above, so its entry is filtered out of the
     // general list rather than shown twice — once with the URL/command and secret
-    // block the preset exists to hide, and once without.
-    setRows((state?.mcp ?? []).filter((r) => !SYSTEM_MCP_PRESET_NAMES.includes(r.name)));
+    // block the preset exists to hide, and once without. A quick-connect row is
+    // filtered the same way (mcp-oauth-catalog §3.1); a row that merely shares
+    // a quick-connect NAME is the user's own and stays.
+    setRows(
+      (state?.mcp ?? []).filter(
+        (r) => !SYSTEM_MCP_PRESET_NAMES.includes(r.name) && !catalog[r.name]?.present,
+      ),
+    );
     setSystemMcp(state?.systemMcp ?? {});
+    setOauth(state?.mcpOAuth);
   }, []);
 
   useEffect(() => {
@@ -2249,15 +2373,32 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
 
   const remove = useCallback(
     async (serverName: string) => {
+      // The server also drops the row's browser sign-in (mcp-oauth-catalog §3.3).
       await nabyPost({ action: 'mcp.remove', name: serverName });
+      setApproval((prev) => {
+        const { [serverName]: _gone, ...rest } = prev;
+        return rest;
+      });
       await reload();
     },
     [reload],
   );
 
   const approve = useCallback(
-    async (serverName: string) => {
-      await nabyPost({ action: 'mcp.approve', name: serverName });
+    async (row: McpRow, force = false) => {
+      // A REMOTE proposal with no headers may need a browser sign-in: check
+      // first, and when it does, the approve button becomes a log-in button —
+      // signing in IS the approval (the row turns `enabled` + `oauth`).
+      if (!force && row.transport !== 'stdio' && !row.headerKeys?.length && row.auth !== 'oauth' && row.url) {
+        setApproval((prev) => ({ ...prev, [row.name]: { checking: true } }));
+        const checked = await probeMcpOAuthUrl(row.url, row.transport);
+        if (checked.ok && checked.probe && checked.probe.verdict !== 'open') {
+          setApproval((prev) => ({ ...prev, [row.name]: { checking: false, probe: checked.probe } }));
+          return;
+        }
+        setApproval((prev) => ({ ...prev, [row.name]: { checking: false } }));
+      }
+      await nabyPost({ action: 'mcp.approve', name: row.name });
       await reload();
     },
     [reload],
@@ -2270,6 +2411,10 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
       {/* The presets come first: they are the MCP servers most users will ever
           connect, and they need no knowledge of what an MCP server is. */}
       <NabySystemMcpSection status={systemMcp} onChanged={() => void reload()} />
+
+      {/* Quick connect: well-known remote servers that sign in through the
+          browser (mcp-oauth-catalog §3.1). */}
+      <McpQuickConnectSection catalog={oauth?.catalog} onChanged={() => void reload()} />
 
       <div className="flex items-center justify-between pt-2">
         <p className="text-xs font-medium text-foreground">{t('providerSetup.mcpServers')}</p>
@@ -2309,86 +2454,136 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
         <p className="text-xs text-muted-foreground">{t('providerSetup.noMcpServers')}</p>
       )}
 
-      {rows.map((row) => (
-        <div
-          key={row.name}
-          className={`rounded px-2 py-1.5 border ${
-            row.status === 'proposed'
-              ? 'border-amber-500/60 border-dashed bg-amber-500/5'
-              : 'border-border'
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-sm text-foreground truncate flex items-center gap-1.5">
-                {row.name}
-                {row.status === 'proposed' && (
-                  <span className="shrink-0 text-[0.714rem] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-px">
-                    {t('providerSetup.mcpProposed')}
-                  </span>
-                )}
-              </p>
-              <p className="text-xs text-muted-foreground truncate">
-                {row.transport === 'stdio'
-                  ? `${row.command ?? ''} ${(row.args ?? []).join(' ')}`.trim()
-                  : (row.url ?? '')}
-              </p>
-              {(row.envKeys?.length || row.headerKeys?.length) && (
-                <p className="text-xs text-muted-foreground">
-                  {row.envKeys?.length ? `env: ${row.envKeys.join(', ')}` : ''}
-                  {row.headerKeys?.length ? `headers: ${row.headerKeys.join(', ')}` : ''}
-                  {t('providerSetup.valuesHidden')}
+      {rows.map((row) => {
+        const isOAuth = row.transport !== 'stdio' && row.auth === 'oauth';
+        const view = oauth?.servers[row.name];
+        const oauthStatus = view?.status ?? 'none';
+        const check = approval[row.name];
+        const needsLogin = row.status === 'proposed' && check?.probe?.verdict === 'oauth';
+        return (
+          <div
+            key={row.name}
+            data-testid={`mcp-row-${row.name}`}
+            className={`rounded px-2 py-1.5 border ${
+              row.status === 'proposed'
+                ? 'border-amber-500/60 border-dashed bg-amber-500/5'
+                : 'border-border'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm text-foreground truncate flex items-center gap-1.5">
+                  {row.name}
+                  {row.status === 'proposed' && (
+                    <span className="shrink-0 text-[0.714rem] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-px">
+                      {t('providerSetup.mcpProposed')}
+                    </span>
+                  )}
+                  {isOAuth && <McpOAuthStatusBadge status={oauthStatus} />}
                 </p>
-              )}
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              {row.status === 'proposed' && (
+                <p className="text-xs text-muted-foreground truncate">
+                  {row.transport === 'stdio'
+                    ? `${row.command ?? ''} ${(row.args ?? []).join(' ')}`.trim()
+                    : (row.url ?? '')}
+                </p>
+                {!isOAuth && (row.envKeys?.length || row.headerKeys?.length) ? (
+                  <p className="text-xs text-muted-foreground">
+                    {row.envKeys?.length ? `env: ${row.envKeys.join(', ')}` : ''}
+                    {row.headerKeys?.length ? `headers: ${row.headerKeys.join(', ')}` : ''}
+                    {t('providerSetup.valuesHidden')}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {row.status === 'proposed' && !needsLogin && (
+                  <button
+                    onClick={() => void approve(row, Boolean(check?.probe))}
+                    disabled={check?.checking}
+                    className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 disabled:opacity-40"
+                  >
+                    {check?.checking
+                      ? t('mcpOAuth.probe.checking')
+                      : check?.probe
+                        ? t('mcpOAuth.probe.approveAnyway')
+                        : t('providerSetup.mcpApprove')}
+                  </button>
+                )}
+                {(isOAuth || needsLogin) && row.transport !== 'stdio' && (
+                  <McpOAuthLoginButton
+                    server={row.name}
+                    displayName={row.name}
+                    pending={Boolean(view?.pending)}
+                    label={
+                      isOAuth && oauthStatus !== 'none' ? t('mcpOAuth.relogin') : t('mcpOAuth.login')
+                    }
+                    url={row.url ?? ''}
+                    transport={row.transport}
+                    {...(check?.probe?.resourceMetadataUrl
+                      ? { resourceMetadataUrl: check.probe.resourceMetadataUrl }
+                      : {})}
+                    onSettled={() => void reload()}
+                  />
+                )}
                 <button
-                  onClick={() => void approve(row.name)}
-                  className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10"
+                  onClick={() => void test(row.name)}
+                  className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
                 >
-                  {t('providerSetup.mcpApprove')}
+                  {t('providerSetup.test')}
                 </button>
-              )}
-              <button
-                onClick={() => void test(row.name)}
-                className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
-              >
-                {t('providerSetup.test')}
-              </button>
-              <button
-                onClick={() => {
-                  setAdding(false);
-                  setEditing(row);
-                }}
-                className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
-              >
-                {t('providerSetup.edit')}
-              </button>
-              <button
-                onClick={() => void remove(row.name)}
-                className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-red-500"
-              >
-                {row.status === 'proposed' ? t('providerSetup.mcpReject') : t('providerSetup.remove')}
-              </button>
+                {/* No edit for a browser-OAuth row: its name keys the tokens and
+                    its URL is what they were issued for (§3.3). */}
+                {!isOAuth && (
+                  <button
+                    onClick={() => {
+                      setAdding(false);
+                      setEditing(row);
+                    }}
+                    className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
+                  >
+                    {t('providerSetup.edit')}
+                  </button>
+                )}
+                <button
+                  onClick={() => void remove(row.name)}
+                  className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-red-500"
+                >
+                  {row.status === 'proposed' ? t('providerSetup.mcpReject') : t('providerSetup.remove')}
+                </button>
+              </div>
             </div>
+            {row.status === 'proposed' && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                {needsLogin ? t('mcpOAuth.probe.oauth') : t('providerSetup.mcpProposedHint')}
+              </p>
+            )}
+            {row.status === 'proposed' && check?.probe?.verdict === 'no-registration' && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t('mcpOAuth.probe.noRegistration')}</p>
+            )}
+            {row.status === 'proposed' && check?.probe?.verdict === 'unreachable' && (
+              <p className="mt-1 text-xs text-red-500 break-words">
+                {t('mcpOAuth.probe.unreachable', { error: check.probe.error ?? '' })}
+              </p>
+            )}
+            {isOAuth && oauthStatus === 'relogin' && (
+              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t('mcpOAuth.reloginHint')}</p>
+            )}
+            {view?.lastError && !view.pending && (
+              <p className="mt-1 text-xs text-red-500 break-words">
+                {t('mcpOAuth.loginFailed', { name: row.name, error: view.lastError })}
+              </p>
+            )}
+            {status[row.name] && (
+              <p
+                className={`mt-1 text-xs ${
+                  status[row.name]?.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'
+                }`}
+              >
+                {status[row.name]?.text}
+              </p>
+            )}
           </div>
-          {row.status === 'proposed' && (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-              {t('providerSetup.mcpProposedHint')}
-            </p>
-          )}
-          {status[row.name] && (
-            <p
-              className={`mt-1 text-xs ${
-                status[row.name]?.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'
-              }`}
-            >
-              {status[row.name]?.text}
-            </p>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

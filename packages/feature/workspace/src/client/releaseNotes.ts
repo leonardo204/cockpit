@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.43.0 — 2026-10-13
+
+### en
+
+Connect Notion, Linear, Asana and Sentry with a browser sign-in — no keys to copy.
+
+**New**
+
+- **Quick connect.** Settings → Connections now lists Notion, Linear, Asana and Sentry above your MCP servers. Click "Connect", sign in in the browser, and their tools are ready in the next turn on either engine. The same row lets you cancel a pending sign-in, disconnect, or sign in again when a login expires.
+- **Sign-in for any remote MCP.** When you add a remote MCP by URL without headers, naby checks the server first. If it supports browser sign-in you get a sign-in button; if not, naby asks you to add a token header instead.
+  - MCP servers suggested in chat go through the same check when you approve them.
+
+**Improved**
+
+- **Removing a signed-in MCP server also deletes its stored sign-in.** Signed-in servers show their status and a "Sign in again" button in the list.
+
+### ko
+
+Notion, Linear, Asana, Sentry를 키 없이 브라우저 로그인으로 연결해요.
+
+**새로 생긴 것**
+
+- **바로 연결.** 설정 → 연결의 MCP 목록 위에 Notion, Linear, Asana, Sentry가 나와요. "연결"을 누르고 브라우저에서 로그인하면 다음 턴부터 두 엔진 모두에서 도구를 쓸 수 있어요. 같은 줄에서 진행 중인 로그인을 취소하거나, 연결을 끊거나, 로그인이 만료됐을 때 다시 로그인할 수 있어요.
+- **어떤 원격 MCP든 로그인으로 연결해요.** 헤더 없이 URL로 원격 MCP를 추가하면 naby가 먼저 서버를 확인해요. 브라우저 로그인을 지원하면 로그인 버튼이 나오고, 지원하지 않으면 헤더에 토큰을 넣으라고 알려 줘요.
+  - 채팅에서 제안된 MCP 서버도 승인할 때 같은 확인을 거쳐요.
+
+**나아진 것**
+
+- **로그인한 MCP 서버를 지우면 저장된 로그인 정보도 함께 지워져요.** 로그인한 서버는 목록에서 연결 상태와 "다시 로그인" 버튼을 보여 줘요.
+
 ## 1.42.1 — 2026-10-13
 
 ### en

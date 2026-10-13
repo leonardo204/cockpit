@@ -54,13 +54,11 @@ import {
   readOrgHookConfig,
   runOrgHarnessSync,
   startOrgHarnessRecheck,
-  startMcpOAuthLogin,
   unsupportedOrgHooks,
   useOrgVersion,
   type AtlassianMigrationReport,
   type AtlassianRowShape,
   type McpOAuthFetch,
-  type McpOAuthLogin,
   type McpOAuthStatus,
   type OrgDepsState,
   type OrgGateVerdict,
@@ -76,6 +74,13 @@ import {
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { anyRunActive } from '../sessionRunHub';
+import {
+  cancelServerOAuthLogin,
+  clearServerOAuthLastError,
+  serverOAuthLastError,
+  serverOAuthLoginPending,
+  startServerOAuthLogin,
+} from './mcpOAuthLogin';
 import { CIC_SERVER_NAME, findSystemMcpPreset, orgHarnessKeyPreset } from './systemMcp';
 
 /** Turns the BACKGROUND passes off (tests, CI; not user-facing). Not the kill
@@ -417,56 +422,32 @@ export function setAtlassianOAuthServerUrl(url: string | undefined): void {
   atlassianServerUrl = url;
 }
 
-type PendingLogin = { login: McpOAuthLogin; startedAt: number };
-let pendingLogin: PendingLogin | undefined;
-let lastLoginError: string | undefined;
-
 /**
  * Start a browser sign-in. Returns the authorization URL — the CLIENT opens it
  * (in the app, `window.open` lands in the OS browser through the window-open
  * handler). A second start cancels the first. When the callback lands, the
  * API-token row is swapped right away if no turn is running, otherwise at the
  * next turn boundary (§4.4 step 3).
+ *
+ * The pending sign-in and its last error live in the per-server manager
+ * (mcpOAuthLogin.ts, mcp-oauth-catalog §4.1) that every browser-OAuth server
+ * shares; only the swap after it is Atlassian's own.
  */
 export async function startAtlassianLogin(
   store: Store,
 ): Promise<{ ok: true; authorizationUrl: string } | { ok: false; error: string }> {
-  pendingLogin?.login.cancel();
-  pendingLogin = undefined;
-  lastLoginError = undefined;
-  let login: McpOAuthLogin;
-  try {
-    login = await startMcpOAuthLogin({
-      store,
-      server: ATLASSIAN_MCP_SERVER_NAME,
-      serverUrl: atlassianServerUrl ?? ATLASSIAN_MCP_URL,
-      ...(atlassianFetch ? { fetch: atlassianFetch } : {}),
-    });
-  } catch (e) {
-    lastLoginError = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: lastLoginError };
-  }
-  const mine: PendingLogin = { login, startedAt: Date.now() };
-  pendingLogin = mine;
-  void login.done.then((r) => {
-    if (pendingLogin === mine) pendingLogin = undefined;
-    if (!r.ok) {
-      if (r.error !== 'cancelled') lastLoginError = r.error;
-      return;
-    }
-    lastLoginError = undefined;
-    if (!anyRunActive()) applyAtlassianAtTurnBoundary(store);
+  return startServerOAuthLogin(store, {
+    server: ATLASSIAN_MCP_SERVER_NAME,
+    serverUrl: atlassianServerUrl ?? ATLASSIAN_MCP_URL,
+    ...(atlassianFetch ? { fetch: atlassianFetch } : {}),
+    onSuccess: () => {
+      if (!anyRunActive()) applyAtlassianAtTurnBoundary(store);
+    },
   });
-  if (!login.authorizationUrl) {
-    // Already authorized (cannot normally happen: the login drops old tokens).
-    return { ok: true, authorizationUrl: '' };
-  }
-  return { ok: true, authorizationUrl: login.authorizationUrl };
 }
 
 export function cancelAtlassianLogin(): void {
-  pendingLogin?.login.cancel();
-  pendingLogin = undefined;
+  cancelServerOAuthLogin(ATLASSIAN_MCP_SERVER_NAME);
 }
 
 /** §4.4 step 3 at a turn boundary. Never throws. */
@@ -507,10 +488,11 @@ export function readAtlassianView(store: Store, now = Date.now()): AtlassianView
   const blockFrom = orgGateBlockFrom(store);
   const notReady = status !== 'connected';
   const migration = readAtlassianMigrationReport(store);
+  const lastLoginError = serverOAuthLastError(ATLASSIAN_MCP_SERVER_NAME);
   return {
     status,
     row: atlassianRowShape(store),
-    loginPending: pendingLogin !== undefined,
+    loginPending: serverOAuthLoginPending(ATLASSIAN_MCP_SERVER_NAME),
     ...(lastLoginError ? { lastLoginError } : {}),
     ...(rec?.loggedInAt !== undefined ? { loggedInAt: rec.loggedInAt } : {}),
     ...(migration ? { migration } : {}),
@@ -644,7 +626,6 @@ export function resetOrgHarnessBootForTests(): void {
   recheck?.stop();
   recheck = undefined;
   inflight = undefined;
-  pendingLogin?.login.cancel();
-  pendingLogin = undefined;
-  lastLoginError = undefined;
+  cancelAtlassianLogin();
+  clearServerOAuthLastError(ATLASSIAN_MCP_SERVER_NAME);
 }

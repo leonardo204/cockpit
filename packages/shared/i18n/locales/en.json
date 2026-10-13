@@ -1349,6 +1349,53 @@
       "none": "Not signed in."
     }
   },
+  "mcpOAuth": {
+    "quickConnect": {
+      "title": "Quick connect",
+      "description": "Well-known services that connect with a browser sign-in. Nothing to type — choose Connect and sign in."
+    },
+    "catalog": {
+      "notion": {
+        "title": "Notion",
+        "description": "Search, read and edit pages and databases in your workspace."
+      },
+      "linear": {
+        "title": "Linear",
+        "description": "Find, create and update issues, projects and comments."
+      },
+      "asana": {
+        "title": "Asana",
+        "description": "Work with tasks, projects and goals."
+      },
+      "sentry": {
+        "title": "Sentry",
+        "description": "Look up issues, errors and releases in your organization."
+      }
+    },
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "login": "Log in",
+    "relogin": "Log in again",
+    "reloginHint": "The sign-in expired. Log in again to use this server's tools.",
+    "loginDone": "Connected to {{name}}.",
+    "loginFailed": "{{name}} sign-in failed: {{error}}",
+    "nameTaken": "A server with the same name already exists.",
+    "presetName": "This name belongs to a built-in server. Choose another name.",
+    "oauthRowLocked": "This server signs in through the browser. Use its log-in button, or remove it and add it again.",
+    "status": {
+      "connected": "connected",
+      "relogin": "log in again",
+      "none": "not signed in"
+    },
+    "probe": {
+      "checking": "Checking the server…",
+      "oauth": "This server connects with a browser sign-in.",
+      "noRegistration": "This server does not support automatic sign-in. Put a token in the headers.",
+      "unreachable": "Could not check the server: {{error}}",
+      "saveAnyway": "Save anyway",
+      "approveAnyway": "approve anyway"
+    }
+  },
   "chatgptOauth": {
     "title": "ChatGPT (subscription)",
     "devBadge": "Dev only · subscription · ToS caution",
