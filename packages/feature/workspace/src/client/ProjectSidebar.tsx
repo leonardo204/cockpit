@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ProjectItem } from './ProjectItem';
 import { ProjectSessionRow } from './ProjectSessionRow';
@@ -60,7 +60,9 @@ interface ProjectSidebarProps {
   onRemoveProject: (index: number) => void;
   onReorderProjects: (projects: ProjectInfo[]) => void;
   onToggleCollapse: () => void;
-  onOpenSessionBrowser: () => void;
+  /** "Open Project". Given the click so the quick folder menu can open under
+   *  the button and hand focus back to it. */
+  onOpenSessionBrowser: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   onBrowseAllSessions: () => void;
   onOpenSettings: () => void;
   onOpenNote: (cwd?: string) => void;

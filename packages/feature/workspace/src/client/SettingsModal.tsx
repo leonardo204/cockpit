@@ -52,6 +52,10 @@ import { NabyOrgHarnessSettings } from './NabyOrgHarnessSettings';
 // question — what this app looks like — and because a nav row per one-control
 // tab is the menu the reorg (§3.1) removed.
 import { FontSettingsPanel } from './FontSettingsPanel';
+// Where the project folder chooser starts. Under General because it is an
+// app-wide preference with one control and no better home — a nav row of its
+// own would be the per-control tab §3.1 removed.
+import { ProjectFolderSettingsPanel } from './ProjectFolderSettingsPanel';
 // Every section is a flat header + content block; the content pane below draws
 // the full-width rule between them (`divide-y`). Cards were tried first and made
 // the multi-panel sections (Agents, Harness, About) boxes-inside-boxes.
@@ -369,6 +373,12 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSectio
                   settingsLayout.test.ts). */}
               <SettingsSection title={t('fonts.title')}>
                 <FontSettingsPanel />
+              </SettingsSection>
+
+              {/* PROJECT FOLDER — not appearance, so it follows the three that
+                  are rather than sitting between them. */}
+              <SettingsSection title={t('projectFolder.title')}>
+                <ProjectFolderSettingsPanel />
               </SettingsSection>
               </>
             ) : null}

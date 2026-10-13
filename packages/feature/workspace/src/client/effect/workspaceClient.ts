@@ -13,6 +13,11 @@
  */
 import { Effect } from "effect"
 import { AppError } from "@cockpit/effect-core"
+import {
+  PROJECT_FOLDER_DEFAULT_KEY,
+  PROJECT_FOLDER_LAST_KEY,
+  normalizeFavorites,
+} from "@cockpit/shared-utils"
 
 // ─────────────────────────────────────────────────────────
 // HTTP primitives
@@ -195,7 +200,10 @@ export const saveProjectSettings = (
  *  import from `electron` (Next would try to bundle it), so the preload's shape
  *  is restated here rather than imported. */
 interface FolderPickerBridge {
-  pickFolder(message?: string): Promise<string | null>
+  // `defaultPath` is new; a preload that predates it simply ignores the extra
+  // argument and opens at home, which is the old behaviour — so no version
+  // check is needed for it.
+  pickFolder(message?: string, defaultPath?: string): Promise<string | null>
 }
 
 /**
@@ -225,22 +233,120 @@ const folderPickerBridge = (): FolderPickerBridge | null => {
  *
  * The route remains the fallback for the cockpit standalone dev server, where
  * there is no Electron bridge at all.
+ *
+ * WHERE IT OPENS, AND WHAT IT REMEMBERS. Both paths get the start folder from
+ * `/api/pick-folder/start` (the configured default, else the parent of the last
+ * pick, else home), and a successful pick is written back as the last folder.
+ * Neither step can fail the pick: a start lookup that errors opens the panel
+ * at home, and a write that errors loses only the memory of this one pick.
+ *
+ * `remember: false` is for callers whose pick is not a project: Settings
+ * choosing the default folder, and Create, which remembers the folder it MADE
+ * (via `rememberProjectFolder`) rather than the parent the user picked.
+ *
+ * `startAt` skips the lookup and opens exactly there — the quick folder menu
+ * (ProjectFolderMenu.tsx) has already fetched the choices, and a favorite opens
+ * the chooser INSIDE that folder rather than at the resolved start.
  */
 export const pickFolder = (
-  message?: string
+  message?: string,
+  options: { remember?: boolean; startAt?: string } = {}
 ): Effect.Effect<{ folder?: string | null }, AppError> =>
   // `suspend` so the detection happens when the effect RUNS, not when the
   // module is evaluated — this module is imported dynamically, but SSR would
   // otherwise be free to decide there is no bridge on the server's behalf.
-  Effect.suspend(() => {
-    const bridge = folderPickerBridge()
-    if (!bridge) return httpJson<{ folder?: string | null }>("/api/pick-folder")
-    return Effect.tryPromise({
-      try: async () => ({ folder: await bridge.pickFolder(message) }),
-      catch: (cause) =>
-        new AppError({ message: "fsOps.pickFolder failed", cause }),
+  Effect.suspend(() =>
+    Effect.gen(function* () {
+      const startPath = options.startAt ?? (yield* projectFolderStart())
+      const bridge = folderPickerBridge()
+      const result = bridge
+        ? yield* Effect.tryPromise({
+            try: async () => ({ folder: await bridge.pickFolder(message, startPath) }),
+            catch: (cause) =>
+              new AppError({ message: "fsOps.pickFolder failed", cause }),
+          })
+        : yield* httpJson<{ folder?: string | null }>(
+            startPath
+              ? `/api/pick-folder?defaultPath=${encodeURIComponent(startPath)}`
+              : "/api/pick-folder"
+          )
+      // Only a real pick is remembered — a cancel (`null`) leaves the last
+      // folder as it was.
+      if (options.remember !== false && typeof result.folder === "string" && result.folder) {
+        yield* rememberProjectFolder(result.folder)
+      }
+      return result
     })
-  })
+  )
+
+/**
+ * The folder the chooser should open at, or undefined to let it pick (home).
+ * Never fails: see `pickFolder` — a broken lookup must not cost the user the
+ * dialog.
+ */
+export const projectFolderStart = (): Effect.Effect<string | undefined> =>
+  loadProjectFolderChoices().pipe(Effect.map((c) => c.startPath))
+
+/**
+ * The quick folder menu's inputs (`/api/pick-folder/start`): the resolved start,
+ * the favorites and the last folder — existing folders only — and home, for
+ * `~` display. Never fails: an unreachable server is "no choices", which makes
+ * the menu step aside and the chooser open where it always did.
+ */
+export interface ProjectFolderChoices {
+  startPath?: string
+  favorites: string[]
+  last: string | null
+  home?: string
+}
+
+const NO_CHOICES: ProjectFolderChoices = { favorites: [], last: null }
+
+const nonEmpty = (v: unknown): string | undefined =>
+  typeof v === "string" && v ? v : undefined
+
+export const loadProjectFolderChoices = (): Effect.Effect<ProjectFolderChoices> =>
+  httpJson<Record<string, unknown>>("/api/pick-folder/start").pipe(
+    Effect.map(
+      (r): ProjectFolderChoices => ({
+        startPath: nonEmpty(r.startPath),
+        favorites: normalizeFavorites(r.favorites),
+        last: nonEmpty(r.last) ?? null,
+        home: nonEmpty(r.home),
+      })
+    ),
+    Effect.orElseSucceed(() => NO_CHOICES)
+  )
+
+/**
+ * Add or remove a favorite folder. Answers the STORED list afterwards (stale
+ * entries included), or `ok: false` when the server refused — `add` takes only
+ * an existing absolute directory.
+ */
+export type FavoritesResult =
+  | { ok: true; favorites: string[] }
+  | { ok: false; reason: string }
+
+export const updateProjectFolderFavorite = (
+  op: "add" | "remove",
+  folder: string
+): Effect.Effect<FavoritesResult, AppError> =>
+  httpPostJson<FavoritesResult>("/api/pick-folder/favorites", { op, folder })
+
+/** Record `folder` as the last project folder. Never fails (best effort). */
+export const rememberProjectFolder = (folder: string): Effect.Effect<void> =>
+  saveSettings({ [PROJECT_FOLDER_LAST_KEY]: folder }).pipe(
+    Effect.asVoid,
+    Effect.orElse(() => Effect.void)
+  )
+
+/** Set the default project folder, or clear it with `null`. The settings PUT
+ *  merges and cannot delete a key, so "cleared" is stored as `null`, which the
+ *  start resolver treats exactly like an absent key. */
+export const saveProjectFolderDefault = (
+  folder: string | null
+): Effect.Effect<unknown, AppError> =>
+  saveSettings({ [PROJECT_FOLDER_DEFAULT_KEY]: folder })
 
 // ─────────────────────────────────────────────────────────
 // /api/create-project

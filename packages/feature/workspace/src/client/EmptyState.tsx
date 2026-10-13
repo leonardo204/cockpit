@@ -6,9 +6,10 @@ import { BrowserRuntime } from '@cockpit/effect-runtime';
 import {
   loadSessionProjects,
   loadSessionsByProject,
-  pickFolder,
   createProject,
+  rememberProjectFolder,
 } from './effect/workspaceClient';
+import { useProjectFolderMenu } from './ProjectFolderMenu';
 
 interface SessionInfo {
   path: string;
@@ -86,8 +87,11 @@ export function EmptyState({
   const [searchKeyword, setSearchKeyword] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // "Open" / "Create" state.
-  const [isPicking, setIsPicking] = useState(false);
+  // "Open" / "Create" state. Both go through ONE quick folder menu (favorites,
+  // last folder, browse); `folderMenu.busy` is the "a chooser is up" state the
+  // Open button used to keep for itself.
+  const folderMenu = useProjectFolderMenu();
+  const { requestFolder } = folderMenu;
   const [isCreating, setIsCreating] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
@@ -186,34 +190,39 @@ export function EmptyState({
     onSelectSession(cwd, fileName.replace('.jsonl', ''));
   };
 
-  // "Open" — the OS folder picker, the same client helper the sidebar's project
-  // browser uses (workspaceClient's `pickFolder`, which prefers the Electron
-  // dialog and falls back to the route). Adding a project is deliberate; this
-  // is the only way a project enters the list besides Create.
-  const handleOpen = useCallback(async () => {
-    if (isPicking) return;
-    setIsPicking(true);
-    const exit = await BrowserRuntime.runPromiseExit(pickFolder());
-    setIsPicking(false);
-    if (exit._tag === 'Success' && exit.value.folder) {
-      onOpenProject(exit.value.folder);
-    }
-  }, [isPicking, onOpenProject]);
+  // "Open" — the quick folder menu, then the OS folder picker: the same hook the
+  // sidebar's "Open Project" uses (ProjectFolderMenu.tsx → workspaceClient's
+  // `pickFolder`, which prefers the Electron dialog and falls back to the
+  // route). Adding a project is deliberate; this is the only way a project
+  // enters the list besides Create.
+  const handleOpen = useCallback(
+    async (trigger: HTMLElement) => {
+      const folder = await requestFolder(trigger);
+      if (folder) onOpenProject(folder);
+    },
+    [requestFolder, onOpenProject],
+  );
 
   // "Create" — name the folder here, pick where it goes in the native dialog,
   // and the server makes exactly that one directory. A button that only
   // reopened the picker would be Open wearing a different label.
-  const handleCreate = useCallback(async () => {
+  const handleCreate = useCallback(async (trigger: HTMLElement) => {
     const name = createName.trim();
-    if (isCreating || !name) return;
+    if (!name) return;
+    // While the menu is up, a second press is the toggle that closes it; the
+    // hook handles that, and the first press then sees "nothing picked".
+    if (isCreating && !folderMenu.menuOpen) return;
     setCreateError(null);
     setIsCreating(true);
-    const picked = await BrowserRuntime.runPromiseExit(pickFolder());
-    if (picked._tag !== 'Success' || !picked.value.folder) {
+    // `remember: false` — the folder picked here is where the project GOES, not
+    // the project. The new folder is remembered below once it exists, so the
+    // next chooser opens right back here, beside it.
+    const parent = await requestFolder(trigger, { remember: false });
+    if (!parent) {
       setIsCreating(false);
       return; // cancelled — not an error
     }
-    const created = await BrowserRuntime.runPromiseExit(createProject(picked.value.folder, name));
+    const created = await BrowserRuntime.runPromiseExit(createProject(parent, name));
     setIsCreating(false);
     if (created._tag !== 'Success') {
       setCreateError(t('workspace.createProjectFailed'));
@@ -230,10 +239,11 @@ export function EmptyState({
       );
       return;
     }
+    BrowserRuntime.runFork(rememberProjectFolder(result.path));
     setCreateOpen(false);
     setCreateName('');
     onOpenProject(result.path);
-  }, [createName, isCreating, onOpenProject, t]);
+  }, [createName, isCreating, folderMenu.menuOpen, requestFolder, onOpenProject, t]);
 
   const formatDate = (isoString: string) => {
     const date = new Date(isoString);
@@ -265,8 +275,8 @@ export function EmptyState({
   const openButton = (large: boolean) => (
     <button
       data-testid="home-open-project"
-      onClick={() => void handleOpen()}
-      disabled={isPicking}
+      onClick={(e) => void handleOpen(e.currentTarget)}
+      disabled={folderMenu.busy && !folderMenu.menuOpen}
       className={`flex items-center gap-2 rounded-lg border border-border text-foreground hover:bg-accent transition-colors disabled:opacity-50 ${
         large ? 'px-4 py-2 text-sm' : 'px-3 py-1.5 text-xs'
       }`}
@@ -308,15 +318,15 @@ export function EmptyState({
         placeholder={t('workspace.createProjectName')}
         onChange={(e) => setCreateName(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') void handleCreate();
+          if (e.key === 'Enter') void handleCreate(e.currentTarget);
           if (e.key === 'Escape') setCreateOpen(false);
         }}
         className="px-3 py-1.5 text-sm border border-border rounded-lg bg-card text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
       />
       <button
         data-testid="home-create-confirm"
-        onClick={() => void handleCreate()}
-        disabled={isCreating || createName.trim().length === 0}
+        onClick={(e) => void handleCreate(e.currentTarget)}
+        disabled={(isCreating && !folderMenu.menuOpen) || createName.trim().length === 0}
         className="px-3 py-1.5 text-sm rounded-lg bg-brand text-white hover:opacity-90 transition disabled:opacity-50"
       >
         {t('workspace.createProjectChooseLocation')}
@@ -349,6 +359,8 @@ export function EmptyState({
     // content area below then has no bounded height to scroll within, so the
     // whole list overflows the viewport and nothing scrolls at all.
     <div className="flex-1 min-h-0 flex flex-col bg-card" data-testid="home-screen">
+      {/* The quick folder menu for Open and Create (portaled). */}
+      {folderMenu.menu}
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-border">
         <h2 className="text-lg font-medium text-foreground whitespace-nowrap">

@@ -8,8 +8,8 @@ import { BrowserRuntime } from '@cockpit/effect-runtime';
 import {
   loadSessionProjects,
   loadSessionsByProject,
-  pickFolder,
 } from './effect/workspaceClient';
+import { useProjectFolderMenu } from './ProjectFolderMenu';
 
 interface SessionInfo {
   path: string;
@@ -44,7 +44,11 @@ interface SessionBrowserProps {
 
 export function SessionBrowser({ isOpen, onClose, onSelectSession, onAddProject }: SessionBrowserProps) {
   const { t } = useTranslation();
-  const [isPickingFolder, setIsPickingFolder] = useState(false);
+  // "Open folder" goes through the shared quick folder menu (favorites, last
+  // folder, browse) like every other way of opening a project.
+  const folderMenu = useProjectFolderMenu();
+  const { requestFolder } = folderMenu;
+  const isPickingFolder = folderMenu.busy && !folderMenu.menuOpen;
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [projectStates, setProjectStates] = useState<Record<string, ProjectState>>({});
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
@@ -143,16 +147,16 @@ export function SessionBrowser({ isOpen, onClose, onSelectSession, onAddProject 
   }, [isOpen, loadProjects]);
 
   // Open folder picker
-  const handlePickFolder = useCallback(async () => {
-    if (isPickingFolder) return;
-    setIsPickingFolder(true);
-    const exit = await BrowserRuntime.runPromiseExit(pickFolder());
-    if (exit._tag === 'Success' && exit.value.folder && onAddProject) {
-      onAddProject(exit.value.folder);
-      onClose();
-    }
-    setIsPickingFolder(false);
-  }, [isPickingFolder, onAddProject, onClose]);
+  const handlePickFolder = useCallback(
+    async (trigger: HTMLElement) => {
+      const folder = await requestFolder(trigger);
+      if (folder && onAddProject) {
+        onAddProject(folder);
+        onClose();
+      }
+    },
+    [requestFolder, onAddProject, onClose],
+  );
 
   // Close on ESC key
   useEffect(() => {
@@ -193,6 +197,9 @@ export function SessionBrowser({ isOpen, onClose, onSelectSession, onAddProject 
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* The quick folder menu for "Open folder" (portaled, z-[80] above this
+          modal). */}
+      {folderMenu.menu}
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
@@ -233,7 +240,7 @@ export function SessionBrowser({ isOpen, onClose, onSelectSession, onAddProject 
             </div>
             {onAddProject && (
               <button
-                onClick={handlePickFolder}
+                onClick={(e) => void handlePickFolder(e.currentTarget)}
                 disabled={isPickingFolder}
                 className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50"
                 title={t('sessions.openFolder')}

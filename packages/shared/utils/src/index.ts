@@ -20,6 +20,10 @@ export * from './markdownFile';
 // The ONE image-format whitelist. The markdown rewriter and /api/fs-image both
 // import it; two copies would break images silently. See imageFile.ts.
 export * from './imageFile';
+// The settings.json keys behind the folder chooser (default, last, favorites)
+// and the pure favorites-list rules — one spelling for the client that writes
+// them and the server that reads them.
+export * from './projectFolder';
 export * from './platform';
 export * from './paths';
 export * from './ollamaEnv';

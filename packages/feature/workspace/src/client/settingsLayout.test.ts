@@ -98,6 +98,8 @@ const PANELS = [
   // likely to be "helpfully" wrapped in a tinted rectangle, and it uses the left
   // accent every other sample-of-something in this pane uses.
   'FontSettingsPanel.tsx',
+  // The default project folder (2026-10-13): a path readout and two buttons.
+  'ProjectFolderSettingsPanel.tsx',
 ] as const;
 
 describe('a section is flat, not a card', () => {
@@ -180,8 +182,13 @@ describe('every settings block is a section', () => {
   // and language because all three answer "what does this app look like". The
   // alternative — a nav row of its own — is the per-control tab the §3.1 regroup
   // deleted twice over.
+  //
+  // THE 2026-10-13 ADDITION. `general` grew by one more, and again it is new UI,
+  // not a move: the default project folder (VOC — the folder chooser always
+  // opened at home). It is an app-wide preference with a single control, which
+  // is what General holds; a nav row of its own is the tab §3.1 removed.
   const EXPECTED: Record<string, number> = {
-    general: 3, // theme + language (merged) + fonts (2026-08-06)
+    general: 4, // theme + language (merged) + fonts (2026-08-06) + project folder (2026-10-13)
     provider: 1, // engine choice + API keys; MCP moved to connections
     connections: 2, // MCP servers (system presets + user-added) / telegram
     agents: 1, // the naby agent list; its memory and telegram moved out

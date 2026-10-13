@@ -1143,6 +1143,32 @@
     "copyFileName": "Copy File Name",
     "copyFolderName": "Copy Folder Name"
   },
+  "projectFolder": {
+    "title": "Default project folder",
+    "description": "Where the folder chooser starts when you open or create a project.",
+    "notSet": "Not set — starts next to the last folder you opened.",
+    "choose": "Choose…",
+    "clear": "Clear",
+    "prompt": "Select the default project folder",
+    "saveFailed": "Couldn't save the default project folder.",
+    "favoritesTitle": "Favorite folders",
+    "favoritesDescription": "Offered in a short menu first when you open or create a project. Up to {{max}}.",
+    "favoritesEmpty": "No favorites yet.",
+    "addFavorite": "Add folder…",
+    "removeFavorite": "Remove",
+    "removeFavoriteLabel": "Remove {{path}} from favorites",
+    "favoriteMissing": "Folder not found — hidden from the menu",
+    "favoritesFull": "Up to {{max}} favorites.",
+    "favoritePrompt": "Select a folder to add to favorites",
+    "favoriteFailed": "Couldn't update favorite folders."
+  },
+  "projectFolderMenu": {
+    "label": "Open a project folder",
+    "last": "Last opened",
+    "addFavorite": "Add to favorites",
+    "addFavoriteFailed": "Couldn't add to favorites.",
+    "browse": "Browse other folder…"
+  },
   "fonts": {
     "title": "Fonts",
     "description": "Choose the faces and sizes the app and the conversation are drawn in.",

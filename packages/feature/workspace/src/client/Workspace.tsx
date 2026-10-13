@@ -12,6 +12,7 @@ import {
 import { ResizeHandle } from '@cockpit/shared-ui';
 import { EmptyState } from './EmptyState';
 import { SessionBrowser } from './SessionBrowser';
+import { useProjectFolderMenu } from './ProjectFolderMenu';
 import { SettingsModal } from './SettingsModal';
 // F1-06. Renders itself only when the desktop app has no provider key yet;
 // returns null in every other case (including the browser dev server).
@@ -540,19 +541,17 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   /** Pick a folder and open it — the one way a project is added, shared by the
    *  home screen's "Open" and the sidebar's "Open Project" so the two cannot
-   *  drift apart. */
-  const handlePickAndOpenProject = useCallback(async () => {
-    // Dynamic imports to match how this file already reaches the Effect runtime
-    // (see the handler above) and to keep the picker out of the initial bundle.
-    const [{ BrowserRuntime }, { pickFolder }] = await Promise.all([
-      import('@cockpit/effect-runtime'),
-      import('./effect/workspaceClient'),
-    ]);
-    const exit = await BrowserRuntime.runPromiseExit(pickFolder());
-    if (exit._tag === 'Success' && exit.value.folder) {
-      openProjectByCwd(exit.value.folder);
-    }
-  }, [openProjectByCwd]);
+   *  drift apart. Goes through the quick folder menu (favorites, last folder,
+   *  "Browse other folder…"), which opens under the button that was clicked. */
+  const { requestFolder, menu: projectFolderMenu } = useProjectFolderMenu();
+  const handlePickAndOpenProject = useCallback(
+    async (e?: { currentTarget: EventTarget | null }) => {
+      const trigger = e?.currentTarget instanceof HTMLElement ? e.currentTarget : null;
+      const folder = await requestFolder(trigger);
+      if (folder) openProjectByCwd(folder);
+    },
+    [openProjectByCwd, requestFolder],
+  );
 
 
   // Remove a project FROM THE LIST, addressed by path — what the home screen's
@@ -719,6 +718,9 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
 
   return (
     <div className="h-screen flex bg-background overflow-hidden">
+      {/* The quick folder menu for the sidebar's "Open Project" (portaled; it
+          renders nothing until the button asks for it). */}
+      {projectFolderMenu}
       {/* Left project list */}
       <ProjectSidebar
         projects={projects}

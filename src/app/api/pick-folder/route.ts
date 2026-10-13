@@ -3,49 +3,47 @@
  *
  * Launches the OS-native folder picker dialog. Returns `folder: null` on
  * failure or user cancellation.
+ *
+ * `?defaultPath=` is where the dialog starts (the client resolves it through
+ * `/api/pick-folder/start`). It is validated here — absolute, existing, a
+ * directory — and anything else silently starts at home, the old behaviour.
+ * The dialogs are launched without a shell (see `pickerCommands`), so a start
+ * folder or prompt containing quotes cannot break out of the command line.
  */
-import { execSync } from "child_process"
+import { execFileSync } from "child_process"
 import { homedir } from "os"
 import { Effect } from "effect"
-import {
-  isMac,
-  isWindows,
-  SETTINGS_FILE,
-  readJsonFile,
-} from "@cockpit/shared-utils"
+import { SETTINGS_FILE, readJsonFile } from "@cockpit/shared-utils"
 import en from "@cockpit/shared-i18n/locales/en.json"
 import ko from "@cockpit/shared-i18n/locales/ko.json"
 import { handler, ok } from "@cockpit/effect-runtime/server"
+import { pickerCommands, usableStartDir } from "../../../lib/projectFolderStart"
 
 const locales: Record<string, typeof en> = { en, ko }
 
-const pickFolder = (prompt: string, home: string): string => {
-  if (isMac) {
-    const script = `osascript -e 'POSIX path of (choose folder with prompt "${prompt}" default location POSIX file "${home}")'`
-    return execSync(script, { encoding: "utf8", timeout: 60000 }).trim()
+const pickFolder = (prompt: string, startDir: string): string => {
+  const commands = pickerCommands(process.platform, prompt, startDir)
+  for (const [i, cmd] of commands.entries()) {
+    try {
+      return execFileSync(cmd.file, cmd.args, {
+        encoding: "utf8",
+        timeout: 60000,
+        // stderr dropped, as the old `2>/dev/null` did: zenity in particular
+        // prints GTK warnings on every run.
+        stdio: ["ignore", "pipe", "ignore"],
+        ...(cmd.env ? { env: { ...process.env, ...cmd.env } } : {}),
+      }).trim()
+    } catch (err) {
+      // Only a MISSING binary moves on to the next dialog (zenity → kdialog).
+      // Anything else — a cancel is a non-zero exit — is the answer.
+      const missing = (err as NodeJS.ErrnoException).code === "ENOENT"
+      if (!missing || i === commands.length - 1) throw err
+    }
   }
-  if (isWindows) {
-    const ps = `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.SelectedPath = '${home}'; if($d.ShowDialog() -eq 'OK'){$d.SelectedPath}`
-    return execSync(`powershell -Command "${ps}"`, {
-      encoding: "utf8",
-      timeout: 60000,
-    }).trim()
-  }
-  // Linux: try zenity, fallback to kdialog
-  try {
-    return execSync(
-      `zenity --file-selection --directory --title="${prompt}" 2>/dev/null`,
-      { encoding: "utf8", timeout: 60000 }
-    ).trim()
-  } catch {
-    return execSync(
-      `kdialog --getexistingdirectory "${home}" --title "${prompt}" 2>/dev/null`,
-      { encoding: "utf8", timeout: 60000 }
-    ).trim()
-  }
+  return ""
 }
 
-export const GET = handler(() =>
+export const GET = handler((req) =>
   Effect.gen(function* () {
     // Read settings (fall back to "en" on failure)
     const settings = yield* Effect.tryPromise({
@@ -58,11 +56,12 @@ export const GET = handler(() =>
         ? settings.language
         : "en"
     const prompt = locales[locale].api.pickFolderPrompt
-    const home = homedir()
+    const requested = new URL(req.url).searchParams.get("defaultPath")
+    const startDir = usableStartDir(requested) ?? homedir()
 
     // Dialog failure or user cancellation -> folder = null
     const result = yield* Effect.try({
-      try: () => pickFolder(prompt, home),
+      try: () => pickFolder(prompt, startDir),
       catch: () => null,
     }).pipe(Effect.orElseSucceed(() => ""))
 
