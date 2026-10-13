@@ -85,6 +85,122 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.42.1 — 2026-10-13
+
+### en
+
+The notes for the last three releases were missing from this window.
+
+**Fixed**
+
+- **"What changed" covers 1.40.0 to 1.42.0 again.** Those releases shipped without notes, so this window stayed silent after each update. Their entries are now here. If you already updated to 1.42.0, open Settings → About → "What changed" to read all three.
+- **A release can no longer ship without notes.** The release build now stops before building anything if this window has no entry for the new version.
+
+### ko
+
+지난 릴리스 세 번의 변경 내용이 이 창에 빠져 있었어요.
+
+**고친 것**
+
+- **1.40.0부터 1.42.0까지의 변경 내용을 다시 볼 수 있어요.** 세 릴리스 모두 변경 내용 없이 나가서 업데이트해도 이 창이 뜨지 않았어요. 이제 세 버전의 내용이 모두 들어 있어요. 이미 1.42.0으로 업데이트했다면 설정 → 정보 → "변경 내용 보기"에서 세 버전을 모두 읽을 수 있어요.
+- **변경 내용 없이는 릴리스가 나가지 않아요.** 새 버전의 변경 내용이 이 창에 없으면 릴리스 빌드가 시작 전에 멈춰요.
+
+## 1.42.0 — 2026-10-13
+
+### en
+
+Opening a project starts where you work, not in your home folder.
+
+**New**
+
+- **Favorite folders.** Clicking "Open project" now first shows your favorite folders and the folder you opened last, then "Browse other folder…". Picking one opens the folder chooser inside that folder.
+  - Add favorites in Settings → General → "Default project folder" (up to 10), or with the star next to the last opened folder in the menu.
+  - A favorite on a drive that is not connected is hidden from the menu but kept in Settings.
+- **Default project folder.** Set one in the same place. "Browse other folder…" starts there; without one it starts next to the last folder you opened, and otherwise in your home folder.
+
+**Fixed**
+
+- **The folder chooser outside the desktop app** no longer passes paths through a shell command, so a folder name with quotes in it can no longer break or run anything.
+
+### ko
+
+프로젝트를 열 때 홈 폴더가 아니라 작업하던 곳에서 시작해요.
+
+**새로 생긴 것**
+
+- **즐겨찾기 폴더.** "프로젝트 열기"를 누르면 즐겨찾기 폴더와 마지막으로 연 폴더가 먼저 나오고, 그 아래에 "다른 폴더 찾아보기…"가 있어요. 목록에서 고르면 폴더 선택창이 그 폴더 안에서 열려요.
+  - 즐겨찾기는 설정 → 일반 → "프로젝트 기본 폴더"에서 추가해요(최대 10개). 목록에서 마지막으로 연 폴더 옆의 별을 눌러도 추가돼요.
+  - 연결되지 않은 드라이브에 있는 즐겨찾기는 목록에서만 숨기고 설정에는 남겨 둬요.
+- **프로젝트 기본 폴더.** 같은 곳에서 정해요. "다른 폴더 찾아보기…"가 거기서 시작하고, 정하지 않았으면 마지막으로 연 폴더 옆에서, 그것도 없으면 홈 폴더에서 시작해요.
+
+**고친 것**
+
+- **데스크톱 앱 밖에서 여는 폴더 선택창**이 더는 경로를 셸 명령에 넣지 않아요. 폴더 이름에 따옴표가 있어도 명령이 깨지거나 실행되지 않아요.
+
+## 1.41.0 — 2026-10-12
+
+### en
+
+The org harness is always on, approvals ask once, and the trust meter counts fairly.
+
+**Improved**
+
+- **The org harness is required.** The on/off checkbox in Settings → Harness is gone. If you had turned it off, it is on again after this update. It only stops when the Skill Hub key is missing or rejected; you can still turn individual skills off.
+- **One approval prompt per tool call.** When an org hook and naby's own policy both want to ask about the same call, you see a single prompt. A second prompt appears only when a hook changed the call and the change itself needs your OK.
+- **Org skills can use the cic token on the Claude engine too.** The token you entered in naby now reaches skills that need it on either engine.
+- **The trust meter shows its calibration.** It tells you whether naby's confidence has been too high, too low or about right. It is display only and does not change growth. Actions you have not reviewed yet are left out of the score and shown separately.
+
+**Fixed**
+
+- **Engine limits no longer count as tripwires.** A tool the engine cannot run (such as backgrounding through Bash) was being counted as a safety refusal and held the persona back. Only real safety refusals count now, so some personas move up a stage after this update.
+- **Agent screen.**
+  - Saving an agent no longer drops its tool restrictions.
+  - The quick-growth button is back in place.
+  - A description that showed in English now shows in Korean.
+
+### ko
+
+조직 하네스가 항상 켜지고, 승인은 한 번만 묻고, 신뢰 지표가 공정하게 세요.
+
+**나아진 것**
+
+- **조직 하네스가 필수가 됐어요.** 설정 → 하네스의 켜기/끄기 체크박스를 없앴어요. 꺼 두셨다면 업데이트 후 다시 켜져요. Skill Hub 키가 없거나 거부될 때만 멈추고, 스킬은 하나씩 끌 수 있어요.
+- **도구 호출 하나에 승인 창은 하나예요.** 조직 훅과 naby 정책이 같은 호출을 확인하려 하면 창이 한 번만 떠요. 훅이 호출 내용을 바꿔서 그 변경을 따로 확인받아야 할 때만 두 번째 창이 떠요.
+- **Claude 엔진에서도 조직 스킬이 cic 토큰을 써요.** naby에 입력한 토큰이 어느 엔진에서든 필요한 스킬에 전달돼요.
+- **신뢰 지표에 보정 판정이 나와요.** naby의 확신이 너무 높았는지, 낮았는지, 적절했는지 보여 줘요. 표시만 하고 성장에는 영향을 주지 않아요. 아직 확인하지 않은 일은 점수에서 빼고 따로 보여 줘요.
+
+**고친 것**
+
+- **엔진 기능 제한을 트립와이어로 세지 않아요.** Bash 백그라운드 실행처럼 엔진이 못 하는 일이 안전 거부로 세어져 페르소나 성장을 막고 있었어요. 이제 진짜 안전 거부만 세요. 그래서 업데이트 후 한 단계 올라가는 페르소나가 있어요.
+- **에이전트 화면.**
+  - 에이전트를 저장해도 도구 제한이 풀리지 않아요.
+  - 빠른 성장 버튼이 제자리로 돌아왔어요.
+  - 영어로 나오던 설명이 한국어로 나와요.
+
+## 1.40.0 — 2026-10-08
+
+### en
+
+naby now follows the altimedia-harness org harness from Skill Hub.
+
+**New**
+
+- **Org harness.** naby downloads and verifies the org harness package from Skill Hub, loads its skills when a task needs them, and runs its approved hooks. Usage metrics are sent with naby as the client.
+- **Atlassian sign-in.** One Atlassian sign-in covers the org skills. If it expires, you have 7 days before skills that need it stop.
+- **Updates.** naby checks for a new harness version every 6 hours and shows a popup when one is installed.
+- **Connection status bar.** A bar under the chat input shows whether Skill Hub and Atlassian are connected.
+
+### ko
+
+naby가 Skill Hub의 altimedia-harness 조직 하네스를 따라가요.
+
+**새로 생긴 것**
+
+- **조직 하네스.** naby가 Skill Hub에서 조직 하네스 패키지를 받아 검증하고, 작업에 필요할 때 스킬을 불러오고, 허용된 훅을 실행해요. 사용 지표는 naby 이름으로 보내요.
+- **Atlassian 로그인.** Atlassian에 한 번 로그인하면 조직 스킬 전체에 쓰여요. 로그인이 만료돼도 7일 동안은 그 스킬을 계속 쓸 수 있어요.
+- **업데이트.** 6시간마다 새 하네스 버전을 확인하고, 설치되면 팝업으로 알려 줘요.
+- **연결 상태 표시줄.** 채팅 입력창 아래에서 Skill Hub와 Atlassian이 연결돼 있는지 보여 줘요.
+
 ## 1.39.2 — 2026-10-02
 
 ### en
