@@ -91,27 +91,27 @@ export const RELEASE_NOTES_MARKDOWN = `
 
 naby is back in the picture: a face, a bubble, and a fixed seat in every chat.
 
+**Improved**
+
+- **naby has an avatar.** A small butterfly drawn for the app, used in the roster, on naby's bubbles, in the thinking bubble, in Settings, and on proposal and routing chips.
+
 **Fixed**
 
 - **naby's bubble is back.** 1.44.0 rendered naby's replies as plain text. They are a card again, with naby's name on top.
 - **naby always shows in the roster.** The participant roster in the header was hidden until you added a participant. It now always shows naby first, plus the + button.
 
-**Improved**
-
-- **naby has an avatar.** A small butterfly drawn for the app, used in the roster, on naby's bubbles, in the thinking bubble, in Settings, and on proposal and routing chips.
-
 ### ko
 
 나비가 다시 보여요. 얼굴도, 말풍선도, 대화마다 자기 자리도요.
+
+**나아진 것**
+
+- **나비에게 아바타가 생겼어요.** 앱용으로 그린 작은 나비예요. 명단, 나비 말풍선, 생각 중 말풍선, 설정, 제안 카드와 라우팅 칩에 같은 얼굴로 나와요.
 
 **고친 것**
 
 - **나비 말풍선이 돌아왔어요.** 1.44.0에서 나비의 답이 평문으로 나왔어요. 다시 카드 모양이고 위에 이름이 붙어요.
 - **명단에 나비가 항상 보여요.** 헤더의 참가자 명단이 참가자를 추가하기 전에는 숨어 있었어요. 이제 나비가 늘 맨 앞에 있고 + 버튼이 같이 있어요.
-
-**나아진 것**
-
-- **나비에게 아바타가 생겼어요.** 앱용으로 그린 작은 나비예요. 명단, 나비 말풍선, 생각 중 말풍선, 설정, 제안 카드와 라우팅 칩에 같은 얼굴로 나와요.
 
 ## 1.44.0 — 2026-10-16
 
