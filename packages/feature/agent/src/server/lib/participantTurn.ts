@@ -29,13 +29,16 @@ import type { RoundAgent } from '../engines/participantRound';
  * learning about the user (`naby_remember`), its own trust ledger
  * (`naby_checkin`), and delegation (`naby_delegate`, and the Agent SDK's
  * `Task`/`Agent`) — a participant does not hand work on (§8.9). Proposing an MCP
- * server (`naby_add_mcp`) changes the user's setup, which is naby's call too.
+ * server (`naby_add_mcp`) changes the user's setup, which is naby's call too, and
+ * so does drafting a participant (`naby_participant_draft`, §8.12 — a participant
+ * never creates or edits another).
  */
 export const PARTICIPANT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
   'naby_remember',
   'naby_checkin',
   'naby_delegate',
   'naby_add_mcp',
+  'naby_participant_draft',
   'Task',
   'Agent',
 ]);

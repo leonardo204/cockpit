@@ -85,6 +85,28 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.45.0 — 2026-10-16
+
+### en
+
+Ask naby to create a participant — it drafts one, you approve.
+
+**New**
+
+- **Create participants in the chat.** Say "make me a translator participant that keeps a plain tone" and naby drafts the name, description, instructions and guardrail. An approval card lets you edit the name, handle, description and avatar, then "Create and add to this chat" or "Create only". naby can also propose edits to an existing participant the same way.
+  - Drafts never carry tools, MCP servers, skills or memory beyond this chat. To widen a participant, use Settings → naby → Participants.
+  - This always asks. No policy rule, "always allow" or full-access mode skips the card.
+
+### ko
+
+나비에게 참가자를 만들어 달라고 하면 초안을 짜 주고, 승인하면 저장돼요.
+
+**새로 생긴 것**
+
+- **대화에서 참가자 만들기.** "담백한 톤의 번역가 참가자 만들어 줘"라고 하면 나비가 이름·설명·지시·가드레일 초안을 짜요. 승인 카드에서 이름·핸들·설명·아바타를 고친 뒤 "만들고 대화에 추가"나 "만들기만"을 눌러요. 기존 참가자의 지시를 고치는 제안도 같은 방식이에요.
+  - 초안에는 도구·MCP 서버·스킬이 없고 기억도 이 대화 안에서만이에요. 넓히려면 설정 → 나비 → 참가자에서 바꿔요.
+  - 항상 물어봐요. 정책 규칙이나 "항상 허용", 전체 허용 모드로도 카드를 건너뛰지 않아요.
+
 ## 1.44.1 — 2026-10-16
 
 ### en

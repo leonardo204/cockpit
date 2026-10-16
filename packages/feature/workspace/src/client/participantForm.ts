@@ -13,6 +13,8 @@
  * unchanged, so saving an imported participant never strips what it came with.
  */
 
+import { AVATAR_PRESETS, COLOR_PRESETS, PARTICIPANT_HEX, participantNameError } from '@cockpit/feature-agent';
+
 export type MemoryScope = 'session' | 'project' | 'user' | 'org';
 export type PermissionMode = 'default' | 'plan';
 
@@ -62,12 +64,13 @@ export type ParticipantForm = {
   keep: { origin?: unknown; extensions?: unknown; maxOutputTokens?: number };
 };
 
-/** Avatar presets the picker offers (any emoji can be typed). */
-export const AVATAR_PRESETS = ['🌐', '🔍', '🧭', '🛠', '🎨', '📝', '🧪', '📊', '🤖', '💡'] as const;
-/** Colour presets (identifying data colours, not theme tokens). */
-export const COLOR_PRESETS = ['#6366F1', '#0EA5E9', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#14B8A6', '#EC4899'] as const;
+// The avatar / colour presets and the handle rule are SHARED with naby's draft
+// card in the chat (multi-agent-chat §8.12), so both refuse the same things.
+// They live in feature-agent because this package depends on it, not the reverse.
 
-const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+export { AVATAR_PRESETS, COLOR_PRESETS };
+
+const HEX = PARTICIPANT_HEX;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string => (typeof v === 'string' ? v : '');
@@ -182,11 +185,8 @@ const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 /** Everything the server would refuse, named per field. Empty = ready to save. */
 export function validateParticipantForm(f: ParticipantForm): FormError[] {
   const errs: FormError[] = [];
-  const name = f.name.trim().replace(/^@/, '');
-  if (!name) errs.push({ field: 'name', code: 'name' });
-  else if (/\s/.test(name)) errs.push({ field: 'name', code: 'nameSpace' });
-  else if (name.includes('@')) errs.push({ field: 'name', code: 'nameAt' });
-  else if (/^[/.~]/.test(name)) errs.push({ field: 'name', code: 'nameLead' });
+  const nameErr = participantNameError(f.name);
+  if (nameErr) errs.push({ field: 'name', code: nameErr });
   if (!f.displayName.trim()) errs.push({ field: 'displayName', code: 'displayName' });
   if (!f.instructions.trim()) errs.push({ field: 'instructions', code: 'instructions' });
   if (!f.avatarImage && !f.avatarEmoji.trim()) errs.push({ field: 'avatar', code: 'avatar' });

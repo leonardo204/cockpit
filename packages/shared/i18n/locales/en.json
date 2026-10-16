@@ -2442,6 +2442,45 @@
       "declined": "✕ Declined · naby won’t propose {{name}} again in this session",
       "dismiss": "Dismiss"
     },
+    "draft": {
+      "title": "naby’s draft · needs your OK",
+      "createQuestion": "Create this participant?",
+      "updateQuestion": "Apply these changes to @{{name}}?",
+      "descriptionHint": "naby reads this sentence to decide when to hand work over.",
+      "avatarImage": "image",
+      "safeDefaults": "Starts with no tools, MCP servers or skills, and remembers only this session. Widen them in Settings.",
+      "before": "Before",
+      "after": "After",
+      "decline": "Decline",
+      "createOnly": "Create only",
+      "createAndAdd": "Create and add to this chat",
+      "apply": "Apply",
+      "created": "✓ Approved · creating {{name}}",
+      "updated": "✓ Approved · updating {{name}}",
+      "declined": "✕ Declined · naby will ask you what to change",
+      "field": {
+        "name": "Handle",
+        "displayName": "Display name",
+        "description": "Description",
+        "instructions": "Instructions",
+        "guardrailsPolicy": "Guardrail policy",
+        "greeting": "Greeting",
+        "avatar": "Avatar",
+        "color": "Colour"
+      },
+      "err": {
+        "name": "Enter a handle.",
+        "nameSpace": "A handle cannot contain spaces.",
+        "nameAt": "A handle cannot contain '@'.",
+        "nameLead": "A handle cannot start with '/', '.' or '~'.",
+        "displayName": "Enter a display name.",
+        "displayNameLong": "Keep the display name to {{max}} characters.",
+        "descriptionLong": "Keep the description to {{max}} characters.",
+        "avatar": "Pick an emoji.",
+        "avatarLong": "An emoji avatar is at most {{max}} characters.",
+        "color": "Pick a colour like #4F46E5."
+      }
+    },
     "settings": {
       "title": "Participants",
       "count": "{{count}}",

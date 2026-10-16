@@ -135,3 +135,11 @@ export {
   type ParticipantInfo,
 } from './participants';
 export { CLAUDE_MODELS_FOR_AGENTS, type ModelOption } from './modelCatalog';
+// MAC-M5a (§8.12): the identity rules the Settings editor and naby's draft card
+// share, so both refuse the same handle, avatar and colour.
+export {
+  AVATAR_PRESETS,
+  COLOR_PRESETS,
+  PARTICIPANT_HEX,
+  participantNameError,
+} from './participantDraft';

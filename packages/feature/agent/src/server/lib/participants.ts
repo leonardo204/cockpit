@@ -19,9 +19,14 @@
 // unit test away from proof.
 
 import {
+  BUILTIN_PERSONA_ID,
   BUILTIN_PERSONA_NAME,
   HUB_MENTION_ALIASES,
+  defaultParticipantProfile,
+  parseParticipantProfile,
   type Agent,
+  type AgentInput,
+  type MemoryScope,
   type SessionParticipant,
   type SessionParticipantAddedBy,
   type SessionParticipantStatus,
@@ -272,4 +277,133 @@ export function sessionRoster(
 
 function viewOfRow(agent: Agent, row: SessionParticipant): ParticipantView {
   return { ...agent, status: row.status, addedBy: row.addedBy, statusUpdatedAt: row.updatedAt };
+}
+
+// ---------------------------------------------------------------------------
+// Writes shared by the HTTP actions and naby's draft tool (MAC-M5a, §8.12)
+// ---------------------------------------------------------------------------
+
+/** The `participant.put` body, as the action and the draft tool hand it over. */
+export type ParticipantPutInput = {
+  id?: unknown;
+  name?: unknown;
+  description?: unknown;
+  instructions?: unknown;
+  model?: unknown;
+  toolRefs?: unknown;
+  memoryScope?: unknown;
+  profile?: unknown;
+};
+
+export type ParticipantWriteStore = Pick<Store, 'getAgent' | 'getAgentByName' | 'listAgents' | 'putAgent'>;
+
+/**
+ * Create or edit a participant — THE one write path (`participant.put` and the
+ * approved draft both land here, so a draft can never be saved under rules the
+ * editor does not apply). Validates the name, the instructions and the profile
+ * (the runtime gate); never throws.
+ */
+export function putParticipant(
+  store: ParticipantWriteStore,
+  body: ParticipantPutInput,
+): { ok: true; participant: Agent } | { ok: false; error: string } {
+  const targetId = typeof body.id === 'string' && body.id ? body.id : '';
+  const existing = targetId ? store.getAgent(targetId) : undefined;
+  if (targetId) {
+    // Only a participant row is editable here: the persona is read-only and a
+    // custom agent has its own editor (`agent.put`), and turning one kind into
+    // another would silently change what it may do.
+    if (targetId === BUILTIN_PERSONA_ID || existing?.kind === 'persona') {
+      return { ok: false, error: 'the built-in persona is read-only and cannot be edited' };
+    }
+    if (!existing) return { ok: false, error: 'no participant with that id' };
+    if (!isParticipant(existing)) {
+      return { ok: false, error: 'only a conversation participant can be edited here' };
+    }
+  }
+  const named = validateParticipantName(body.name, store, existing?.id);
+  if (!named.ok) return { ok: false, error: named.error };
+  const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : '';
+  if (!instructions) return { ok: false, error: 'instructions are required' };
+  const memoryScope: MemoryScope =
+    body.memoryScope === 'session' ||
+    body.memoryScope === 'project' ||
+    body.memoryScope === 'user' ||
+    body.memoryScope === 'org'
+      ? body.memoryScope
+      : // A NEW participant defaults to `session`, not `user`: an imported
+        // profile is untrusted, and what it learns should not reach every
+        // other conversation unless the user widens it (§8.1). An edit that
+        // omits the field keeps the row's scope.
+        (existing?.memoryScope ?? 'session');
+
+  // The profile is UNTRUSTED input: it passes the runtime gate or nothing is
+  // written. Omitted on an edit = keep the stored one; omitted on a create =
+  // the default profile (an emoji and a colour).
+  let profile;
+  try {
+    profile =
+      body.profile !== undefined
+        ? parseParticipantProfile(body.profile)
+        : (existing?.profile ?? defaultParticipantProfile(named.name));
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  // toolRefs: a sent list replaces; an edit that does not mention it keeps the
+  // row's; a NEW participant without one gets NO tools ([]), never "inherit the
+  // session's toolset" — widening an agent's tools has to be a deliberate
+  // request (the same rule `agent.put` keeps, and §8.1's import default).
+  const toolRefs = Array.isArray(body.toolRefs)
+    ? body.toolRefs.filter((r): r is string => typeof r === 'string')
+    : (existing?.toolRefs ?? []);
+
+  const input: AgentInput = {
+    ...(existing ? { id: existing.id } : {}),
+    name: named.name,
+    kind: 'participant',
+    ...(typeof body.description === 'string' && body.description.trim()
+      ? { description: body.description.trim() }
+      : {}),
+    systemPrompt: instructions,
+    ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model.trim() } : {}),
+    toolRefs,
+    memoryScope,
+    // NOT NULL in the table; a participant has no autonomy and nothing reads
+    // this (§8.1).
+    autonomy: { escalation: 'inline' },
+    profile,
+  };
+  try {
+    return { ok: true, participant: store.putAgent(input) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Put a participant into a session's roster as `active`, with the per-session cap
+ * (R2.4) counted here — the cap is a SETTING, so the store does not know it.
+ * Already active = a no-op success. A fresh add wins over an earlier `declined`
+ * or `removed` (§8.1).
+ */
+export function addParticipantToSession(
+  store: Pick<Store, 'getAgent' | 'listSessionParticipants' | 'putSessionParticipant' | 'getSetting'>,
+  sessionId: string,
+  agentId: string,
+  addedBy: SessionParticipantAddedBy,
+): { ok: true; already: boolean } | { ok: false; error: string; cap?: number } {
+  const agent = store.getAgent(agentId);
+  if (!isParticipant(agent)) {
+    return { ok: false, error: 'only a conversation participant can join a session' };
+  }
+  const rows = store.listSessionParticipants(sessionId);
+  if (rows.some((r) => r.agentId === agent.id && r.status === 'active')) return { ok: true, already: true };
+  const { maxPerSession } = readParticipantSettings(store);
+  const active = rows.filter((r) => r.status === 'active').length;
+  if (active >= maxPerSession) {
+    return { ok: false, error: `a session can hold at most ${maxPerSession} participants`, cap: maxPerSession };
+  }
+  store.putSessionParticipant(sessionId, agent.id, { status: 'active', addedBy });
+  return { ok: true, already: false };
 }

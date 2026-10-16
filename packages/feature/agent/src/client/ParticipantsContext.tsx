@@ -13,10 +13,13 @@
  * REFRESH. The roster changes in four ways and each one triggers a re-read: the
  * session changes; the user adds or removes someone here; naby's proposal is
  * resolved (`naby:approval_resolved`, which also arrives when it was answered on
- * Telegram); or Settings edits the registry (`naby:participants_changed`).
+ * Telegram) — and so is naby's participant draft (§8.12), whose resolved event is
+ * sent AFTER the row is written; or Settings edits the registry
+ * (`naby:participants_changed`).
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { draftResolvedSaved } from './participantDraft';
 import {
   DEFAULT_PARTICIPANT_CHAT_SETTINGS,
   chatSettingsFrom,
@@ -159,10 +162,20 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
 
   useEffect(() => {
     const onChange = () => refresh();
-    window.addEventListener('naby:approval_resolved', onChange);
+    const onResolved = (e: Event) => {
+      refresh();
+      // naby's approved participant DRAFT (§8.12) wrote a new or changed row:
+      // Settings' participant list re-reads too. Announced by the chat the draft
+      // belongs to only, so N open chats do not echo it N times.
+      const d = (e as CustomEvent).detail as Record<string, unknown> | undefined;
+      if (d && draftResolvedSaved(d) && d.session_id === sessionRef.current) {
+        window.dispatchEvent(new CustomEvent(PARTICIPANTS_CHANGED_EVENT, { detail: { from: 'draft' } }));
+      }
+    };
+    window.addEventListener('naby:approval_resolved', onResolved);
     window.addEventListener(PARTICIPANTS_CHANGED_EVENT, onChange);
     return () => {
-      window.removeEventListener('naby:approval_resolved', onChange);
+      window.removeEventListener('naby:approval_resolved', onResolved);
       window.removeEventListener(PARTICIPANTS_CHANGED_EVENT, onChange);
     };
   }, [refresh]);

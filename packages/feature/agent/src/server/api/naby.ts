@@ -109,14 +109,12 @@ import {
   type AgentKind,
   type AgentEscalation,
   type MemoryScope,
-  parseParticipantProfile,
-  defaultParticipantProfile,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 // "Is anything running anywhere" — the one question the account switch has to ask
 // before it may change which subscription answers (claude-multi-account §5.4).
 import { anyRunActive } from '../sessionRunHub';
-import { approvalMayRemember, resolveApproval } from '../lib/approvalRegistry';
+import { approvalMayRemember, resolveApproval, type ApprovalExtras } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
 import { safeLearningReport, type LearningReport } from '../lib/learningRead';
@@ -168,13 +166,14 @@ import {
   type PersonaAutonomy,
 } from '../lib/personaAutonomy';
 import {
+  addParticipantToSession,
   isParticipant,
   listParticipantsWithCounts,
+  putParticipant,
   parseParticipantSettingsInput,
   readParticipantSettings,
   sessionRoster,
   uniqueCopyName,
-  validateParticipantName,
   writeParticipantSettings,
   type ParticipantSettings,
   type ParticipantView,
@@ -748,6 +747,11 @@ export type NabyAction =
       scope?: string;
       scopeKey?: string;
       toolPattern?: string;
+      /** multi-agent-chat §8.12 (R8.3): the fields the user corrected on naby's
+       *  participant draft card, and whether to add it to this conversation.
+       *  Read only by a draft (`participant.create` / `participant.update`). */
+      edits?: { name?: unknown; displayName?: unknown; description?: unknown; avatar?: unknown; color?: unknown };
+      addToSession?: boolean;
     }
   // Phase 3 (P3-M1) — the naby agent layer (built-in persona + custom agents),
   // addressed by `@`. `agent.put` upserts (omit `id` to create a custom agent,
@@ -1322,6 +1326,23 @@ function resolvePolicyScope(
 /** The hub every session roster starts with (multi-agent-chat R2.1): the built-in
  *  persona, under whatever handle it holds on this install (`@naby`, or `@persona`
  *  on one whose seed name was taken). */
+/** The draft-card extras of an `approval.resolve` body (multi-agent-chat
+ *  §8.12): only the five editable fields, only as strings, and a boolean
+ *  `addToSession`. Undefined when the body carries neither. */
+function approvalExtrasFrom(body: { edits?: unknown; addToSession?: unknown }): ApprovalExtras | undefined {
+  const out: ApprovalExtras = {};
+  if (body.edits && typeof body.edits === 'object' && !Array.isArray(body.edits)) {
+    const e = body.edits as Record<string, unknown>;
+    const edits: NonNullable<ApprovalExtras['edits']> = {};
+    for (const k of ['name', 'displayName', 'description', 'avatar', 'color'] as const) {
+      if (typeof e[k] === 'string') edits[k] = e[k] as string;
+    }
+    if (Object.keys(edits).length > 0) out.edits = edits;
+  }
+  if (typeof body.addToSession === 'boolean') out.addToSession = body.addToSession;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function hubOf(store: Pick<Store, 'getAgent'>): { id: string; name: string } {
   const persona = store.getAgent(BUILTIN_PERSONA_ID);
   return { id: BUILTIN_PERSONA_ID, name: persona?.name ?? 'naby' };
@@ -1720,79 +1741,11 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     }
 
     case 'participant.put': {
-      const targetId = typeof body.id === 'string' && body.id ? body.id : '';
-      const existing = targetId ? store.getAgent(targetId) : undefined;
-      if (targetId) {
-        // Only a participant row is editable here: the persona is read-only and a
-        // custom agent has its own editor (`agent.put`), and turning one kind into
-        // another would silently change what it may do.
-        if (targetId === BUILTIN_PERSONA_ID || existing?.kind === 'persona') {
-          return { ok: false, error: 'the built-in persona is read-only and cannot be edited' };
-        }
-        if (!existing) return { ok: false, error: 'no participant with that id' };
-        if (!isParticipant(existing)) {
-          return { ok: false, error: 'only a conversation participant can be edited here' };
-        }
-      }
-      const named = validateParticipantName(body.name, store, existing?.id);
-      if (!named.ok) return { ok: false, error: named.error };
-      const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : '';
-      if (!instructions) return { ok: false, error: 'instructions are required' };
-      const memoryScope: MemoryScope =
-        body.memoryScope === 'session' ||
-        body.memoryScope === 'project' ||
-        body.memoryScope === 'user' ||
-        body.memoryScope === 'org'
-          ? body.memoryScope
-          : // A NEW participant defaults to `session`, not `user`: an imported
-            // profile is untrusted, and what it learns should not reach every
-            // other conversation unless the user widens it (§8.1). An edit that
-            // omits the field keeps the row's scope.
-            (existing?.memoryScope ?? 'session');
-
-      // The profile is UNTRUSTED input: it passes the runtime gate or nothing is
-      // written. Omitted on an edit = keep the stored one; omitted on a create =
-      // the default profile (an emoji and a colour).
-      let profile;
-      try {
-        profile =
-          body.profile !== undefined
-            ? parseParticipantProfile(body.profile)
-            : (existing?.profile ?? defaultParticipantProfile(named.name));
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
-      }
-
-      // toolRefs: a sent list replaces; an edit that does not mention it keeps the
-      // row's; a NEW participant without one gets NO tools ([]), never "inherit the
-      // session's toolset" — widening an agent's tools has to be a deliberate
-      // request (the same rule `agent.put` keeps, and §8.1's import default).
-      const toolRefs = Array.isArray(body.toolRefs)
-        ? body.toolRefs.filter((r): r is string => typeof r === 'string')
-        : (existing?.toolRefs ?? []);
-
-      const input: AgentInput = {
-        ...(existing ? { id: existing.id } : {}),
-        name: named.name,
-        kind: 'participant',
-        ...(typeof body.description === 'string' && body.description.trim()
-          ? { description: body.description.trim() }
-          : {}),
-        systemPrompt: instructions,
-        ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model.trim() } : {}),
-        toolRefs,
-        memoryScope,
-        // NOT NULL in the table; a participant has no autonomy and nothing reads
-        // this (§8.1).
-        autonomy: { escalation: 'inline' },
-        profile,
-      };
-      try {
-        const participant = store.putAgent(input);
-        return { ok: true, participant, participants: listParticipantsWithCounts(store) };
-      } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) };
-      }
+      // The ONE write path (lib/participants.ts) — naby's approved drafts land
+      // there too (multi-agent-chat §8.12, R8.4).
+      const put = putParticipant(store, body);
+      if (!put.ok) return { ok: false, error: put.error };
+      return { ok: true, participant: put.participant, participants: listParticipantsWithCounts(store) };
     }
 
     case 'participant.remove': {
@@ -1928,22 +1881,9 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (typeof body.agentId !== 'string' || !body.agentId) {
         return { ok: false, error: 'agentId is required' };
       }
-      const agent = store.getAgent(body.agentId);
-      if (!isParticipant(agent)) {
-        return { ok: false, error: 'only a conversation participant can join a session' };
-      }
-      const rows = store.listSessionParticipants(body.sessionId);
-      const already = rows.some((r) => r.agentId === agent.id && r.status === 'active');
-      if (!already) {
-        // The cap is a SETTING, so it is counted here and not in the store (§8.1).
-        const { maxPerSession } = readParticipantSettings(store);
-        const active = rows.filter((r) => r.status === 'active').length;
-        if (active >= maxPerSession) {
-          return { ok: false, error: `a session can hold at most ${maxPerSession} participants` };
-        }
-        // A user add wins over an earlier `declined` or `removed` (§8.1).
-        store.putSessionParticipant(body.sessionId, agent.id, { status: 'active', addedBy: 'user' });
-      }
+      // The cap check and the upsert are shared with naby's approved drafts.
+      const added = addParticipantToSession(store, body.sessionId, body.agentId, 'user');
+      if (!added.ok) return { ok: false, error: added.error };
       return { ok: true, naby: hubOf(store), participants: sessionRoster(store, body.sessionId) };
     }
 
@@ -2070,10 +2010,15 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // Asked BEFORE resolving: the registry forgets the entry on resolve.
       const pattern = typeof body.toolPattern === 'string' ? body.toolPattern.trim() : '';
       const mayRemember = approvalMayRemember(body.approvalId, pattern);
-      const resolved = resolveApproval(body.approvalId, gateDecision);
+      // A draft's corrections travel with the answer; the draft's executor
+      // re-validates them before anything is written (R8.3). Only string fields
+      // of the five editable ones are passed on.
+      const extras = approvalExtrasFrom(body);
+      const resolved = resolveApproval(body.approvalId, gateDecision, extras);
       // Remember: persist a rule so this tool no longer prompts in that scope.
-      // NEVER for a participant proposal (multi-agent-chat §8.2): adding a
-      // participant is a decision about this conversation, not a tool policy.
+      // NEVER for a participant proposal (multi-agent-chat §8.2) or a participant
+      // draft (§8.12, R8.2): those are decisions about one participant, not a
+      // tool policy, and a draft always asks.
       if (body.remember && pattern && mayRemember) {
         const r = resolvePolicyScope(body.scope, body.scopeKey);
         if (r.ok) {

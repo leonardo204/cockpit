@@ -45,6 +45,13 @@
  * use the throwaway store below. A second theme imports again and shows the
  * rename (`-imported`).
  *
+ * With `--drafts` (MAC-M5a, multi-agent-chat §8.12), also — injected client-side
+ * as `naby:approval_request` with source 'participant_draft' (nothing reaches
+ * the server, nothing is written):
+ *   m5a-draft-create, m5a-draft-create-card   naby's draft of a new participant
+ *   m5a-draft-update, m5a-draft-update-card   naby's draft of a change (before →
+ *                       after of the changed fields only)
+ *
  * A surface that is not reachable (no project open, no session) is skipped with
  * a log line, not failed: the script is a camera, not a test.
  *
@@ -70,6 +77,7 @@ const height = Number(arg('height', '900'));
 const locale = arg('locale', 'ko-KR');
 const participants = process.argv.includes('--participants');
 const importFile = arg('import', '');
+const drafts = process.argv.includes('--drafts');
 
 if (!base || !out) {
   console.error('usage: node scripts/ui-screenshots.mjs --base <url> --out <dir> [--themes light,dark]');
@@ -169,6 +177,72 @@ async function participantShots(page, frame, theme) {
   await settle(page, 400);
   if (await frame.locator('[data-testid="proposal-outcome"]').count()) {
     await shoot(screen, `${theme}-mac-proposal-declined`);
+  }
+}
+
+/** MAC-M5a: naby's participant draft card, create and update. Client-side only. */
+async function draftShots(page, frame, theme) {
+  const screen = frame.locator('#chat-screen');
+  const create = {
+    approvalId: 'ui-screenshot-draft-create',
+    tool_name: 'participant.create',
+    source: 'participant_draft',
+    input: {
+      draft: {
+        action: 'create',
+        name: 'translator',
+        displayName: '번역가',
+        description: '한국어와 영어 사이를 번역한다. 번역이나 영어 문장 다듬기가 필요할 때 부른다.',
+        instructions:
+          '너는 한국어와 영어 사이를 번역한다.\n원문의 뜻과 어조를 지키고, 고유명사는 그대로 둔다.\n애매한 표현은 번역 뒤에 짧게 짚는다.',
+        guardrailsPolicy: '원문에 없는 내용을 지어내지 않는다.',
+        greeting: '안녕하세요, 번역을 맡을게요.',
+        avatar: { kind: 'emoji', value: '🌐' },
+        color: '#0EA5E9',
+        addToSession: true,
+      },
+      addToSession: true,
+    },
+  };
+  const update = {
+    approvalId: 'ui-screenshot-draft-update',
+    tool_name: 'participant.update',
+    source: 'participant_draft',
+    input: {
+      draft: {
+        ...create.input.draft,
+        action: 'update',
+        id: 'ui-screenshot',
+        description: '한국어·영어·일본어 사이를 번역한다. 번역이 필요할 때 부른다.',
+        instructions: '너는 한국어, 영어, 일본어 사이를 번역한다.\n원문의 뜻과 어조를 지킨다.',
+        addToSession: false,
+      },
+      before: { ...create.input.draft, action: undefined, addToSession: undefined },
+      changed: ['description', 'instructions'],
+      addToSession: false,
+    },
+  };
+  for (const [kind, detail] of [
+    ['create', create],
+    ['update', update],
+  ]) {
+    await frame.evaluate((d) => window.dispatchEvent(new CustomEvent('naby:approval_request', { detail: d })), detail);
+    await settle(page, 700);
+    const card = frame.locator('[data-testid="participant-draft"]');
+    if (await card.count()) {
+      await shoot(screen, `${theme}-m5a-draft-${kind}`);
+      await shoot(card, `${theme}-m5a-draft-${kind}-card`);
+    } else {
+      console.log(`[${theme}] draft card (${kind}) did not render; skipping`);
+    }
+    await frame.evaluate(
+      (id) => window.dispatchEvent(new CustomEvent('naby:approval_resolved', { detail: { approvalId: id, decision: 'deny' } })),
+      detail.approvalId,
+    );
+    await settle(page, 300);
+    // The answered line folds away on its own; dismiss it so the next card is alone.
+    const dismiss = frame.locator('[data-testid="proposal-outcome"] button').first();
+    if (await dismiss.count()) await dismiss.click();
   }
 }
 
@@ -322,6 +396,7 @@ async function runTheme(browser, theme) {
       console.log(`[${theme}] approval card did not render; skipping`);
     }
     if (participants) await participantShots(page, frame, theme);
+    if (drafts) await draftShots(page, frame, theme);
   } else {
     console.log(`[${theme}] no chat frame (no project open); skipping chat, bubbles, approval`);
   }

@@ -137,6 +137,11 @@ export function formatApprovalMessage(opts: {
   // asks whether to bring someone into the conversation, so it reads as naby's
   // question rather than as a tool card.
   if (opts.toolName === 'participant.add') return formatParticipantProposal(opts);
+  // naby's participant DRAFT (§8.12, R8.3): the phone gets a short summary and
+  // approve / decline — editing the draft is the in-app card's job.
+  if (opts.toolName === 'participant.create' || opts.toolName === 'participant.update') {
+    return formatParticipantDraft(opts.toolName, opts);
+  }
   const who = opts.agentName ? `@${opts.agentName}` : 'naby';
   const lines: string[] = [];
   if (opts.project !== undefined) lines.push(projectHeader(opts.project));
@@ -176,6 +181,51 @@ function formatParticipantProposal(opts: { input?: unknown; cwd?: string; projec
     lines.push(`· 이유: ${truncate(input.reason.trim(), INPUT_PREVIEW_CHARS)}`);
   }
   lines.push('', '아래에서 승인하거나 거절하세요 (yes / no 답장도 됩니다).');
+  return lines.join('\n');
+}
+
+/** The phone copy of naby's participant draft (multi-agent-chat §8.12, R8.3).
+ *  Korean, like the proposal. Approving here applies the draft's own
+ *  `addToSession`; the name and description are as naby wrote them. */
+function formatParticipantDraft(
+  toolName: 'participant.create' | 'participant.update',
+  opts: { input?: unknown; project?: string },
+): string {
+  const obj = (v: unknown): Record<string, unknown> =>
+    v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const input = obj(opts.input);
+  const draft = obj(input.draft);
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  const name = str(draft.name) || 'participant';
+  const display = str(draft.displayName);
+  const avatar = obj(draft.avatar).kind === 'emoji' ? str(obj(draft.avatar).value) : '';
+  const add = input.addToSession === true || draft.addToSession === true;
+  const lines: string[] = [];
+  if (opts.project !== undefined) lines.push(projectHeader(opts.project));
+  if (toolName === 'participant.create') {
+    lines.push(`🦋 나비의 초안: 새 참가자 @${name}를 만들까요?`);
+  } else {
+    lines.push(`🦋 나비의 초안: 참가자 @${name}를 고칠까요?`);
+  }
+  if (display || avatar) lines.push(`${avatar ? `${avatar} ` : ''}${display}`.trim());
+  if (str(draft.description)) lines.push(truncate(str(draft.description), INPUT_PREVIEW_CHARS));
+  if (toolName === 'participant.update' && Array.isArray(input.changed) && input.changed.length > 0) {
+    const label: Record<string, string> = {
+      name: '핸들',
+      displayName: '표시 이름',
+      description: '설명',
+      instructions: '지시',
+      guardrailsPolicy: '가드레일',
+      greeting: '첫 인사',
+      avatar: '아바타',
+      color: '색',
+    };
+    lines.push(`· 바뀌는 것: ${input.changed.map((f) => label[String(f)] ?? String(f)).join(', ')}`);
+  }
+  if (toolName === 'participant.create') {
+    lines.push(add ? '· 승인하면 이 대화에 추가합니다' : '· 승인해도 이 대화에는 추가하지 않습니다');
+  }
+  lines.push('', '아래에서 승인하거나 거절하세요 (yes / no 답장도 됩니다). 이름·설명을 고치려면 앱의 카드에서 고치세요.');
   return lines.join('\n');
 }
 

@@ -26,6 +26,14 @@ import {
   proposalFromApproval,
   type ParticipantProposal,
 } from './participants';
+import { ParticipantDraftCard } from './ParticipantDraftCard';
+import {
+  draftFromApproval,
+  draftResolveBody,
+  type DraftChoice,
+  type DraftForm,
+  type ParticipantDraftCard as DraftCardData,
+} from './participantDraft';
 import {
   approvalAskerFrom,
   approvalOffersRemember,
@@ -45,12 +53,20 @@ type Pending = ApprovalAsker & {
   /** multi-agent-chat R6.7: naby proposes adding a participant. Drawn as the
    *  proposal card (approve / decline only) instead of the tool card. */
   proposal?: ParticipantProposal;
+  /** multi-agent-chat §8.12 (R8.3): naby's participant draft — the draft card. */
+  draft?: DraftCardData;
   /** §8.9: a participant's own tool call names the participant. */
   speakerName?: string;
 };
 
-/** What the proposal card leaves behind once answered (R6.7). */
-type ProposalOutcome = { approvalId: string; displayName: string; decision: 'allow' | 'deny' };
+/** What the proposal (or draft) card leaves behind once answered (R6.7). */
+type ProposalOutcome = {
+  approvalId: string;
+  displayName: string;
+  decision: 'allow' | 'deny';
+  /** A draft's line reads differently from a proposal's (§8.12). */
+  draft?: 'create' | 'update';
+};
 
 /** How long the answered-proposal line stays before it folds away. */
 const OUTCOME_MS = 8000;
@@ -160,7 +176,16 @@ export const ProposalOutcomeLine = memo(function ProposalOutcomeLine({
       data-decision={outcome.decision}
     >
       <span className="flex-1">
-        {ok
+        {outcome.draft
+          ? ok
+            ? t(outcome.draft === 'create' ? 'participants.draft.created' : 'participants.draft.updated', {
+                defaultValue: outcome.draft === 'create' ? '✓ Approved · creating {{name}}' : '✓ Approved · updating {{name}}',
+                name: outcome.displayName,
+              })
+            : t('participants.draft.declined', {
+                defaultValue: '✕ Declined · naby will ask you what to change',
+              })
+          : ok
           ? t('participants.proposal.approved', {
               defaultValue: '✓ Approved · {{name}} joined as a participant',
               name: outcome.displayName,
@@ -224,17 +249,18 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
       // Only handle prompts for THIS conversation (once we know our session id).
       if (sessionId && typeof d.session_id === 'string' && d.session_id !== sessionId) return;
       const proposal = proposalFromApproval(d, lookupRef.current) ?? undefined;
+      const draft = proposal ? undefined : (draftFromApproval(d) ?? undefined);
       const speakerName = approvalSpeakerName(d);
       const item: Pending = {
         approvalId: d.approvalId,
         toolName: typeof d.tool_name === 'string' ? d.tool_name : 'tool',
         inputPreview: previewInput(d.input),
-        // A proposal's `reason`/`source` are naby's, not an org hook's: they are
-        // drawn by the proposal card and must not reach the hook-copy rules.
-        ...(proposal ? { proposal } : approvalAskerFrom(d)),
-        ...(speakerName && !proposal ? { speakerName } : {}),
+        // A proposal's / draft's `reason`/`source` are naby's, not an org hook's:
+        // they are drawn by their own card and must not reach the hook-copy rules.
+        ...(proposal ? { proposal } : draft ? { draft } : approvalAskerFrom(d)),
+        ...(speakerName && !proposal && !draft ? { speakerName } : {}),
       };
-      if (proposal) setOutcome(null);
+      if (proposal || draft) setOutcome(null);
       setQueue((q) => (q.some((p) => p.approvalId === item.approvalId) ? q : [...q, item]));
     };
     const onResolved = (e: Event) => {
@@ -244,6 +270,14 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
       const pending = queueRef.current.find((p) => p.approvalId === d.approvalId);
       if (pending?.proposal && (d.decision === 'allow' || d.decision === 'deny')) {
         setOutcome({ approvalId: pending.approvalId, displayName: pending.proposal.displayName, decision: d.decision });
+      }
+      if (pending?.draft && (d.decision === 'allow' || d.decision === 'deny')) {
+        setOutcome({
+          approvalId: pending.approvalId,
+          displayName: pending.draft.draft.displayName,
+          decision: d.decision,
+          draft: pending.draft.action,
+        });
       }
       setQueue((q) => q.filter((p) => p.approvalId !== d.approvalId));
     };
@@ -283,8 +317,38 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
     [current, cwd],
   );
 
+  // naby's participant draft (§8.12): edits and the session choice ride along;
+  // never "remember" (R8.2).
+  const answerDraft = async (choice: DraftChoice, form: DraftForm) => {
+    if (!current?.draft) return;
+    const card = current.draft;
+    setBusy(true);
+    setQueue((q) => q.filter((p) => p.approvalId !== current.approvalId));
+    setOutcome({
+      approvalId: current.approvalId,
+      displayName: form.displayName.trim() || card.draft.displayName,
+      decision: choice === 'decline' ? 'deny' : 'allow',
+      draft: card.action,
+    });
+    await postResolve(draftResolveBody(current.approvalId, card, form, choice));
+    setBusy(false);
+  };
+
   if (!current) {
     return outcome ? <ProposalOutcomeLine outcome={outcome} onDismiss={() => setOutcome(null)} /> : null;
+  }
+
+  if (current.draft) {
+    return (
+      <ParticipantDraftCard
+        // A fresh form per draft: the next queued draft must not inherit edits.
+        key={current.approvalId}
+        card={current.draft}
+        busy={busy}
+        more={queue.length - 1}
+        onAnswer={(choice, form) => void answerDraft(choice, form)}
+      />
+    );
   }
 
   if (current.proposal) {

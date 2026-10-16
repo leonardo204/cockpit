@@ -247,6 +247,11 @@ import {
 } from './participantRound';
 import { readParticipantSettings } from '../lib/participants';
 import {
+  makeParticipantDraftTool,
+  PARTICIPANT_DRAFT_RULE,
+  PARTICIPANT_DRAFT_TOOL,
+} from '../lib/participantDraft';
+import {
   participantMayUseTool,
   recentForRoute,
   readParticipantProfile,
@@ -1418,8 +1423,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                           ? call
                           : { ...call, subagent: { agentId: `naby-delegate-${input.spec.name}` } },
                       ),
-                    toolSchemas,
-                    executors,
+                    // naby's own participant drafts stay with naby (§8.12): a
+                    // delegated subagent is never offered the tool (and the gate
+                    // refuses it for a subagent call anyway).
+                    toolSchemas: toolSchemas.filter((t) => t.name !== PARTICIPANT_DRAFT_TOOL),
+                    executors: Object.fromEntries(
+                      Object.entries(executors).filter(([name]) => name !== PARTICIPANT_DRAFT_TOOL),
+                    ),
                     signal: ctx.signal,
                     ...(projectCwd ? { cwd: projectCwd } : {}),
                     onSession: (childId, spec) =>
@@ -1600,14 +1610,61 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // server like every other runtime tool, so both engines share it.
         const orgLoad = orgListed && turnHasShell ? makeOrgSkillLoadTool(orgTurn) : undefined;
 
+        // `naby_participant_draft` (multi-agent-chat §8.12, MAC-M5a) — naby writes
+        // a participant's draft and the USER approves it on a card. NABY'S TURNS
+        // ONLY: a turn addressed to a custom agent is that agent's, a participant
+        // never gets it (participantTurn's exclusion list), a subagent is refused
+        // at the gate below, and a scheduled task / job report / kickoff has
+        // nobody in front of a card. On dev-claude it reaches the model through
+        // the in-process `nabytools` server like `naby_remember`.
+        //
+        // It ALWAYS ASKS: the executor raises the approval itself after the gate
+        // has let the call through, so neither a policy rule nor the allow-all
+        // baseline can answer for it (the gate special-case below).
+        const nabyOwnsTurn = !routedAgent || routedAgent.kind === 'persona';
+        const draftTool =
+          nabyOwnsTurn && roundEligible
+            ? makeParticipantDraftTool({
+                store,
+                sessionId,
+                emit: (event) => ctx.emit(event as RunEvent),
+                signal: ctx.signal,
+                ttlMs: APPROVAL_TTL_MS,
+                log: (kind, payload) => logActivity(kind, payload),
+                ...(growthSubject ? { hubAgentId: growthSubject.id } : {}),
+                // Telegram follows naby's own escalation, like a proposal (D12):
+                // drafting is naby's decision whatever turn it is in. Read when a
+                // draft is actually made (`escalateToTelegram` is bound below).
+                escalate: {
+                  enabled: () => {
+                    if (escalateToTelegram) return true;
+                    const e = readPersonaAutonomy(store).escalation;
+                    return e === 'telegram' || e === 'both';
+                  },
+                  send: (input) =>
+                    void escalateApproval({
+                      store,
+                      approvalId: input.approvalId,
+                      toolName: input.toolName,
+                      input: input.input,
+                      now: Date.now(),
+                      ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+                    }),
+                  finish: (input) => void finishEscalation({ store, ...input }),
+                },
+              })
+            : undefined;
+
         const toolSchemas: ToolSchema[] = [
           ...builtin.toolSchemas,
+          ...(draftTool ? [draftTool.schema] : []),
           ...(workspace?.toolSchemas ?? []),
           ...(orgLoad ? [orgLoad.schema] : []),
           ...(mcp?.toolSchemas ?? []),
         ];
         const executors: Record<string, Executor> = {
           ...builtin.executors,
+          ...(draftTool ? { [draftTool.schema.name]: draftTool.executor } : {}),
           ...(workspace?.executors ?? {}),
           ...(orgLoad ? { [orgLoad.schema.name]: orgLoad.executor } : {}),
           ...(mcp?.executors ?? {}),
@@ -2081,6 +2138,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // their speech as `[@name]` user-side lines in its history, so it is
             // told the same thing: context, never instructions or approvals.
             !roundMode && sessionHasParticipants ? HUB_ROUND_RULES : undefined,
+            // R8.5: present exactly when the draft tool is — with participants or
+            // without (the first participant is made this way), in a round and on
+            // the plain path (a round's naby speech starts from this same system).
+            draftTool ? PARTICIPANT_DRAFT_RULE : undefined,
             stageLimited
               ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
               : undefined,
@@ -2465,6 +2526,38 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           return undefined;
         };
         const gate: Gate = async (call) => {
+          // ---- naby's participant DRAFT always asks (multi-agent-chat §8.12, R8.2)
+          //
+          // OUTERMOST, before the policy engine and the allow-all baseline, because
+          // neither may ANSWER for this tool: its executor raises the user's
+          // approval card itself, so the gate's job is only to let the call reach
+          // it. A policy can still TIGHTEN — an explicit `deny` rule or an org
+          // hook's deny refuses the call — but an `allow` (or a remembered "always
+          // allow") cannot skip the card, and an `ask` does not stack a second,
+          // generic prompt with an "always" button on top of it. A subagent never
+          // drafts, and a turn that was not given the tool cannot run it.
+          //
+          // No growth observation: asking a human is not an unsupervised act, and
+          // a declined draft is not a safety refusal.
+          if (normalizeToolName(call.toolName) === PARTICIPANT_DRAFT_TOOL) {
+            if (!draftTool || call.subagent) {
+              console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (naby turns only)`);
+              return {
+                behavior: 'deny',
+                reason: 'only naby can draft a participant, on its own turn',
+                refusal: 'capability',
+              };
+            }
+            if (resolvePolicyEffect(policyRules, PARTICIPANT_DRAFT_TOOL) === 'deny') {
+              console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (policy rule)`);
+              return { behavior: 'deny', reason: 'a policy rule blocks drafting participants', refusal: 'capability' };
+            }
+            const hooked = await orgHookGate(call, false);
+            hookOpinions.delete(call.toolCallId);
+            if (hooked) return hooked;
+            console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → allow (the draft asks the user itself)`);
+            return { behavior: 'allow' };
+          }
           // Phase 3 P3-M2: a routed agent restricted to `toolRefs` may use ONLY
           // those tools. This is the OUTERMOST check — it overrides even an
           // allow-all baseline, because the restriction is the agent's identity,
