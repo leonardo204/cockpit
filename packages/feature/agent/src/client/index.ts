@@ -126,7 +126,7 @@ export type {
 // multi-agent-chat (MAC-M3): what Settings' participant section shares with the
 // chat — one avatar look, one read of a participant row, one change signal, and
 // the stored-model picker list (no `auto`, see modelCatalog.ts).
-export { ParticipantAvatar, NabyAvatar } from './ParticipantAvatar';
+export { ParticipantAvatar } from './ParticipantAvatar';
 export { announceParticipantsChanged, PARTICIPANTS_CHANGED_EVENT } from './ParticipantsContext';
 export {
   participantInfoFrom,

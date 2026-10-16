@@ -13,7 +13,8 @@
 
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ParticipantAvatar, NabyAvatar } from './ParticipantAvatar';
+import { NabyAvatar } from '@cockpit/shared-ui';
+import { ParticipantAvatar } from './ParticipantAvatar';
 import type { ActingAgent } from './actingAgent';
 import type { ParticipantInfo, RoundProgress } from './participants';
 
@@ -44,7 +45,7 @@ export const RoundProgressStrip = memo(function RoundProgressStrip({
       {acting?.participant && acting.avatar ? (
         <ParticipantAvatar avatar={acting.avatar} color={acting.color ?? '#8B8FA3'} size="xs" speaking />
       ) : (
-        <NabyAvatar size="xs" speaking />
+        <NabyAvatar size={20} speaking />
       )}
       <span>{t('participants.progress.speaking', { defaultValue: '{{name}} is speaking', name: speakerName })}</span>
       <span className="font-semibold text-muted-foreground">

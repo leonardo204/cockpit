@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { I18nextProvider } from 'react-i18next';
 import i18n from '@cockpit/shared-i18n';
 import { ThemeProvider } from '@cockpit/shared-ui';
-import { ParticipantRosterView, ShowRoutingToggleView } from './ParticipantRoster';
+import { ParticipantRoster, ParticipantRosterView, ShowRoutingToggleView } from './ParticipantRoster';
+import { MessageList } from './MessageList';
 import { RoutingChip } from './RoutingChip';
 import { ParticipantProposalCard, ProposalOutcomeLine } from './ToolApprovalPrompt';
 import { MessageBubble } from './MessageBubble';
@@ -126,6 +127,28 @@ describe('ParticipantRosterView (R6.2)', () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*data-testid="roster-add-reviewer"/);
   });
 
+  it('MAC-M3b: with zero participants the roster still shows naby (with its avatar) and the + button', () => {
+    const html = view({ inSession: [], addable: [] });
+    expect(html).toContain('data-testid="participant-roster"');
+    expect(html).toContain('data-roster-id="naby"');
+    expect(html).toContain('data-naby-avatar');
+    expect(html).toContain('data-testid="roster-add"');
+    // Nobody else, and nothing folded.
+    expect(html.match(/data-roster-id=/g)).toHaveLength(1);
+    expect(html).not.toContain('roster-folded');
+  });
+
+  it('MAC-M3b: the wired roster renders even when the chat has no participants at all', () => {
+    // EMPTY_PARTICIPANTS is `enabled:false` — the context a naby-only chat has
+    // when nothing is registered. It used to render nothing.
+    const html = render(<ParticipantRoster speakingId={null} />, EMPTY_PARTICIPANTS);
+    expect(html).toContain('data-roster-id="naby"');
+    expect(html).toContain('data-naby-avatar');
+    expect(html).toContain('data-testid="roster-add"');
+    // The "show routing" toggle still waits for participants.
+    expect(render(<ShowRoutingToggleView on={false} onToggle={noop} />)).toContain('show-routing-toggle');
+  });
+
   it('before the first send nothing can be added', () => {
     const html = view({ menuOpen: true, hasSession: false });
     expect(html).toContain('Send a first message');
@@ -152,6 +175,8 @@ describe('RoutingChip visibility (R6.4)', () => {
     const html = render(<RoutingChip routing={delegate} />, ctx({ settings: { ...ctx().settings, showRouting: true } }));
     expect(html).toContain('data-testid="routing-chip"');
     expect(html).toContain('naby → @translator');
+    // MAC-M3b: naby's own step is marked with naby's avatar.
+    expect(html).toContain('data-naby-avatar');
     expect(html).toContain('needs English');
     expect(html).toContain('<details');
     expect(html).toContain('Translate the notes');
@@ -202,6 +227,10 @@ describe('ParticipantProposalCard (R6.7)', () => {
   it('shows the participant, naby’s reason, and only Approve / Decline', () => {
     const html = render(<ParticipantProposalCard proposal={proposal} busy={false} more={0} onApprove={noop} onDecline={noop} />);
     expect(html).toContain('data-testid="participant-proposal"');
+    // MAC-M3b: the title chip carries naby's avatar, not a 🦋 in the string.
+    expect(html).toContain('data-naby-avatar');
+    expect(html).toContain('naby’s proposal · needs your OK');
+    expect(html).not.toContain('🦋');
     expect(html).toContain('Reviewer looks right for this');
     expect(html).toContain('@reviewer');
     expect(html).toContain('Reviews pull requests');
@@ -257,10 +286,42 @@ describe('MessageBubble speaker card (R6.1)', () => {
     expect(html).not.toContain('relay-chip');
   });
 
-  it('naby’s own bubble keeps the plain look', () => {
+  it('MAC-M3b: naby’s own reply is a card with naby’s avatar and brand-coloured name', () => {
     const html = bubble({ id: 'm2', role: 'assistant', content: 'naby answers' });
-    expect(html).not.toContain('data-speaker');
+    expect(html).toContain('data-speaker="naby"');
+    expect(html).toContain('data-naby-avatar');
+    expect(html).toContain('aria-label="나비"');
+    expect(html).toMatch(/data-testid="naby-line"[^>]*><span class="text-brand">naby<\/span>/);
+    // The card: the agent card's surface, edged in the brand colour.
+    expect(html).toContain('bg-card text-card-foreground border border-border rounded-xl');
+    expect(html).toContain('border-l-brand/70');
+    expect(html).toContain('naby answers');
+    // Not a participant.
     expect(html).not.toContain('data-participant-avatar');
+    expect(html).not.toContain('data-testid="speaker-line"');
+  });
+
+  it('MAC-M3b: naby’s card reads 나비 in Korean', async () => {
+    await i18n.changeLanguage('ko');
+    try {
+      const html = bubble({ id: 'm2', role: 'assistant', content: '안녕하세요' });
+      expect(html).toMatch(/data-testid="naby-line"[^>]*><span class="text-brand">나비<\/span>/);
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  it('MAC-M3b: an assistant row with nothing in it yet draws no naby header', () => {
+    const html = bubble({ id: 'm3', role: 'assistant', content: '', isStreaming: true });
+    expect(html).not.toContain('data-naby-avatar');
+    expect(html).not.toContain('naby-line');
+  });
+
+  it('MAC-M3b: user bubbles are unchanged — no avatar, no naby line', () => {
+    const html = bubble({ id: 'u1', role: 'user', content: 'hello' });
+    expect(html).toContain('bg-user-bubble');
+    expect(html).not.toContain('data-naby-avatar');
+    expect(html).not.toContain('naby-line');
   });
 
   it('a routing marker row is a chip — hidden by default, drawn with "show routing"', () => {
@@ -297,5 +358,28 @@ describe('RoundProgressStrip (R6.5)', () => {
     expect(html).toContain('speech 2/6');
     expect(html).toContain('data-testid="round-stop"');
     expect(html).toContain('>Stop</button>');
+  });
+});
+
+describe('loading bubble (MAC-M3b)', () => {
+  const list = (over: Record<string, unknown>) =>
+    render(<MessageList messages={[]} isLoading thinkingName="naby" {...over} />);
+
+  it('shows naby’s avatar when naby is the acting agent', () => {
+    const html = list({ thinkingPersona: true });
+    expect(html).toContain('data-naby-avatar');
+    expect(html).toContain('participant-speaking');
+  });
+
+  it('a participant’s turn shows the participant’s avatar instead', () => {
+    const html = list({ thinkingPersona: false, thinkingAvatar: { avatar: { kind: 'emoji', value: '🌐' }, color: '#0EA5E9' } });
+    expect(html).toContain('data-participant-avatar');
+    expect(html).not.toContain('data-naby-avatar');
+  });
+
+  it('no agent identity keeps the spinner', () => {
+    const html = list({ thinkingPersona: false });
+    expect(html).not.toContain('data-naby-avatar');
+    expect(html).toContain('animate-spin');
   });
 });

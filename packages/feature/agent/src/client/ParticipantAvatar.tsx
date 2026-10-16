@@ -61,26 +61,5 @@ export const ParticipantAvatar = memo(function ParticipantAvatar({
   );
 });
 
-/** naby's own mark in the roster and the strip: the butterfly, brand-tinted. */
-export const NabyAvatar = memo(function NabyAvatar({
-  size = 'md',
-  speaking = false,
-  title,
-}: {
-  size?: ParticipantAvatarSize;
-  speaking?: boolean;
-  title?: string;
-}) {
-  return (
-    <span
-      className={`relative inline-grid shrink-0 place-items-center rounded-full bg-accent leading-none ring-1 ring-brand/40 select-none ${SIZES[size]} ${
-        speaking ? 'participant-speaking' : ''
-      }`}
-      style={{ ['--participant-color' as string]: 'hsl(var(--brand))' }}
-      title={title}
-      data-naby-avatar=""
-    >
-      <span aria-hidden="true">🦋</span>
-    </span>
-  );
-});
+// naby's own mark is `NabyAvatar` in @cockpit/shared-ui (MAC-M3b): one cute
+// butterfly drawn as SVG, shared with Settings, which cannot import this package.

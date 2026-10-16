@@ -27,7 +27,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from '@cockpit/shared-ui';
+import { NabyAvatar, toast } from '@cockpit/shared-ui';
 import type { Agent } from '../../../../../../dist/naby-runtime.mjs';
 import { GrowthPanel } from './GrowthPanel';
 import { AgentExportButton } from './AgentExportButton';
@@ -274,6 +274,10 @@ const AgentRow = memo(function AgentRow({
   return (
     <div className="rounded-lg border border-border p-2.5">
     <div className="flex items-start justify-between gap-2">
+      {/* naby's card carries naby's face (MAC-M3b), the same mark as its chat
+          bubble and roster chip. */}
+      <div className="flex min-w-0 items-start gap-2.5">
+      {isPersona ? <NabyAvatar size={40} className="mt-0.5" /> : null}
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-foreground truncate" title={agent.name}>
@@ -321,6 +325,7 @@ const AgentRow = memo(function AgentRow({
             })}
           </p>
         ) : null}
+      </div>
       </div>
       <div className="flex gap-1.5 shrink-0">
         {/* Both write actions are hidden for the built-in persona — the store

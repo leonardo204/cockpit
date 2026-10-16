@@ -548,12 +548,15 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
         : null,
     [actingAgent],
   );
-  const participantControls = participantsState.enabled ? (
+  // ALWAYS SHOWN (MAC-M3b): naby is in every conversation, so its chip and the
+  // `+` are there even with zero participants. Only the "show routing" toggle
+  // still waits for participants to exist — with none there is nothing to route.
+  const participantControls = (
     <div className="flex items-center gap-2" data-slot="participant-controls">
       <ParticipantRoster speakingId={speakingId} />
       <ShowRoutingToggle />
     </div>
-  ) : null;
+  );
   // #10: connect the live tail whenever this tab is VIEWING the session (active, not the
   // originator currently sending). The session-stream snapshot's `status` — not the racy
   // global-state broadcast — decides whether a run is live. This is what lets a refreshed
@@ -1035,7 +1038,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
                 header above is hidden and this row IS the chat's header, so the
                 roster and the "show routing" toggle sit at its right end; when
                 the header is shown they live in its roster slot instead. */}
-            {hideHeader && participantControls ? <div className="ml-auto pl-2">{participantControls}</div> : null}
+            {hideHeader ? <div className="ml-auto pl-2">{participantControls}</div> : null}
           </div>
         )}
 
@@ -1066,6 +1069,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             onApprovePlan={handleApprovePlan}
             thinkingName={thinkingName}
             thinkingAvatar={thinkingAvatar}
+            thinkingPersona={!!actingAgent?.persona}
             // A turn this tab did NOT send: the fast-growth session's opening
             // question, a Telegram message, a scheduled task — anything the live
             // stream reports (including a turn merely RESERVED and not yet

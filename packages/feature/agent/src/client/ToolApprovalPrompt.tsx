@@ -18,6 +18,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { NabyAvatar } from '@cockpit/shared-ui';
 import { ParticipantAvatar } from './ParticipantAvatar';
 import { useParticipants } from './ParticipantsContext';
 import {
@@ -84,8 +85,9 @@ export const ParticipantProposalCard = memo(function ParticipantProposalCard({
       className="mx-4 mb-2 rounded-xl border-[1.5px] border-brand/40 bg-card p-3.5 shadow-card"
       data-testid="participant-proposal"
     >
-      <div className="inline-flex items-center rounded-sm bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground">
-        {t('participants.proposal.title', { defaultValue: '🦋 naby’s proposal · needs your OK' })}
+      <div className="inline-flex items-center gap-1.5 rounded-sm bg-accent py-0.5 pl-1 pr-2 text-xs font-semibold text-accent-foreground">
+        <NabyAvatar size={20} bare />
+        {t('participants.proposal.title', { defaultValue: 'naby’s proposal · needs your OK' })}
       </div>
       <div className="mt-2 text-sm font-semibold text-foreground">
         {t('participants.proposal.question', {

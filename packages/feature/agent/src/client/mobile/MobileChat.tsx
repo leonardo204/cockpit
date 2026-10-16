@@ -203,6 +203,7 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
           onLoadMore={loadMoreHistory}
           isActive={isActive}
           thinkingName={thinkingName}
+          thinkingPersona={!!actingAgent?.persona}
         />
       )}
 

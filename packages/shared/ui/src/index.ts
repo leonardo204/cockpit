@@ -52,6 +52,9 @@ export { rehypeSourceLines } from './rehypeSourceLines';
 // JSON content search (CSS Custom Highlight API + DOM Range mapping)
 export { useJsonSearch, JsonSearchBar } from './useJsonSearch';
 
+// naby's own avatar — the cute butterfly mark (multi-agent-chat MAC-M3b)
+export { NabyAvatar, type NabyAvatarProps } from './NabyAvatar';
+
 // Status dot (success / warning / danger / neutral / active)
 export { StatusDot, statusToneClass, type StatusTone } from './StatusDot';
 

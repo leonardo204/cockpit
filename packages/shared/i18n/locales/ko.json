@@ -2433,7 +2433,7 @@
       "participant": "참가자"
     },
     "proposal": {
-      "title": "🦋 나비의 제안 · 승인 필요",
+      "title": "나비의 제안 · 승인 필요",
       "question": "{{name}} 참가자가 맞을 것 같아요. 참가자로 추가해서 맡길까요?",
       "reason": "나비의 이유",
       "approve": "승인",

@@ -17,22 +17,32 @@
 
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from '@cockpit/shared-ui';
+import { NabyAvatar, toast } from '@cockpit/shared-ui';
 import type { ChatRouting } from './types';
 import { routingChipKind, routingChipVisible, type RoutingChipKind } from './participants';
 import { useParticipants } from './ParticipantsContext';
 
+/** `'naby'` = naby's own step, drawn with its avatar (MAC-M3b); the rest are
+ *  glyphs for things that are not naby acting. */
 const GLYPH: Record<RoutingChipKind, string> = {
-  delegate: '🦋',
+  delegate: 'naby',
   'user-mention': '👆',
-  'to-naby': '🦋',
+  'to-naby': 'naby',
   return: '↩',
-  propose: '🦋',
+  propose: 'naby',
   'ignored-mention': '⛔',
   cap: '⏸',
   'not-in-session': 'ℹ️',
-  end: '🦋',
+  end: 'naby',
 };
+
+function Glyph({ kind }: { kind: RoutingChipKind }) {
+  return GLYPH[kind] === 'naby' ? (
+    <NabyAvatar size={16} bare className="-mt-0.5 mr-0.5" />
+  ) : (
+    <span aria-hidden="true">{GLYPH[kind]}</span>
+  );
+}
 
 const CHIP_TONE: Partial<Record<RoutingChipKind, string>> = {
   'ignored-mention': 'text-destructive bg-destructive/10 border-destructive/45',
@@ -76,7 +86,7 @@ export const RoutingChip = memo(function RoutingChip({ routing }: { routing: Cha
     return (
       <div className="my-2 flex justify-center px-2" data-role="system" data-routing-kind={kind}>
         <span className="inline-flex max-w-[85%] items-center gap-1.5 rounded-full bg-warning/10 px-3 py-1 text-[0.786rem] font-semibold text-warning">
-          <span aria-hidden="true">{GLYPH[kind]}</span>
+          <Glyph kind={kind} />
           <span className="min-w-0 break-words">{text}</span>
           {canAdd ? (
             <button
@@ -140,7 +150,7 @@ export const RoutingChip = memo(function RoutingChip({ routing }: { routing: Cha
         className={`max-w-[85%] rounded-sm border border-dashed px-2.5 py-1 font-mono text-[0.714rem] font-semibold ${tone}`}
         data-testid="routing-chip"
       >
-        <span aria-hidden="true">{GLYPH[kind]}</span> {label}
+        <Glyph kind={kind} /> {label}
         {reason ? <span className="ml-1.5 font-medium text-muted-foreground">· {reason}</span> : null}
         {routing.tokens && routing.tokens.input + routing.tokens.output > 0 ? (
           <span className="ml-1.5 font-medium text-muted-foreground" data-testid="routing-tokens">

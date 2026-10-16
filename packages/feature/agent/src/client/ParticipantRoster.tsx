@@ -11,6 +11,11 @@
  * here yet, with the "n/5" count, and goes inert at the cap. Each participant
  * has its own × to take it out of THIS conversation (the registry is Settings').
  *
+ * ALWAYS DRAWN (MAC-M3b). It used to hide while the conversation had no
+ * participants, so a plain naby-only chat showed no roster at all — and users
+ * read the empty header as "naby is not here". naby is in every conversation,
+ * so the roster now always shows naby's chip and the `+`, even with nobody else.
+ *
  * Split in two so the layout is testable without a DOM: `ParticipantRosterView`
  * is pure props → markup; `ParticipantRoster` reads the chat's participant
  * context and owns the menu's open state.
@@ -18,9 +23,9 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from '@cockpit/shared-ui';
+import { NabyAvatar, toast } from '@cockpit/shared-ui';
 import { Plus, X } from 'lucide-react';
-import { ParticipantAvatar, NabyAvatar } from './ParticipantAvatar';
+import { ParticipantAvatar } from './ParticipantAvatar';
 import { addableParticipants, rosterLayout, type ParticipantInfo } from './participants';
 import { useParticipants } from './ParticipantsContext';
 
@@ -77,7 +82,7 @@ export const ParticipantRosterView = memo(function ParticipantRosterView({
           })}
           data-roster-id="naby"
         >
-          <NabyAvatar size="sm" speaking={speakingId === 'naby'} />
+          <NabyAvatar size={24} speaking={speakingId === 'naby'} />
           {hubLabel}
           <span className="text-[0.643rem] font-semibold text-muted-foreground">
             · {t('participants.fixed', { defaultValue: 'pinned' })}
@@ -203,8 +208,10 @@ export const ParticipantRosterView = memo(function ParticipantRosterView({
   );
 });
 
-/** The roster, wired to the chat's participant context. Renders nothing when
- *  there are no participants at all (R2.1: the chat looks as it always did). */
+/** The roster, wired to the chat's participant context. Always rendered —
+ *  naby's chip and the `+` show even when nobody else is registered or here
+ *  (MAC-M3b; the zero-participant chat used to hide it, which read as "naby is
+ *  missing"). */
 export function ParticipantRoster({ speakingId }: { speakingId: SpeakingId }) {
   const { t } = useTranslation();
   const ctx = useParticipants();
@@ -256,7 +263,6 @@ export function ParticipantRoster({ speakingId }: { speakingId: SpeakingId }) {
   );
   const onToggleMenu = useCallback(() => setMenuOpen((o) => !o), []);
 
-  if (!ctx.enabled) return null;
   return (
     <div ref={rootRef}>
       <ParticipantRosterView

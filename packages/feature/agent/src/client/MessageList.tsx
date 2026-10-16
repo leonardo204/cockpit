@@ -14,7 +14,7 @@ import {
   type ScrollWrite,
   type StickEvent,
 } from './stickToBottom';
-import { ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
+import { NabyAvatar, ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
 import { apiRetryNotice } from './apiRetryNotice';
 import { relayedMessageIds, type ParticipantAvatar as ParticipantAvatarData } from './participants';
@@ -45,6 +45,9 @@ interface MessageListProps {
   /** multi-agent-chat (MAC-M3): the acting PARTICIPANT's avatar, drawn beside
    *  its name in the loading bubble. Absent for naby and every other agent. */
   thinkingAvatar?: { avatar: ParticipantAvatarData; color: string } | null;
+  /** MAC-M3b: the acting agent is naby itself (`ActingAgent.persona`), so the
+   *  loading bubble draws naby's avatar instead of the bare spinner. */
+  thinkingPersona?: boolean;
   /** True when the turn on screen was started SOMEWHERE ELSE and this tab is only
    *  watching it: the fast-growth session's opening turn, a Telegram message, a
    *  scheduled task. The user did not press send, so "naby is thinking" — the
@@ -82,7 +85,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, thinkingAvatar, viewerRun, onStop, sendNonce, onResendMessage, onAskSelection, askOpen },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, thinkingAvatar, thinkingPersona = false, viewerRun, onStop, sendNonce, onResendMessage, onAskSelection, askOpen },
   ref
 ) {
   const { t } = useTranslation();
@@ -679,6 +682,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   <div className="flex items-center gap-2 text-muted-foreground">
                     {thinkingAvatar && !viewerRun ? (
                       <ParticipantAvatar avatar={thinkingAvatar.avatar} color={thinkingAvatar.color} size="sm" speaking />
+                    ) : thinkingPersona || viewerRun ? (
+                      // naby is the one working (or, for a viewer run, the one
+                      // typing to the user): its own face, pulsing, not a spinner.
+                      <NabyAvatar size={24} speaking />
                     ) : (
                       <span className="inline-block w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
                     )}

@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useTheme } from '@cockpit/shared-ui';
+import { NabyAvatar, useTheme } from '@cockpit/shared-ui';
 import { APP_DESCRIPTION, APP_TITLE } from '@cockpit/shared-utils';
 import { toast } from '@cockpit/shared-ui';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
@@ -118,14 +118,14 @@ type SettingsSectionId =
 //
 // SINGLE-CODEPOINT ICONS ONLY. `agents` used 🧑‍🚀 (person + ZWJ + rocket), the
 // one ZWJ sequence in the codebase: Windows does not compose it and renders TWO
-// glyphs side by side, so the nav row read as a typo. 🦋 (U+1F98B) is one
-// codepoint everywhere — and on-theme, since the butterfly is the agent's own
-// growth/trust symbol.
-const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: string }[] = [
+// glyphs side by side, so the nav row read as a typo. The naby row was 🦋
+// (U+1F98B); since MAC-M3b it is naby's own avatar, the same mark as its chat
+// bubble — an inline SVG, so it renders identically on every platform.
+const NAV_SECTIONS: { id: SettingsSectionId; labelKey: string; icon: ReactNode }[] = [
   { id: 'general', labelKey: 'settings.general', icon: '🎨' },
   { id: 'provider', labelKey: 'settings.aiProvider', icon: '🤖' },
   { id: 'connections', labelKey: 'settings.connections', icon: '🔌' },
-  { id: 'agents', labelKey: 'agentManager.title', icon: '🦋' },
+  { id: 'agents', labelKey: 'agentManager.title', icon: <NabyAvatar size={18} bare className="-my-0.5" /> },
   { id: 'memory', labelKey: 'memoryReview.title', icon: '🧠' },
   { id: 'harness', labelKey: 'harnessReview.title', icon: '🧩' },
   { id: 'permissions', labelKey: 'policyManager.title', icon: '🛡️' },

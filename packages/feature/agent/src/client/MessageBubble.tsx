@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
-import { Portal, toast } from '@cockpit/shared-ui';
+import { NabyAvatar, Portal, toast } from '@cockpit/shared-ui';
 import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight, RotateCw, Pencil } from 'lucide-react';
 import { setComposerText } from './fileRefBus';
 import { ToolCallModal } from './ToolCallModal';
@@ -149,8 +149,9 @@ interface MessageBalloonProps {
    *  delta. */
   onFilePathClick?: (path: string) => boolean;
   /** A participant's speech (multi-agent-chat R6.1): drawn as the agent card,
-   *  its left edge in the speaker's colour. Absent = naby's plain text. A
-   *  string, not an object, so the memo'd balloon keeps a stable prop. */
+   *  its left edge in the speaker's colour. Absent = naby's own card, edged in
+   *  the brand colour. A string, not an object, so the memo'd balloon keeps a
+   *  stable prop. */
   speakerColor?: string;
 }
 
@@ -158,21 +159,26 @@ interface MessageBalloonProps {
  * Balloon surfaces (shell-look-and-feel section 5).
  *
  * The user's message is the filled brand bubble, right-aligned, with the
- * tail corner squared. Naby's own reply is PLAIN TEXT on the page — no fill,
- * no avatar — because it is the conversation's host, not a participant.
+ * tail corner squared.
  */
 const USER_BUBBLE_CLASS =
   'bg-user-bubble text-user-bubble-foreground rounded-xl rounded-br-sm shadow-card px-4 py-2.5';
-const NABY_BUBBLE_CLASS = 'text-foreground px-1 py-1';
 
 /**
- * The participant-agent card: the look an agent other than naby gets once
- * multi-agent-chat (MAC-M3) adds the speaker's avatar-and-name line above it.
- * Defined here, beside the two above, so the three surfaces are designed
- * together; nothing renders it until a message carries a speaker.
+ * The agent card: every assistant voice — a participant (MAC-M3) and naby
+ * itself — speaks from this card, with its avatar beside it and its name line
+ * above. A participant's card is edged in its own colour (inline, it is data).
  */
 export const AGENT_BUBBLE_CARD_CLASS =
   'bg-card text-card-foreground border border-border rounded-xl rounded-tl-sm shadow-card px-4 py-2.5';
+
+/**
+ * naby's own card (MAC-M3b). MAC-M0 drew naby as plain text on the page, as the
+ * prototype did, and users read that as "naby's bubble disappeared". It is the
+ * same agent card as a participant's, edged in the BRAND colour instead of a
+ * participant's, so naby is one voice among the cards and still the host.
+ */
+export const NABY_BUBBLE_CLASS = `${AGENT_BUBBLE_CARD_CLASS} border-l-[3px] border-l-brand/70`;
 
 /**
  * ONE THING THE ASSISTANT SAID, as one balloon.
@@ -871,9 +877,23 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
 
   // THE PARTICIPANT CARD (multi-agent-chat R6.1, shell-look-and-feel §5): the
   // avatar beside the bubble and a name line above it, in the speaker's colour,
-  // with the "relayed by naby" mark when naby handed it the turn (R6.4a). naby's
-  // own bubble keeps today's plain look.
-  const speakerLine = speaker ? (
+  // with the "relayed by naby" mark when naby handed it the turn (R6.4a).
+  // naby's own reply gets the same shape (MAC-M3b): its butterfly beside the
+  // card and its name, in the brand colour, above it.
+  // Only once there is something of naby's to draw: an assistant row that is
+  // still empty (a turn that has not said or run anything yet) would otherwise
+  // leave a bare avatar and name above the "naby is thinking" bubble, which
+  // carries naby's face itself.
+  const isNaby =
+    message.role === 'assistant' &&
+    !speaker &&
+    (hasBubbleContent || renderSegments.length > 0 || !!message.thinking || askQuestionCalls.length > 0);
+  const nabyName = t('chat.personaName', { defaultValue: 'naby' });
+  const speakerLine = isNaby ? (
+    <div className="mb-0.5 flex items-center gap-1.5 px-0.5 text-xs font-bold" data-testid="naby-line">
+      <span className="text-brand">{nabyName}</span>
+    </div>
+  ) : speaker ? (
     <div className="mb-0.5 flex flex-wrap items-center gap-1.5 px-0.5 text-xs font-bold" data-testid="speaker-line">
       <span style={{ color: speaker.color }}>{speaker.displayName}</span>
       <span className="font-medium text-muted-foreground">@{speaker.name}</span>
@@ -894,7 +914,14 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     </div>
   ) : null;
   const wrapSpeaker = (column: ReactNode) =>
-    speaker ? (
+    isNaby ? (
+      <div className="mb-4 flex items-start gap-2.5" data-speaker="naby">
+        {/* 32 px, the participants' gutter (ParticipantAvatar md), so naby's
+            cards and theirs line up in one column. */}
+        <NabyAvatar size={32} title={nabyName} className="mt-0.5" />
+        {column}
+      </div>
+    ) : speaker ? (
       <div className="mb-4 flex items-start gap-2.5" data-speaker={speaker.name}>
         <ParticipantAvatar avatar={speaker.avatar} color={speaker.color} size="md" title={speaker.displayName} className="mt-0.5" />
         {column}
@@ -907,7 +934,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     <>
       {wrapSpeaker(
       <div
-        className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} ${speaker ? 'min-w-0 flex-1' : 'mb-4'} group`}
+        className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} ${speaker || isNaby ? 'min-w-0 flex-1' : 'mb-4'} group`}
         data-role={message.role}
       >
         {speakerLine}
