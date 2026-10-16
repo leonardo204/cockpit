@@ -270,7 +270,9 @@ export type ReflectionSweepResult = {
 function agentIdsFor(store: ReflectionStore, opts?: ReflectionSweepOptions): string[] {
   if (opts?.agentIds) return opts.agentIds;
   try {
-    const ids = store.listAgents().map((a) => a.id);
+    // A conversation participant has no growth ledger and is never reflected on
+    // (multi-agent-chat R3.8): its speech is not naby's evidence.
+    const ids = store.listAgents().filter((a) => a.kind !== 'participant').map((a) => a.id);
     return ids.length > 0 ? ids : [BUILTIN_PERSONA_ID];
   } catch {
     return [BUILTIN_PERSONA_ID];

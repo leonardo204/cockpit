@@ -139,7 +139,7 @@ export function MobileSessionList({ onOpen, onUseDesktop, initialSessions }: Mob
                     session.status === 'loading'
                       ? 'animate-pulse bg-orange-9'
                       : session.status === 'unread'
-                        ? 'bg-red-500'
+                        ? 'bg-destructive'
                         : 'bg-muted-foreground/30'
                   }`}
                 />
@@ -150,7 +150,7 @@ export function MobileSessionList({ onOpen, onUseDesktop, initialSessions }: Mob
                       <span className="flex-shrink-0 text-xs text-orange-11">{t('sessions.running')}</span>
                     )}
                     {session.status === 'unread' && (
-                      <span className="flex-shrink-0 text-xs text-red-500">{t('sessions.done')}</span>
+                      <span className="flex-shrink-0 text-xs text-destructive">{t('sessions.done')}</span>
                     )}
                     <span className="ml-auto flex-shrink-0 text-xs text-muted-foreground">
                       {formatTime(session.lastActive)}

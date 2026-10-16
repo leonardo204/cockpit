@@ -41,7 +41,7 @@ const DIR = __dirname;
  * and a tint" in a comment and fails the test that checks there is no border.
  * Block comments (which is what the JSX `{/* … *\/}` form compiles to) and
  * whole-line `//` comments are dropped; trailing `//` is left alone so a URL or a
- * `bg-amber-500/10` in code is never truncated.
+ * `bg-warning/10` in code is never truncated.
  */
 const read = (f: string) =>
   readFileSync(join(DIR, f), 'utf8')
@@ -262,7 +262,7 @@ describe('nothing draws a card inside the agent row', () => {
     // user — but a 2px edge says that without a fourth rectangle.
     const reason = attrsOf(GROWTH, 'growth-reason');
     expect(reason).toContain('border-l-2');
-    expect(reason).not.toMatch(/bg-amber-500\/10/);
+    expect(reason).not.toMatch(/bg-warning\/10/);
   });
 
   it('the learning block is a heading under a rule, not a panel', () => {
@@ -284,8 +284,8 @@ describe('nothing draws a card inside the agent row', () => {
     // they get the same treatment. The export one opens inside the agent row.
     const exportRoot = attrsOf(EXPORT, 'agent-export-confirm');
     const importRoot = attrsOf(IMPORT, 'agent-import-confirm');
-    expect(exportRoot).toContain('border-l-2 border-amber-500/60');
-    expect(importRoot).toContain('border-l-2 border-sky-500/60');
+    expect(exportRoot).toContain('border-l-2 border-warning/60');
+    expect(importRoot).toContain('border-l-2 border-info/60');
     for (const root of [exportRoot, importRoot]) {
       expect(root).not.toMatch(/rounded-lg/);
     }
@@ -596,13 +596,13 @@ describe('warnings are accents, not boxes', () => {
   it('the insecure-backend banner reads the same in the wizard card', () => {
     // It renders both in the settings section and inside the onboarding card;
     // in the card a bordered, tinted rectangle was a box within a box.
-    expect(PROVIDER).toContain('border-l-2 border-amber-500/60 pl-2.5');
-    expect(PROVIDER).not.toContain('rounded border border-amber-500/50 bg-amber-500/10');
+    expect(PROVIDER).toContain('border-l-2 border-warning/60 pl-2.5');
+    expect(PROVIDER).not.toContain('rounded border border-warning/50 bg-warning/10');
   });
 });
 
 describe('modal width scales with the window', () => {
-  const panelClass = /className="relative bg-card rounded-lg shadow-xl ([^"]+)"/.exec(MODAL)?.[1];
+  const panelClass = /className="relative bg-card rounded-xl shadow-float ([^"]+)"/.exec(MODAL)?.[1];
 
   it('is proportional with a hard minimum, not a fixed max', () => {
     expect(panelClass, 'modal panel className not found — did the markup change?').toBeDefined();

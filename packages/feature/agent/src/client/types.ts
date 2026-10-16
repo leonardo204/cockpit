@@ -41,9 +41,41 @@ export type { ImageMediaType, ImageInfo, MessageImage };
 import type { SubagentTask } from './subagentGroups';
 import type { TurnSegment } from '../shared/turnSegments';
 
+/** Who spoke an assistant bubble (multi-agent-chat §8.1, R2.2). Absent = naby.
+ *  Mirrors the server's `ChatSpeaker` (toChatMessages.ts); the live stream fills
+ *  the display fields from `system/speaker`, a reload carries id + handle. */
+export interface ChatSpeaker {
+  agentId: string;
+  name: string;
+  displayName?: string;
+  avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; dataUrl: string };
+  color?: string;
+}
+
+/** A routing step (multi-agent-chat §8.4). Carried on `role:'system'` marker
+ *  rows — live from `system/routing`, reloaded from naby's hand-off rows — which
+ *  MAC-M3 renders as routing chips (hidden unless "show routing" is on). */
+export interface ChatRouting {
+  kind: 'delegate' | 'propose' | 'return' | 'end';
+  targetAgentId?: string;
+  targetName?: string;
+  reason?: string;
+  brief?: string;
+  decision?: 'route' | 'user-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+  /** Live events only (MAC-M4): the routing call's token use behind this step. */
+  tokens?: { input: number; output: number };
+  /** Live `cap` events only (MAC-M4): the limit the round actually ran under. */
+  limit?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
+  /** The participant that spoke this assistant bubble; absent = naby. */
+  speaker?: ChatSpeaker;
+  /** Set on routing marker rows (and on a participant bubble that returned the
+   *  turn to naby). */
+  routing?: ChatRouting;
   /** EVERYTHING the assistant said this turn, concatenated. Still the single
    *  string the rest of the app treats as "the message": copy, search, the
    *  "has the answer started" test, the live/disk reconcile. `segments` says

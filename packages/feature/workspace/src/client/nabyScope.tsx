@@ -52,27 +52,27 @@ interface ScopeStyle {
 const SCOPE_STYLE: Record<NabyScopeId, ScopeStyle> = {
   user: {
     icon: '🌐',
-    pill: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
-    border: 'border-l-sky-500',
-    text: 'text-sky-600 dark:text-sky-400',
+    pill: 'bg-info/15 text-info',
+    border: 'border-l-info',
+    text: 'text-info',
   },
   project: {
     icon: '📁',
-    pill: 'bg-violet-500/15 text-violet-600 dark:text-violet-400',
-    border: 'border-l-violet-500',
-    text: 'text-violet-600 dark:text-violet-400',
+    pill: 'bg-brand/15 text-brand-foreground',
+    border: 'border-l-brand',
+    text: 'text-brand-foreground',
   },
   session: {
     icon: '💬',
-    pill: 'bg-slate-500/15 text-slate-600 dark:text-slate-400',
-    border: 'border-l-slate-500',
-    text: 'text-slate-600 dark:text-slate-400',
+    pill: 'bg-muted text-muted-foreground',
+    border: 'border-l-muted-foreground',
+    text: 'text-muted-foreground',
   },
   org: {
     icon: '🏢',
-    pill: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
-    border: 'border-l-amber-500',
-    text: 'text-amber-600 dark:text-amber-400',
+    pill: 'bg-warning/15 text-warning',
+    border: 'border-l-warning',
+    text: 'text-warning',
   },
 };
 

@@ -22,7 +22,7 @@ interface TodoViewerModalProps {
 function StatusIcon({ status }: { status: TodoItem['status'] }) {
   switch (status) {
     case 'completed':
-      return <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />;
+      return <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0" />;
     case 'in_progress':
       return <Loader className="w-4 h-4 text-brand flex-shrink-0 animate-spin" />;
     default:
@@ -69,7 +69,7 @@ export function TodoViewerModal({ toolCall, onClose }: TodoViewerModalProps) {
         <div className="px-4 pt-3">
           <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
             <div
-              className="h-full bg-green-500 rounded-full transition-all duration-300"
+              className="h-full bg-success rounded-full transition-all duration-300"
               style={{ width: `${total > 0 ? (completed / total) * 100 : 0}%` }}
             />
           </div>

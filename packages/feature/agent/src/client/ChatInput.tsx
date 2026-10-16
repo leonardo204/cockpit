@@ -4,6 +4,7 @@ import { useState, useEffect, useLayoutEffect, useRef, KeyboardEvent, ClipboardE
 import type { ImageInfo, ImageMediaType, ChatEngine } from './types';
 import { toast } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
+import { ArrowUp } from 'lucide-react';
 import { ImagePreview } from '@cockpit/shared-ui';
 import { ScheduleTaskPopover } from './ScheduleTaskPopover';
 import { BrowserRuntime } from '@cockpit/effect-runtime';
@@ -34,6 +35,9 @@ import {
   type FileRow,
 } from './palette';
 import { findSlashQuery, slashInsertion } from '../shared/slashTokens';
+import { useParticipants } from './ParticipantsContext';
+import { ParticipantAvatar } from './ParticipantAvatar';
+import { handleSet, mentionGroupOf, mentionPickPlan, orderMentionAgents, type MentionGroup } from './participants';
 
 // Migrated from src/components/project/ChatInput.tsx.
 
@@ -132,6 +136,11 @@ interface CommandInfo {
     stage: 'egg' | 'larva' | 'pupa' | 'butterfly';
     percent: number;
     addressable: boolean;
+    /** A conversation participant (multi-agent-chat, commands.ts). Its growth
+     *  badge is a fixed placeholder; the palette draws its avatar instead. */
+    participant?: boolean;
+    /** Always false from the server (it has no session); resolved here. */
+    inSession?: boolean;
   };
 }
 
@@ -197,6 +206,10 @@ const GROWTH_GLYPH: Record<'egg' | 'larva' | 'pupa' | 'butterfly', string> = {
 
 export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, history = EMPTY_COMPOSER_HISTORY, onShowUserMessages, onOpenNote, onCreateScheduledTask, composerViewport, compactPlaceholder }: ChatInputProps) {
   const { t } = useTranslation();
+  // multi-agent-chat R6.3: the `@` palette puts this conversation's participants
+  // first and greys registered ones that are not in it.
+  const participants = useParticipants();
+  const inSessionNames = useMemo(() => handleSet(participants.inSession), [participants.inSession]);
   const [input, setInput] = useState('');
   // Caret offset into `input`; drives line-aware command autocomplete.
   const [caret, setCaret] = useState(0);
@@ -484,9 +497,12 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
       // mean a file. Offering agents there would be noise.
       const agents = dir
         ? []
-        : paletteRows(
-            commands.filter((c) => c.name.slice(1).toLowerCase().startsWith(leaf.toLowerCase())),
-            '@',
+        : orderMentionAgents(
+            paletteRows(
+              commands.filter((c) => c.name.slice(1).toLowerCase().startsWith(leaf.toLowerCase())),
+              '@',
+            ),
+            inSessionNames,
           );
       const files = dirEntries?.dir === dir ? fileRows(dirEntries.entries, dir, leaf) : [];
       return [...agents, ...files];
@@ -497,7 +513,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     const { verb } = commandQuery;
     const match = (cmd: CommandInfo) => cmd.name.slice(1).toLowerCase().startsWith(verb);
     return paletteRows(commands.filter(match), '/');
-  }, [commandQuery, mentionQuery, commands, dirEntries]);
+  }, [commandQuery, mentionQuery, commands, dirEntries, inSessionNames]);
 
   // P3-M12a: `isSelectable` used to live here and answered `agent.addressable`.
   // EVERY row is selectable now — the stage narrows what an agent may do, not
@@ -598,6 +614,14 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     // moment a `/name` could be picked mid-sentence. A folder inserts a trailing
     // `/` and no space so the menu stays open for the next segment.
     const isMention = !!mentionQuery;
+    // A REGISTERED PARTICIPANT THAT IS NOT IN THIS CONVERSATION (R3.2, R6.3):
+    // picking it adds it to the session FIRST, then writes the mention — so the
+    // `@` it inserts is one the round will act on, not a "not in this
+    // conversation" line. With no session yet (nothing sent), there is nothing
+    // to add it to: the mention is written and the round says so on send.
+    const pick = isMention
+      ? mentionPickPlan(command, inSessionNames, participants.registered, participants.sessionId)
+      : ({ kind: 'insert' } as const);
     const insert = command.file
       ? mentionInsertion(command as FileRow)
       : isMention
@@ -613,16 +637,34 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     const after = input.slice(to);
     const next = before + insert + after;
     const pos = before.length + insert.length;
-    setInput(next);
-    setCaret(pos);
-    requestAnimationFrame(() => {
-      const ta = textareaRef.current;
-      if (ta) {
-        ta.focus();
-        ta.setSelectionRange(pos, pos);
-      }
-    });
-  }, [input, commandQuery, mentionQuery]);
+    const apply = () => {
+      setInput(next);
+      setCaret(pos);
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current;
+        if (ta) {
+          ta.focus();
+          ta.setSelectionRange(pos, pos);
+        }
+      });
+    };
+    if (pick.kind === 'add-then-insert') {
+      const typed = input;
+      void participants.add(pick.agentId).then((res) => {
+        if (!res.ok) {
+          toast(
+            t('participants.addFailed', { defaultValue: 'Could not add the participant: {{error}}', error: res.error }),
+            'error',
+          );
+          return;
+        }
+        // Only if the draft is still the one the pick was made on.
+        if (inputRef.current === typed) apply();
+      });
+      return;
+    }
+    apply();
+  }, [input, commandQuery, mentionQuery, inSessionNames, participants, t]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     // Check if IME composition is in progress (e.g., Chinese pinyin input)
@@ -833,7 +875,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
   const getSourceColor = (source: CommandInfo['source']) =>
     source === 'file'
       ? ''
-      : 'bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/25 dark:text-emerald-400';
+      : 'bg-success/15 text-success';
 
   // A small glyph so a unified "/" list still tells command / skill / subagent
   // apart at a glance. Commands (the default) get none to stay uncluttered.
@@ -850,7 +892,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
 
   return (
     <div
-      className={`border-t bg-card relative ${dragOver ? 'border-brand ring-1 ring-brand/40' : 'border-border'}`}
+      className={`border-t bg-background relative ${dragOver ? 'border-brand ring-1 ring-brand/40' : 'border-transparent'}`}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -874,13 +916,23 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
             // THREE groups: agents (the `@` layer), files/folders, and harness
             // commands. A header is drawn at each boundary so they never read as one
             // list — under `@` the first two appear, under `/` only the third.
-            const groupOf = (r: PaletteEntry | undefined) =>
-              r === undefined ? '' : r.agent ? 'agents' : r.file ? 'files' : 'commands';
+            const groupOf = (r: PaletteEntry | undefined): MentionGroup | 'files' | 'commands' | '' =>
+              r === undefined
+                ? ''
+                : r.agent
+                  ? mentionGroupOf(r, inSessionNames)
+                  : r.file
+                    ? 'files'
+                    : 'commands';
             const prev = index > 0 ? filteredCommands[index - 1] : undefined;
             const group = groupOf(cmd);
             const groupHeader =
               index === 0 || groupOf(prev) !== group
-                ? group === 'agents'
+                ? group === 'session'
+                  ? t('participants.palette.sessionGroup', { defaultValue: 'In this conversation' })
+                  : group === 'outside'
+                    ? t('participants.palette.outsideGroup', { defaultValue: 'Registered · not in this conversation' })
+                    : group === 'agents'
                   ? t('chatInput.agentsGroup', { defaultValue: 'Agents' })
                   : group === 'files'
                     ? t('chatInput.filesGroup', { defaultValue: 'Files & folders' })
@@ -889,7 +941,18 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
             // P3-M12a: what the stage tells the user is now its SCOPE, not a
             // refusal. Every agent row is pickable; the tooltip says how far this
             // one can be trusted to act, in the same words the engine enforces.
-            const scopeHint = cmd.agent
+            // A participant does not grow (R3.8): no stage, no scope hint — its
+            // avatar and whether it is in this conversation say what matters.
+            const participantInfo = cmd.agent?.participant
+              ? participants.lookup('', cmd.name.slice(1)) ??
+                participants.registered.find((p) => p.name.toLowerCase() === cmd.name.slice(1).toLowerCase())
+              : undefined;
+            const outside = group === 'outside';
+            const scopeHint = cmd.agent?.participant
+              ? outside
+                ? t('participants.palette.addToUse', { defaultValue: 'Add as a participant' })
+                : undefined
+              : cmd.agent
               ? t(`chatInput.agentScope.${cmd.agent.stage}`, {
                   defaultValue:
                     cmd.agent.stage === 'butterfly'
@@ -907,11 +970,15 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                 <div
                   onClick={() => handleSelectCommand(cmd)}
                   title={scopeHint}
+                  data-palette-group={group}
                   className={`px-4 py-2 ${
                     index === selectedIndex ? 'bg-brand/10 cursor-pointer' : 'hover:bg-accent cursor-pointer'
-                  }`}
+                  } ${outside ? 'opacity-60' : ''}`}
                 >
                   <div className="flex items-center gap-3">
+                    {participantInfo ? (
+                      <ParticipantAvatar avatar={participantInfo.avatar} color={participantInfo.color} size="xs" />
+                    ) : null}
                     <span className="font-mono text-sm font-medium text-foreground">
                       {/* A folder shows its trailing slash, which is also what
                           picking it inserts — so the row reads as what it does. */}
@@ -935,6 +1002,17 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                         {cmd.file.isDir
                           ? t('chatInput.folder', { defaultValue: 'folder' })
                           : t('chatInput.file', { defaultValue: 'file' })}
+                      </span>
+                    ) : cmd.agent?.participant ? (
+                      <span
+                        className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap ${
+                          outside ? 'text-muted-foreground' : 'bg-accent text-brand'
+                        }`}
+                        data-testid={outside ? 'palette-add-to-use' : 'palette-participant'}
+                      >
+                        {outside
+                          ? t('participants.palette.addToUse', { defaultValue: 'Add as a participant' })
+                          : t('participants.palette.participant', { defaultValue: 'participant' })}
                       </span>
                     ) : cmd.agent ? (
                       <span
@@ -1017,7 +1095,9 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
           (3-line) input keeps the controls anchored to the bottom-left like a
           normal LLM input, instead of the icons floating beside a tall field. */}
       <div className="p-4">
-        <div className="flex flex-col rounded-lg border border-border bg-card focus-within:ring-2 focus-within:ring-ring">
+        {/* The composer card (shell-look-and-feel section 5): a raised card
+            whose border turns brand on focus, like the prototype's input box. */}
+        <div className="flex flex-col rounded-xl border-[1.5px] border-border bg-card shadow-card transition-colors focus-within:border-brand">
           <textarea
             ref={textareaRef}
             value={input}
@@ -1123,6 +1203,20 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
                 )}
               </div>
             )}
+
+            {/* Send. The same `handleSend` Enter calls — a pointer path to it,
+                not a second way of sending. Round, on the brand gradient. */}
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={disabled || (!input.trim() && images.length === 0)}
+              className="ml-auto flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-brand-gradient text-primary-foreground shadow-card transition-all hover:opacity-90 active:scale-95 disabled:opacity-40 disabled:shadow-none"
+              title={t('mobile.send')}
+              aria-label={t('mobile.send')}
+              data-testid="composer-send"
+            >
+              <ArrowUp className="h-4 w-4" strokeWidth={2.5} />
+            </button>
           </div>
         </div>
       </div>

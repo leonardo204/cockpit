@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { applyStreamEvent, withAssistantText, type StreamEvent } from './applyStreamEvent';
-import { actingAgentFromInit, type ActingAgent } from './actingAgent';
+import { actingAgentFromInit, actingAgentFromSpeaker, type ActingAgent } from './actingAgent';
 import type {
   ChatMessage,
   ImageInfo,
@@ -400,6 +400,29 @@ export function useChatStream(
       return;
     }
 
+    // multi-agent-chat (MAC-M2): a round changes SPEAKER mid-turn. The buffered
+    // text belongs to the speech that just ended, so it is flushed into the live
+    // bubble FIRST — otherwise it would land in the next speaker's bubble after
+    // the reducer splits them. The loading bubble's name follows the speaker.
+    if (eventType === 'system' && (event.subtype === 'speaker' || event.subtype === 'routing')) {
+      if (streamFlushTimerRef.current) {
+        clearTimeout(streamFlushTimerRef.current);
+        streamFlushTimerRef.current = null;
+      }
+      flushStreamBuffer();
+      if (thinkingFlushTimerRef.current) {
+        clearTimeout(thinkingFlushTimerRef.current);
+        thinkingFlushTimerRef.current = null;
+      }
+      flushThinkingBuffer();
+      if (event.subtype === 'speaker') {
+        const acting = actingAgentFromSpeaker(event);
+        if (acting) onActingAgentRef.current?.(acting);
+      }
+      setMessages((prev) => applyStreamEvent(prev, event as unknown as StreamEvent, { engine, assistantId: messageId }));
+      return;
+    }
+
     // Handle SDK api_retry event (e.g. transient 401/5xx). Show in loading bubble.
     if (eventType === 'system' && event.subtype === 'api_retry') {
       setApiRetryInfo({
@@ -597,7 +620,7 @@ export function useChatStream(
       // Finalize the assistant bubble (resultText fallback + isStreaming off + toolCalls done)
       setMessages((prev) => applyStreamEvent(prev, event as unknown as StreamEvent, { engine, assistantId: messageId }));
     }
-  }, [setMessages, flushStreamBuffer, onSessionId, onFetchTitle, cwd, engine]);
+  }, [setMessages, flushStreamBuffer, flushThinkingBuffer, onSessionId, onFetchTitle, cwd, engine]);
 
   // #10 ws-converge: tail the active detached run over /ws/session-stream and feed every
   // event through the SAME handleStreamEvent the SSE path used — so token usage, title,

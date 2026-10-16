@@ -252,7 +252,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSectio
           it becomes a wall of text; the `min-w` floor keeps a 48px-wide nav plus
           a usable content pane at ~880px, and yields to the viewport (minus the
           mx-4 gutters) on windows narrower than that rather than overflowing. */}
-      <div className="relative bg-card rounded-lg shadow-xl w-[min(86vw,1600px)] min-w-[min(880px,calc(100vw-2rem))] h-[85vh] mx-4 flex flex-col overflow-hidden">
+      <div className="relative bg-card rounded-xl shadow-float w-[min(86vw,1600px)] min-w-[min(880px,calc(100vw-2rem))] h-[85vh] mx-4 flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <h2 className="text-sm font-medium text-foreground">{t('settings.title')}</h2>
@@ -271,7 +271,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSectio
             horizontal strip), splits side-by-side from `sm` up. */}
         <div className="flex flex-col sm:flex-row flex-1 min-h-0">
           {/* Left section nav */}
-          <nav className="shrink-0 sm:w-48 border-b sm:border-b-0 sm:border-r border-border overflow-x-auto sm:overflow-y-auto">
+          <nav className="shrink-0 sm:w-48 bg-sidebar border-b sm:border-b-0 sm:border-r border-border overflow-x-auto sm:overflow-y-auto">
             <ul className="flex sm:flex-col p-2 gap-1">
               {NAV_SECTIONS.map((s) => (
                 <li key={s.id} className="shrink-0">
@@ -279,8 +279,8 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSectio
                     onClick={() => setSection(s.id)}
                     className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-left whitespace-nowrap transition-colors ${
                       section === s.id
-                        ? 'bg-brand/10 text-brand font-medium'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                        ? 'bg-accent text-brand-foreground font-semibold'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
                     }`}
                   >
                     <span aria-hidden>{s.icon}</span>

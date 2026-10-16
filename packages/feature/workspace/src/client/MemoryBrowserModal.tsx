@@ -264,18 +264,18 @@ const BrowserRow = memo(function BrowserRow({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {corroboration >= CORROBORATION_BADGE_MIN ? (
-            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-sky-500/15 text-sky-600 dark:text-sky-400">
+            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-info/15 text-info">
               {t('memoryReview.corroborated', { count: corroboration })}
             </span>
           ) : null}
           {isStale ? (
-            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-slate-500/15 text-slate-600 dark:text-slate-400">
+            <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground">
               {t('memoryReview.staleBadge')}
             </span>
           ) : null}
           {isSuperseded ? (
             <span
-              className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-violet-500/15 text-violet-600 dark:text-violet-400"
+              className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-brand/15 text-brand-foreground"
               data-testid="memory-superseded-badge"
             >
               {t('memoryReview.supersededBadge')}
@@ -285,8 +285,8 @@ const BrowserRow = memo(function BrowserRow({
           <span
             className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
               isProposed
-                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
-                : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                ? 'bg-warning/15 text-warning'
+                : 'bg-success/15 text-success'
             }`}
           >
             {isProposed ? t('memoryReview.badgeProposed') : t('memoryReview.badgeConfirmed')}
@@ -398,7 +398,7 @@ const BrowserRow = memo(function BrowserRow({
               onClick={() => onDelete(item.id)}
               disabled={busy}
               title={t('memoryReview.deleteTitle')}
-              className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+              className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
             >
               {t('memoryReview.delete')}
             </button>
@@ -724,7 +724,7 @@ export function MemoryBrowserModal({
           ) : loading ? (
             <p className="text-xs text-muted-foreground">{t('memoryReview.loading')}</p>
           ) : error ? (
-            <p className="text-xs text-red-600 dark:text-red-400">
+            <p className="text-xs text-destructive">
               {t('memoryReview.loadError', { error })}
             </p>
           ) : (page?.items.length ?? 0) === 0 ? (

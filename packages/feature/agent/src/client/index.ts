@@ -123,3 +123,15 @@ export type {
   UsageLimitsSnapshot,
   ChatEngine,
 } from './types';
+// multi-agent-chat (MAC-M3): what Settings' participant section shares with the
+// chat — one avatar look, one read of a participant row, one change signal, and
+// the stored-model picker list (no `auto`, see modelCatalog.ts).
+export { ParticipantAvatar, NabyAvatar } from './ParticipantAvatar';
+export { announceParticipantsChanged, PARTICIPANTS_CHANGED_EVENT } from './ParticipantsContext';
+export {
+  participantInfoFrom,
+  participantInfosFrom,
+  type ParticipantAvatar as ParticipantAvatarData,
+  type ParticipantInfo,
+} from './participants';
+export { CLAUDE_MODELS_FOR_AGENTS, type ModelOption } from './modelCatalog';

@@ -41,9 +41,9 @@ async function policyAction(body: Record<string, unknown>): Promise<
 }
 
 const EFFECT_STYLE: Record<string, string> = {
-  allow: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-  deny: 'bg-red-500/15 text-red-600 dark:text-red-400',
-  ask: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  allow: 'bg-success/15 text-success',
+  deny: 'bg-destructive/15 text-destructive',
+  ask: 'bg-warning/15 text-warning',
 };
 
 const RuleRow = memo(function RuleRow({
@@ -69,7 +69,7 @@ const RuleRow = memo(function RuleRow({
       <button
         onClick={() => onRemove(rule.id)}
         disabled={busy}
-        className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50 shrink-0"
+        className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50 shrink-0"
       >
         {t('policyManager.remove', { defaultValue: 'Remove' })}
       </button>

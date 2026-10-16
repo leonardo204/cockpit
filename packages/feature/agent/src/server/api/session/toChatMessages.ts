@@ -16,10 +16,38 @@ import {
   type TurnSegment,
 } from '../../../shared/turnSegments';
 
+/** Who spoke an assistant bubble (multi-agent-chat §8.1, R2.2). Absent = naby.
+ *  A reloaded transcript carries only what the row stored (id + handle); the
+ *  live stream adds the display fields from its `system/speaker` event. */
+export interface ChatSpeaker {
+  agentId: string;
+  name: string;
+  displayName?: string;
+  avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; dataUrl: string };
+  color?: string;
+}
+
+/** A routing step (multi-agent-chat §8.1, §8.4) — naby handing the turn on,
+ *  a participant returning it, an ignored `@`, a limit. Carried on a lightweight
+ *  `role:'system'` marker row that MAC-M3 renders as a routing chip. */
+export interface ChatRouting {
+  kind: 'delegate' | 'propose' | 'return' | 'end';
+  targetAgentId?: string;
+  targetName?: string;
+  reason?: string;
+  brief?: string;
+  decision?: 'route' | 'user-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /** Assistant bubbles spoken by a participant (absent = naby). */
+  speaker?: ChatSpeaker;
+  /** Set on routing marker rows (and on a participant's bubble that returned
+   *  the turn to naby with `@naby`). */
+  routing?: ChatRouting;
   /** Why a `system` row is here, and what the pill should say. Mirrors the
    *  client's own field (feature/agent/src/client/types.ts); a reloaded
    *  transcript has to describe itself the same way a live one does. */
@@ -141,6 +169,23 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         });
         return;
       }
+      // NABY'S HAND-OFF (multi-agent-chat §8.1) is a `user` row that the user did
+      // not type. It becomes a ROUTING MARKER — a `system` row with `routing`, kept
+      // out of the reader's own bubble (and so out of edit / resend / composer
+      // history, which read user bubbles). Its text is naby's brief, one click
+      // away in `detail`; MAC-M3 draws it as a chip and hides it by default.
+      if (m.routing || m.speaker) {
+        const target = m.routing?.targetName ?? m.routing?.targetAgentId;
+        out.push({
+          id: `routing-${i}`,
+          role: 'system',
+          content: target ? `${m.speaker?.name ?? 'naby'} → @${target}` : (m.speaker?.name ?? 'naby'),
+          systemEvent: { kind: 'meta', detail: m.content },
+          ...(m.speaker ? { speaker: { agentId: m.speaker.agentId, name: m.speaker.name } } : {}),
+          ...(m.routing ? { routing: { ...m.routing } } : {}),
+        });
+        return;
+      }
       out.push({ id: `user-${i}`, role: 'user', content: m.content });
     } else if (m.role === 'assistant') {
       const toolCalls = (m.toolCalls ?? []).map((tc) => ({
@@ -171,7 +216,10 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         : undefined;
       const previous = out[out.length - 1];
       const isToolCallOnly = m.content.trim() === '' && toolCalls.length > 0;
-      if (isToolCallOnly && previous && previous.role === 'assistant') {
+      // A call folds into the bubble above it only when the SAME speaker said
+      // that bubble — a participant's tool call never lands in naby's bubble.
+      const sameSpeaker = previous?.speaker?.agentId === m.speaker?.agentId;
+      if (isToolCallOnly && previous && previous.role === 'assistant' && sameSpeaker) {
         previous.toolCalls = [...(previous.toolCalls ?? []), ...toolCalls];
         let segments = previous.segments;
         for (const tc of toolCalls) segments = appendToolCallSegment(segments, tc.id);
@@ -188,6 +236,8 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         id: `assistant-${i}`,
         role: 'assistant',
         content: m.content,
+        ...(m.speaker ? { speaker: { agentId: m.speaker.agentId, name: m.speaker.name } } : {}),
+        ...(m.routing ? { routing: { ...m.routing } } : {}),
         ...(toolCalls.length ? { toolCalls } : {}),
         ...(segments.length ? { segments } : {}),
         ...(turn ?? {}),

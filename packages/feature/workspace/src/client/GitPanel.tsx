@@ -223,13 +223,13 @@ function Section({
  *  colour carries the rest. */
 function ChangeBadge({ kind }: { kind: GitChange['kind'] }) {
   const map: Record<GitChange['kind'], [string, string]> = {
-    added: ['A', 'text-emerald-600 dark:text-emerald-400'],
-    modified: ['M', 'text-amber-600 dark:text-amber-400'],
-    deleted: ['D', 'text-red-600 dark:text-red-400'],
-    renamed: ['R', 'text-sky-600 dark:text-sky-400'],
-    copied: ['C', 'text-sky-600 dark:text-sky-400'],
+    added: ['A', 'text-success'],
+    modified: ['M', 'text-warning'],
+    deleted: ['D', 'text-destructive'],
+    renamed: ['R', 'text-info'],
+    copied: ['C', 'text-info'],
     untracked: ['U', 'text-muted-foreground'],
-    typechange: ['T', 'text-amber-600 dark:text-amber-400'],
+    typechange: ['T', 'text-warning'],
   };
   const [letter, cls] = map[kind];
   return (
@@ -349,7 +349,7 @@ function RefBadge({ name, kind, current }: { name: string; kind: string; current
     kind === 'head'
       ? 'bg-foreground/15 text-foreground font-semibold'
       : kind === 'tag'
-        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+        ? 'bg-warning/15 text-warning'
         : kind === 'remote'
           ? 'bg-muted text-muted-foreground'
           : 'bg-brand/15 text-brand';
@@ -629,8 +629,8 @@ export function GitPanel({ cwd, onClose, width, resizing, onOpenDiff, onAsk }: G
 
       {/* Conflicts first — they block everything below them. */}
       {repo.conflicted.length > 0 && (
-        <div className="px-2 py-1.5 border-b border-border bg-red-500/10 space-y-1">
-          <div className="text-[0.688rem] font-semibold text-red-700 dark:text-red-300">
+        <div className="px-2 py-1.5 border-b border-border bg-destructive/10 space-y-1">
+          <div className="text-[0.688rem] font-semibold text-destructive">
             {t('git.conflicted', { defaultValue: 'Conflicts' })} ({repo.conflicted.length})
           </div>
           {repo.conflicted.map((c) => (

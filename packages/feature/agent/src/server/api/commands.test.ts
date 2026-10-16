@@ -224,3 +224,74 @@ describe('palette fresh scan wiring', () => {
     expect(harnessSource).toContain('lastScanAt.set(key, now)');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Conversation participants in the `@` palette (multi-agent-chat §8.5, MAC-M1
+// server side). A participant has no growth ledger — it never learns (R3.8) — so
+// it is sent as a fixed, addressable butterfly flagged `participant`, while the
+// persona and custom rows keep their measured stage exactly as before.
+// ---------------------------------------------------------------------------
+import { loadAgentEntries } from './commands';
+import type { Agent } from '../../../../../../../dist/naby-runtime.mjs';
+
+describe('loadAgentEntries — participant rows', () => {
+  const agent = (over: Partial<Agent> & { id: string; name: string; kind: Agent['kind'] }): Agent => ({
+    systemPrompt: `prompt of ${over.name}\nsecond line`,
+    memoryScope: 'user',
+    autonomy: { escalation: 'inline' },
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  });
+  const ledgerReads: string[] = [];
+  const store = {
+    listAgents: () => [
+      agent({ id: 'p', name: 'naby', kind: 'persona', description: 'the hub' }),
+      agent({ id: 'c', name: 'scout', kind: 'custom' }),
+      agent({
+        id: 't',
+        name: 'translator',
+        kind: 'participant',
+        description: 'Translates Korean and English.',
+        profile: {
+          displayName: 'Translator',
+          avatar: { kind: 'emoji', value: '🌐' },
+          color: '#0ea5e9',
+          knowledge: [],
+          guardrails: {},
+          mcpServers: [],
+          skills: [],
+        },
+      }),
+    ],
+    listEvalEvents: (agentId: string) => {
+      ledgerReads.push(agentId);
+      return [];
+    },
+  };
+
+  it('returns participants with the participant flag and a fixed addressable butterfly', () => {
+    const rows = loadAgentEntries(store as never);
+    const tr = rows.find((r) => r.name === '@translator');
+    expect(tr?.description).toBe('Translates Korean and English.');
+    expect(tr?.agent).toEqual({
+      stage: 'butterfly',
+      percent: 100,
+      addressable: true,
+      participant: true,
+      inSession: false,
+    });
+  });
+
+  it('keeps persona and custom rows on their measured stage, without the participant flag', () => {
+    ledgerReads.length = 0;
+    const rows = loadAgentEntries(store as never);
+    expect(rows.map((r) => r.name)).toEqual(['@naby', '@scout', '@translator']);
+    const naby = rows.find((r) => r.name === '@naby');
+    expect(naby?.agent?.stage).toBe('egg');
+    expect(naby?.agent?.participant).toBeUndefined();
+    expect(rows.find((r) => r.name === '@scout')?.description).toBe('prompt of scout');
+    // The participant's ledger is never read — there is nothing to measure.
+    expect(ledgerReads).not.toContain('t');
+  });
+});

@@ -109,12 +109,14 @@ import {
   type AgentKind,
   type AgentEscalation,
   type MemoryScope,
+  parseParticipantProfile,
+  defaultParticipantProfile,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { getStore } from '../engines/naby';
 // "Is anything running anywhere" — the one question the account switch has to ask
 // before it may change which subscription answers (claude-multi-account §5.4).
 import { anyRunActive } from '../sessionRunHub';
-import { resolveApproval } from '../lib/approvalRegistry';
+import { approvalMayRemember, resolveApproval } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
 import { safeLearningReport, type LearningReport } from '../lib/learningRead';
@@ -138,11 +140,26 @@ import {
   type UsageCacheEntry,
 } from '../lib/usageCache';
 import { exportAgent } from '../lib/agentExport';
+import {
+  applyImportDecisions,
+  decodeImportBytes,
+  exportParticipant,
+  exportParticipantBundle,
+  IMPORTABLE_FORMATS,
+  participantToolCatalog,
+  planParticipantImport,
+  readDecisions,
+} from '../lib/participantImport';
 import { applyAgentImport } from '../lib/agentImport';
 import type {
   AgentExportResult,
   AgentImportPlan,
   AgentImportReport,
+  ImportFormat,
+  ImportLoss,
+  ImportPlan,
+  ParticipantExportResult,
+  ParticipantExportReport,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { AUTONOMY_STEP_CAP, resolveMaxSteps } from '../lib/autonomy';
 import {
@@ -150,6 +167,18 @@ import {
   writePersonaAutonomy,
   type PersonaAutonomy,
 } from '../lib/personaAutonomy';
+import {
+  isParticipant,
+  listParticipantsWithCounts,
+  parseParticipantSettingsInput,
+  readParticipantSettings,
+  sessionRoster,
+  uniqueCopyName,
+  validateParticipantName,
+  writeParticipantSettings,
+  type ParticipantSettings,
+  type ParticipantView,
+} from '../lib/participants';
 import {
   readTelegramConfig,
   writeTelegramConfig,
@@ -745,6 +774,57 @@ export type NabyAction =
   // either field on its own, clamps `maxSteps`, and answers with what was kept.
   | { action: 'personaAutonomy.get' }
   | { action: 'personaAutonomy.set'; escalation?: string; maxSteps?: number }
+  // multi-agent-chat MAC-M1 (§8.4) — CONVERSATION PARTICIPANTS. A separate family
+  // from `agent.*` because `agent.put` forces kind='custom' and has no profile.
+  // `participant.*` manages the registry; `session.participants.*` one session's
+  // roster (naby is always in it and never stored); `participants.get/set` the
+  // five settings keys (lib/participants.ts owns keys, defaults and clamp).
+  | { action: 'participant.list' }
+  | {
+      action: 'participant.put';
+      id?: string;
+      name: string;
+      description?: string;
+      instructions: string;
+      model?: string;
+      toolRefs?: string[];
+      memoryScope?: string;
+      profile?: unknown;
+    }
+  | { action: 'participant.remove'; id: string }
+  | { action: 'participant.duplicate'; id: string }
+  // MAC-M4 (agent-import-adapters §2–§5). `import` is TWO-STEP like
+  // `agent.import`: without `apply` it parses and reports (writes nothing); with
+  // `apply: true` it parses again against the machine as it is NOW, applies the
+  // user's `decisions` (handle, display name, description) and writes a
+  // participant. `format` forces an adapter; absent = detected. `export` is the
+  // `.md` + sidecar v2 pair (agent.export stays v1); `exportBundle` the zip.
+  | {
+      action: 'participant.import';
+      format?: string;
+      fileName: string;
+      bytesBase64: string;
+      apply?: boolean;
+      decisions?: { name?: string; displayName?: string; description?: string };
+      cwd?: string;
+    }
+  | { action: 'participant.export'; id: string }
+  | { action: 'participant.exportBundle'; ids: string[] }
+  // The tools a participant can be granted on this machine (the editor's chips,
+  // and what `participant.import` keeps). Built by the turn's own builders.
+  | { action: 'tools.list' }
+  | { action: 'session.participants.list'; sessionId: string }
+  | { action: 'session.participants.add'; sessionId: string; agentId: string }
+  | { action: 'session.participants.remove'; sessionId: string; agentId: string }
+  | { action: 'participants.get' }
+  | {
+      action: 'participants.set';
+      proposalsEnabled?: boolean;
+      maxPerSession?: number;
+      maxSpeechesPerRound?: number;
+      maxRoundTrips?: number;
+      showRouting?: boolean;
+    }
   // Phase 3 (P3-M3) — the Telegram escalation channel config. `get` returns the
   // config with the token REDACTED; `set` persists (a token '' is left unchanged
   // so the redacted UI never wipes it); `test` sends a live message.
@@ -944,6 +1024,16 @@ export type NabyActionResult =
       agents?: Agent[];
       /** `agent.put`: the agent that was created/updated. */
       agent?: Agent;
+      /** `participant.*`: every participant with its active-session count.
+       *  `session.participants.*`: the session's ACTIVE participants joined with
+       *  their agent rows (naby is reported separately in `naby`). */
+      participants?: ParticipantView[];
+      /** `participant.put` / `participant.duplicate`: the row written. */
+      participant?: Agent;
+      /** `session.participants.*`: the hub, always in the roster (R2.1). */
+      naby?: { id: string; name: string };
+      /** `participants.get`/`set`: the five settings as now stored (clamped). */
+      participantSettings?: ParticipantSettings;
       /** `personaAutonomy.get`/`set`: the persona delegation settings as they now
        *  stand — already clamped, so the UI renders the effective values rather
        *  than the ones it asked for. */
@@ -1017,6 +1107,24 @@ export type NabyActionResult =
       title?: string;
       /** `agent.export`: both files' contents plus what was left out. */
       export?: AgentExportResult;
+      /** `participant.export`: the `.md` + sidecar v2 pair and its report. */
+      participantExport?: ParticipantExportResult;
+      /** `participant.exportBundle`: one zip (base64) of several participants. */
+      participantBundle?: {
+        fileName: string;
+        base64: string;
+        manifest: { formatVersion: number; exportedAt: number; agents: string[] };
+        reports: Record<string, ParticipantExportReport>;
+      };
+      /** `participant.import`: the plan (preview), and what landed (apply). */
+      participantImport?: {
+        format: ImportFormat;
+        agent: ImportPlan['agent'];
+        losses: ImportLoss[];
+        warnings: string[];
+        report: ImportPlan['report'];
+        applied: boolean;
+      };
       /** `models.list`: the live model catalog for the catalogue that was asked
        *  for. Exactly one of `claude` / `google` is present — the other was not
        *  probed, which is different from "probed and empty" and is why the absent
@@ -1209,6 +1317,14 @@ function resolvePolicyScope(
     return { ok: true, scope: 'project', scopeKey };
   }
   return { ok: false, error: `unknown scope '${s}'` };
+}
+
+/** The hub every session roster starts with (multi-agent-chat R2.1): the built-in
+ *  persona, under whatever handle it holds on this install (`@naby`, or `@persona`
+ *  on one whose seed name was taken). */
+function hubOf(store: Pick<Store, 'getAgent'>): { id: string; name: string } {
+  const persona = store.getAgent(BUILTIN_PERSONA_ID);
+  return { id: BUILTIN_PERSONA_ID, name: persona?.name ?? 'naby' };
 }
 
 export async function runNabyAction(body: NabyAction): Promise<NabyActionResult> {
@@ -1476,6 +1592,12 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (targetId === BUILTIN_PERSONA_ID || targetKind === 'persona' || body.kind === 'persona') {
         return { ok: false, error: 'the built-in persona is read-only and cannot be edited' };
       }
+      // A participant row is edited through `participant.put` (multi-agent-chat
+      // §8.4). Saving it here would rewrite it as kind='custom' and drop its
+      // profile — the Settings list shows every kind, so this is reachable.
+      if (targetKind === 'participant') {
+        return { ok: false, error: 'this agent is a conversation participant; edit it with participant.put' };
+      }
 
       const name = typeof body.name === 'string' ? body.name.trim() : '';
       if (!name) return { ok: false, error: 'name is required' };
@@ -1591,6 +1713,265 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       };
     }
 
+    // -- conversation participants (multi-agent-chat MAC-M1, §8.4) -----------
+
+    case 'participant.list': {
+      return { ok: true, participants: listParticipantsWithCounts(store) };
+    }
+
+    case 'participant.put': {
+      const targetId = typeof body.id === 'string' && body.id ? body.id : '';
+      const existing = targetId ? store.getAgent(targetId) : undefined;
+      if (targetId) {
+        // Only a participant row is editable here: the persona is read-only and a
+        // custom agent has its own editor (`agent.put`), and turning one kind into
+        // another would silently change what it may do.
+        if (targetId === BUILTIN_PERSONA_ID || existing?.kind === 'persona') {
+          return { ok: false, error: 'the built-in persona is read-only and cannot be edited' };
+        }
+        if (!existing) return { ok: false, error: 'no participant with that id' };
+        if (!isParticipant(existing)) {
+          return { ok: false, error: 'only a conversation participant can be edited here' };
+        }
+      }
+      const named = validateParticipantName(body.name, store, existing?.id);
+      if (!named.ok) return { ok: false, error: named.error };
+      const instructions = typeof body.instructions === 'string' ? body.instructions.trim() : '';
+      if (!instructions) return { ok: false, error: 'instructions are required' };
+      const memoryScope: MemoryScope =
+        body.memoryScope === 'session' ||
+        body.memoryScope === 'project' ||
+        body.memoryScope === 'user' ||
+        body.memoryScope === 'org'
+          ? body.memoryScope
+          : // A NEW participant defaults to `session`, not `user`: an imported
+            // profile is untrusted, and what it learns should not reach every
+            // other conversation unless the user widens it (§8.1). An edit that
+            // omits the field keeps the row's scope.
+            (existing?.memoryScope ?? 'session');
+
+      // The profile is UNTRUSTED input: it passes the runtime gate or nothing is
+      // written. Omitted on an edit = keep the stored one; omitted on a create =
+      // the default profile (an emoji and a colour).
+      let profile;
+      try {
+        profile =
+          body.profile !== undefined
+            ? parseParticipantProfile(body.profile)
+            : (existing?.profile ?? defaultParticipantProfile(named.name));
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+
+      // toolRefs: a sent list replaces; an edit that does not mention it keeps the
+      // row's; a NEW participant without one gets NO tools ([]), never "inherit the
+      // session's toolset" — widening an agent's tools has to be a deliberate
+      // request (the same rule `agent.put` keeps, and §8.1's import default).
+      const toolRefs = Array.isArray(body.toolRefs)
+        ? body.toolRefs.filter((r): r is string => typeof r === 'string')
+        : (existing?.toolRefs ?? []);
+
+      const input: AgentInput = {
+        ...(existing ? { id: existing.id } : {}),
+        name: named.name,
+        kind: 'participant',
+        ...(typeof body.description === 'string' && body.description.trim()
+          ? { description: body.description.trim() }
+          : {}),
+        systemPrompt: instructions,
+        ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model.trim() } : {}),
+        toolRefs,
+        memoryScope,
+        // NOT NULL in the table; a participant has no autonomy and nothing reads
+        // this (§8.1).
+        autonomy: { escalation: 'inline' },
+        profile,
+      };
+      try {
+        const participant = store.putAgent(input);
+        return { ok: true, participant, participants: listParticipantsWithCounts(store) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case 'participant.remove': {
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      const target = store.getAgent(body.id);
+      if (!target) return { ok: true, participants: listParticipantsWithCounts(store) };
+      if (!isParticipant(target)) {
+        return { ok: false, error: 'only a conversation participant can be removed here' };
+      }
+      // The store takes the participant's session rows with it (§8.1).
+      store.removeAgent(target.id);
+      return { ok: true, participants: listParticipantsWithCounts(store) };
+    }
+
+    case 'participant.duplicate': {
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      const source = store.getAgent(body.id);
+      if (!isParticipant(source)) {
+        return { ok: false, error: 'only a conversation participant can be duplicated' };
+      }
+      // Case-insensitive, as the store's name rule is: `X-copy` is taken by `x-copy`.
+      const takenNames = new Set(store.listAgents().map((a) => a.name.toLowerCase()));
+      const name = uniqueCopyName(source.name, (n) => takenNames.has(n.toLowerCase()));
+      try {
+        const participant = store.putAgent({
+          name,
+          kind: 'participant',
+          ...(source.description !== undefined ? { description: source.description } : {}),
+          systemPrompt: source.systemPrompt,
+          ...(source.model !== undefined ? { model: source.model } : {}),
+          toolRefs: source.toolRefs ?? [],
+          memoryScope: source.memoryScope,
+          autonomy: { escalation: 'inline' },
+          ...(source.profile !== undefined ? { profile: source.profile } : {}),
+        });
+        return { ok: true, participant, participants: listParticipantsWithCounts(store) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    // MAC-M4 — bring a participant in from a file (agent-import-adapters §2–§4).
+    // The runtime decides everything about the file; this reads the machine,
+    // applies the user's decisions and writes. Preview and apply parse the SAME
+    // bytes twice on purpose: the apply must see the names and tools as they are
+    // at the moment of writing, not as they were when the preview was drawn.
+    case 'participant.import': {
+      const fileName = typeof body.fileName === 'string' && body.fileName.trim() ? body.fileName.trim() : '';
+      if (!fileName) return { ok: false, error: 'fileName is required' };
+      const decoded = decodeImportBytes(body.bytesBase64);
+      if (!decoded.ok) return { ok: false, error: decoded.error };
+      let format: ImportFormat | undefined;
+      if (body.format !== undefined && body.format !== '') {
+        if (!IMPORTABLE_FORMATS.includes(body.format as ImportFormat)) {
+          return { ok: false, error: `unknown format '${String(body.format)}'` };
+        }
+        format = body.format as ImportFormat;
+      }
+      const parsed = planParticipantImport(store, {
+        fileName,
+        bytes: decoded.bytes,
+        ...(format ? { format } : {}),
+        ...(typeof body.cwd === 'string' && body.cwd ? { cwd: body.cwd } : {}),
+        now: Date.now(),
+      });
+      if (!parsed.ok) {
+        return { ok: false, error: parsed.problems.join('; '), errorKey: 'participantImport.problem' };
+      }
+      const { plan } = parsed;
+      const view = (applied: boolean, agent: ImportPlan['agent'] = plan.agent) => ({
+        format: plan.format,
+        agent,
+        losses: plan.losses,
+        warnings: plan.warnings,
+        report: plan.report,
+        applied,
+      });
+      // PREVIEW: report and stop. Nothing is written.
+      if (body.apply !== true) return { ok: true, participantImport: view(false) };
+
+      const decided = applyImportDecisions(plan, readDecisions(body.decisions), store);
+      if (!decided.ok) return { ok: false, error: decided.error };
+      try {
+        const participant = store.putAgent(decided.agent);
+        return {
+          ok: true,
+          participant,
+          participants: listParticipantsWithCounts(store),
+          participantImport: view(true, decided.agent),
+        };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case 'participant.export': {
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      const target = store.getAgent(body.id);
+      if (!isParticipant(target)) return { ok: false, error: 'only a conversation participant can be exported here' };
+      try {
+        return { ok: true, participantExport: exportParticipant(target, Date.now()) };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case 'participant.exportBundle': {
+      if (!Array.isArray(body.ids) || body.ids.length === 0) return { ok: false, error: 'ids is required' };
+      const agents: Agent[] = [];
+      for (const id of body.ids) {
+        const a = typeof id === 'string' ? store.getAgent(id) : undefined;
+        if (!isParticipant(a)) return { ok: false, error: `not a conversation participant: ${String(id)}` };
+        agents.push(a);
+      }
+      return { ok: true, participantBundle: exportParticipantBundle(agents, Date.now()) };
+    }
+
+    case 'tools.list': {
+      return { ok: true, tools: participantToolCatalog() };
+    }
+
+    case 'session.participants.list': {
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId is required' };
+      }
+      return { ok: true, naby: hubOf(store), participants: sessionRoster(store, body.sessionId) };
+    }
+
+    case 'session.participants.add': {
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId is required' };
+      }
+      if (typeof body.agentId !== 'string' || !body.agentId) {
+        return { ok: false, error: 'agentId is required' };
+      }
+      const agent = store.getAgent(body.agentId);
+      if (!isParticipant(agent)) {
+        return { ok: false, error: 'only a conversation participant can join a session' };
+      }
+      const rows = store.listSessionParticipants(body.sessionId);
+      const already = rows.some((r) => r.agentId === agent.id && r.status === 'active');
+      if (!already) {
+        // The cap is a SETTING, so it is counted here and not in the store (§8.1).
+        const { maxPerSession } = readParticipantSettings(store);
+        const active = rows.filter((r) => r.status === 'active').length;
+        if (active >= maxPerSession) {
+          return { ok: false, error: `a session can hold at most ${maxPerSession} participants` };
+        }
+        // A user add wins over an earlier `declined` or `removed` (§8.1).
+        store.putSessionParticipant(body.sessionId, agent.id, { status: 'active', addedBy: 'user' });
+      }
+      return { ok: true, naby: hubOf(store), participants: sessionRoster(store, body.sessionId) };
+    }
+
+    case 'session.participants.remove': {
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId is required' };
+      }
+      if (typeof body.agentId !== 'string' || !body.agentId) {
+        return { ok: false, error: 'agentId is required' };
+      }
+      // naby is always in the roster and cannot be taken out (R2.1).
+      if (body.agentId === BUILTIN_PERSONA_ID || store.getAgent(body.agentId)?.kind === 'persona') {
+        return { ok: false, error: 'naby is always in the conversation and cannot be removed' };
+      }
+      store.removeSessionParticipant(body.sessionId, body.agentId);
+      return { ok: true, naby: hubOf(store), participants: sessionRoster(store, body.sessionId) };
+    }
+
+    case 'participants.get': {
+      return { ok: true, participantSettings: readParticipantSettings(store) };
+    }
+
+    case 'participants.set': {
+      const parsed = parseParticipantSettingsInput(body as unknown as Record<string, unknown>);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
+      return { ok: true, participantSettings: writeParticipantSettings(store, parsed.input) };
+    }
+
     case 'telegram.get': {
       const cfg = readTelegramConfig(store);
       return {
@@ -1686,10 +2067,14 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         body.decision === 'allow'
           ? ({ behavior: 'allow' } as const)
           : ({ behavior: 'deny', reason: 'you denied this tool call' } as const);
+      // Asked BEFORE resolving: the registry forgets the entry on resolve.
+      const pattern = typeof body.toolPattern === 'string' ? body.toolPattern.trim() : '';
+      const mayRemember = approvalMayRemember(body.approvalId, pattern);
       const resolved = resolveApproval(body.approvalId, gateDecision);
       // Remember: persist a rule so this tool no longer prompts in that scope.
-      const pattern = typeof body.toolPattern === 'string' ? body.toolPattern.trim() : '';
-      if (body.remember && pattern) {
+      // NEVER for a participant proposal (multi-agent-chat §8.2): adding a
+      // participant is a decision about this conversation, not a tool policy.
+      if (body.remember && pattern && mayRemember) {
         const r = resolvePolicyScope(body.scope, body.scopeKey);
         if (r.ok) {
           store.putPolicyRule({
@@ -1797,7 +2182,24 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         existingNames: store.listAgents().map((a) => a.name),
         now: Date.now(),
       });
-      if (!parsed.ok) return { ok: false, error: parsed.problems.join('; ') };
+      if (!parsed.ok) {
+        // A participant export is sidecar v2, which this (custom-agent) path
+        // refuses by design (agent-import-adapters §5). Say where it does go.
+        let version: unknown;
+        try {
+          version = (JSON.parse(body.sidecar) as { formatVersion?: unknown }).formatVersion;
+        } catch {
+          version = undefined;
+        }
+        if (typeof version === 'number' && version > 1) {
+          return {
+            ok: false,
+            error: `${parsed.problems.join('; ')} — if this is a participant file, use Import in Settings › naby › Participants`,
+            errorKey: 'agentImport.useParticipantImport',
+          };
+        }
+        return { ok: false, error: parsed.problems.join('; ') };
+      }
 
       // PREVIEW: report and stop. Nothing is written, so the user can decline
       // after seeing what a colleague's file actually contains.

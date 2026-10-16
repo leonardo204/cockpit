@@ -26,6 +26,10 @@ import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
 import { MarkdownRenderer, docTabTarget } from '@cockpit/shared-ui';
 import { openDocumentInTab } from './docOpenBus';
 import { useTranslation } from 'react-i18next';
+import { useParticipants } from './ParticipantsContext';
+import { RoutingChip } from './RoutingChip';
+import { ParticipantAvatar } from './ParticipantAvatar';
+import { resolveSpeaker, type ResolvedSpeaker } from './participants';
 
 // Migrated from src/components/project/MessageBubble.tsx.
 
@@ -144,7 +148,31 @@ interface MessageBalloonProps {
    *  render would tear down and rebuild the message's whole DOM on every stream
    *  delta. */
   onFilePathClick?: (path: string) => boolean;
+  /** A participant's speech (multi-agent-chat R6.1): drawn as the agent card,
+   *  its left edge in the speaker's colour. Absent = naby's plain text. A
+   *  string, not an object, so the memo'd balloon keeps a stable prop. */
+  speakerColor?: string;
 }
+
+/**
+ * Balloon surfaces (shell-look-and-feel section 5).
+ *
+ * The user's message is the filled brand bubble, right-aligned, with the
+ * tail corner squared. Naby's own reply is PLAIN TEXT on the page — no fill,
+ * no avatar — because it is the conversation's host, not a participant.
+ */
+const USER_BUBBLE_CLASS =
+  'bg-user-bubble text-user-bubble-foreground rounded-xl rounded-br-sm shadow-card px-4 py-2.5';
+const NABY_BUBBLE_CLASS = 'text-foreground px-1 py-1';
+
+/**
+ * The participant-agent card: the look an agent other than naby gets once
+ * multi-agent-chat (MAC-M3) adds the speaker's avatar-and-name line above it.
+ * Defined here, beside the two above, so the three surfaces are designed
+ * together; nothing renders it until a message carries a speaker.
+ */
+export const AGENT_BUBBLE_CARD_CLASS =
+  'bg-card text-card-foreground border border-border rounded-xl rounded-tl-sm shadow-card px-4 py-2.5';
 
 /**
  * ONE THING THE ASSISTANT SAID, as one balloon.
@@ -167,6 +195,7 @@ const MessageBalloon = memo(function MessageBalloon({
   leading,
   extras,
   onFilePathClick,
+  speakerColor,
 }: MessageBalloonProps) {
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
@@ -196,10 +225,16 @@ const MessageBalloon = memo(function MessageBalloon({
           sent too". */}
       <div
         className={`self-start max-w-[80%] ${
-          isUser
-            ? 'bg-accent text-foreground border border-brand rounded-2xl rounded-br-md'
-            : 'bg-accent text-foreground dark:text-slate-11 rounded-2xl rounded-bl-md'
-        } px-4 py-2`}
+          isUser ? USER_BUBBLE_CLASS : speakerColor ? AGENT_BUBBLE_CARD_CLASS : NABY_BUBBLE_CLASS
+        }`}
+        style={
+          speakerColor
+            ? {
+                borderLeft: `3px solid ${speakerColor}`,
+                background: `color-mix(in srgb, ${speakerColor} 5%, hsl(var(--card)))`,
+              }
+            : undefined
+        }
       >
         {leading}
         {text && (
@@ -337,11 +372,24 @@ interface MessageBubbleProps {
    *  Wired by Chat down through MessageList; absent in read-only surfaces
    *  (subagent transcript modal), where the button simply does not render. */
   onResendMessage?: (message: ChatMessage) => void;
+  /** multi-agent-chat R6.4(a): this participant bubble was handed over by naby
+   *  (the routing marker before it targeted this speaker). Computed once per
+   *  list in MessageList (`relayedMessageIds`). */
+  relayed?: boolean;
 }
 
 // Use memo optimization — only re-render when message or cwd changes
-export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true, inFlightTurn = false, onResendMessage }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, cwd, sessionId, onApprovePlan, isLoading, isActive = true, inFlightTurn = false, onResendMessage, relayed = false }: MessageBubbleProps) {
   const { t, i18n } = useTranslation();
+  // multi-agent-chat (MAC-M3): who spoke this bubble. A live bubble carries the
+  // speaker's display fields; a reloaded one only id + handle, so the rest comes
+  // from the registry (and a neutral fallback for a deleted participant).
+  const participants = useParticipants();
+  const { lookup } = participants;
+  const speaker: ResolvedSpeaker | null = useMemo(
+    () => (message.role === 'assistant' && message.speaker ? resolveSpeaker(message.speaker, lookup) : null),
+    [message.role, message.speaker, lookup],
+  );
   const [previewImage, setPreviewImage] = useState<MessageImage | null>(null);
   const [showAskQuestionViewer, setShowAskQuestionViewer] = useState(false);
   const [showEventDetail, setShowEventDetail] = useState(false);
@@ -640,7 +688,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                   <div className="flex items-center gap-2 mb-1.5">
                     <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-green-500 rounded-full transition-all duration-300"
+                        className="h-full bg-success rounded-full transition-all duration-300"
                         style={{ width: `${total > 0 ? (completed / total) * 100 : 0}%` }}
                       />
                     </div>
@@ -655,7 +703,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                       }`}
                     >
                       {todo.status === 'completed' ? (
-                        <CheckCircle2 className="w-3 h-3 text-green-500 flex-shrink-0" />
+                        <CheckCircle2 className="w-3 h-3 text-success flex-shrink-0" />
                       ) : todo.status === 'in_progress' ? (
                         <Loader className="w-3 h-3 text-brand flex-shrink-0 animate-spin" />
                       ) : (
@@ -745,6 +793,9 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // System-event row (task-notification / meta): a muted one-line bar, not a
   // conversation bubble. Kept after all hooks so hook order stays stable.
   if (message.role === 'system') {
+    // A routing marker (multi-agent-chat §8.4) is a chip — hidden unless "show
+    // routing" is on, except the two kinds the user must always be told.
+    if (message.routing) return <RoutingChip routing={message.routing} />;
     const ev = message.systemEvent;
     const icon =
       ev?.kind === 'task-notification'
@@ -818,9 +869,48 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     );
   }
 
+  // THE PARTICIPANT CARD (multi-agent-chat R6.1, shell-look-and-feel §5): the
+  // avatar beside the bubble and a name line above it, in the speaker's colour,
+  // with the "relayed by naby" mark when naby handed it the turn (R6.4a). naby's
+  // own bubble keeps today's plain look.
+  const speakerLine = speaker ? (
+    <div className="mb-0.5 flex flex-wrap items-center gap-1.5 px-0.5 text-xs font-bold" data-testid="speaker-line">
+      <span style={{ color: speaker.color }}>{speaker.displayName}</span>
+      <span className="font-medium text-muted-foreground">@{speaker.name}</span>
+      {relayed ? (
+        <span
+          className="inline-flex items-center rounded-sm bg-muted px-1.5 py-px text-[0.714rem] font-semibold text-muted-foreground"
+          title={t('participants.relayedHint', { defaultValue: 'naby checked and handed this to the participant' })}
+          data-testid="relay-chip"
+        >
+          {t('participants.relayed', { defaultValue: '↪ via naby' })}
+        </span>
+      ) : null}
+      {message.routing?.kind === 'return' && participants.settings.showRouting ? (
+        <span className="inline-flex items-center rounded-sm border border-dashed border-brand/45 bg-accent px-1.5 py-px font-mono text-[0.714rem] font-semibold text-brand">
+          {t('participants.askedNaby', { defaultValue: '↩ asked naby' })}
+        </span>
+      ) : null}
+    </div>
+  ) : null;
+  const wrapSpeaker = (column: ReactNode) =>
+    speaker ? (
+      <div className="mb-4 flex items-start gap-2.5" data-speaker={speaker.name}>
+        <ParticipantAvatar avatar={speaker.avatar} color={speaker.color} size="md" title={speaker.displayName} className="mt-0.5" />
+        {column}
+      </div>
+    ) : (
+      column
+    );
+
   return (
     <>
-      <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} mb-4 group`} data-role={message.role}>
+      {wrapSpeaker(
+      <div
+        className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} ${speaker ? 'min-w-0 flex-1' : 'mb-4'} group`}
+        data-role={message.role}
+      >
+        {speakerLine}
         {/* Message timestamp — shown on hover */}
         {timeStr && (
           <span className="text-[0.786rem] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity mb-0.5 px-1">
@@ -853,6 +943,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
           <MessageBalloon
             text={message.content}
             isUser={isUser}
+            speakerColor={isUser ? undefined : speaker?.color}
             isStreaming={!isUser && !!message.isStreaming}
             onCopy={message.content ? handleCopy : undefined}
             copyTitle={t('chat.copyMessage')}
@@ -881,6 +972,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                   key={seg.id}
                   text={seg.text}
                   isUser={false}
+                  speakerColor={speaker?.color}
                   // Only where the turn is CURRENTLY writing: the last segment
                   // of a running turn. A caret under a bubble that tools have
                   // since run after would claim the model is still typing there.
@@ -945,7 +1037,8 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             {turnMeta.text}
           </span>
         )}
-      </div>
+      </div>,
+      )}
 
       {/* Image preview modal */}
       {previewImage && (

@@ -134,7 +134,7 @@ describe('the composer takes room FROM the transcript, it does not cover it', ()
     expect(chatInput).not.toMatch(/className=\{`\s*(absolute|fixed)/);
     // The composer's root is an ordinary in-flow block. `relative` is for the
     // drag overlay and the "/" palette INSIDE it, not for the composer itself.
-    expect(chatInput).toMatch(/className=\{`border-t bg-card relative/);
+    expect(chatInput).toMatch(/className=\{`border-t bg-background relative/);
   });
 
   it('NO MAGIC PADDING stands in for the composer height', () => {

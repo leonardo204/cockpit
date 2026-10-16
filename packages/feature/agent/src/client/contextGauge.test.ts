@@ -212,8 +212,8 @@ describe('contextGauge', () => {
 
   it('maps each tier onto the classes the bar already uses', () => {
     expect(gaugeToneClass('neutral')).toBe('text-muted-foreground');
-    expect(gaugeToneClass('warn')).toBe('text-yellow-500');
-    expect(gaugeToneClass('critical')).toBe('text-red-500');
+    expect(gaugeToneClass('warn')).toBe('text-warning');
+    expect(gaugeToneClass('critical')).toBe('text-destructive');
   });
 });
 

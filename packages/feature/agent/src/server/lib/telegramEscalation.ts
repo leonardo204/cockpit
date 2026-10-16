@@ -133,6 +133,10 @@ export function formatApprovalMessage(opts: {
    *  rule when they ask together (org-harness-sync §7.10). */
   reasons?: readonly string[];
 }): string {
+  // A PARTICIPANT PROPOSAL is not a tool call (multi-agent-chat §8.2, R3.9): it
+  // asks whether to bring someone into the conversation, so it reads as naby's
+  // question rather than as a tool card.
+  if (opts.toolName === 'participant.add') return formatParticipantProposal(opts);
   const who = opts.agentName ? `@${opts.agentName}` : 'naby';
   const lines: string[] = [];
   if (opts.project !== undefined) lines.push(projectHeader(opts.project));
@@ -142,6 +146,36 @@ export function formatApprovalMessage(opts: {
   const input = formatInputPreview(opts.input);
   if (input) lines.push('', input);
   lines.push('', 'Approve or deny below (or reply yes / no).');
+  return lines.join('\n');
+}
+
+/** The phone copy of naby's proposal to add a participant (R3.9). Korean, like
+ *  the rest of the user-facing Telegram copy that names naby as 나비. */
+function formatParticipantProposal(opts: { input?: unknown; cwd?: string; project?: string }): string {
+  const input = (opts.input && typeof opts.input === 'object' ? opts.input : {}) as {
+    name?: unknown;
+    displayName?: unknown;
+    description?: unknown;
+    reason?: unknown;
+    avatar?: unknown;
+  };
+  const name = typeof input.name === 'string' && input.name ? input.name : 'participant';
+  const display = typeof input.displayName === 'string' && input.displayName ? input.displayName : '';
+  const avatar =
+    input.avatar && typeof input.avatar === 'object' && (input.avatar as { kind?: unknown }).kind === 'emoji'
+      ? String((input.avatar as { value?: unknown }).value ?? '')
+      : '';
+  const lines: string[] = [];
+  if (opts.project !== undefined) lines.push(projectHeader(opts.project));
+  lines.push(`🦋 나비의 제안: @${name}를 참가자로 추가해서 맡길까요?`);
+  if (display || avatar) lines.push(`${avatar ? `${avatar} ` : ''}${display}`.trim());
+  if (typeof input.description === 'string' && input.description.trim()) {
+    lines.push(truncate(input.description.trim(), INPUT_PREVIEW_CHARS));
+  }
+  if (typeof input.reason === 'string' && input.reason.trim()) {
+    lines.push(`· 이유: ${truncate(input.reason.trim(), INPUT_PREVIEW_CHARS)}`);
+  }
+  lines.push('', '아래에서 승인하거나 거절하세요 (yes / no 답장도 됩니다).');
   return lines.join('\n');
 }
 

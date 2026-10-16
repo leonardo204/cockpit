@@ -91,7 +91,7 @@ export function ThemeProvider({ children, initialTheme, persistTheme }: ThemePro
 
     // Update PWA title bar color
     const themeColorMeta = document.querySelector('meta[name="theme-color"]');
-    const color = resolved === 'dark' ? '#111113' : '#f9f9fb';
+    const color = resolved === 'dark' ? '#17181f' : '#ffffff';
     if (themeColorMeta) {
       themeColorMeta.setAttribute('content', color);
     }

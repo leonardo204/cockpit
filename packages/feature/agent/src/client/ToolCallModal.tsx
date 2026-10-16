@@ -169,7 +169,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId, subagentModel }: ToolC
               tabIndex={0}
               onClick={(e) => { e.stopPropagation(); setShowSubagent(true); }}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setShowSubagent(true); } }}
-              className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
+              className="text-[0.786rem] text-brand hover:text-brand/80 cursor-pointer"
               title={t('chat.subagentViewTitle')}
             >
               {t('chat.subagent')}
@@ -181,7 +181,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId, subagentModel }: ToolC
               tabIndex={0}
               onClick={(e) => { e.stopPropagation(); setShowWorkflow(true); }}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); setShowWorkflow(true); } }}
-              className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
+              className="text-[0.786rem] text-brand hover:text-brand/80 cursor-pointer"
               title={t('chat.workflowViewTitle')}
             >
               {t('chat.workflowRun')}
@@ -219,7 +219,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId, subagentModel }: ToolC
                 tabIndex={0}
                 onClick={(e) => { e.stopPropagation(); openPreview('input'); }}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openPreview('input'); } }}
-                className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
+                className="text-[0.786rem] text-brand hover:text-brand/80 cursor-pointer"
                 title={t('toolCall.inputParamsTitle')}
               >
                 {t('toolCall.input')}
@@ -230,7 +230,7 @@ export function ToolCallModal({ toolCall, cwd, sessionId, subagentModel }: ToolC
                   tabIndex={0}
                   onClick={(e) => { e.stopPropagation(); openPreview('result'); }}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); openPreview('result'); } }}
-                  className="text-[0.786rem] text-brand hover:text-teal-10 cursor-pointer"
+                  className="text-[0.786rem] text-brand hover:text-brand/80 cursor-pointer"
                   title={t('toolCall.resultTitle')}
                 >
                   {t('toolCall.result')}

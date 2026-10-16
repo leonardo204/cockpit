@@ -54,7 +54,7 @@ export const ProjectSessionRow = memo(function ProjectSessionRow({
       <button
         data-testid="sidebar-session-delete"
         data-session-id={sessionId}
-        className="flex-shrink-0 p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100"
+        className="flex-shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100"
         onClick={(e) => {
           e.stopPropagation();
           onDelete(cwd, sessionId);

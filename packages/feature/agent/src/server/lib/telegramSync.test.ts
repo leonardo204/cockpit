@@ -219,3 +219,43 @@ describe('telegramSync — the project line', () => {
     expect(f.sent[0]!.split('\n')[0]).toBe(`📁 ${STR.noProject}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// multi-agent-chat §8.7(a) — who answered, right after the project line
+// ---------------------------------------------------------------------------
+
+describe('telegramSync — the participant speaker line (multi-agent-chat §8.7a)', () => {
+  it('one participant: `🌐 Translator:` sits directly after `📁 project`, and the text is not labelled twice', () => {
+    const msg = formatMirrorMessage(
+      '번역',
+      turn({ text: '🌐 Translator:\nHello, world.', speakers: [{ displayName: 'Translator', emoji: '🌐' }] }),
+      'naby',
+    );
+    const lines = msg.split('\n');
+    expect(lines[0]).toBe('📁 naby');
+    expect(lines[1]).toBe('🌐 Translator:');
+    expect(lines[2]).toBe('🔁 번역');
+    expect(msg.match(/🌐 Translator:/g)).toHaveLength(1);
+    expect(msg).toContain('Hello, world.');
+  });
+
+  it('several participants: one line naming them all; each speech keeps its own label', () => {
+    const text = '🌐 Translator:\nHello.\n\n🧐 Critic:\nToo literal.';
+    const msg = formatMirrorMessage(
+      't',
+      turn({ text, speakers: [{ displayName: 'Translator', emoji: '🌐' }, { displayName: 'Critic', emoji: '🧐' }] }),
+      'proj',
+    );
+    const lines = msg.split('\n');
+    expect(lines[0]).toBe('📁 proj');
+    expect(lines[1]).toBe('🌐 Translator · 🧐 Critic');
+    expect(msg).toContain('🧐 Critic:\nToo literal.');
+  });
+
+  it('a naby-only turn keeps the old shape exactly (no speaker line)', () => {
+    const before = formatMirrorMessage('아침 브리핑', turn(), 'proj');
+    const after = formatMirrorMessage('아침 브리핑', turn({ speakers: [] }), 'proj');
+    expect(after).toBe(before);
+    expect(before.split('\n')[1]).toBe('🔁 아침 브리핑');
+  });
+});

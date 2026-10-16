@@ -63,9 +63,20 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
           body: JSON.stringify({ action: 'agent.import', ...body }),
         });
         const json = (await res.json().catch(() => null)) as
-          | { ok?: boolean; import?: ImportWire; error?: string }
+          | { ok?: boolean; import?: ImportWire; error?: string; errorKey?: string }
           | null;
         if (!res.ok || !json?.ok || !json.import) {
+          // A participant export (sidecar v2) is refused here by design; the
+          // server names the door it belongs to (agent-import-adapters §5).
+          if (json?.errorKey === 'agentImport.useParticipantImport') {
+            toast(
+              t('agentImport.useParticipantImport', {
+                defaultValue: 'This is a participant file. Import it under Settings › naby › Participants.',
+              }),
+              'error',
+            );
+            return null;
+          }
           toast(json?.error || t('agentImport.failed', { defaultValue: 'That file could not be read.' }), 'error');
           return null;
         }
@@ -154,10 +165,10 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
     // many. The checkbox row below keeps its border: it is a single interactive
     // row, which is the one thing a border is still for.
     <div
-      className="space-y-2 border-l-2 border-sky-500/60 pl-2.5"
+      className="space-y-2 border-l-2 border-info/60 pl-2.5"
       data-testid="agent-import-confirm"
     >
-      <div className="text-xs font-medium text-sky-800 dark:text-sky-200">
+      <div className="text-xs font-medium text-info">
         {t('agentImport.title', {
           defaultValue: 'This file was written somewhere else. Here is what it carries.',
         })}
@@ -222,7 +233,7 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
       </label>
 
       {r.promptLooksSecret ? (
-        <p className="text-[0.786rem] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[0.786rem] leading-relaxed text-destructive">
           {t('agentImport.promptWarning', {
             defaultValue:
               "This agent's instructions look like they contain a credential. Read them before importing.",
@@ -252,7 +263,7 @@ export function AgentImportButton({ onImported }: { onImported: () => void }) {
         <button
           onClick={() => void apply()}
           disabled={busy}
-          className="text-xs px-2.5 py-1 rounded border border-emerald-500/50 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/15 disabled:opacity-50"
+          className="text-xs px-2.5 py-1 rounded border border-success/50 text-success hover:bg-success/15 disabled:opacity-50"
         >
           {t('agentImport.confirm', { defaultValue: 'Import' })}
         </button>

@@ -111,7 +111,7 @@ export function ContextLimitBanner({ atThreshold, sessionId, cwd }: ContextLimit
 
   return (
     <div
-      className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2"
+      className="mx-4 mb-2 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2"
       data-testid="context-limit-banner"
     >
       <span className="text-sm leading-5">⚠️</span>

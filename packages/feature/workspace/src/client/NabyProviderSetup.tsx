@@ -389,7 +389,7 @@ function ProviderForm({
             </button>
           </div>
         )}
-        {modelsNote && <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{modelsNote}</p>}
+        {modelsNote && <p className="mt-1 text-xs text-warning">{modelsNote}</p>}
         <p className="mt-1 text-xs text-muted-foreground">{row.modelMeaning}</p>
       </div>
 
@@ -408,19 +408,19 @@ function ProviderForm({
       ))}
 
       {insecureWarning && (
-        <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-2">
-          <p className="text-xs text-amber-600 dark:text-amber-400">⚠ {insecureWarning}</p>
+        <div className="border-l-2 border-warning/60 pl-2.5 space-y-2">
+          <p className="text-xs text-warning">⚠ {insecureWarning}</p>
           <button
             onClick={() => void save(true)}
             disabled={busy}
-            className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+            className="px-2 py-1 text-xs rounded border border-warning/60 text-warning hover:bg-warning/20"
           >
             {t('providerSetup.saveAnyway')}
           </button>
         </div>
       )}
 
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
 
       <div className="flex items-center gap-2 pt-1">
         <button
@@ -439,7 +439,7 @@ function ProviderForm({
             {t('providerSetup.removeKey')}
           </button>
         )}
-        {saved && <span className="text-xs text-green-600 dark:text-green-400">{t('providerSetup.saved')}</span>}
+        {saved && <span className="text-xs text-success">{t('providerSetup.saved')}</span>}
         {missing.length > 0 && (
           <span className="text-xs text-muted-foreground">{t('providerSetup.stillNeeds', { fields: missing.join(', ') })}</span>
         )}
@@ -460,8 +460,8 @@ function SecurityBanner({ security }: { security: Security }) {
     // settings section and the onboarding card — and inside the card a bordered,
     // tinted rectangle was a box within a box. The amber edge plus amber text
     // still reads as a warning wherever it lands.
-    <div className="border-l-2 border-amber-500/60 pl-2.5">
-      <p className="text-xs text-amber-600 dark:text-amber-400">
+    <div className="border-l-2 border-warning/60 pl-2.5">
+      <p className="text-xs text-warning">
         ⚠ {t('providerSetup.insecurePre')}
         <code>{security.backend}</code>{t('providerSetup.insecurePost')}{security.warning ? ` ${security.warning}` : ''}
       </p>
@@ -542,7 +542,7 @@ export function NabyProviderSettings({ isOpen }: { isOpen: boolean }) {
             <span className="text-sm text-foreground">{row.label}</span>
             <span className="text-xs">
               {row.stored ? (
-                <span className="text-green-600 dark:text-green-400">{t('providerSetup.keySaved')}</span>
+                <span className="text-success">{t('providerSetup.keySaved')}</span>
               ) : (
                 <span className="text-muted-foreground">{t('providerSetup.notConfigured')}</span>
               )}
@@ -724,7 +724,7 @@ export function NabyOnboardingWizard() {
               >
                 <span className="text-sm text-foreground">{row.label}</span>
                 {row.stored && (
-                  <span className="text-xs text-green-600 dark:text-green-400">{t('providerSetup.keySaved')}</span>
+                  <span className="text-xs text-success">{t('providerSetup.keySaved')}</span>
                 )}
               </button>
             ))}
@@ -1049,8 +1049,8 @@ function ClaudeCliMissingCard({
   return (
     // The same left-accent amber treatment the insecure-storage banner uses:
     // this is advice about something the user has to go and do, not a failure.
-    <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-2" data-testid="claude-cli-install">
-      <p className="text-xs text-amber-600 dark:text-amber-400">⚠ {t('claudeInstall.missing')}</p>
+    <div className="border-l-2 border-warning/60 pl-2.5 space-y-2" data-testid="claude-cli-install">
+      <p className="text-xs text-warning">⚠ {t('claudeInstall.missing')}</p>
       <p className="text-xs text-muted-foreground">{t('claudeInstall.why')}</p>
       {/* target="_blank" is what electron/boot.ts turns into "open in the OS
           browser" — the docs must not load inside the app shell. */}
@@ -1380,7 +1380,7 @@ function ClaudeAccountsCard({
       </button>
 
       {error && (
-        <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="claude-account-error">
+        <p className="text-xs text-warning" data-testid="claude-account-error">
           {error}
         </p>
       )}
@@ -1558,7 +1558,7 @@ export function NabyEngineSelector({
         )}
       {/* The runtime's own sentence about what will actually happen — kept as
           the single source of truth rather than re-derived in the UI. */}
-      <p className={`text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-amber-500'}`}>
+      <p className={`text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-warning'}`}>
         {state.engine.summary}
       </p>
       {/* …AND WHAT THIS SHELL IS QUIETLY DOING TO IT (subagent-delegation §4.4).
@@ -1824,13 +1824,13 @@ function McpAddForm({
             placeholder={t('providerSetup.headersPlaceholder')}
             rows={2}
             className={`${inputClass} font-mono ${
-              probe?.verdict === 'no-registration' ? 'ring-1 ring-amber-500/70' : ''
+              probe?.verdict === 'no-registration' ? 'ring-1 ring-warning/70' : ''
             }`}
           />
         </>
       )}
       {editing && (initial?.headerKeys?.length || initial?.envKeys?.length) ? (
-        <p className="text-xs text-amber-600 dark:text-amber-400">{t('providerSetup.secretReentry')}</p>
+        <p className="text-xs text-warning">{t('providerSetup.secretReentry')}</p>
       ) : null}
       {remote && probe?.verdict === 'oauth' ? (
         <div className="space-y-1.5 border-l-2 border-brand/60 pl-2.5" data-testid="mcp-add-oauth">
@@ -1853,13 +1853,13 @@ function McpAddForm({
         </div>
       ) : null}
       {remote && probe?.verdict === 'no-registration' ? (
-        <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="mcp-add-no-registration">
+        <p className="text-xs text-warning" data-testid="mcp-add-no-registration">
           {t('mcpOAuth.probe.noRegistration')}
         </p>
       ) : null}
       {remote && probe?.verdict === 'unreachable' ? (
         <div className="space-y-1" data-testid="mcp-add-unreachable">
-          <p className="text-xs text-red-500 break-words">
+          <p className="text-xs text-destructive break-words">
             {t('mcpOAuth.probe.unreachable', { error: probe.error ?? '' })}
           </p>
           <button
@@ -1871,7 +1871,7 @@ function McpAddForm({
           </button>
         </div>
       ) : null}
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
       <div className="flex items-center gap-2">
         <button
           onClick={() => void submit()}
@@ -2113,7 +2113,7 @@ function SystemMcpForm({
             <button
               onClick={() => void remove()}
               disabled={busy}
-              className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-red-500 disabled:opacity-40"
+              className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-destructive disabled:opacity-40"
             >
               {t('systemMcp.remove')}
             </button>
@@ -2124,7 +2124,7 @@ function SystemMcpForm({
         <p className="text-xs text-muted-foreground">{t('systemMcp.secretKept')}</p>
       )}
       {note && (
-        <p className={`text-xs ${note.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+        <p className={`text-xs ${note.ok ? 'text-success' : 'text-destructive'}`}>
           {note.text}
         </p>
       )}
@@ -2191,7 +2191,7 @@ function SystemMcpOAuthForm({
 
   return (
     <div className="space-y-1.5" data-testid={`system-mcp-oauth-${preset.name}`}>
-      <p className={`text-xs ${oauth.status === 'relogin' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
+      <p className={`text-xs ${oauth.status === 'relogin' ? 'text-warning' : 'text-muted-foreground'}`}>
         {t(statusKey)}
       </p>
       <AtlassianLoginButton atlassian={view} onState={() => onChanged()} />
@@ -2207,14 +2207,14 @@ function SystemMcpOAuthForm({
           <button
             onClick={() => void remove()}
             disabled={busy}
-            className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-red-500 disabled:opacity-40"
+            className="shrink-0 px-2 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-destructive disabled:opacity-40"
           >
             {t('systemMcp.remove')}
           </button>
         </div>
       ) : null}
       {note && (
-        <p className={`text-xs ${note.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>{note.text}</p>
+        <p className={`text-xs ${note.ok ? 'text-success' : 'text-destructive'}`}>{note.text}</p>
       )}
     </div>
   );
@@ -2262,9 +2262,9 @@ function SystemMcpRow({
         <p className="text-xs font-medium text-foreground">{t(preset.titleKey)}</p>
         <span className="text-xs">
           {proposed ? (
-            <span className="text-amber-600 dark:text-amber-400">{t('systemMcp.proposed')}</span>
+            <span className="text-warning">{t('systemMcp.proposed')}</span>
           ) : state.configured ? (
-            <span className="text-green-600 dark:text-green-400">{t('systemMcp.connected')}</span>
+            <span className="text-success">{t('systemMcp.connected')}</span>
           ) : (
             <span className="text-muted-foreground">{t('systemMcp.notConfigured')}</span>
           )}
@@ -2279,11 +2279,11 @@ function SystemMcpRow({
         )}
       </div>
       {proposed && (
-        <div className="border-l-2 border-amber-500/60 pl-2.5 space-y-1.5">
-          <p className="text-xs text-amber-600 dark:text-amber-400">{t('systemMcp.proposedHint')}</p>
+        <div className="border-l-2 border-warning/60 pl-2.5 space-y-1.5">
+          <p className="text-xs text-warning">{t('systemMcp.proposedHint')}</p>
           <button
             onClick={() => void approve()}
-            className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10"
+            className="px-2 py-1 text-xs rounded border border-warning/60 text-warning hover:bg-warning/10"
           >
             {t('systemMcp.approve')}
           </button>
@@ -2466,7 +2466,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
             data-testid={`mcp-row-${row.name}`}
             className={`rounded px-2 py-1.5 border ${
               row.status === 'proposed'
-                ? 'border-amber-500/60 border-dashed bg-amber-500/5'
+                ? 'border-warning/60 border-dashed bg-warning/5'
                 : 'border-border'
             }`}
           >
@@ -2475,7 +2475,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
                 <p className="text-sm text-foreground truncate flex items-center gap-1.5">
                   {row.name}
                   {row.status === 'proposed' && (
-                    <span className="shrink-0 text-[0.714rem] uppercase tracking-wide text-amber-600 dark:text-amber-400 border border-amber-500/50 rounded px-1 py-px">
+                    <span className="shrink-0 text-[0.714rem] uppercase tracking-wide text-warning border border-warning/50 rounded px-1 py-px">
                       {t('providerSetup.mcpProposed')}
                     </span>
                   )}
@@ -2499,7 +2499,7 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
                   <button
                     onClick={() => void approve(row, Boolean(check?.probe))}
                     disabled={check?.checking}
-                    className="px-2 py-1 text-xs rounded border border-amber-500/60 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 disabled:opacity-40"
+                    className="px-2 py-1 text-xs rounded border border-warning/60 text-warning hover:bg-warning/10 disabled:opacity-40"
                   >
                     {check?.checking
                       ? t('mcpOAuth.probe.checking')
@@ -2545,37 +2545,37 @@ export function NabyMcpServers({ isOpen }: { isOpen: boolean }) {
                 )}
                 <button
                   onClick={() => void remove(row.name)}
-                  className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-red-500"
+                  className="px-2 py-1 text-xs rounded border border-border text-muted-foreground hover:text-destructive"
                 >
                   {row.status === 'proposed' ? t('providerSetup.mcpReject') : t('providerSetup.remove')}
                 </button>
               </div>
             </div>
             {row.status === 'proposed' && (
-              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              <p className="mt-1 text-xs text-warning">
                 {needsLogin ? t('mcpOAuth.probe.oauth') : t('providerSetup.mcpProposedHint')}
               </p>
             )}
             {row.status === 'proposed' && check?.probe?.verdict === 'no-registration' && (
-              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t('mcpOAuth.probe.noRegistration')}</p>
+              <p className="mt-1 text-xs text-warning">{t('mcpOAuth.probe.noRegistration')}</p>
             )}
             {row.status === 'proposed' && check?.probe?.verdict === 'unreachable' && (
-              <p className="mt-1 text-xs text-red-500 break-words">
+              <p className="mt-1 text-xs text-destructive break-words">
                 {t('mcpOAuth.probe.unreachable', { error: check.probe.error ?? '' })}
               </p>
             )}
             {isOAuth && oauthStatus === 'relogin' && (
-              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{t('mcpOAuth.reloginHint')}</p>
+              <p className="mt-1 text-xs text-warning">{t('mcpOAuth.reloginHint')}</p>
             )}
             {view?.lastError && !view.pending && (
-              <p className="mt-1 text-xs text-red-500 break-words">
+              <p className="mt-1 text-xs text-destructive break-words">
                 {t('mcpOAuth.loginFailed', { name: row.name, error: view.lastError })}
               </p>
             )}
             {status[row.name] && (
               <p
                 className={`mt-1 text-xs ${
-                  status[row.name]?.ok ? 'text-green-600 dark:text-green-400' : 'text-red-500'
+                  status[row.name]?.ok ? 'text-success' : 'text-destructive'
                 }`}
               >
                 {status[row.name]?.text}

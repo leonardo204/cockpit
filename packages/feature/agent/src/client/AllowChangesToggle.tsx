@@ -116,9 +116,9 @@ export function AllowChangesToggle() {
       />
       <span className="flex items-center gap-1 text-foreground">
         {on ? (
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+          <ShieldCheck className="w-3.5 h-3.5 text-success" />
         ) : (
-          <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
+          <ShieldAlert className="w-3.5 h-3.5 text-warning" />
         )}
         {t('chat.allowChanges', { defaultValue: 'Allow changes' })}
       </span>

@@ -58,7 +58,7 @@ export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) 
     <div
       role="alert"
       data-testid="run-failure-notice"
-      className="mx-4 mb-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2"
+      className="mx-4 mb-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2"
     >
       <div className="flex items-start gap-2">
         <span className="self-start text-sm leading-5">⚠️</span>

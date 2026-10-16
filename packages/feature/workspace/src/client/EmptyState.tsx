@@ -341,7 +341,7 @@ export function EmptyState({
         {t('workspace.createProjectCancel')}
       </button>
       {createError && (
-        <span data-testid="home-create-error" className="text-xs text-red-500">
+        <span data-testid="home-create-error" className="text-xs text-destructive">
           {createError}
         </span>
       )}
@@ -499,7 +499,7 @@ export function EmptyState({
                         </div>
                       )}
 
-                      {state.error && <div className="p-3 text-xs text-red-500">{state.error}</div>}
+                      {state.error && <div className="p-3 text-xs text-destructive">{state.error}</div>}
 
                       {!state.isLoading && !state.error && state.sessions.length === 0 && (
                         <div className="p-3 text-xs text-muted-foreground">{t('workspace.noSessions')}</div>

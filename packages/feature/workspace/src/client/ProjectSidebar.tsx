@@ -290,7 +290,7 @@ export function ProjectSidebar({
     // escaping popovers: the project list below sets its own overflow-y-auto,
     // and the rows truncate their own text.
     <div
-      className={`h-full bg-card flex flex-col shrink-0 ${
+      className={`h-full bg-sidebar flex flex-col shrink-0 ${
         resizing ? '' : 'transition-[width] duration-200'
       }`}
       style={{ width: collapsed ? SIDEBAR_COLLAPSED_WIDTH : width }}
@@ -352,6 +352,13 @@ export function ProjectSidebar({
           scrolling happens HERE (see the root comment above): this is the
           element that may clip, and the nested rows live inside it. */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        {/* Section label (shell-look-and-feel section 5). The collapsed rail is
+            an icon strip with no room for words, so it drops the label. */}
+        {!collapsed && projects.length > 0 && (
+          <div className="px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground select-none">
+            {t('workspace.sidebarProjects')}
+          </div>
+        )}
         {projects.map((project, index) => {
           const branch = projectStateAt(sessionTree, project.cwd);
           // The collapsed rail is an icon strip 48px wide — a session title has
@@ -413,6 +420,9 @@ export function ProjectSidebar({
 
               {showBranch && (
                 <div className="mt-0.5 space-y-0.5" data-testid="sidebar-session-branch" data-cwd={project.cwd}>
+                  <div className="pl-8 pr-1 pt-0.5 text-[0.714rem] font-semibold tracking-wide text-muted-foreground select-none">
+                    {t('workspace.sidebarSessions')}
+                  </div>
                   {branch.isLoading && branch.sessions.length === 0 && (
                     <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
                       {t('sessions.loadingSessions')}

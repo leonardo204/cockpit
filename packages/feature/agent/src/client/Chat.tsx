@@ -45,6 +45,10 @@ import { ASSUMED_ACTING_AGENT, thinkingDisplayName, type ActingAgent } from './a
 import { SelectionChatPopup, type SelectionChatPopupWiring } from './SelectionChatPopup';
 import { attachQuotedContext } from './selectionChatOps';
 import { useTranslation } from 'react-i18next';
+import { ParticipantsProvider, useParticipantsState } from './ParticipantsContext';
+import { ParticipantRoster, ShowRoutingToggle, type SpeakingId } from './ParticipantRoster';
+import { RoundProgressStrip } from './RoundProgressStrip';
+import { roundProgress } from './participants';
 
 // Migrated from src/components/project/Chat.tsx.
 
@@ -515,6 +519,41 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
 
   // #10: live session sync.
   const liveSessionId = loadedSessionId || sessionId;
+
+  // ---- multi-agent-chat (MAC-M3): the conversation's participants ----------
+  // Read once here and shared through context with the roster, the speaker
+  // cards, the routing chips and the `@` palette (ParticipantsContext.tsx).
+  const participantsState = useParticipantsState(liveSessionId ?? null);
+  const roundRunning = isLoading || liveRunning;
+  // Who the roster marks as speaking: the acting agent while a turn runs.
+  const speakingId: SpeakingId = !roundRunning
+    ? null
+    : actingAgent?.participant && actingAgent.id
+      ? actingAgent.id
+      : actingAgent?.persona
+        ? 'naby'
+        : null;
+  // "speaking now · next: @b" (R6.5) — only while a round with participants runs.
+  const progress = useMemo(() => (roundRunning ? roundProgress(messages) : null), [roundRunning, messages]);
+  const progressNext = useMemo(
+    () =>
+      progress?.next ? participantsState.lookup(progress.next.agentId ?? '', progress.next.name) : undefined,
+    [progress, participantsState],
+  );
+  // The loading bubble shows a participant's avatar beside its name.
+  const thinkingAvatar = useMemo(
+    () =>
+      actingAgent?.participant && actingAgent.avatar
+        ? { avatar: actingAgent.avatar, color: actingAgent.color ?? '#8B8FA3' }
+        : null,
+    [actingAgent],
+  );
+  const participantControls = participantsState.enabled ? (
+    <div className="flex items-center gap-2" data-slot="participant-controls">
+      <ParticipantRoster speakingId={speakingId} />
+      <ShowRoutingToggle />
+    </div>
+  ) : null;
   // #10: connect the live tail whenever this tab is VIEWING the session (active, not the
   // originator currently sending). The session-stream snapshot's `status` — not the racy
   // global-state broadcast — decides whether a run is live. This is what lets a refreshed
@@ -910,7 +949,8 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   );
 
   return (
-    <div className={`flex ${hideHeader && hideSidebar ? 'h-full' : 'h-screen'} bg-card`}>
+    <ParticipantsProvider value={participantsState}>
+    <div className={`flex ${hideHeader && hideSidebar ? 'h-full' : 'h-screen'} bg-background`}>
       {/* Main Content */}
       <div
         id="chat-screen"
@@ -928,6 +968,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             onOpenProjectSessions={() => setIsProjectSessionsOpen(true)}
             onOpenSessionBrowser={onOpenSessionBrowser}
             onOpenSettings={onOpenSettings}
+            roster={participantControls}
           />
         )}
 
@@ -944,7 +985,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             side question is not where any of that is decided, and the row does not
             fit across a popup anyway. The popup inherits whatever the app is set to. */}
         {isClaudeEngine && !ephemeral && (
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card/50">
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-background">
             <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} onEngineName={handleEngineName} onActiveEngine={handleActiveEngine} onUserSelect={handleUserSwitch} />
             {/* The model chip sits BETWEEN the engine and the account chip — it
                 picks WHICH model the selected engine uses (Claude aliases /
@@ -990,6 +1031,11 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
                 files / run commands (still logged); OFF = read-only observation.
                 Global (not per-tab), so it owns its own read/write to /api/naby. */}
             <AllowChangesToggle />
+            {/* THE ROSTER WHERE IT IS SEEN (MAC-M3). In the tabbed workspace the
+                header above is hidden and this row IS the chat's header, so the
+                roster and the "show routing" toggle sit at its right end; when
+                the header is shown they live in its roster slot instead. */}
+            {hideHeader && participantControls ? <div className="ml-auto pl-2">{participantControls}</div> : null}
           </div>
         )}
 
@@ -1019,12 +1065,14 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             isActive={isActive}
             onApprovePlan={handleApprovePlan}
             thinkingName={thinkingName}
+            thinkingAvatar={thinkingAvatar}
             // A turn this tab did NOT send: the fast-growth session's opening
             // question, a Telegram message, a scheduled task — anything the live
             // stream reports (including a turn merely RESERVED and not yet
             // started) while this tab is not the originator.
             viewerRun={liveRunning && !isLoading}
-            onStop={handleStop}
+            // A round's strip (below) carries the one Stop for the whole round.
+            onStop={progress ? undefined : handleStop}
             // The user just acted → the transcript goes to the bottom and
             // follows the answer from there, wherever they had scrolled to.
             sendNonce={sendNonce}
@@ -1063,6 +1111,18 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           sessionId={sessionId ?? undefined}
           cwd={initialCwd}
         />
+
+        {/* R6.5: who is speaking, who is next, and the round's one Stop. */}
+        {progress ? (
+          <RoundProgressStrip
+            progress={progress}
+            acting={actingAgent}
+            speakerName={thinkingName}
+            {...(progressNext ? { next: progressNext } : {})}
+            maxSpeeches={participantsState.settings.maxSpeechesPerRound}
+            onStop={handleStop}
+          />
+        ) : null}
 
         {/* Input */}
         <ChatInput
@@ -1130,5 +1190,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
         }}
       />
     </div>
+    </ParticipantsProvider>
   );
 }

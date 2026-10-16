@@ -152,6 +152,14 @@ import {
   type ToolSchema,
   type TurnStats,
   type Usage,
+  // multi-agent-chat MAC-M2: the round loop's runtime half — the `@` parser, the
+  // participant's system prompt and knowledge matching, the hub-mention test.
+  composeParticipantSystem,
+  matchKnowledgeKeywords,
+  mentionsHub,
+  parseMentions,
+  ROUTE_TIER,
+  type MessageSpeaker,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
 // Re-exported so the session-browsing routes (Phase C-2) can type the store
@@ -180,6 +188,7 @@ import { resolveContextWindow as resolveRunContextWindow } from '../lib/contextW
 // same thing to an engine: inherit the turn's model.
 import {
   effectiveAgentModel,
+  modelValueForTier,
   resolveAutoModel,
   AUTO_MODEL_VALUE,
   type AutoModelResolution,
@@ -230,6 +239,23 @@ import { fastGrowthInstruction } from '../lib/fastGrowth';
 import { handoffInstruction } from '../lib/sessionHandoff';
 import { JOB_REPORT_SOURCE, makeJobSink } from '../lib/backgroundJobReport';
 import { namedHarnessRows } from '../../shared/slashTokens';
+import {
+  runParticipantRound,
+  type ParticipantSpeakInput,
+  type ProposalOutcome,
+  type RoundAgent,
+} from './participantRound';
+import { readParticipantSettings } from '../lib/participants';
+import {
+  participantMayUseTool,
+  recentForRoute,
+  readParticipantProfile,
+  resolveParticipantModel,
+  roundResultText,
+  toRoundAgent,
+  HUB_ROUND_RULES,
+  type RoundSpeechRecord,
+} from '../lib/participantTurn';
 
 // ---------------------------------------------------------------------------
 // Where the database lives.
@@ -1108,12 +1134,79 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // Resolved HERE, before the toolset, because P3-M4's learning sink needs
         // the agent's `memoryScope` as the default scope for what it captures.
         // Everything else derived from the agent stays below the toolset.
-        const addressed = parseAgentAddress(ctx.prompt ?? '');
+        // ---- CONVERSATION PARTICIPANTS (multi-agent-chat §8.2, MAC-M2) ------
+        //
+        // Decided BEFORE the `@agent` address below, on purpose: a participant's
+        // name is a registered agent name, so `parseAgentAddress` → `getAgentByName`
+        // would otherwise make it `routedAgent` — and then the growth subject, the
+        // check-in sink and `naby_remember` would all run as the participant
+        // (§8.3). The round loop intercepts it instead.
+        //
+        // A ROUND IS ENTERED when the user names a participant, or — unless the
+        // turn is explicitly addressed to naby or a custom agent — when the session
+        // holds a participant, or one is registered and proposals are on (D13).
+        // Otherwise NOTHING here changes the turn: no registered participant means
+        // no read past `listAgents`, no routing call, and the existing path.
+        //
+        // Only conversational turns: a scheduled task, a background-job report and
+        // a fast-growth kickoff are naby working on its own, not a message someone
+        // could want a participant to answer.
+        const participantSettings = readParticipantSettings(store);
+        const registeredParticipants: Agent[] = (() => {
+          try {
+            return store.listAgents().filter((a) => a.kind === 'participant');
+          } catch {
+            return [];
+          }
+        })();
+        const activeParticipantIds: Set<string> = (() => {
+          if (registeredParticipants.length === 0) return new Set<string>();
+          try {
+            return new Set(
+              store
+                .listSessionParticipants(sessionId)
+                .filter((r) => r.status === 'active')
+                .map((r) => r.agentId),
+            );
+          } catch {
+            return new Set<string>();
+          }
+        })();
+        const sessionHasParticipants = registeredParticipants.some((a) => activeParticipantIds.has(a.id));
+        const turnSource = typeof ctx.params.source === 'string' ? ctx.params.source : 'chat';
+        const roundEligible = turnSource === 'chat' || turnSource === 'telegram';
+        const participantMentions =
+          roundEligible && registeredParticipants.length > 0
+            ? parseMentions(ctx.prompt ?? '', registeredParticipants.map((a) => a.name))
+            : [];
+        const rawAddress = parseAgentAddress(ctx.prompt ?? '');
+        const rawAddressAgent: Agent | undefined = rawAddress
+          ? store.getAgentByName(rawAddress.name)
+          : undefined;
+        // `@naby …` / `@custom-agent …` keeps today's path (the address is an
+        // explicit choice of who answers, §8.2 "mentions == [@naby]").
+        const addressesOtherAgent =
+          rawAddressAgent !== undefined && rawAddressAgent.kind !== 'participant';
+        const roundMode =
+          roundEligible &&
+          (participantMentions.length > 0 ||
+            (!addressesOtherAgent &&
+              (sessionHasParticipants ||
+                (registeredParticipants.length > 0 && participantSettings.proposalsEnabled))));
+        if (roundMode) {
+          console.log(
+            `[engine:naby] participants: round (in session ${activeParticipantIds.size}, registered ` +
+              `${registeredParticipants.length}, mentions ${JSON.stringify(participantMentions)})`,
+          );
+        }
+        // In a round naby speaks as ITSELF (the persona) and the participant is
+        // never the routed agent; outside one, a participant's name is not an
+        // agent address either (only the round may hand it the turn).
+        const addressed =
+          roundMode || rawAddressAgent?.kind === 'participant' ? undefined : rawAddress;
         // The agent the `@name` NAMES. Whether it may actually be delegated to is
         // a separate question, answered immediately below.
-        const addressedAgent: Agent | undefined = addressed
-          ? store.getAgentByName(addressed.name)
-          : undefined;
+        const addressedAgent: Agent | undefined = addressed ? rawAddressAgent : undefined;
 
         // ---- ONE `@` GATE (P3-M9 G2), REDEFINED (P3-M12a) ------------------
         //
@@ -1683,10 +1776,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // autonomy than its settings already allowed. A butterfly's contract has
         // no number (`maxSteps: undefined`) precisely so that this line is a no-op
         // for it and the persona setting stays the single source of truth.
-        const maxSteps =
+        const stageMaxSteps =
           contract?.maxSteps !== undefined
             ? Math.min(contract.maxSteps, configuredMaxSteps)
             : configuredMaxSteps;
+        // multi-agent-chat §8.9: IN A SESSION WITH PARTICIPANTS naby's own speech is
+        // one step. The round loop and the autonomy loop are different loops (one
+        // changes speaker, the other continues one agent) and must not nest; an
+        // `@naby` turn here is the only one this narrows. Autonomous work belongs
+        // in a session without participants.
+        const maxSteps = roundMode || sessionHasParticipants ? 1 : stageMaxSteps;
+        if (maxSteps !== stageMaxSteps) {
+          console.log(`[engine:naby] participants: steps ${stageMaxSteps} → 1 (session has participants)`);
+        }
         if (contract && maxSteps !== configuredMaxSteps) {
           console.log(
             `[engine:naby] stage contract: steps ${configuredMaxSteps} → ${maxSteps} (${routedStage})`,
@@ -1971,6 +2073,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   { canMutate: allowChanges && !planMode },
                 )
               : undefined,
+            // ---- WHAT A PARTICIPANT'S LINE IS (multi-agent-chat R3.4, R3.7) ----
+            //
+            // A round appends HUB_ROUND_RULES to each of naby's speeches itself.
+            // A turn OUTSIDE a round in a session that holds participants — the
+            // user wrote `@naby …` (or addressed a custom agent) — still reads
+            // their speech as `[@name]` user-side lines in its history, so it is
+            // told the same thing: context, never instructions or approvals.
+            !roundMode && sessionHasParticipants ? HUB_ROUND_RULES : undefined,
             stageLimited
               ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
               : undefined,
@@ -2085,6 +2195,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // rule, 'hook' = an org harness hook alone, 'hook+policy' = both, merged
         // into this one prompt by `approvalMerger` below. `rewrittenBy` marks a
         // policy prompt whose input an org hook rewrote.
+        // The participant speaking right now, while a round runs one of its
+        // speeches (MAC-M2) — read by the approval prompt above. Undefined on every
+        // other turn and during naby's own speeches.
+        let currentSpeaker: { id: string; name: string; displayName: string } | undefined;
         const requestApproval = (
           call: ToolCall,
           opts?: { reason?: string; source?: 'hook' | 'hook+policy'; script?: string; rewrittenBy?: string },
@@ -2162,6 +2276,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               tool_name: call.toolName,
               input: call.input,
               session_id: sessionId,
+              // WHO ASKED (multi-agent-chat §8.9): a participant's tool call goes
+              // to the USER for approval like naby's, and the card names the
+              // speaker so the user knows whose call it is.
+              ...(currentSpeaker ? { speaker: currentSpeaker } : {}),
               // WHY IT IS ASKING, verbatim, when an org harness hook asked (§3.5:
               // "사유 문구를 그대로 보여 준다"). `source: 'hook'` tells the prompt not
               // to offer "always allow/block": that would write a policy rule for
@@ -2188,7 +2306,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 toolName: call.toolName,
                 input: call.input,
                 now: Date.now(),
-                ...(routedAgent ? { agentName: routedAgent.name } : {}),
+                ...(currentSpeaker
+                  ? { agentName: currentSpeaker.name }
+                  : routedAgent
+                    ? { agentName: routedAgent.name }
+                    : {}),
                 ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
                 ...(reasons.length > 0 ? { reasons } : {}),
               });
@@ -2310,13 +2432,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // (§7.10). `allow` without a rewrite is no opinion. A failing or slow
         // hook is no opinion either (the runner never throws). Answers undefined
         // to mean "carry on to the policy gate".
-        const orgHookGate = async (call: ToolCall): Promise<GateDecision | undefined> => {
+        const orgHookGate = async (
+          call: ToolCall,
+          // A participant's call is NOT naby's growth evidence (R3.8).
+          observe = true,
+        ): Promise<GateDecision | undefined> => {
           if (!orgHooks.enabled) return undefined;
           const hook = await orgHooks.preToolUse(call);
           if (hook?.behavior === 'deny') {
             const reason = `org harness hook (${hook.label ?? hook.script}): ${hook.reason ?? 'denied'}`;
             console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (${reason})`);
-            observeForGrowth(call, false, reason);
+            if (observe) observeForGrowth(call, false, reason);
             return { behavior: 'deny', reason };
           }
           if (hook && (hook.behavior === 'ask' || hook.updatedInput)) {
@@ -2731,6 +2857,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // it is this flag the end-of-run fallback must key on — otherwise a run
         // stopped between steps would leave the client's turn spinning forever.
         let emittedResult = false;
+        // multi-agent-chat MAC-M2: a round is running (its speeches' engine
+        // results are folded, not emitted), and how the latest speech ended.
+        let roundActive = false;
+        let speechOk = true;
         const accUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
         let accCostUsd = 0;
 
@@ -2803,197 +2933,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           // handle are all built ONCE, outside the loop: they belong to the goal,
           // not to a step. Steps share the session history, so step N sees
           // everything steps 1..N-1 did.
-          do {
-            step += 1;
-            stepText = '';
-            stepUsedTool = false;
-            await runTurn({
-              engine,
-              store,
-              sessionId,
-              // A routed agent may prefer its own model; else the engine's resolved
-              // model (or the provider default). Same field the model switcher uses.
-              //
-              // `effectiveAgentModel` IS WHAT MAKES `?? modelForEngine` REACHABLE
-              // for an agent stored with `auto` (model-auto-routing §4.5). The
-              // agent editor's model field is free text, so that string can be in
-              // the row; sent as-is the SDK rejects the turn, and read as a
-              // preference it would outrank the router on the very turn the user
-              // asked the router to decide. Treated as absent, the agent inherits
-              // this turn's model — which on an `auto` turn is the routed one, so
-              // the stored `auto` gets exactly what it asked for.
-              model: (() => {
-                const m = effectiveAgentModel(routedAgent?.model) ?? modelForEngine;
-                return { providerId, ...(m ? { model: m } : {}) };
-              })(),
-              // Step 1 is the user's own words; every later step is the harness
-              // asking the agent to continue. That prompt is stored as a real user
-              // message because it IS what drove the model — the transcript should
-              // never imply the user typed something they did not, nor hide what
-              // did (it is labelled `[naby autonomy]`).
-              //
-              // P3-M9: WHICH continuation depends on why the previous step did not
-              // end the run. `stepDecision` still holds that step's verdict here —
-              // it is only reassigned inside this call's `result` case — so a
-              // 'verify-nudge' verdict swaps in the nudge, which asks the agent to
-              // CHECK rather than to carry on. Asking an agent that thinks it is
-              // finished to "continue toward the goal" only gets the same claim back.
-              userText:
-                step === 1
-                  ? turnText
-                  : stepDecision.reason === 'verify-nudge'
-                    ? verificationNudgePrompt(step, maxSteps)
-                    : continuationPrompt(step, maxSteps),
-              // Multimodal input: hand this turn's images to the runtime, which
-              // attaches them (transiently) to the user message so each engine can
-              // build a native image block. ImageData -> RuntimeImage (drop the
-              // 'base64' discriminant the runtime does not need).
-              ...(ctx.images && ctx.images.length > 0
-                ? { images: ctx.images.map((im) => ({ media_type: im.media_type, data: im.data })) }
-                : {}),
-              toolSchemas,
-              gate,
-              executors,
-              signal: ctx.signal,
-              // THE NABY LAYER (P3-M14a). The runtime offers this step's LAST
-              // assistant block to it before that block reaches the client, the
-              // transcript or the log — so what was shown is what was stored (§2
-              // principle 3). The `[[DONE]]` marker survives because the port takes
-              // it off before the model sees the text and puts it back afterwards;
-              // the autonomy stop decision below reads the RESTYLED text, so if
-              // that ever stopped working an autonomous run would stop stopping.
-              voice,
-              // PreCompact / SessionStart(compact) (org-harness-sync §3.5), called by
-              // whichever engine compacts, at its own compaction point.
-              ...(orgHooks.compaction ? { compaction: orgHooks.compaction } : {}),
-              // §3.4 ON THE CLAUDE ENGINE (org-harness-sync §7.5). The SDK's own
-              // Bash has no per-command env, so `HARNESS_CLIENT`, the project dir
-              // and the cic token go on the CLI process for this step. A function:
-              // the engine reads it once when the step starts, so a token removed
-              // or a harness switched off is gone from the next step. The ai-sdk
-              // engine gets its env per command instead (`commandEnv` above).
-              ...(engineId === 'dev-claude' ? { backendEnv: () => orgProcessEnv(orgTurn) } : {}),
-              // THE THREE FACTS THE RUNTIME CANNOT SEE (naby-activity-log §3).
-              // Routing, the fast-growth flag and what dispatched the turn are all
-              // decided here; the runtime stamps them on every record of the turn
-              // rather than the shell writing a second, parallel event that could
-              // disagree. `runId` groups this run's steps into one request.
-              activity: {
-                ...(growthSubject ? { agentId: growthSubject.id, agentName: growthSubject.name } : {}),
-                ...(sessionFastGrowth ? { fastGrowth: true } : {}),
-                step,
-                source: typeof ctx.params.source === 'string' ? ctx.params.source : 'chat',
-                ...(typeof ctx.params.runId === 'string' ? { runId: ctx.params.runId } : {}),
-              },
-              // Phase 2.5 (M4): enabled subagents the model may delegate to. The
-              // Claude Agent SDK engine maps these to native `agents` (spawned via
-              // the gated Task tool); the AI-SDK engine ignores them.
-              //
-              // THE SAME ROSTER the delegation sink and the system prompt's policy
-              // block were built from (§4.2) — gathered once, above the loop, so
-              // the prompt cannot name a subagent this input leaves out.
-              subagents: turnSubagents,
-              // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
-              // whose trigger matches (or that is always-on) has its instructions
-              // appended to the system prompt; a tool-bearing skill participates
-              // only when all its tools are in `availableTools`, else it is excluded
-              // and counted. Scoped to user + org + this project's cwd (via
-              // opts.cwd, set above). Off entirely when no skill is enabled/matches
-              // (byte-for-byte no-op).
-              // Phase 3 P3-M2: turn-time MEMORY injection (was dormant — the
-              // runtime implemented it since Phase 1.5 but no caller wired it). The
-              // runtime retrieves confirmed, scope-appropriate memory within this
-              // budget and folds it into the system prompt above the engine seam.
-              // This is what makes an agent (the persona especially) act on what it
-              // has learned. A turn with no confirmed memory is a byte-for-byte
-              // no-op. Scoped to user + org + this project's cwd (opts.cwd).
-              // P3-M8c: rank what is injected by RELEVANCE to this turn, not by
-              // recency alone. `turnText` — the user's words with any `@agent`
-              // mention already stripped — is the query on EVERY step, including
-              // the autonomy continuation steps: step 2's stored user message is
-              // the harness saying "carry on", and ranking memory against that
-              // would throw away the only signal about what the work is. A turn
-              // whose words match no memory is ordered exactly as before.
-              memoryInjection: {
-                tokenBudget: MEMORY_TOKEN_BUDGET,
-                queryText: turnText,
-                userId: DEFAULT_USER_ID,
-                orgId: DEFAULT_ORG_ID,
-              },
-              onMemoryInjection: (injected) => {
-                if (injected.items.length > 0 || injected.droppedForBudget > 0) {
-                  console.log(
-                    `[engine:naby] memory: injected ${injected.items.length}` +
-                      `, dropped-for-budget ${injected.droppedForBudget}`,
-                  );
-                }
-              },
-              skillInjection: {
-                tokenBudget: SKILL_TOKEN_BUDGET,
-                userId: DEFAULT_USER_ID,
-                orgId: DEFAULT_ORG_ID,
-                availableTools,
-                // Named on EVERY step of an autonomous run, for the same reason
-                // `queryText` is: the user asked for this row for the work, and
-                // step 2's stored user message is the harness saying "carry on".
-                ...(namedRows.length > 0 ? { explicitNames: namedRows } : {}),
-                // On-demand (org) skills: listed by name + description on their
-                // own budget, body preloaded when named — all against the folder
-                // pinned above (org-harness-sync §3.3, §4.7). `enabled` is the
-                // kill switch as read at turn start, whatever the rows say.
-                onDemand: {
-                  enabled: orgListed,
-                  listingTokenBudget: ORG_SKILL_LISTING_TOKEN_BUDGET,
-                  loadBody: orgSkillPreloader(orgTurn),
-                },
-              },
-              onSkillInjection: (injected) => {
-                if (injected.skills.length > 0 || injected.excludedForTools > 0) {
-                  console.log(
-                    `[engine:naby] skills: injected ${injected.skills.length}` +
-                      `, excluded-for-tools ${injected.excludedForTools}` +
-                      `, dropped-for-budget ${injected.droppedForBudget}` +
-                      (namedRows.length > 0 ? `, named ${JSON.stringify(namedRows)}` : ''),
-                  );
-                }
-                const od = injected.onDemand;
-                if (od && (od.listed.length > 0 || od.switchedOff > 0 || od.listingDroppedForBudget > 0)) {
-                  console.log(
-                    `[engine:naby] org skills: listed ${od.listed.length} (${od.listingTokens} tok)` +
-                      `, preloaded ${JSON.stringify(od.preloaded.map((p) => p.item.name))}` +
-                      `, shadowed ${od.shadowed}, switched-off ${od.switchedOff}` +
-                      `, dropped-for-budget ${od.listingDroppedForBudget}` +
-                      (orgTurn.pkg ? `, package ${orgTurn.pkg.version}` : ''),
-                  );
-                }
-              },
-              // F1-07. runTurn records one usage row per answered turn. It cannot
-              // infer either of these — `Engine` is an interface and says nothing
-              // about which backend implements it or who pays for it — so the
-              // composition root, which chose the engine, supplies them.
-              engineId,
-              costBasis,
-              // THE DIRECTORY THIS TURN IS ABOUT — told to the model (`system`)
-              // and to the ENGINE (`cwd`) from the SAME source, in the same
-              // conditional, on purpose.
-              //
-              // These used to be one line, not two: the system prompt announced
-              // `ctx.cwd` while the engine was given nothing, so the Agent SDK
-              // fell back to the Electron process's cwd — naby's own source
-              // checkout — and loaded NABY's `.claude/` harness (CLAUDE.md,
-              // hooks) into a chat about someone else's project. The model was
-              // told one directory and was standing in another. Full write-up on
-              // `EngineRunInput.cwd` in the runtime.
-              //
-              // `RunCtx.cwd` is documented as "normalized, may be ''", and the
-              // empty string is NOT a directory: passing it through would hand
-              // the SDK a falsy-but-present value and re-open the same ambiguity.
-              // The truthiness guard means no-directory stays UNDEFINED end to
-              // end, which the contract defines as "say nothing about a
-              // directory" rather than "use the ambient one".
-              ...(turnSystem ? { system: turnSystem } : {}),
-              ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
-              onEvent: (ev: EngineEvent) => {
+          // THE EVENT TRANSLATION, named (MAC-M2) so a participant's speech in a
+          // round streams through exactly the code naby's own turn does.
+          const translateEvent = (ev: EngineEvent): void => {
               // Cancellation: stop translating the moment the run is stopped.
               // The signal is also handed to the engine (and through it to the
               // provider call), so this is a second, immediate barrier rather
@@ -3327,7 +3269,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // user sees instead; the terminal result comes from the last
                   // step — or from the fallback below if the run is stopped
                   // between steps.
+                  // THE SPEECH'S VERDICT, for the round loop (MAC-M2).
+                  speechOk = ev.ok;
                   if (stepDecision.proceed) break;
+                  // IN A ROUND every speech ends with its own engine `result`, and
+                  // none of them is the turn's end: the round emits ONE result
+                  // after its last speech (see `runRound`). Totals are already
+                  // folded in above.
+                  if (roundActive) break;
                   emittedResult = true;
                   ctx.emit({
                     type: 'result',
@@ -3348,8 +3297,659 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   break;
                 }
               }
+          };
+          // naby's turn options, built per speech/step from the SAME closures —
+          // the autonomy loop below and the round loop (MAC-M2) share them.
+          const nabyTurnOptions = (stepUserText: string): Parameters<typeof runTurn>[0] => ({
+              engine,
+              store,
+              sessionId,
+              // A routed agent may prefer its own model; else the engine's resolved
+              // model (or the provider default). Same field the model switcher uses.
+              //
+              // `effectiveAgentModel` IS WHAT MAKES `?? modelForEngine` REACHABLE
+              // for an agent stored with `auto` (model-auto-routing §4.5). The
+              // agent editor's model field is free text, so that string can be in
+              // the row; sent as-is the SDK rejects the turn, and read as a
+              // preference it would outrank the router on the very turn the user
+              // asked the router to decide. Treated as absent, the agent inherits
+              // this turn's model — which on an `auto` turn is the routed one, so
+              // the stored `auto` gets exactly what it asked for.
+              model: (() => {
+                const m = effectiveAgentModel(routedAgent?.model) ?? modelForEngine;
+                return { providerId, ...(m ? { model: m } : {}) };
+              })(),
+              // Step 1 is the user's own words; every later step is the harness
+              // asking the agent to continue. That prompt is stored as a real user
+              // message because it IS what drove the model — the transcript should
+              // never imply the user typed something they did not, nor hide what
+              // did (it is labelled `[naby autonomy]`).
+              //
+              // P3-M9: WHICH continuation depends on why the previous step did not
+              // end the run. `stepDecision` still holds that step's verdict here —
+              // it is only reassigned inside this call's `result` case — so a
+              // 'verify-nudge' verdict swaps in the nudge, which asks the agent to
+              // CHECK rather than to carry on. Asking an agent that thinks it is
+              // finished to "continue toward the goal" only gets the same claim back.
+              userText: stepUserText,
+              // Multimodal input: hand this turn's images to the runtime, which
+              // attaches them (transiently) to the user message so each engine can
+              // build a native image block. ImageData -> RuntimeImage (drop the
+              // 'base64' discriminant the runtime does not need).
+              ...(ctx.images && ctx.images.length > 0
+                ? { images: ctx.images.map((im) => ({ media_type: im.media_type, data: im.data })) }
+                : {}),
+              toolSchemas,
+              gate,
+              executors,
+              signal: ctx.signal,
+              // THE NABY LAYER (P3-M14a). The runtime offers this step's LAST
+              // assistant block to it before that block reaches the client, the
+              // transcript or the log — so what was shown is what was stored (§2
+              // principle 3). The `[[DONE]]` marker survives because the port takes
+              // it off before the model sees the text and puts it back afterwards;
+              // the autonomy stop decision below reads the RESTYLED text, so if
+              // that ever stopped working an autonomous run would stop stopping.
+              voice,
+              // PreCompact / SessionStart(compact) (org-harness-sync §3.5), called by
+              // whichever engine compacts, at its own compaction point.
+              ...(orgHooks.compaction ? { compaction: orgHooks.compaction } : {}),
+              // §3.4 ON THE CLAUDE ENGINE (org-harness-sync §7.5). The SDK's own
+              // Bash has no per-command env, so `HARNESS_CLIENT`, the project dir
+              // and the cic token go on the CLI process for this step. A function:
+              // the engine reads it once when the step starts, so a token removed
+              // or a harness switched off is gone from the next step. The ai-sdk
+              // engine gets its env per command instead (`commandEnv` above).
+              ...(engineId === 'dev-claude' ? { backendEnv: () => orgProcessEnv(orgTurn) } : {}),
+              // THE THREE FACTS THE RUNTIME CANNOT SEE (naby-activity-log §3).
+              // Routing, the fast-growth flag and what dispatched the turn are all
+              // decided here; the runtime stamps them on every record of the turn
+              // rather than the shell writing a second, parallel event that could
+              // disagree. `runId` groups this run's steps into one request.
+              activity: {
+                ...(growthSubject ? { agentId: growthSubject.id, agentName: growthSubject.name } : {}),
+                ...(sessionFastGrowth ? { fastGrowth: true } : {}),
+                step,
+                source: typeof ctx.params.source === 'string' ? ctx.params.source : 'chat',
+                ...(typeof ctx.params.runId === 'string' ? { runId: ctx.params.runId } : {}),
               },
+              // Phase 2.5 (M4): enabled subagents the model may delegate to. The
+              // Claude Agent SDK engine maps these to native `agents` (spawned via
+              // the gated Task tool); the AI-SDK engine ignores them.
+              //
+              // THE SAME ROSTER the delegation sink and the system prompt's policy
+              // block were built from (§4.2) — gathered once, above the loop, so
+              // the prompt cannot name a subagent this input leaves out.
+              subagents: turnSubagents,
+              // Phase 1.6 / 2.5 (M3): turn-time skill injection. An enabled skill
+              // whose trigger matches (or that is always-on) has its instructions
+              // appended to the system prompt; a tool-bearing skill participates
+              // only when all its tools are in `availableTools`, else it is excluded
+              // and counted. Scoped to user + org + this project's cwd (via
+              // opts.cwd, set above). Off entirely when no skill is enabled/matches
+              // (byte-for-byte no-op).
+              // Phase 3 P3-M2: turn-time MEMORY injection (was dormant — the
+              // runtime implemented it since Phase 1.5 but no caller wired it). The
+              // runtime retrieves confirmed, scope-appropriate memory within this
+              // budget and folds it into the system prompt above the engine seam.
+              // This is what makes an agent (the persona especially) act on what it
+              // has learned. A turn with no confirmed memory is a byte-for-byte
+              // no-op. Scoped to user + org + this project's cwd (opts.cwd).
+              // P3-M8c: rank what is injected by RELEVANCE to this turn, not by
+              // recency alone. `turnText` — the user's words with any `@agent`
+              // mention already stripped — is the query on EVERY step, including
+              // the autonomy continuation steps: step 2's stored user message is
+              // the harness saying "carry on", and ranking memory against that
+              // would throw away the only signal about what the work is. A turn
+              // whose words match no memory is ordered exactly as before.
+              memoryInjection: {
+                tokenBudget: MEMORY_TOKEN_BUDGET,
+                queryText: turnText,
+                userId: DEFAULT_USER_ID,
+                orgId: DEFAULT_ORG_ID,
+              },
+              onMemoryInjection: (injected) => {
+                if (injected.items.length > 0 || injected.droppedForBudget > 0) {
+                  console.log(
+                    `[engine:naby] memory: injected ${injected.items.length}` +
+                      `, dropped-for-budget ${injected.droppedForBudget}`,
+                  );
+                }
+              },
+              skillInjection: {
+                tokenBudget: SKILL_TOKEN_BUDGET,
+                userId: DEFAULT_USER_ID,
+                orgId: DEFAULT_ORG_ID,
+                availableTools,
+                // Named on EVERY step of an autonomous run, for the same reason
+                // `queryText` is: the user asked for this row for the work, and
+                // step 2's stored user message is the harness saying "carry on".
+                ...(namedRows.length > 0 ? { explicitNames: namedRows } : {}),
+                // On-demand (org) skills: listed by name + description on their
+                // own budget, body preloaded when named — all against the folder
+                // pinned above (org-harness-sync §3.3, §4.7). `enabled` is the
+                // kill switch as read at turn start, whatever the rows say.
+                onDemand: {
+                  enabled: orgListed,
+                  listingTokenBudget: ORG_SKILL_LISTING_TOKEN_BUDGET,
+                  loadBody: orgSkillPreloader(orgTurn),
+                },
+              },
+              onSkillInjection: (injected) => {
+                if (injected.skills.length > 0 || injected.excludedForTools > 0) {
+                  console.log(
+                    `[engine:naby] skills: injected ${injected.skills.length}` +
+                      `, excluded-for-tools ${injected.excludedForTools}` +
+                      `, dropped-for-budget ${injected.droppedForBudget}` +
+                      (namedRows.length > 0 ? `, named ${JSON.stringify(namedRows)}` : ''),
+                  );
+                }
+                const od = injected.onDemand;
+                if (od && (od.listed.length > 0 || od.switchedOff > 0 || od.listingDroppedForBudget > 0)) {
+                  console.log(
+                    `[engine:naby] org skills: listed ${od.listed.length} (${od.listingTokens} tok)` +
+                      `, preloaded ${JSON.stringify(od.preloaded.map((p) => p.item.name))}` +
+                      `, shadowed ${od.shadowed}, switched-off ${od.switchedOff}` +
+                      `, dropped-for-budget ${od.listingDroppedForBudget}` +
+                      (orgTurn.pkg ? `, package ${orgTurn.pkg.version}` : ''),
+                  );
+                }
+              },
+              // F1-07. runTurn records one usage row per answered turn. It cannot
+              // infer either of these — `Engine` is an interface and says nothing
+              // about which backend implements it or who pays for it — so the
+              // composition root, which chose the engine, supplies them.
+              engineId,
+              costBasis,
+              // THE DIRECTORY THIS TURN IS ABOUT — told to the model (`system`)
+              // and to the ENGINE (`cwd`) from the SAME source, in the same
+              // conditional, on purpose.
+              //
+              // These used to be one line, not two: the system prompt announced
+              // `ctx.cwd` while the engine was given nothing, so the Agent SDK
+              // fell back to the Electron process's cwd — naby's own source
+              // checkout — and loaded NABY's `.claude/` harness (CLAUDE.md,
+              // hooks) into a chat about someone else's project. The model was
+              // told one directory and was standing in another. Full write-up on
+              // `EngineRunInput.cwd` in the runtime.
+              //
+              // `RunCtx.cwd` is documented as "normalized, may be ''", and the
+              // empty string is NOT a directory: passing it through would hand
+              // the SDK a falsy-but-present value and re-open the same ambiguity.
+              // The truthiness guard means no-directory stays UNDEFINED end to
+              // end, which the contract defines as "say nothing about a
+              // directory" rather than "use the ambient one".
+              ...(turnSystem ? { system: turnSystem } : {}),
+              ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+              onEvent: translateEvent,
+          });
+          // ---- THE ROUND (multi-agent-chat §8.2–§8.3, MAC-M2) -----------------
+          //
+          // A DIFFERENT LOOP from the autonomy one below: that one continues one
+          // agent step by step; this one changes SPEAKER. The state machine — who
+          // speaks next, the limits, the proposal — is `participantRound.ts`; this
+          // closure supplies its effects from the turn already assembled above:
+          //
+          //   naby's speech       `nabyTurnOptions` (the same system prompt, tools,
+          //                       gate, memory and voice as any naby turn; maxSteps
+          //                       is already 1 here, §8.9)
+          //   a participant's     the same engine, event translation and policy
+          //                       gate, with its own system prompt, tools, model
+          //                       and read-only memory, and NO growth, learning,
+          //                       check-ins or subagents (§8.3, R3.8)
+          //   the routing call    one tool-less `engine.run` — no store writes
+          //   a proposal          the approval bridge (registry + Telegram)
+          //
+          // ONE `result` for the whole round (the client ends its turn on it), sent
+          // after the loop; every speech's own `result` is folded into the totals.
+          const runRound = async (): Promise<void> => {
+            roundActive = true;
+            const hubAgent: RoundAgent = growthSubject
+              ? toRoundAgent(growthSubject, '나비')
+              : { id: BUILTIN_PERSONA_ID, name: 'naby', displayName: '나비', description: '' };
+            const hubSpeaker: MessageSpeaker = { agentId: hubAgent.id, name: hubAgent.name };
+            const byId = new Map(registeredParticipants.map((a) => [a.id, a]));
+            const mcpToolNames = new Set((mcp?.toolSchemas ?? []).map((t) => t.name));
+            const turnImages =
+              ctx.images && ctx.images.length > 0
+                ? ctx.images.map((im) => ({ media_type: im.media_type, data: im.data }))
+                : undefined;
+            // This turn's images ride the round's FIRST speech only (they are
+            // transient and belong to the user's message, not to every speech).
+            let imagesSpent = false;
+            const takeImages = () => {
+              if (imagesSpent || !turnImages) return {};
+              imagesSpent = true;
+              return { images: turnImages };
+            };
+            const speeches: RoundSpeechRecord[] = [];
+            const beginSpeech = () => {
+              step += 1;
+              stepText = '';
+              stepUsedTool = false;
+              sawPartialText = false;
+              speechOk = true;
+            };
+            // Which persona-level escalation a PROPOSAL follows (D12): naby's own
+            // setting, since proposing is naby's decision whatever turn it is in.
+            const proposalEscalates = (() => {
+              const e = readPersonaAutonomy(store).escalation;
+              return e === 'telegram' || e === 'both';
+            })();
+            // The model a routing call runs on (§8.2, D3): `ROUTE_TIER` through
+            // the catalogue the auto router uses, when this session is on `auto`;
+            // otherwise the session's own model.
+            const routeModel = autoRequested ? modelValueForTier(store, ROUTE_TIER) : effectiveAgentModel(modelForEngine);
+
+            const routeCall = async (system: string) => {
+              let text = '';
+              let partial = '';
+              let callUsage: Usage | undefined;
+              let callCost: number | undefined;
+              let served = routeModel ?? '';
+              let ok = false;
+              const startedRoute = Date.now();
+              for await (const ev of engine.run({
+                model: { providerId, ...(routeModel ? { model: routeModel } : {}) },
+                messages: [{ role: 'user', content: 'Decide who responds now. Reply with the JSON object only.' }],
+                system,
+                toolSchemas: [],
+                executors: {},
+                // Tool-less by construction; a backend that offers built-ins anyway
+                // is refused here, so a routing call can never act.
+                gate: async () => ({ behavior: 'deny' as const, reason: 'the routing call has no tools' }),
+                ...(projectCwd ? { cwd: projectCwd } : {}),
+                signal: ctx.signal,
+              })) {
+                if (ctx.signal.aborted) break;
+                if (ev.kind === 'init' && ev.model) served = ev.model;
+                else if (ev.kind === 'text' && ev.role === 'assistant' && !ev.agentToolCallId) {
+                  if (ev.partial) partial += ev.text;
+                  else text += ev.text;
+                } else if (ev.kind === 'result') {
+                  ok = ev.ok;
+                  callUsage = ev.usage;
+                  callCost = ev.costUsd;
+                }
+              }
+              const inputTokens = callUsage?.inputTokens ?? 0;
+              const outputTokens = callUsage?.outputTokens ?? 0;
+              const cachedInputTokens = callUsage?.cachedInputTokens ?? 0;
+              // §8.6: the routing call is not a `runTurn`, so no usage row appears
+              // by itself — it is written here, so the cost total includes it.
+              if (inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0) {
+                try {
+                  store.appendUsage(sessionId, {
+                    at: Date.now(),
+                    engine: engineId,
+                    providerId,
+                    model: served,
+                    inputTokens,
+                    outputTokens,
+                    cachedInputTokens,
+                    costBasis,
+                    ...(callCost !== undefined ? { reportedCostUsd: callCost } : {}),
+                  });
+                } catch (e) {
+                  console.log(`[engine:naby] routing usage not recorded: ${e instanceof Error ? e.message : String(e)}`);
+                }
+                logActivity('usage', {
+                  sessionId,
+                  agentId: hubAgent.id,
+                  agentName: hubAgent.name,
+                  source: 'participant-route',
+                  engine: engineId,
+                  providerId,
+                  model: served,
+                  inputTokens,
+                  outputTokens,
+                  cachedInputTokens,
+                  costBasis,
+                  durationMs: Date.now() - startedRoute,
+                  ...(callCost !== undefined ? { reportedCostUsd: callCost } : {}),
+                });
+                accUsage.inputTokens += inputTokens;
+                accUsage.outputTokens += outputTokens;
+                accUsage.cachedInputTokens += cachedInputTokens;
+                accCostUsd += callCost ?? 0;
+              }
+              if (!ok && !text && !partial) throw new Error('routing call failed');
+              return { text: text || partial, inputTokens, outputTokens };
+            };
+
+            const propose = (agent: RoundAgent, reason: string): Promise<ProposalOutcome> => {
+              const approvalId = `${sessionId}:participant.add:${agent.id}:${randomUUID()}`;
+              const input = {
+                agentId: agent.id,
+                name: agent.name,
+                displayName: agent.displayName,
+                ...(agent.avatar ? { avatar: agent.avatar } : {}),
+                description: agent.description,
+                reason,
+              };
+              return new Promise<ProposalOutcome>((resolve) => {
+                let settled = false;
+                const settle = (outcome: ProposalOutcome, why?: string) => {
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(timer);
+                  ctx.signal.removeEventListener('abort', onAbort);
+                  unregisterApproval(approvalId);
+                  const decision = outcome === 'allow' ? 'allow' : 'deny';
+                  if (proposalEscalates) {
+                    void finishEscalation({
+                      store,
+                      approvalId,
+                      decision,
+                      ...(decision === 'deny' && why ? { reason: why } : {}),
+                    });
+                  }
+                  logActivity('approval_resolved', {
+                    sessionId,
+                    agentId: hubAgent.id,
+                    approvalId,
+                    toolName: 'participant.add',
+                    decision,
+                    outcome,
+                  });
+                  ctx.emit({ type: 'approval_resolved', approvalId, decision, session_id: sessionId });
+                  resolve(outcome);
+                };
+                const onAbort = () => settle('abort', 'turn was stopped before approval');
+                const timer = setTimeout(() => settle('timeout', 'approval request timed out'), APPROVAL_TTL_MS);
+                if (ctx.signal.aborted) return onAbort();
+                ctx.signal.addEventListener('abort', onAbort);
+                // The SAME registry a tool approval uses (R3.9): the inline card's
+                // `approval.resolve` and a Telegram button both land on `settle`.
+                registerApproval(
+                  approvalId,
+                  (d) => settle(d.behavior === 'allow' ? 'allow' : 'deny', d.behavior === 'deny' ? d.reason : undefined),
+                  Date.now(),
+                  { toolName: 'participant.add' },
+                );
+                logActivity('approval_requested', {
+                  sessionId,
+                  agentId: hubAgent.id,
+                  approvalId,
+                  toolName: 'participant.add',
+                  input,
+                  escalatedToTelegram: proposalEscalates,
+                  askedBy: 'participant_proposal',
+                });
+                ctx.emit({
+                  type: 'approval_request',
+                  approvalId,
+                  tool_name: 'participant.add',
+                  input,
+                  session_id: sessionId,
+                  source: 'participant_proposal',
+                  reason,
+                });
+                if (proposalEscalates) {
+                  void escalateApproval({
+                    store,
+                    approvalId,
+                    toolName: 'participant.add',
+                    input,
+                    now: Date.now(),
+                    ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+                  });
+                }
+              });
+            };
+
+            /** A participant's speech, assembled per §8.3. */
+            const participantTurnOptions = (agent: Agent, i: ParticipantSpeakInput) => {
+              // Read tolerantly (review finding 6): a stored profile that no longer
+              // passes the gate speaks with the default profile, and says so in the
+              // activity log, rather than failing the round.
+              const { profile, fallback: profileFallback } = readParticipantProfile(agent);
+              if (profileFallback) {
+                console.warn(`[engine:naby] participant @${agent.name}: default profile used (${profileFallback})`);
+                logActivity('participant_route', {
+                  sessionId,
+                  agentId: agent.id,
+                  agentName: agent.name,
+                  note: 'profile-fallback',
+                  reason: profileFallback,
+                });
+              }
+              const allowed = (name: string) => participantMayUseTool(normalizeToolName(name), agent, mcpToolNames);
+              const pSchemas = toolSchemas.filter((t) => allowed(t.name));
+              const pExecutors: Record<string, Executor> = {};
+              for (const t of pSchemas) {
+                const ex = executors[t.name];
+                if (ex) pExecutors[t.name] = ex;
+              }
+              const planOnly = profile.guardrails.permissionMode === 'plan' || planMode;
+              const floor = phase1HarnessFloor(runtimeToolNames);
+              // THE SAME GATE, minus the stage contract and minus growth: the
+              // participant's allowlist first (a capability refusal), then the org
+              // hook, then the user's policy — whose `ask` reaches the USER (R3.7).
+              const participantGate: Gate = async (call) => {
+                const bare = normalizeToolName(call.toolName);
+                if (!participantMayUseTool(bare, agent, mcpToolNames)) {
+                  console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (participant @${agent.name})`);
+                  return {
+                    behavior: 'deny',
+                    reason: `participant @${agent.name} is limited to its allowed tools`,
+                    refusal: 'capability',
+                  };
+                }
+                if (planOnly) {
+                  const d = await floor(call);
+                  if (d.behavior === 'deny') return d;
+                }
+                const hooked = await orgHookGate(call, false);
+                if (hooked) return hooked;
+                const decision = await gated.gate(call).finally(() => hookOpinions.delete(call.toolCallId));
+                console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${decision.behavior} (@${agent.name})`);
+                const entry = gated.log[gated.log.length - 1];
+                if (entry) deps.onGateDecision?.(entry);
+                return decision;
+              };
+              const inSessionNames = registeredParticipants
+                .filter((a) => activeParticipantIds.has(a.id))
+                .map((a) => a.name);
+              const matched = matchKnowledgeKeywords(profile, `${turnText}\n${i.brief}`);
+              const system = [
+                shellNote,
+                composeParticipantSystem(
+                  profile,
+                  { name: agent.name, ...(agent.description ? { description: agent.description } : {}), systemPrompt: agent.systemPrompt },
+                  { names: [hubAgent.name, ...inSessionNames], hubName: hubAgent.name },
+                  matched,
+                ),
+              ]
+                .filter(Boolean)
+                .join('\n\n');
+              const sessionModel = effectiveAgentModel(modelForEngine);
+              const picked = resolveParticipantModel(engineId, effectiveAgentModel(agent.model), sessionModel);
+              if (picked.fallbackFrom) {
+                logActivity('participant_route', {
+                  sessionId,
+                  agentId: agent.id,
+                  agentName: agent.name,
+                  note: 'model-fallback',
+                  requested: picked.fallbackFrom,
+                  used: picked.model ?? '(engine default)',
+                });
+              }
+              const pAvailable = engineId === 'dev-claude'
+                ? [
+                    ...pSchemas.map((t) => t.name),
+                    ...[...OBSERVATION_BUILTINS, ...DANGEROUS_BUILTINS].filter((b) => allowed(b)),
+                  ]
+                : pSchemas.map((t) => t.name);
+              return {
+                engine,
+                store,
+                sessionId,
+                model: { providerId, ...(picked.model ? { model: picked.model } : {}) },
+                userText: i.brief,
+                ...takeImages(),
+                toolSchemas: pSchemas,
+                executors: pExecutors,
+                gate: participantGate,
+                signal: ctx.signal,
+                system,
+                ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+                speaker: { agentId: agent.id, name: agent.name },
+                routing: {
+                  from: hubSpeaker,
+                  kind: 'delegate' as const,
+                  targetAgentId: agent.id,
+                  targetName: agent.name,
+                  reason: i.reason,
+                  brief: i.brief,
+                },
+                hub: hubSpeaker,
+                assistantRouting: (text: string) =>
+                  mentionsHub(text, hubAgent.name)
+                    ? { kind: 'return' as const, reason: 'asked', targetAgentId: hubAgent.id, targetName: hubAgent.name }
+                    : undefined,
+                // D6: READ-ONLY, and only the participant's own scope. No
+                // learning sink, no check-in sink, no `naby_remember` (R3.8).
+                memoryInjection: {
+                  tokenBudget: MEMORY_TOKEN_BUDGET,
+                  taskType: 'chat',
+                  queryText: i.brief,
+                  userId: DEFAULT_USER_ID,
+                  orgId: DEFAULT_ORG_ID,
+                  scopes: [agent.memoryScope],
+                },
+                skillInjection: {
+                  tokenBudget: SKILL_TOKEN_BUDGET,
+                  userId: DEFAULT_USER_ID,
+                  orgId: DEFAULT_ORG_ID,
+                  availableTools: pAvailable,
+                  explicitNames: profile.skills,
+                  explicitOnly: true,
+                },
+                engineId,
+                costBasis,
+                activity: {
+                  agentId: agent.id,
+                  agentName: agent.name,
+                  source: 'participant',
+                  step,
+                  ...(typeof ctx.params.runId === 'string' ? { runId: ctx.params.runId } : {}),
+                },
+                ...(orgHooks.compaction ? { compaction: orgHooks.compaction } : {}),
+                ...(engineId === 'dev-claude' ? { backendEnv: () => orgProcessEnv(orgTurn) } : {}),
+                onEvent: translateEvent,
+              };
+            };
+
+            const result = await runParticipantRound({
+              store,
+              sessionId,
+              hub: hubAgent,
+              userText: turnText,
+              mentions: participantMentions,
+              registered: registeredParticipants.map((a) => toRoundAgent(a)),
+              settings: participantSettings,
+              recent: () => {
+                try {
+                  return recentForRoute(store.getMessages(sessionId), hubAgent.name);
+                } catch {
+                  return [];
+                }
+              },
+              writeUserRow: () => {
+                store.appendMessage(sessionId, { role: 'user', content: turnText });
+              },
+              runNabyTurn: async (i) => {
+                beginSpeech();
+                const { images: _ignored, ...base } = nabyTurnOptions(turnText);
+                void _ignored;
+                await runTurn({
+                  ...base,
+                  ...takeImages(),
+                  ...(i.handoff
+                    ? {
+                        userText: i.handoff.content,
+                        routing: {
+                          from: hubSpeaker,
+                          kind: 'delegate' as const,
+                          targetAgentId: hubAgent.id,
+                          targetName: hubAgent.name,
+                          reason: i.handoff.reason,
+                        },
+                      }
+                    : {}),
+                  // R3.7: naby is told what the labelled participant lines are,
+                  // plus the round's limit notice when it has hit one.
+                  system: [base.system, HUB_ROUND_RULES, i.note].filter(Boolean).join('\n\n'),
+                  hub: hubSpeaker,
+                  activity: { ...base.activity, step },
+                });
+                speeches.push({ agent: hubAgent, persona: true, text: stepText });
+                return { text: stepText, ok: speechOk };
+              },
+              runParticipantTurn: async (i) => {
+                const agent = byId.get(i.agent.id);
+                if (!agent) return { text: '', ok: false };
+                // The roster may have grown this round (an approved proposal).
+                activeParticipantIds.add(agent.id);
+                beginSpeech();
+                currentSpeaker = { id: agent.id, name: agent.name, displayName: i.agent.displayName };
+                try {
+                  await runTurn(participantTurnOptions(agent, i));
+                } finally {
+                  currentSpeaker = undefined;
+                }
+                speeches.push({ agent: i.agent, persona: false, text: stepText });
+                return { text: stepText, ok: speechOk };
+              },
+              routeCall,
+              propose,
+              emit: (e) => ctx.emit({ ...e, session_id: sessionId } as unknown as RunEvent),
+              log: (kind, fields) =>
+                logActivity(kind, { sessionId, agentId: hubAgent.id, agentName: hubAgent.name, ...fields }),
+              signal: ctx.signal,
             });
+            console.log(
+              `[engine:naby] participants: round ended (${result.endedBy}, ${result.speeches} speech(es), ` +
+                `${result.proposals} proposal(s))`,
+            );
+            // THE ROUND'S ONE `result` (the client ends its turn on it). Skipped on a
+            // stop: the fallback below reports a stopped run the way it always has.
+            if (!ctx.signal.aborted && sawResult) {
+              emittedResult = true;
+              const ok = result.lastOk && !errorMessage;
+              const text = roundResultText(speeches);
+              assistantText = text;
+              ctx.emit({
+                type: 'result',
+                subtype: ok ? 'success' : 'error_during_execution',
+                session_id: sessionId,
+                is_error: !ok,
+                result: ok ? text : (errorMessage ?? 'run failed'),
+                usage: toSdkUsage(accUsage),
+                total_cost_usd: accCostUsd,
+                ...gaugeFields(),
+                ...measureTurn(),
+                num_turns: turns,
+              });
+            }
+          };
+          if (roundMode) {
+            await runRound();
+          } else
+          do {
+            step += 1;
+            stepText = '';
+            stepUsedTool = false;
+            await runTurn(
+              nabyTurnOptions(
+                step === 1
+                  ? turnText
+                  : stepDecision.reason === 'verify-nudge'
+                    ? verificationNudgePrompt(step, maxSteps)
+                    : continuationPrompt(step, maxSteps),
+              ),
+            );
             // Between steps: tell the user (a muted one-line bar) that the agent
             // is continuing, or why it stopped. Emitted here rather than in the
             // `result` case so it lands after that step's events, and so the

@@ -60,6 +60,14 @@ export interface CommandInfo {
     /** progress toward butterfly, 0–100 */
     percent: number
     addressable: boolean
+    // CONVERSATION PARTICIPANTS (multi-agent-chat §8.5, MAC-M1 server side). A
+    // participant has no growth stage — it does not learn (R3.8) — so it is sent
+    // as a fixed butterfly/100/addressable to keep the existing badge code safe,
+    // flagged `participant` so the M3 palette can draw it differently.
+    // `inSession` is false here: this read has no session; the M3 palette
+    // resolves it against the roster.
+    participant?: boolean
+    inSession?: boolean
   }
 }
 
@@ -176,6 +184,22 @@ export function loadAgentEntries(store: AgentPaletteStore): CommandInfo[] {
     return []
   }
   return agents.map((a) => {
+    if (a.kind === "participant") {
+      // No ledger read: a participant never grows (R3.8), and a growth stage
+      // would be a number about nothing.
+      return {
+        name: `@${a.name}`,
+        description: a.description ?? a.systemPrompt.split("\n")[0]?.slice(0, 120) ?? "",
+        source: "user" as const,
+        agent: {
+          stage: "butterfly" as GrowthStage,
+          percent: 100,
+          addressable: true,
+          participant: true,
+          inSession: false,
+        },
+      }
+    }
     // Shared with the Settings panel (growthRead), so the badge here and the
     // gauge there can never disagree. Best-effort inside: no ledger reads as an
     // egg rather than throwing.

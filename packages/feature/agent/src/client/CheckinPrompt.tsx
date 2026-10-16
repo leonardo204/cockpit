@@ -184,10 +184,10 @@ export function CheckinPrompt({
 
   return (
     <div
-      className="mx-4 mb-2 rounded-lg border border-sky-500/50 bg-sky-500/10 p-3"
+      className="mx-4 mb-2 rounded-lg border border-info/50 bg-info/10 p-3"
       data-testid="checkin-prompt"
     >
-      <div className="text-xs font-medium text-sky-700 dark:text-sky-300">
+      <div className="text-xs font-medium text-info">
         {t('checkin.title', { defaultValue: 'naby is asking how to proceed' })}
       </div>
       <div className="mt-1 text-sm text-foreground" data-testid="checkin-question">

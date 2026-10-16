@@ -17,6 +17,10 @@ import type { GateDecision } from '../../../../../../../dist/naby-runtime.mjs';
 type Pending = {
   resolve: (decision: GateDecision) => void;
   createdAt: number;
+  /** What is being approved, when the asker says (multi-agent-chat MAC-M2).
+   *  `participant.add` is a proposal, not a tool call: `approval.resolve` must not
+   *  turn its "remember" into a policy rule. */
+  toolName?: string;
 };
 
 // Pinned to globalThis, NOT a plain module-level Map: the paused turn runs in the
@@ -35,8 +39,30 @@ export function registerApproval(
   approvalId: string,
   resolve: (decision: GateDecision) => void,
   createdAt: number,
+  meta?: { toolName?: string },
 ): void {
-  pending.set(approvalId, { resolve, createdAt });
+  pending.set(approvalId, { resolve, createdAt, ...(meta?.toolName ? { toolName: meta.toolName } : {}) });
+}
+
+/** The tool name a pending approval was registered with, if the asker gave one. */
+export function pendingApprovalToolName(approvalId: string): string | undefined {
+  return pending.get(approvalId)?.toolName;
+}
+
+/** The approval kind whose "remember" is never a policy rule (multi-agent-chat
+ *  §8.2): adding a participant is a one-off decision about THIS conversation. */
+export const PARTICIPANT_ADD_TOOL = 'participant.add';
+
+/**
+ * Whether a resolve may persist a "remember" policy rule. False for a
+ * participant proposal — recognised by the registered name OR by the pattern the
+ * client sent, so a stale or hand-made request cannot write a `participant.add`
+ * rule either.
+ */
+export function approvalMayRemember(approvalId: string, toolPattern: string): boolean {
+  if (pendingApprovalToolName(approvalId) === PARTICIPANT_ADD_TOOL) return false;
+  if (toolPattern.trim() === PARTICIPANT_ADD_TOOL) return false;
+  return true;
 }
 
 /** Settle a pending approval with a decision. Returns false if the id is unknown

@@ -92,7 +92,7 @@ export function confirm(message: string, options?: {
     // name, and the i18n singleton runs with `escapeValue: false`.
     overlay.innerHTML = `
       <div class="fixed inset-0 bg-black/50"></div>
-      <div class="relative bg-card border border-border rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4" style="animation: confirmScaleIn 0.15s ease-out">
+      <div class="relative bg-card border border-border rounded-xl shadow-float p-6 max-w-sm w-full mx-4" style="animation: confirmScaleIn 0.15s ease-out">
         <div data-slot="title" class="text-base font-medium text-foreground mb-2"></div>
         <div data-slot="message" class="text-sm text-muted-foreground mb-6 whitespace-pre-wrap"></div>
         <div class="flex justify-end gap-3">

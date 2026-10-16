@@ -139,9 +139,9 @@ describe('recent × — the control', () => {
     // The only guard left once the confirmation went: the control must say
     // what it does. Destructive treatment + a tooltip naming the consequence.
     const src = read('RecentSessionDeleteButton.tsx');
-    expect(src).toContain('hover:bg-red-500/20');
-    expect(src).toContain('hover:text-red-500');
-    expect(src).toContain('focus:text-red-500');
+    expect(src).toContain('hover:bg-destructive/20');
+    expect(src).toContain('hover:text-destructive');
+    expect(src).toContain('focus:text-destructive');
     expect(src).toContain("title={t('sessions.deleteSessionFromRecent')}");
     expect(src).toContain("aria-label={t('sessions.deleteSessionFromRecent')}");
   });

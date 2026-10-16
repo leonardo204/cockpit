@@ -734,7 +734,7 @@ const TreeChildren = memo(function TreeChildren({
   const body = (() => {
     if (error) {
       return (
-        <div style={{ paddingLeft: 8 + depth * 12 }} className="py-0.5 text-xs text-red-500">
+        <div style={{ paddingLeft: 8 + depth * 12 }} className="py-0.5 text-xs text-destructive">
           {t('fileBrowser.loadError', { defaultValue: 'Could not read this folder.' })}
         </div>
       );

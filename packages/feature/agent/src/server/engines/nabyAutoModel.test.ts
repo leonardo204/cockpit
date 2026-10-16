@@ -213,7 +213,16 @@ describe('no stored `auto` reaches a provider (§4.5)', () => {
     expect(SRC).not.toContain('await resolveMeteredProvider(settings, requestedModel)');
   });
 
-  it('every model field that can hold a stored value is guarded — seven sites', () => {
+  it('the round loop (multi-agent-chat MAC-M2) guards its three model sites', () => {
+    // A participant's stored model, the session model a participant falls back
+    // to, and the routing call's session model — each can hold `auto`, and each
+    // would otherwise send it to a provider as a model id.
+    expect(SRC).toContain('resolveParticipantModel(engineId, effectiveAgentModel(agent.model), sessionModel)');
+    expect(SRC).toContain('const sessionModel = effectiveAgentModel(modelForEngine);');
+    expect(SRC).toContain(': effectiveAgentModel(modelForEngine);');
+  });
+
+  it('every model field that can hold a stored value is guarded — ten sites', () => {
     // An eighth site added later without the guard is exactly the regression this
     // count exists to catch. Raise it deliberately, with its own assertion above.
     //
@@ -223,7 +232,10 @@ describe('no stored `auto` reaches a provider (§4.5)', () => {
     // those branches `auto` is not a policy anything will execute; it is just a
     // string no provider answers to, which is precisely what this guard turns
     // into "no model".
-    expect(SRC.match(/effectiveAgentModel\(/g)).toHaveLength(7);
+    //
+    // MAC-M2 ADDED THREE (asserted above): the round's participant model, its
+    // session-model fallback and the routing call's model.
+    expect(SRC.match(/effectiveAgentModel\(/g)).toHaveLength(10);
   });
 });
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 // F1-07. Per-session cost + which engine is answering. Renders nothing until
 // /api/naby responds, so the header is unchanged when the runtime is absent.
@@ -25,6 +25,10 @@ interface ChatHeaderProps {
   // Chat is mounted; left undefined when wrapped in TabManager).
   onOpenSessionBrowser?: () => void;
   onOpenSettings?: () => void;
+  /** multi-agent-chat (MAC-M3): the participant roster and the "show routing"
+   *  toggle, built by Chat (it owns the participant state). Null = no
+   *  participants, and the slot collapses. */
+  roster?: ReactNode;
 }
 
 export function ChatHeader({
@@ -33,28 +37,36 @@ export function ChatHeader({
   onOpenProjectSessions,
   onOpenSessionBrowser,
   onOpenSettings,
+  roster,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const [copiedCommand, setCopiedCommand] = useState(false);
 
   return (
-    <div className="border-b border-border px-4 py-3 bg-card">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <img src="/icons/icon-72x72.png" alt={APP_NAME} className="w-6 h-6" />
-          <div className="flex items-baseline gap-2">
-            <h1 className="text-lg font-semibold text-foreground">
+    <div className="border-b border-border px-4 py-2.5 bg-background">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <img src="/icons/icon-72x72.png" alt={APP_NAME} className="w-7 h-7 rounded-lg" />
+          {/* Title over a secondary line (shell-look-and-feel section 5). */}
+          <div className="min-w-0">
+            <h1 className="text-[1.036rem] font-bold leading-tight tracking-tight text-foreground">
               {APP_NAME}
             </h1>
             {/* Upstream's tagline described upstream's product (a multi-seat
                 coding workbench). Replaced rather than dropped: the slot is the
                 first thing a new user reads. */}
-            <span className="text-xs text-muted-foreground">
+            <p className="mt-0.5 truncate text-[0.786rem] font-medium leading-tight text-muted-foreground">
               Your persona agent. Local-first.
-            </span>
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        {/* Participant roster slot (multi-agent-chat R6.2): naby first, the
+            session's participants, the `+` menu and the "show routing" toggle.
+            Collapses when there are no participants. */}
+        <div className="ml-auto flex items-center empty:hidden" data-slot="chat-header-roster">
+          {roster}
+        </div>
+        <div className="flex items-center gap-1.5" data-slot="chat-header-toggles">
           {/* F1-07 — per-session cost / usage and the answering engine. */}
           <NabySessionCost sessionId={sessionId} />
           {/* Show project path */}
@@ -106,7 +118,7 @@ export function ChatHeader({
               }}
               className={`p-2 rounded-lg transition-colors ${
                 copiedCommand
-                  ? 'text-green-500 bg-green-500/10'
+                  ? 'text-success bg-success/10'
                   : 'text-muted-foreground hover:text-foreground hover:bg-accent'
               }`}
               title={copiedCommand ? t('chat.copiedCommandTooltip') : t('chat.copyCommandTooltip', { sessionId })}

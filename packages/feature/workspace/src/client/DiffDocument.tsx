@@ -69,16 +69,16 @@ function LineRow({
 }) {
   const tint =
     kind === 'add'
-      ? 'bg-emerald-500/10'
+      ? 'bg-success/10'
       : kind === 'del'
-        ? 'bg-red-500/10'
+        ? 'bg-destructive/10'
         : '';
   const mark = kind === 'add' ? '+' : kind === 'del' ? '−' : ' ';
   const markCls =
     kind === 'add'
-      ? 'text-emerald-600 dark:text-emerald-400'
+      ? 'text-success'
       : kind === 'del'
-        ? 'text-red-600 dark:text-red-400'
+        ? 'text-destructive'
         : 'text-transparent';
 
   return (
@@ -133,10 +133,10 @@ function FileBlock({ file }: { file: DiffFile }) {
         </span>
         <span className="ml-auto shrink-0 flex items-center gap-2 text-xs font-mono">
           {file.additions > 0 && (
-            <span className="text-emerald-600 dark:text-emerald-400">+{file.additions}</span>
+            <span className="text-success">+{file.additions}</span>
           )}
           {file.deletions > 0 && (
-            <span className="text-red-600 dark:text-red-400">−{file.deletions}</span>
+            <span className="text-destructive">−{file.deletions}</span>
           )}
         </span>
       </button>
@@ -169,7 +169,7 @@ function FileBlock({ file }: { file: DiffFile }) {
                 );
               })}
               {file.truncated && (
-                <div className="px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="px-3 py-2 text-xs text-warning">
                   {t('diff.truncatedFile', {
                     defaultValue: 'This file’s diff is too long to show in full.',
                   })}
@@ -308,9 +308,9 @@ export function DiffDocument({ cwd, path, staged, commit, onAsk }: DiffDocumentP
         </span>
         <span className="shrink-0 flex items-center gap-2 text-xs font-mono">
           {totals.add > 0 && (
-            <span className="text-emerald-600 dark:text-emerald-400">+{totals.add}</span>
+            <span className="text-success">+{totals.add}</span>
           )}
-          {totals.del > 0 && <span className="text-red-600 dark:text-red-400">−{totals.del}</span>}
+          {totals.del > 0 && <span className="text-destructive">−{totals.del}</span>}
         </span>
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <button
@@ -355,7 +355,7 @@ export function DiffDocument({ cwd, path, staged, commit, onAsk }: DiffDocumentP
               <FileBlock key={`${f.oldPath ?? ''}→${f.path}`} file={f} />
             ))}
             {data.truncated && (
-              <div className="text-xs text-amber-600 dark:text-amber-400">
+              <div className="text-xs text-warning">
                 {t('diff.truncatedList', {
                   defaultValue: 'Only the first files are shown — this change is very large.',
                 })}

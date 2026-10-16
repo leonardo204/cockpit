@@ -166,7 +166,7 @@ export function UpdatePanel() {
         ) : state === 'unsupported' ? (
           <span>{t('updates.unsupported')}</span>
         ) : status?.error ? (
-          <span className="text-red-500">{t('updates.failed')}</span>
+          <span className="text-destructive">{t('updates.failed')}</span>
         ) : checkedByUser && !checking ? (
           // The answer to the question they actually asked.
           <span>{t('updates.upToDate', { version: status?.currentVersion ?? '' })}</span>

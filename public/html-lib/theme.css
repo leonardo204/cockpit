@@ -1,7 +1,8 @@
 /*
  * Cockpit small-app theme — semantic design tokens (light + .dark).
- * Distilled from the app's src/app/globals.css (same Radix Teal / Slate + status
- * scales), so a small app looks native to Cockpit and gets light/dark for free.
+ * Distilled from the app's src/app/globals.css (same violet brand scale,
+ * Slate grays and status colors — specs/shell-look-and-feel.md section 3), so a
+ * small app looks native to the shell and gets light/dark for free.
  *
  * Usage:
  *   <link rel="stylesheet" href="/html-lib/theme.css">
@@ -12,10 +13,19 @@
  * Dark mode: add class "dark" on <body> (or <html>). To follow the system and
  * avoid a flash, run before first paint:
  *   document.documentElement.classList.toggle('dark', matchMedia('(prefers-color-scheme: dark)').matches)
+ *
+ * Every semantic token is declared in BOTH blocks below, not derived from the
+ * scales. A custom property that reads another one is resolved where it is
+ * declared, so a `.dark` on <body> would not reach a value computed on :root.
  */
 
 :root {
   /* ---- Raw scales (HSL triplets — for translucency: hsl(var(--x) / <alpha>)) ---- */
+  --violet-1: 255 100% 99.4%; --violet-2: 252 100% 98.6%; --violet-3: 253 100% 97%;
+  --violet-4: 253 100% 95%;   --violet-5: 253 100% 92.5%; --violet-6: 253 100% 89%;
+  --violet-7: 253 100% 84%;   --violet-8: 252 100% 77%;   --violet-9: 252 100% 65%;
+  --violet-10: 255 100% 74%;  --violet-11: 252 72% 53%;   --violet-12: 254 60% 20%;
+
   --teal-1: 180 50% 99.2%; --teal-2: 180 44% 97%;  --teal-3: 180 43% 93.8%;
   --teal-4: 180 44% 89.7%; --teal-5: 180 42% 84.3%; --teal-6: 181 39% 76.8%;
   --teal-7: 181 35% 66.3%; --teal-8: 181 33% 52.5%; --teal-9: 179 35% 35%;
@@ -32,39 +42,60 @@
   --blue-9: 206 100% 50%; --blue-10: 207 96% 43%;  --blue-11: 208 88% 43%;
 
   /* ---- Semantic tokens (ready-to-use colors) ---- */
-  --background: hsl(0 0% 98%);
-  --foreground: hsl(var(--slate-12));
+  --background: hsl(0 0% 100%);
+  --sidebar: hsl(240 23% 97%);
+  --foreground: hsl(230 10% 12%);
   --card: hsl(0 0% 100%);
-  --card-foreground: hsl(var(--slate-12));
-  --primary: hsl(var(--slate-12));
+  --card-foreground: hsl(230 10% 12%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(230 10% 12%);
+  --primary: hsl(252 100% 65%);
   --primary-foreground: hsl(0 0% 100%);
-  --secondary: hsl(var(--slate-3));
-  --secondary-foreground: hsl(var(--slate-12));
-  --muted: hsl(var(--slate-3));
-  --muted-foreground: hsl(var(--slate-11));
-  --accent: hsl(var(--slate-3));
-  --accent-foreground: hsl(var(--slate-12));
-  --border: hsl(var(--slate-5));
-  --input: hsl(var(--slate-5));
-  --ring: hsl(var(--teal-9));
-  --brand: hsl(var(--teal-9));
-  --brand-foreground: hsl(var(--teal-11));
-  --destructive: hsl(var(--red-9));
+  --secondary: hsl(228 24% 96%);
+  --secondary-foreground: hsl(210 14% 13%);
+  --muted: hsl(228 24% 96%);
+  --muted-foreground: hsl(225 7% 45%);
+  --accent: hsl(254 100% 96%);
+  --accent-foreground: hsl(252 72% 53%);
+  --border: hsl(230 14% 91%);
+  --input: hsl(230 14% 91%);
+  --ring: hsl(252 100% 65%);
+  --brand: hsl(252 100% 65%);
+  --brand-foreground: hsl(252 72% 53%);
+  --brand-2: hsl(255 100% 74%);
+  --brand-gradient: linear-gradient(135deg, var(--brand), var(--brand-2));
+  --user-bubble: hsl(252 100% 65%);
+  --user-bubble-foreground: hsl(0 0% 100%);
+  --code-surface: hsl(240 16% 96%);
+  --destructive: hsl(0 73% 55%);
   --destructive-foreground: hsl(0 0% 100%);
 
-  /* Friendly status aliases (auto-adapt in dark via the scale overrides) */
-  --success: hsl(var(--green-9));
-  --warning: hsl(var(--amber-9));
-  --error: hsl(var(--red-9));
-  --info: hsl(var(--blue-9));
+  /* Status colors, each with the text color for a solid fill of it */
+  --success: hsl(159 80% 35%);
+  --success-foreground: hsl(0 0% 100%);
+  --warning: hsl(38 95% 39%);
+  --warning-foreground: hsl(0 0% 100%);
+  --error: var(--destructive);
+  --info: hsl(206 100% 50%);
+  --info-foreground: hsl(0 0% 100%);
 
-  --radius: 0.5rem;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  /* Elevation: card = resting surfaces, float = dialogs / popovers */
+  --shadow-card: 0 2px 14px rgba(30, 25, 80, 0.08);
+  --shadow-float: 0 30px 80px rgba(30, 25, 80, 0.18);
+
+  --radius: 0.75rem;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+    "Pretendard Variable", Pretendard, "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 .dark {
   /* Raw scales, dark */
+  --violet-1: 250 20% 10%;    --violet-2: 255 30% 13%;    --violet-3: 253 37% 18%;
+  --violet-4: 252 40% 22.5%;  --violet-5: 252 45% 27%;    --violet-6: 252 50% 33%;
+  --violet-7: 253 60% 44%;    --violet-8: 254 80% 60%;    --violet-9: 255 100% 74%;
+  --violet-10: 254 100% 85%;  --violet-11: 254 100% 82%;  --violet-12: 252 100% 95%;
+
   --teal-1: 183 30% 7%;   --teal-2: 183 35% 9%;    --teal-3: 183 38% 12%;
   --teal-4: 182 40% 15%;  --teal-5: 182 40% 18%;   --teal-6: 182 38% 23%;
   --teal-7: 181 35% 30%;  --teal-8: 180 34% 40%;   --teal-9: 179 42% 50%;
@@ -80,13 +111,45 @@
   --amber-9: 39 100% 57%; --amber-10: 43 100% 64%; --amber-11: 46 100% 74%;
   --blue-9: 206 100% 50%; --blue-10: 209 100% 60%; --blue-11: 210 100% 72%;
 
-  /* Semantic overrides that differ from light (the rest auto-adapt via the scales) */
-  --background: hsl(var(--slate-1));
-  --card: hsl(0 0% 12%);
-  --primary-foreground: hsl(var(--slate-1));
-  --accent: hsl(var(--slate-4));
-  --border: hsl(var(--slate-6));
-  --input: hsl(var(--slate-6));
+  /* Semantic tokens, dark — all of them, see the header note */
+  --background: hsl(232 15% 11%);
+  --sidebar: hsl(231 16% 9%);
+  --foreground: hsl(230 21% 95%);
+  --card: hsl(233 14% 13%);
+  --card-foreground: hsl(230 21% 95%);
+  --popover: hsl(233 14% 13%);
+  --popover-foreground: hsl(230 21% 95%);
+  --primary: hsl(255 100% 74%);
+  --primary-foreground: hsl(253 47% 10%);
+  --secondary: hsl(229 14% 15%);
+  --secondary-foreground: hsl(220 9% 80%);
+  --muted: hsl(229 14% 15%);
+  --muted-foreground: hsl(227 10% 64%);
+  --accent: hsl(254 31% 20%);
+  --accent-foreground: hsl(254 100% 82%);
+  --border: hsl(230 12% 19%);
+  --input: hsl(230 12% 19%);
+  --ring: hsl(255 100% 74%);
+  --brand: hsl(255 100% 74%);
+  --brand-foreground: hsl(254 100% 82%);
+  --brand-2: hsl(254 100% 85%);
+  --brand-gradient: linear-gradient(135deg, hsl(255 100% 74%), hsl(254 100% 85%));
+  --user-bubble: hsl(251 41% 39%);
+  --user-bubble-foreground: hsl(253 100% 96%);
+  --code-surface: hsl(229 14% 15%);
+  --destructive: hsl(0 100% 71%);
+  --destructive-foreground: hsl(0 0% 100%);
+
+  --success: hsl(157 63% 53%);
+  --success-foreground: hsl(232 15% 11%);
+  --warning: hsl(38 90% 61%);
+  --warning-foreground: hsl(232 15% 11%);
+  --error: hsl(0 100% 71%);
+  --info: hsl(206 100% 50%);
+  --info-foreground: hsl(0 0% 100%);
+
+  --shadow-card: none;
+  --shadow-float: 0 30px 80px rgba(0, 0, 0, 0.55);
 }
 
 /* Minimal base so linking the theme makes a page look native immediately. */
@@ -97,3 +160,4 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+a { color: var(--brand-foreground); }

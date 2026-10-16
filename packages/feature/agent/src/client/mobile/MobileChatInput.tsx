@@ -62,7 +62,7 @@ export function MobileChatInput({ onSend, onStop, isRunning, disabled }: MobileC
           type="button"
           onClick={onStop}
           aria-label={t('mobile.stop')}
-          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-red-500 text-white active:scale-95"
+          className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground active:scale-95"
         >
           <Square className="h-5 w-5" fill="currentColor" />
         </button>

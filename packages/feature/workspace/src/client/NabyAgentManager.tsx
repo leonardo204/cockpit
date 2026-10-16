@@ -33,6 +33,7 @@ import { GrowthPanel } from './GrowthPanel';
 import { AgentExportButton } from './AgentExportButton';
 import { AgentImportButton } from './AgentImportButton';
 import { SettingsDetails } from './SettingsDetails';
+import { ParticipantSection } from './ParticipantSection';
 
 type Escalation = 'inline' | 'telegram' | 'both';
 type MemoryScope = 'session' | 'project' | 'user' | 'org';
@@ -292,7 +293,9 @@ const AgentRow = memo(function AgentRow({
                 outside. */}
             {isPersona
               ? t('agentManager.kindPersona', { defaultValue: 'Built-in' })
-              : t('agentManager.kindCustom', { defaultValue: 'Custom' })}
+              : (agent.kind as string) === 'participant'
+                ? t('agentManager.kindParticipant', { defaultValue: 'Participant' })
+                : t('agentManager.kindCustom', { defaultValue: 'Custom' })}
           </span>
         </div>
         {/* The persona's description is SEED text, stored in English because the
@@ -335,7 +338,7 @@ const AgentRow = memo(function AgentRow({
             <button
               onClick={() => onRemove(agent)}
               disabled={busy}
-              className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+              className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
             >
               {t('agentManager.remove', { defaultValue: 'Remove' })}
             </button>
@@ -597,7 +600,10 @@ export function NabyAgentManager({
         </div>
       ) : null}
 
-      {/* List */}
+      {/* List: naby's card, then the PARTICIPANTS section under it
+          (multi-agent-chat R5.1), then any custom agents. Participants are not
+          AgentRows: their editor is `participant.put` (R1.1's seven sections),
+          and `agent.put` would turn one into a custom agent. */}
       {loading ? (
         <p className="text-xs text-muted-foreground">{t('agentManager.loading', { defaultValue: 'Loading…' })}</p>
       ) : agents.length === 0 ? (
@@ -606,19 +612,43 @@ export function NabyAgentManager({
         </p>
       ) : (
         <div className="space-y-2">
-          {agents.map((a) => (
-            <AgentRow
-              key={a.id}
-              agent={a}
-              busy={busy}
-              {...(cwd ? { cwd } : {})}
-              onEdit={(x) => setForm(toForm(x))}
-              onRemove={(x) => void remove(x)}
-              onLeaveSettings={handleLeaveSettings}
-            />
-          ))}
+          {agents
+            .filter((a) => a.kind === 'persona')
+            .map((a) => (
+              <AgentRow
+                key={a.id}
+                agent={a}
+                busy={busy}
+                {...(cwd ? { cwd } : {})}
+                onEdit={(x) => setForm(toForm(x))}
+                onRemove={(x) => void remove(x)}
+                onLeaveSettings={handleLeaveSettings}
+              />
+            ))}
         </div>
       )}
+
+      <div className="pt-2">
+        <ParticipantSection isOpen={isOpen} {...(cwd ? { cwd } : {})} />
+      </div>
+
+      {!loading && agents.some((a) => a.kind !== 'persona' && (a.kind as string) !== 'participant') ? (
+        <div className="space-y-2 pt-2">
+          {agents
+            .filter((a) => a.kind !== 'persona' && (a.kind as string) !== 'participant')
+            .map((a) => (
+              <AgentRow
+                key={a.id}
+                agent={a}
+                busy={busy}
+                {...(cwd ? { cwd } : {})}
+                onEdit={(x) => setForm(toForm(x))}
+                onRemove={(x) => void remove(x)}
+                onLeaveSettings={handleLeaveSettings}
+              />
+            ))}
+        </div>
+      ) : null}
 
       {/* What naby is, versus an imported agent, on request. */}
       <SettingsDetails>

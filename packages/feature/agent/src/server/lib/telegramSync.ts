@@ -60,7 +60,24 @@ export type MirrorTurn = {
   numTurns?: number;
   /** Autonomy steps actually taken, when the run was autonomous. */
   steps?: number;
+  /** multi-agent-chat §8.7(a): the PARTICIPANTS that spoke in this turn, in
+   *  order (naby is never listed). Empty or absent = a naby-only turn, whose
+   *  message keeps its old shape exactly. */
+  speakers?: MirrorSpeaker[];
 };
+
+/** A participant as the mirror names it. */
+export type MirrorSpeaker = { displayName: string; emoji?: string };
+
+/** The speaker line (§8.7a): `🌐 Translator:` for one, `🌐 Translator · 🧐 Critic`
+ *  for several (each speech in the text is then labelled on its own). */
+export function mirrorSpeakerLine(speakers: readonly MirrorSpeaker[]): string | undefined {
+  const names = speakers
+    .filter((s) => s.displayName.trim())
+    .map((s) => `${s.emoji ? `${s.emoji} ` : ''}${s.displayName.trim()}`);
+  if (names.length === 0) return undefined;
+  return names.length === 1 ? `${names[0]}:` : names.join(' · ');
+}
 
 /** The IO seam — the production default sends over the real bot and registers
  *  the reply route; the tests pass fakes. */
@@ -87,12 +104,23 @@ export function formatMirrorMessage(
 ): string {
   const lines: string[] = [];
   if (project !== undefined) lines.push(projectHeader(project));
+  // §8.7(a): who answered goes RIGHT AFTER the project line — the two things a
+  // phone reader scans for first. A naby-only turn has no such line.
+  const speakerLine = mirrorSpeakerLine(turn.speakers ?? []);
+  if (speakerLine) lines.push(speakerLine);
   lines.push(`🔁 ${sessionTitle?.trim() || turn.sessionId}`);
   const prompt = (turn.prompt ?? '').trim();
   if (prompt) lines.push(`🙋 ${truncate(prompt, MIRROR_PROMPT_PREVIEW_CHARS)}`);
+  // One speaker: the round's text opens with that same label
+  // (`roundResultText`); it is already on the speaker line, so it is not
+  // repeated. Several speakers keep their per-speech labels.
+  let text = turn.text;
+  if (text && speakerLine && (turn.speakers ?? []).length === 1 && text.startsWith(`${speakerLine}\n`)) {
+    text = text.slice(speakerLine.length + 1);
+  }
   const report: FinalReport = {
     ok: turn.ok,
-    ...(turn.text ? { text: turn.text } : {}),
+    ...(text ? { text } : {}),
     ...(turn.error ? { error: turn.error } : {}),
     ...(turn.durationMs != null ? { durationMs: turn.durationMs } : {}),
     ...(turn.numTurns != null ? { numTurns: turn.numTurns } : {}),

@@ -251,7 +251,7 @@ export function GrowthReportModal({
               </div>
               <div className={`mt-1 w-full bg-border ${bar}`}>
                 <div
-                  className={`${bar} ${g.blockedByTripwire ? 'bg-amber-500' : 'bg-brand'}`}
+                  className={`${bar} ${g.blockedByTripwire ? 'bg-warning' : 'bg-brand'}`}
                   style={{ width: `${Math.min(100, Math.max(2, g.percent))}%` }}
                 />
               </div>
@@ -264,7 +264,7 @@ export function GrowthReportModal({
           </p>
 
           {g.blockedByTripwire ? (
-            <p className="text-[0.786rem] leading-relaxed text-red-700 dark:text-red-300">
+            <p className="text-[0.786rem] leading-relaxed text-destructive">
               {t('growth.tripwireBlocked', {
                 defaultValue:
                   'Accuracy has reached the line, but {{count}} action(s) were refused for safety recently. Until those fall out of the recent window it does not become a butterfly — a safety refusal is not averaged away.',
@@ -493,7 +493,7 @@ export function GrowthReportModal({
                         : ''}
                     </div>
                     {d.excludedCode ? (
-                      <div className="mt-0.5 pl-5 text-[0.714rem] text-amber-700 dark:text-amber-400">
+                      <div className="mt-0.5 pl-5 text-[0.714rem] text-warning">
                         {t('growth.recentExcluded', {
                           defaultValue: 'not counted — {{reason}}',
                           // The server sends a CODE; anything unrecognised (a row

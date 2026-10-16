@@ -320,7 +320,7 @@ function createMarkdownComponents(
 
       if (!isPureText) {
         return (
-          <code className="px-1.5 py-0.5 mx-0.5 rounded bg-accent text-[0.875em] font-mono" {...props}>
+          <code className="px-1.5 py-0.5 mx-0.5 rounded bg-code-surface text-[0.875em] font-mono" {...props}>
             {children}
           </code>
         );
@@ -330,7 +330,7 @@ function createMarkdownComponents(
       const isInline = !match && !className && !codeString.includes('\n');
 
       if (isInline) {
-        const codeClass = "px-1.5 py-0.5 mx-0.5 rounded bg-accent text-[0.875em] font-mono";
+        const codeClass = "px-1.5 py-0.5 mx-0.5 rounded bg-code-surface text-[0.875em] font-mono";
         // A PATH IN BACKTICKS IS THE SHAPE THIS FEATURE EXISTS FOR. The assistant
         // writes `파일: /Users/…/report.md` in monospace, and this repo's own
         // conventions ask for `file_path:line` the same way — so a plugin that
@@ -468,7 +468,7 @@ function createMarkdownComponents(
     table: ({ children, node: _node, ...rest }: ComponentPropsWithoutRef<'table'> & ExtraProps) => (
       <div className="overflow-x-auto my-3" {...rest}><table className="min-w-full border border-border">{children}</table></div>
     ),
-    thead: ({ children, node: _node, ...rest }: ComponentPropsWithoutRef<'thead'> & ExtraProps) => <thead className="bg-accent" {...rest}>{children}</thead>,
+    thead: ({ children, node: _node, ...rest }: ComponentPropsWithoutRef<'thead'> & ExtraProps) => <thead className="bg-muted" {...rest}>{children}</thead>,
     th: ({ children, node: _node, ...rest }: ComponentPropsWithoutRef<'th'> & ExtraProps) => (
       <th className="px-4 py-2 text-left font-semibold border-b border-border" {...rest}>{children}</th>
     ),

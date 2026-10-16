@@ -349,7 +349,7 @@ const HarnessRow = memo(function HarnessRow({
               button next to it is about to do. Task-critical, so it is not
               something the user has to go looking for. */}
           {needsPhase25(item) ? (
-            <div className="text-[0.714rem] text-amber-600 dark:text-amber-400 mt-1">
+            <div className="text-[0.714rem] text-warning mt-1">
               {t('harnessReview.needsPhase25')}
             </div>
           ) : null}
@@ -362,8 +362,8 @@ const HarnessRow = memo(function HarnessRow({
               removed
                 ? 'bg-muted text-muted-foreground'
                 : enabled
-                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                  : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                  ? 'bg-success/15 text-success'
+                  : 'bg-warning/15 text-warning'
             }`}
           >
             {removed
@@ -405,7 +405,7 @@ const HarnessRow = memo(function HarnessRow({
           <button
             onClick={() => onDelete(item.id)}
             disabled={busy}
-            className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
           >
             {t('harnessReview.delete')}
           </button>
@@ -739,7 +739,7 @@ const HarnessSetTools = memo(function HarnessSetTools({
           </button>
         </div>
         {parseError ? (
-          <p className="text-[0.786rem] text-red-600 dark:text-red-400">
+          <p className="text-[0.786rem] text-destructive">
             {t('harnessSet.parseError', { error: parseError })}
           </p>
         ) : null}
@@ -829,17 +829,17 @@ const HarnessSetTools = memo(function HarnessSetTools({
             {/* Landing result: everything disabled + any conflicts */}
             {landed ? (
               <div className="space-y-1 text-[0.786rem] text-muted-foreground">
-                <div className="text-emerald-600 dark:text-emerald-400">
+                <div className="text-success">
                   {t('harnessSet.importDone', { count: landed.count })}
                 </div>
                 <div>{t('harnessSet.landedNote')}</div>
                 {landed.conflicts.length > 0 ? (
                   <div className="space-y-0.5">
-                    <div className="text-amber-600 dark:text-amber-400">
+                    <div className="text-warning">
                       {t('harnessSet.conflictsTitle', { count: landed.conflicts.length })}
                     </div>
                     {landed.conflicts.map((c, i) => (
-                      <div key={i} className="text-amber-600/90 dark:text-amber-400/90 break-words">
+                      <div key={i} className="text-warning/90 break-words">
                         {t('harnessSet.conflictNote', {
                           requestedName: c.requestedName,
                           landedName: c.landedName,
@@ -1144,7 +1144,7 @@ export function NabyHarnessReview({
           repetition. */}
       <div className="text-xs text-muted-foreground leading-relaxed space-y-1">
         <p>{t('harnessReview.description')}</p>
-        <p className="text-amber-600 dark:text-amber-400">{t('harnessReview.reviewNote')}</p>
+        <p className="text-warning">{t('harnessReview.reviewNote')}</p>
         {/* The list re-scans the NABY HARNESS HOME on every load, so a skill
             installed there outside this panel (by the model, through skill-hub)
             appears without pressing Import — and, since v1.9.1, it appears ON:
@@ -1254,7 +1254,7 @@ export function NabyHarnessReview({
                     <div>{t('harnessImport.resultSkipped', { count: summary.skipped.length })}</div>
                   ) : null}
                   {summary.failed.length > 0 ? (
-                    <div className="text-red-600 dark:text-red-400">
+                    <div className="text-destructive">
                       {t('harnessImport.resultFailed', { count: summary.failed.length })}
                     </div>
                   ) : null}
@@ -1265,7 +1265,7 @@ export function NabyHarnessReview({
                 <button
                   onClick={() => void revertImport()}
                   disabled={busy}
-                  className="text-[0.786rem] px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+                  className="text-[0.786rem] px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
                 >
                   {t('harnessReview.revertImport')}
                 </button>
@@ -1327,7 +1327,7 @@ export function NabyHarnessReview({
       ) : loading ? (
         <p className="text-xs text-muted-foreground">{t('harnessReview.loading')}</p>
       ) : error ? (
-        <p className="text-xs text-red-600 dark:text-red-400">
+        <p className="text-xs text-destructive">
           {t('harnessReview.loadError', { error })}
         </p>
       ) : visible.length === 0 ? (

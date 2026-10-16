@@ -263,7 +263,7 @@ const ProposalRow = memo(function ProposalRow({
           onClick={() => onDelete(item.id)}
           disabled={busy}
           title={t('memoryReview.deleteTitle')}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
         >
           {t('memoryReview.delete')}
         </button>
@@ -628,7 +628,7 @@ export function NabyMemoryReview({
         {loading && !summary ? (
           <p className="text-xs text-muted-foreground">{t('memoryReview.loading')}</p>
         ) : error ? (
-          <p className="text-xs text-red-600 dark:text-red-400">
+          <p className="text-xs text-destructive">
             {t('memoryReview.loadError', { error })}
           </p>
         ) : totalRows === 0 ? (
@@ -640,7 +640,7 @@ export function NabyMemoryReview({
                 <span className="text-muted-foreground">{t(SCOPE_LABELS[s.scope] ?? s.scope)}</span>{' '}
                 <span>{t('memoryReview.summaryConfirmed', { count: s.confirmed })}</span>
                 {s.proposed > 0 ? (
-                  <span className="text-amber-600 dark:text-amber-400">
+                  <span className="text-warning">
                     {' · '}
                     {t('memoryReview.summaryProposed', { count: s.proposed })}
                   </span>
@@ -813,7 +813,7 @@ export function NabyMemoryReview({
             <button
               onClick={() => handleBulk({ action: 'deleteBySource', source: 'external' })}
               disabled={busy}
-              className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+              className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
             >
               {t('memoryReview.deleteExternal')}
             </button>
@@ -821,7 +821,7 @@ export function NabyMemoryReview({
               <button
                 onClick={() => handleBulk({ action: 'deleteBySource', sessionId })}
                 disabled={busy}
-                className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+                className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
               >
                 {t('memoryReview.deleteThisSession')}
               </button>

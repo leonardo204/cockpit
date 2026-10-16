@@ -217,8 +217,8 @@ describe('sidebar tree — wiring', () => {
     const button = /<button\s+data-testid="sidebar-session-delete"[\s\S]*?<\/button>/.exec(row)?.[0];
     expect(button, 'the delete button was renamed — re-point this guard').toBeDefined();
     // Same × as the tab close and the project close: same glyph, same red hover.
-    expect(button).toContain('hover:bg-red-500/20');
-    expect(button).toContain('hover:text-red-500');
+    expect(button).toContain('hover:bg-destructive/20');
+    expect(button).toContain('hover:text-destructive');
     expect(button).toContain('M6 18L18 6M6 6l12 12');
     // Never also opens the session it is deleting.
     expect(button).toContain('e.stopPropagation()');
@@ -266,7 +266,7 @@ describe('sidebar tree — wiring', () => {
     // panel in something that would erase the three bottom popovers.
     const src = read('ProjectSidebar.tsx');
     expect(src).toContain('<div className="flex-1 overflow-y-auto p-2 space-y-1">');
-    const rootClass = /className=\{`h-full bg-card flex flex-col[^`]*`/.exec(src)?.[0];
+    const rootClass = /className=\{`h-full bg-sidebar flex flex-col[^`]*`/.exec(src)?.[0];
     expect(rootClass).not.toContain('overflow-hidden');
   });
 

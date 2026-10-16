@@ -78,7 +78,7 @@ export function ProjectItem({
         <NumberIcon number={index + 1} isActive={isActive} />
         {/* Unread red dot - top-right of number icon (hidden while loading to avoid overlap) */}
         {hasUnread && !isActive && !isLoading && (
-          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
+          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-destructive" />
         )}
         {/* Running orange dot - top-right of number icon */}
         {isLoading && (
@@ -117,7 +117,7 @@ export function ProjectItem({
           )}
           {/* Close button */}
           <button
-            className="p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-500 transition-colors"
+            className="p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive transition-colors"
             onClick={(e) => {
               e.stopPropagation();
               onRemove();

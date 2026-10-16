@@ -199,7 +199,7 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDelete
               <div className="flex items-center gap-1">
                 <button
                   onClick={handleClear}
-                  className="px-2 py-1 text-xs rounded bg-red-500 text-white hover:bg-red-600 transition-colors"
+                  className="px-2 py-1 text-xs rounded bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
                 >
                   {t('sessions.clearRecentsConfirm')}
                 </button>
@@ -214,7 +214,7 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDelete
               <button
                 onClick={() => setConfirmClear(true)}
                 disabled={sessions.length === 0}
-                className="p-1 text-slate-9 hover:text-red-500 hover:bg-accent rounded transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                className="p-1 text-slate-9 hover:text-destructive hover:bg-accent rounded transition-colors disabled:opacity-40 disabled:pointer-events-none"
                 title={t('sessions.clearRecents')}
                 aria-label={t('sessions.clearRecents')}
               >
@@ -274,7 +274,7 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDelete
 
           {error && (
             <div className="flex items-center justify-center h-full">
-              <div className="text-xs text-red-11">{error}</div>
+              <div className="text-xs text-destructive">{error}</div>
             </div>
           )}
 
@@ -322,7 +322,7 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDelete
                       session.status === 'loading'
                         ? 'bg-orange-9 animate-pulse'
                         : session.status === 'unread'
-                          ? 'bg-red-500'
+                          ? 'bg-destructive'
                           : 'bg-muted-foreground/30'
                     }`} />
                     <h4 className="text-xs font-medium text-foreground truncate flex-1" title={session.cwd}>
@@ -332,7 +332,7 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDelete
                       <span className="text-[0.714rem] text-orange-11 flex-shrink-0">{t('sessions.running')}</span>
                     )}
                     {session.status === 'unread' && (
-                      <span className="text-[0.714rem] text-red-500 flex-shrink-0">{t('sessions.done')}</span>
+                      <span className="text-[0.714rem] text-destructive flex-shrink-0">{t('sessions.done')}</span>
                     )}
                     {/* Hover-revealed close, at the right edge of the card.
                         HERE the button really is nested inside the row's click

@@ -141,7 +141,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
           </span>
         )}
         {unreadCount > 0 && (
-          <span className={`min-w-[18px] h-[18px] px-1 text-white text-xs font-medium rounded-full flex items-center justify-center bg-red-500 ${
+          <span className={`min-w-[18px] h-[18px] px-1 text-destructive-foreground text-xs font-medium rounded-full flex items-center justify-center bg-destructive ${
             collapsed && !loadingCount ? 'absolute -top-1 -right-1' : ''
           }`}>
             {unreadCount}
@@ -158,7 +158,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
               <span className="ml-2 text-xs text-orange-11">({t('sessions.runningCount', { count: loadingCount })})</span>
             )}
             {unreadCount > 0 && (
-              <span className="ml-2 text-xs text-red-500">({t('sessions.unreadCount', { count: unreadCount })})</span>
+              <span className="ml-2 text-xs text-destructive">({t('sessions.unreadCount', { count: unreadCount })})</span>
             )}
             {/* Expand into the full searchable recent-sessions panel (up to 100) */}
             <button
@@ -208,7 +208,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
                       session.status === 'loading'
                         ? 'bg-orange-9 animate-pulse'
                         : session.status === 'unread'
-                          ? 'bg-red-500'
+                          ? 'bg-destructive'
                           : 'bg-muted-foreground/30'
                     }`} />
                     <div className="flex-1 min-w-0">
@@ -220,7 +220,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
                           <span className="text-xs text-orange-11 flex-shrink-0">{t('sessions.running')}</span>
                         )}
                         {session.status === 'unread' && (
-                          <span className="text-xs text-red-500 flex-shrink-0">{t('sessions.done')}</span>
+                          <span className="text-xs text-destructive flex-shrink-0">{t('sessions.done')}</span>
                         )}
                         <span className="text-xs text-muted-foreground flex-shrink-0">
                           {formatTime(session.lastActive)}

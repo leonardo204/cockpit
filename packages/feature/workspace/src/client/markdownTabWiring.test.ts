@@ -215,7 +215,7 @@ describe('promotion — one viewer, two chromes', () => {
     // test, so the strip and the panel dispatch can never disagree.
     expect(TAB_BAR).toContain("from './tabKinds'");
     expect(TAB_BAR).toContain('isMarkdownTab(tab)');
-    expect(TAB_BAR).toContain('border-violet-500');
+    expect(TAB_BAR).toContain('border-info');
   });
 
   it('marks an INACTIVE document tab on the top line only', () => {
@@ -223,8 +223,8 @@ describe('promotion — one viewer, two chromes', () => {
     // thing made a row of inactive tabs read as two competing groups. So the
     // inactive document tab carries the same text and hover treatment as an
     // inactive chat tab, and differs only in the line above it.
-    expect(TAB_BAR).toContain("'border-violet-500/50 text-muted-foreground hover:bg-secondary/50'");
-    expect(TAB_BAR).not.toContain('hover:bg-violet-500/10');
+    expect(TAB_BAR).toContain("'border-info/50 text-muted-foreground hover:bg-secondary/50'");
+    expect(TAB_BAR).not.toContain('hover:bg-info/10');
   });
 
   it('does not make the distinction colour-only', () => {

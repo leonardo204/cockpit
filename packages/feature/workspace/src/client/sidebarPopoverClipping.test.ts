@@ -26,9 +26,9 @@ describe('sidebar layout — popovers escape the panel', () => {
   it('does not clip overflow on the sidebar root', () => {
     const src = readFileSync(SRC, 'utf8');
 
-    // The root is the first element of the component's return: `h-full bg-card
+    // The root is the first element of the component's return: `h-full bg-sidebar
     // flex flex-col`. Match that class run and assert what is NOT in it.
-    const rootClass = /className=\{`h-full bg-card flex flex-col[^`]*`/.exec(src)?.[0];
+    const rootClass = /className=\{`h-full bg-sidebar flex flex-col[^`]*`/.exec(src)?.[0];
     expect(rootClass, 'sidebar root className not found — did the markup change?').toBeDefined();
     expect(rootClass).not.toContain('overflow-hidden');
     expect(rootClass).not.toContain('overflow-clip');

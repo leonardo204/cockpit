@@ -14,6 +14,7 @@
 import { defaultSessionName, encodePath } from '@cockpit/shared-utils';
 import { getStore } from '../../engines/naby';
 import type { RuntimeMessage, SessionRef } from '../../engines/naby';
+import { isUserAuthored } from '../../../../../../../../dist/naby-runtime.mjs';
 
 // Display fields mirror the old jsonl-derived shapes: messages truncated to 50
 // chars, sampled as first-5 + last-5 (or all when ≤10).
@@ -44,7 +45,9 @@ function truncate(msg: string): string {
 export function userTexts(messages: RuntimeMessage[]): string[] {
   const out: string[] = [];
   for (const m of messages) {
-    if (m.role === 'user' && m.content.trim()) out.push(m.content);
+    // Only what the USER typed (multi-agent-chat §8.1): naby's hand-off to a
+    // participant is a labelled user row and must not become a session title.
+    if (m.role === 'user' && isUserAuthored(m) && m.content.trim()) out.push(m.content);
   }
   return out;
 }

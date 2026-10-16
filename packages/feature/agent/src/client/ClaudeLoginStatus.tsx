@@ -390,9 +390,9 @@ export function ClaudeLoginStatus() {
   const status = login.status;
   const signedIn = status === 'signed-in';
   const dotClass = signedIn
-    ? 'bg-emerald-500'
+    ? 'bg-success'
     : status === 'signed-out'
-      ? 'bg-amber-500'
+      ? 'bg-warning'
       : 'bg-muted-foreground/50';
 
   // Identity from `claude auth status`. The email is the primary identity now
@@ -432,7 +432,7 @@ export function ClaudeLoginStatus() {
           data-testid="claude-login-dot"
         />
         <span
-          className={status === 'signed-out' ? 'text-amber-500' : 'text-muted-foreground'}
+          className={status === 'signed-out' ? 'text-warning' : 'text-muted-foreground'}
           data-testid="claude-account-label"
         >
           {label}
@@ -618,7 +618,7 @@ export function ClaudeLoginStatus() {
                   : t('claudeAccount.login', { defaultValue: 'Log in' })}
               </button>
               {loginError && (
-                <span className="text-[0.786rem] text-amber-500" data-testid="claude-account-login-error">
+                <span className="text-[0.786rem] text-warning" data-testid="claude-account-login-error">
                   {loginError}
                   {loginDocsUrl && (
                     <>

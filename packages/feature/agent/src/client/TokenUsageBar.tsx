@@ -533,7 +533,7 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
 
         {/* Rate limit warning/rejected indicator */}
         {shows('rateLimited') && rateLimitInfo && (
-          <span className="flex items-center gap-1 text-red-500"
+          <span className="flex items-center gap-1 text-destructive"
             title={[
               rateLimitInfo.rateLimitType && `Type: ${formatLimitType(rateLimitInfo.rateLimitType)}`,
               utilizationPercent && `Usage: ${utilizationPercent}`,
@@ -655,7 +655,7 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
         )}
         {shows('cost') && (
           <span
-            className="flex items-center gap-1 text-green-11"
+            className="flex items-center gap-1 text-success"
             data-testid="turn-cost-stat"
             title={t('chat.turnCostHint', {
               defaultValue:

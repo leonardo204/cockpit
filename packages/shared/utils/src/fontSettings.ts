@@ -88,13 +88,18 @@ export const DEFAULT_FONT_SETTINGS: FontSettings = {
 /**
  * The stack the app has always used, minus the leading Inter.
  *
+ * Pretendard sits right after Apple SD Gothic Neo and ahead of Malgun Gothic
+ * (shell-look-and-feel D14): on a Mac nothing changes, and on Windows a
+ * machine that has Pretendard installed gets it instead of Malgun. It is a
+ * preference, not a bundled file — absent, the stack falls through.
+ *
  * ORDER IS THE WHOLE POINT (the same reason `globals.css` documents it): the
  * Korean faces sit ahead of the Simplified-Chinese ones, because with SC first
  * Windows resolved Hangul to Microsoft YaHei — a face whose Korean coverage is a
  * fallback — and the UI read as slightly wrong and blurry there.
  */
 const SYSTEM_SANS_TAIL =
-  '-apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif';
+  '-apple-system, "Segoe UI", "Apple SD Gothic Neo", "Pretendard Variable", Pretendard, "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif';
 
 /** The monospace stack the app has always used. System faces only. */
 const SYSTEM_MONO_STACK =

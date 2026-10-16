@@ -122,9 +122,9 @@ export function McpOAuthStatusBadge({ status }: { status: McpOAuthServerView['st
   const { t } = useTranslation();
   const cls =
     status === 'connected'
-      ? 'text-green-600 dark:text-green-400 border-green-500/50'
+      ? 'text-success border-success/50'
       : status === 'relogin'
-        ? 'text-amber-600 dark:text-amber-400 border-amber-500/50'
+        ? 'text-warning border-warning/50'
         : 'text-muted-foreground border-border';
   return (
     <span
@@ -170,7 +170,7 @@ function QuickConnectRow({
         type="button"
         disabled={busy}
         onClick={() => void disconnect()}
-        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-red-500 disabled:opacity-40"
+        className="text-xs px-2 py-1 rounded border border-border text-muted-foreground hover:text-destructive disabled:opacity-40"
       >
         {t('mcpOAuth.disconnect')}
       </button>
@@ -199,7 +199,7 @@ function QuickConnectRow({
         </p>
         <p className="text-xs text-muted-foreground">{t(descriptionKey)}</p>
         {view.lastError && !view.pending ? (
-          <p className="text-xs text-red-500 break-words">
+          <p className="text-xs text-destructive break-words">
             {t('mcpOAuth.loginFailed', { name: title, error: view.lastError })}
           </p>
         ) : null}

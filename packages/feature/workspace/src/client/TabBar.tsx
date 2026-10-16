@@ -44,7 +44,7 @@ function TabNumberIcon({
       className={`w-5 h-5 flex-shrink-0 ${
         isActive
           ? isDocument
-            ? 'text-violet-600 dark:text-violet-400'
+            ? 'text-info'
             : 'text-brand'
           : 'text-muted-foreground'
       }`}
@@ -221,7 +221,7 @@ export function TabBar({
               className={`group flex items-center gap-1 px-3 py-1.5 text-sm cursor-pointer rounded-t-lg border-t-[1.5px] transition-colors ${
                 tab.id === activeTabId
                   ? isMarkdownTab(tab)
-                    ? 'border-violet-500 bg-violet-500/10 text-foreground font-medium'
+                    ? 'border-info bg-info/10 text-foreground font-medium'
                     : 'border-brand bg-slate-4 text-foreground font-medium'
                   : isMarkdownTab(tab)
                     ? // INACTIVE DOCUMENT TAB: the strip's ordinary colours, and
@@ -230,7 +230,7 @@ export function TabBar({
                       // competing groups; the line says "different kind" without
                       // claiming attention an unfocused tab has not earned. Held
                       // at reduced opacity so a lit line still means "active".
-                      'border-violet-500/50 text-muted-foreground hover:bg-secondary/50'
+                      'border-info/50 text-muted-foreground hover:bg-secondary/50'
                     : 'border-transparent text-muted-foreground hover:bg-secondary/50'
               } ${dragTabIndex === index ? 'opacity-50' : ''} ${
                 dragOverTabIndex === index ? 'border-l-2 border-brand' : ''
@@ -255,7 +255,7 @@ export function TabBar({
                 )}
                 {/* Unread red dot badge - top-right (hidden while loading to avoid overlap) */}
                 {!tab.isLoading && unreadTabs.has(tab.id) && tab.id !== activeTabId && (
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500" />
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-destructive" />
                 )}
                 {/* Pinned indicator. NOT a button: pinning moved into the
                     right-click menu, because as a hover-only icon in the corner

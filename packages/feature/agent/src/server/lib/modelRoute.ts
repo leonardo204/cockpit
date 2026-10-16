@@ -285,3 +285,21 @@ export function resolveAutoModel(args: ResolveAutoModelArgs): AutoModelResolutio
     return { value: pickCatalogValue('sonnet', undefined), tier: 'sonnet', reason: 'default' };
   }
 }
+
+/**
+ * The concrete model a FIXED tier is sent as (multi-agent-chat §8.2, D3): the
+ * same catalogue lookup the auto router ends in (`pickCatalogValue` over the cached
+ * Claude model rows), WITHOUT the router's rules — naby's routing call always runs
+ * on `ROUTE_TIER`, and `sticky` / `window-fit` / `budget-cap` must not move it.
+ * Never throws: an unreadable catalogue reads as the plain alias.
+ */
+export function modelValueForTier(
+  store: Parameters<typeof readClaudeModelRows>[0],
+  tier: ModelTier,
+): string {
+  try {
+    return pickCatalogValue(tier, readClaudeModelRows(store));
+  } catch {
+    return pickCatalogValue(tier, undefined);
+  }
+}

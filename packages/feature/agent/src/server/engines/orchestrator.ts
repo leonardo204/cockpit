@@ -140,6 +140,9 @@ export async function dispatchChat(
   let emittedEvents = 0;
   let autonomySteps = 0;
   let runResult: { isError?: boolean; numTurns?: number; text?: string } | undefined;
+  // The participants that spoke this run (multi-agent-chat §8.7a), from the
+  // round's `system/speaker` events — for the mirror's speaker line.
+  const speakers: { id: string; displayName: string; emoji?: string }[] = [];
   if (cwd && sessionId) {
     updateGlobalState(cwd, sessionId, 'loading', undefined, promptText).catch(() => {});
   }
@@ -180,6 +183,17 @@ export async function dispatchChat(
           // snapshot, captured here so the teardown needs no snapshot lookup.
           ...(typeof event.result === 'string' && event.result ? { text: event.result } : {}),
         };
+      } else if (event.type === 'system' && event.subtype === 'speaker') {
+        const a = (event as { agent?: { id?: unknown; name?: unknown; displayName?: unknown; avatar?: unknown; persona?: unknown } }).agent;
+        if (a && a.persona !== true && typeof a.id === 'string' && !speakers.some((s) => s.id === a.id)) {
+          const av = a.avatar as { kind?: unknown; value?: unknown } | undefined;
+          speakers.push({
+            id: a.id,
+            displayName:
+              typeof a.displayName === 'string' && a.displayName ? a.displayName : typeof a.name === 'string' ? a.name : a.id,
+            ...(av?.kind === 'emoji' && typeof av.value === 'string' ? { emoji: av.value } : {}),
+          });
+        }
       } else if (event.type === 'system' && event.harness_subtype === 'autonomy') {
         // One marker per completed autonomy step (naby's own loop emits it).
         autonomySteps += 1;
@@ -226,6 +240,9 @@ export async function dispatchChat(
       durationMs: Date.now() - runStartedAt,
       ...(runResult?.numTurns !== undefined ? { numTurns: runResult.numTurns } : {}),
       ...(autonomySteps > 0 ? { steps: autonomySteps } : {}),
+      ...(speakers.length > 0
+        ? { speakers: speakers.map((s) => ({ displayName: s.displayName, ...(s.emoji ? { emoji: s.emoji } : {}) })) }
+        : {}),
     }).catch((e) => console.warn('[telegram] mirror failed:', e));
   };
 

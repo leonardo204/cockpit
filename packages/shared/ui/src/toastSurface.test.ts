@@ -188,7 +188,10 @@ describe('toast stylesheet', () => {
   });
 
   it('themes the one hardcoded value — the shadow — in both modes', () => {
-    expect(css).toContain('.toast-surface');
-    expect(css).toContain('.dark .toast-surface');
+    // The shadow is the shared floating elevation, which is itself declared
+    // once per theme (:root and .dark), so no per-theme toast rule is needed.
+    expect(css).toMatch(/\.toast-surface \{\s*box-shadow: var\(--shadow-float\);/);
+    // (The @theme registration `--shadow-float: var(--shadow-float)` is not a value.)
+    expect(css.match(/^\s*--shadow-float: (?!var\()[^;]+;/gm)?.length).toBe(2);
   });
 });

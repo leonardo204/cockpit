@@ -386,7 +386,7 @@ export function EngineSwitcher({ liveModel, onOpenSettings, onEngineName, onActi
           {/* The runtime's own sentence about what will actually happen — the
               single source of truth, not re-derived here. */}
           {state?.engine?.summary && (
-            <p className={`px-1 text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-amber-500'}`}>
+            <p className={`px-1 text-xs ${state.engine.ok ? 'text-muted-foreground' : 'text-warning'}`}>
               {state.engine.summary}
             </p>
           )}

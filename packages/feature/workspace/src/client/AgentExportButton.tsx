@@ -146,10 +146,10 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
     // there was card-in-card. The 2px amber edge keeps the "read this before you
     // click" weight without a fourth nested rectangle.
     <div
-      className="mt-2 space-y-2 border-l-2 border-amber-500/60 pl-2.5"
+      className="mt-2 space-y-2 border-l-2 border-warning/60 pl-2.5"
       data-testid="agent-export-confirm"
     >
-      <div className="text-xs font-medium text-amber-800 dark:text-amber-200">
+      <div className="text-xs font-medium text-warning">
         {t('agentExport.title', {
           defaultValue: 'These files contain what naby has learned about you.',
         })}
@@ -192,7 +192,7 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
       ) : null}
 
       {r.promptLooksSecret ? (
-        <p className="text-[0.786rem] leading-relaxed text-red-700 dark:text-red-300">
+        <p className="text-[0.786rem] leading-relaxed text-destructive">
           {t('agentExport.promptWarning', {
             defaultValue:
               "This agent's own instructions look like they contain a credential. It is not removed — that would change how the agent behaves — so check it before saving.",
@@ -207,7 +207,7 @@ export function AgentExportButton({ agentId, cwd }: { agentId: string; cwd?: str
       <div className="flex gap-1.5">
         <button
           onClick={save}
-          className="text-xs px-2.5 py-1 rounded border border-emerald-500/50 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/15"
+          className="text-xs px-2.5 py-1 rounded border border-success/50 text-success hover:bg-success/15"
         >
           {t('agentExport.save', { defaultValue: 'Save both files' })}
         </button>

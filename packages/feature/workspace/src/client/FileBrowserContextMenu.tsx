@@ -138,7 +138,7 @@ export function FileBrowserContextMenu({
   const item =
     'w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-foreground hover:bg-accent transition-colors';
   const danger =
-    'w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-red-500 hover:bg-accent transition-colors';
+    'w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm text-destructive hover:bg-accent transition-colors';
 
   /** Every item closes first, then acts: the actions that follow open an inline
    *  input, and a menu still on screen would take the focus back. */

@@ -17,6 +17,8 @@ import {
 import { ToolbarRenderer, ToolbarData } from '@cockpit/shared-ui';
 import { useTranslation } from 'react-i18next';
 import { apiRetryNotice } from './apiRetryNotice';
+import { relayedMessageIds, type ParticipantAvatar as ParticipantAvatarData } from './participants';
+import { ParticipantAvatar } from './ParticipantAvatar';
 
 // Migrated from src/components/project/MessageList.tsx.
 
@@ -40,6 +42,9 @@ interface MessageListProps {
    *  "Gemini") only where no agent identity exists. Chat resolves it (actingAgent.ts)
    *  and passes a plain string, so it never threatens the memoized rows below. */
   thinkingName?: string | null;
+  /** multi-agent-chat (MAC-M3): the acting PARTICIPANT's avatar, drawn beside
+   *  its name in the loading bubble. Absent for naby and every other agent. */
+  thinkingAvatar?: { avatar: ParticipantAvatarData; color: string } | null;
   /** True when the turn on screen was started SOMEWHERE ELSE and this tab is only
    *  watching it: the fast-growth session's opening turn, a Telegram message, a
    *  scheduled task. The user did not press send, so "naby is thinking" — the
@@ -77,7 +82,7 @@ export interface MessageListHandle {
 }
 
 export const MessageList = forwardRef<MessageListHandle, MessageListProps>(function MessageList(
-  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, viewerRun, onStop, sendNonce, onResendMessage, onAskSelection, askOpen },
+  { messages, isLoading, cwd, sessionId, apiRetryInfo, hasMoreHistory, isLoadingMore, onLoadMore, isActive = true, onApprovePlan, thinkingName, thinkingAvatar, viewerRun, onStop, sendNonce, onResendMessage, onAskSelection, askOpen },
   ref
 ) {
   const { t } = useTranslation();
@@ -214,6 +219,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // Where the in-flight turn begins: the last user bubble. -1 when there is
   // none, in which case every message counts as the turn (a run that has not
   // yet flushed its user line still owns whatever is on screen).
+  // multi-agent-chat R6.4(a): which participant bubbles naby handed the turn to.
+  // One pass over the list, so each bubble gets a plain boolean (memo-safe).
+  const relayedIds = useMemo(() => relayedMessageIds(uniqueMessages), [uniqueMessages]);
+
   const lastUserIndex = useMemo(() => {
     for (let i = uniqueMessages.length - 1; i >= 0; i--) {
       if (uniqueMessages[i].role === 'user') return i;
@@ -660,6 +669,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                   // earlier turn's block cannot come back to life when a later
                   // turn starts (see the prop doc in MessageBubble).
                   inFlightTurn={!!isLoading && index >= lastUserIndex}
+                  relayed={relayedIds.has(message.id)}
                 />
               </div>
             ))}
@@ -667,7 +677,11 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
               <div className="flex justify-start mb-4">
                 <div className="bg-accent rounded-2xl rounded-bl-md px-4 py-3 max-w-[90%]">
                   <div className="flex items-center gap-2 text-muted-foreground">
-                    <span className="inline-block w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+                    {thinkingAvatar && !viewerRun ? (
+                      <ParticipantAvatar avatar={thinkingAvatar.avatar} color={thinkingAvatar.color} size="sm" speaking />
+                    ) : (
+                      <span className="inline-block w-5 h-5 border-2 border-brand border-t-transparent rounded-full animate-spin" />
+                    )}
                     {/* Same bubble, same spinner, same clock, same Stop — only the
                         sentence changes, because a turn nobody on this screen asked
                         for is naby speaking first, not an engine answering. Both
@@ -688,7 +702,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                       // teaches them the app freezes.
                       <button
                         onClick={onStop}
-                        className="ml-1 rounded border border-border px-1.5 py-0.5 text-[0.786rem] text-muted-foreground hover:border-red-500/50 hover:text-red-600 dark:hover:text-red-400"
+                        className="ml-1 rounded border border-border px-1.5 py-0.5 text-[0.786rem] text-muted-foreground hover:border-destructive/50 hover:text-destructive"
                         title={t('chat.stopHint', { defaultValue: 'Stop this turn (or press Esc)' })}
                       >
                         {t('chat.stop', { defaultValue: 'Stop' })}
@@ -696,7 +710,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
                     )}
                   </div>
                   {apiRetryInfo && retryNotice && (
-                    <div className="mt-2 flex items-start gap-2 text-xs text-amber-400 border-t border-border/50 pt-2">
+                    <div className="mt-2 flex items-start gap-2 text-xs text-warning border-t border-border/50 pt-2">
                       <svg className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>

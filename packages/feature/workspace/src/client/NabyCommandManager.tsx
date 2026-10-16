@@ -149,8 +149,8 @@ const CommandRow = memo(function CommandRow({
           <span
             className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
               enabled
-                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                ? 'bg-success/15 text-success'
+                : 'bg-warning/15 text-warning'
             }`}
           >
             {enabled ? t('commandManager.badgeEnabled') : t('commandManager.badgeDisabled')}
@@ -176,7 +176,7 @@ const CommandRow = memo(function CommandRow({
         <button
           onClick={() => onDelete(item.id)}
           disabled={busy}
-          className="text-xs px-2 py-1 rounded border border-border hover:bg-red-500/10 hover:border-red-500/40 text-red-600 dark:text-red-400 disabled:opacity-50"
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-destructive/10 hover:border-destructive/40 text-destructive disabled:opacity-50"
         >
           {t('commandManager.delete')}
         </button>
@@ -471,7 +471,7 @@ export function NabyCommandManager({
       ) : loading ? (
         <p className="text-xs text-muted-foreground">{t('commandManager.loading')}</p>
       ) : error ? (
-        <p className="text-xs text-red-600 dark:text-red-400">
+        <p className="text-xs text-destructive">
           {t('commandManager.loadError', { error })}
         </p>
       ) : items.length === 0 ? (

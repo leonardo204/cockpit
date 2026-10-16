@@ -315,7 +315,7 @@ export function ProjectFolderMenuView({
             onClick={() => onChoose({ kind: 'folder', path: entry.path })}
           >
             {entry.kind === 'favorite' ? (
-              <svg className="w-4 h-4 flex-shrink-0 text-amber-500" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <svg className="w-4 h-4 flex-shrink-0 text-warning" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M12 2.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.3l-5.8 3.1 1.1-6.5-4.7-4.6 6.5-.9z" />
               </svg>
             ) : (
@@ -339,7 +339,7 @@ export function ProjectFolderMenuView({
               data-testid="project-folder-menu-star"
               aria-label={t('projectFolderMenu.addFavorite')}
               title={t('projectFolderMenu.addFavorite')}
-              className="px-2 py-1.5 text-muted-foreground hover:text-amber-500 focus:text-amber-500 hover:bg-accent focus:bg-accent focus:outline-none transition-colors"
+              className="px-2 py-1.5 text-muted-foreground hover:text-warning focus:text-warning hover:bg-accent focus:bg-accent focus:outline-none transition-colors"
               onClick={() => onStar(entry.path)}
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">

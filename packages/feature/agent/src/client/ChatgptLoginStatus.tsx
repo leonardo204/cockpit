@@ -177,7 +177,7 @@ export function ChatgptLoginStatus() {
 
   const signedIn = status.signedIn;
   const email = status.email;
-  const dotClass = signedIn ? 'bg-emerald-500' : 'bg-amber-500';
+  const dotClass = signedIn ? 'bg-success' : 'bg-warning';
 
   // The chip's own label: the email when signed in and known, else a short brand
   // word. Amber when signed out, mirroring the Claude chip's signed-out styling.
@@ -206,7 +206,7 @@ export function ChatgptLoginStatus() {
           data-testid="chatgpt-login-dot"
         />
         <span
-          className={signedIn ? 'text-muted-foreground' : 'text-amber-500'}
+          className={signedIn ? 'text-muted-foreground' : 'text-warning'}
           data-testid="chatgpt-account-label"
         >
           {label}
@@ -241,7 +241,7 @@ export function ChatgptLoginStatus() {
             </span>
             {/* The dev-only / ToS caution — small, in the popover, not on the row.
                 Keeps the "not endorsed by OpenAI" nuance without overwhelming. */}
-            <span className="text-[0.786rem] text-amber-600 dark:text-amber-400" data-testid="chatgpt-account-devnote">
+            <span className="text-[0.786rem] text-warning" data-testid="chatgpt-account-devnote">
               {t('chatgptOauth.devBadge')}
             </span>
           </div>
@@ -276,7 +276,7 @@ export function ChatgptLoginStatus() {
           )}
 
           {error && (
-            <span className="text-[0.786rem] text-amber-500" data-testid="chatgpt-account-error">
+            <span className="text-[0.786rem] text-warning" data-testid="chatgpt-account-error">
               {error}
             </span>
           )}

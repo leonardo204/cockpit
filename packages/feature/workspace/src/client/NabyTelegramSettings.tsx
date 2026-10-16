@@ -141,7 +141,7 @@ export function NabyTelegramSettings({ isOpen }: { isOpen: boolean }) {
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         {t('telegramSettings.enable', { defaultValue: 'Enable Telegram escalation' })}
         {ready ? (
-          <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+          <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full bg-success/15 text-success">
             {t('telegramSettings.ready', { defaultValue: 'ready' })}
           </span>
         ) : null}

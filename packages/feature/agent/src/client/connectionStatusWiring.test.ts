@@ -122,12 +122,14 @@ describe('one StatusDot, one set of colors', () => {
     const jobs = read('feature/workspace/src/client/RunningJobsIndicator.tsx');
     expect(jobs).toContain("from '@cockpit/shared-ui'");
     expect(jobs).not.toMatch(/function StatusDot/);
-    expect(jobs).not.toContain('bg-emerald-500');
+    expect(jobs).not.toMatch(/bg-(emerald|green)-\d/);
   });
   it('the success and warning tokens exist in both themes and are registered', () => {
     const css = readFileSync(join(pkgs, '..', 'src/app/globals.css'), 'utf8');
-    expect(css.match(/--success: var\(--green-9\);/g)?.length).toBe(2);
-    expect(css.match(/--warning: var\(--amber-9\);/g)?.length).toBe(2);
+    // One declaration per theme (:root and .dark). The values are the
+    // prototype palette (shell-look-and-feel section 3.2), not a Radix step.
+    expect(css.match(/^\s*--success: [^;]+;/gm)?.length).toBe(2);
+    expect(css.match(/^\s*--warning: [^;]+;/gm)?.length).toBe(2);
     expect(css).toContain('--color-success: hsl(var(--success));');
     expect(css).toContain('--color-warning: hsl(var(--warning));');
   });

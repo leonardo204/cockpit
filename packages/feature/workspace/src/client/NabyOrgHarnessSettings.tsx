@@ -111,7 +111,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
 
       <div className="text-xs space-y-1">
         <p className="text-foreground">{t(orgStatusKey(view))}</p>
-        <p className={activation === 'needsKey' ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}>
+        <p className={activation === 'needsKey' ? 'text-warning' : 'text-muted-foreground'}>
           {t(orgActivationKey(activation))}
         </p>
         <p className="text-muted-foreground">
@@ -138,22 +138,22 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
           <p
             className={`text-xs ${
               atlassian.status === 'connected'
-                ? 'text-green-600 dark:text-green-400'
+                ? 'text-success'
                 : atlassian.status === 'relogin'
-                  ? 'text-amber-600 dark:text-amber-400'
+                  ? 'text-warning'
                   : 'text-muted-foreground'
             }`}
           >
             {t(atlassianStatusKey(atlassian))}
           </p>
           {gateLine ? (
-            <p className="text-xs text-amber-600 dark:text-amber-400">
+            <p className="text-xs text-warning">
               {t(gateLine.key, { ...(gateLine.days !== undefined ? { days: gateLine.days } : {}) })}
             </p>
           ) : null}
           <AtlassianLoginButton atlassian={atlassian} onState={setView} />
           {atlassian.lastLoginError && !atlassian.loginPending ? (
-            <p className="text-xs text-red-500">
+            <p className="text-xs text-destructive">
               {t('orgHarness.atlassian.loginFailed', {
                 error: atlassian.lastLoginError,
                 defaultValue: 'Atlassian sign-in failed: {{error}}',
@@ -170,7 +170,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
                 </p>
               ) : null}
               {migration.confluenceUpload === 'kept' ? (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
+                <p className="text-xs text-warning">
                   {t('orgHarness.atlassian.confluenceUploadKept', {
                     defaultValue:
                       'confluence-upload is no longer built in. You changed it, so it stays as yours — to publish to Confluence, use pdoc.',
@@ -179,7 +179,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
               ) : null}
               {migration.legacyRefs.length > 0 ? (
                 <div className="space-y-0.5">
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                  <p className="text-xs text-warning">
                     {t('orgHarness.atlassian.legacyRefs', {
                       count: migration.legacyRefs.length,
                       defaultValue:
@@ -201,8 +201,8 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
       ) : null}
 
       {missingDeps.length > 0 ? (
-        <div className="space-y-1 rounded border border-amber-500/50 p-2" data-testid="org-harness-deps">
-          <p className="text-xs text-amber-700 dark:text-amber-300">
+        <div className="space-y-1 rounded border border-warning/50 p-2" data-testid="org-harness-deps">
+          <p className="text-xs text-warning">
             {t('orgHarness.deps.title', {
               defaultValue: 'Some tools the org skills need are missing on this computer. The skills that use them are skipped until you install them.',
             })}
@@ -271,7 +271,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
             {skills.map((s) => (
               <li key={s.name} className="flex items-center gap-2">
                 <code className="text-foreground">/{s.name}</code>
-                <span className={s.enabled ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'}>
+                <span className={s.enabled ? 'text-success' : 'text-muted-foreground'}>
                   {s.enabled
                     ? t('orgHarness.skillOn', { defaultValue: 'on' })
                     : t('orgHarness.skillOff', { defaultValue: 'off' })}

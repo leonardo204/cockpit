@@ -313,7 +313,7 @@ export function GrowthPanel({
           </div>
           <div className={`mt-1 w-full bg-border ${bar}`}>
             <div
-              className={`${bar} ${g.blockedByTripwire ? 'bg-amber-500' : 'bg-brand'}`}
+              className={`${bar} ${g.blockedByTripwire ? 'bg-warning' : 'bg-brand'}`}
               style={{ width: `${Math.min(100, Math.max(2, g.percent))}%` }}
             />
           </div>
@@ -329,7 +329,7 @@ export function GrowthPanel({
       <div
         className={`border-l-2 pl-2.5 text-[0.786rem] leading-relaxed ${
           c.direction === 'down'
-            ? 'border-amber-500/60 text-amber-800 dark:text-amber-200'
+            ? 'border-warning/60 text-warning'
             : 'border-border text-muted-foreground'
         }`}
         data-testid="growth-reason"

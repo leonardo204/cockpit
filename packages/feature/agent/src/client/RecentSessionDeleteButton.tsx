@@ -58,7 +58,7 @@ export function RecentSessionDeleteButton({
       // Names the consequence: the conversation goes, not just this row.
       title={t('sessions.deleteSessionFromRecent')}
       aria-label={t('sessions.deleteSessionFromRecent')}
-      className={`flex-shrink-0 p-1 rounded hover:bg-red-500/20 text-muted-foreground hover:text-red-500 focus:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100 ${className}`}
+      className={`flex-shrink-0 p-1 rounded hover:bg-destructive/20 text-muted-foreground hover:text-destructive focus:text-destructive transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100 ${className}`}
     >
       <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

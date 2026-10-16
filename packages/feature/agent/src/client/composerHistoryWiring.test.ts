@@ -142,7 +142,7 @@ describe('the popup is not clipped and speaks the same language as the palette',
     // `relative`; putting overflow-hidden on it would erase both popups, which
     // is invisible to typecheck and to a DOM-less test alike.
     expect(chatInput).toMatch(/ref=\{historyListRef\}\s*\n\s*className="absolute bottom-full left-0 right-0 mx-4 mb-2/);
-    const rootClass = /className=\{`border-t bg-card relative [^`]*`\}/.exec(chatInput)?.[0];
+    const rootClass = /className=\{`border-t bg-background relative [^`]*`\}/.exec(chatInput)?.[0];
     expect(rootClass, 'composer root className not found — did the markup change?').toBeDefined();
     expect(rootClass).not.toContain('overflow-hidden');
     expect(rootClass).not.toContain('overflow-clip');

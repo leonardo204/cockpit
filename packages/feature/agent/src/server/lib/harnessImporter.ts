@@ -124,6 +124,7 @@ import * as nodeFs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import yaml from 'js-yaml';
+import { parseSubagentArtifact as runtimeParseSubagentArtifact } from '../../../../../../../dist/naby-runtime.mjs';
 import { CLAUDE_HARNESS_DIR, NABY_HARNESS_DIR } from './harnessHome';
 // ONE definition of "this file is under a naby harness home", shared with the
 // delete tiers (harnessSource.ts). Auto-enable and tier-1 delete are the same
@@ -290,7 +291,7 @@ export function parseFrontmatter(raw: string): { data: Record<string, unknown>; 
   if (!m) return { data: {}, body: text.trim() };
   let data: Record<string, unknown> = {};
   try {
-    const parsed = yaml.load(m[1]);
+    const parsed = yaml.load(m[1] ?? '');
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       data = parsed as Record<string, unknown>;
     }
@@ -378,23 +379,17 @@ export function parseSkillArtifact(fallbackName: string, raw: string): ParsedHar
   };
 }
 
-/** agent `.md`: frontmatter `name`/`description`/`model`/`tools`, body is the prompt. */
+/**
+ * agent `.md`: frontmatter `name`/`description`/`model`/`tools`, body is the prompt.
+ *
+ * THE RULES LIVE IN THE RUNTIME (agent-import-adapters §3.1, MAC-M4): the
+ * participant importer reads the same Claude Code subagent files, so the parser
+ * moved to `src/runtime/import/claudeAgentMd.ts` and this is the one call into
+ * it. js-yaml stays this importer's YAML reader (`parseFrontmatter` above), so
+ * harness imports read frontmatter exactly as they always have.
+ */
 export function parseSubagentArtifact(fallbackName: string, raw: string): ParsedHarness | null {
-  const { data, body } = parseFrontmatter(raw);
-  if (body.length === 0) return null;
-  const name = asString(pick(data, 'name')) ?? fallbackName;
-  const description = asString(pick(data, 'description'));
-  const model = asString(pick(data, 'model'));
-  const toolRefs = asStringList(pick(data, 'tools', 'allowed-tools', 'allowedTools'));
-  return {
-    name,
-    ...(description ? { description } : {}),
-    subagent: {
-      systemPrompt: body,
-      ...(model ? { model } : {}),
-      ...(toolRefs ? { toolRefs } : {}),
-    },
-  };
+  return runtimeParseSubagentArtifact(fallbackName, raw, { parseFrontmatter });
 }
 
 // ---------------------------------------------------------------------------

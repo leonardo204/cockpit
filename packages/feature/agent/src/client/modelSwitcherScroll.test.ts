@@ -89,11 +89,11 @@ describe('nothing clips the popover', () => {
   });
 
   it('not the engine row in Chat that the chip sits in', () => {
-    const row = /<div className="flex items-center gap-2 px-3 py-1\.5 border-b border-border bg-card\/50">/.exec(chat)?.[0];
+    const row = /<div className="flex items-center gap-2 px-3 py-1\.5 border-b border-border bg-background">/.exec(chat)?.[0];
     expect(row, 'engine row not found — did Chat.tsx change?').toBeDefined();
     expect(row).not.toContain('overflow-hidden');
     // And the switcher really is in that row.
-    const rowAt = chat.indexOf('bg-card/50">');
+    const rowAt = chat.indexOf('border-b border-border bg-background">');
     const switcherAt = chat.indexOf('<ModelSwitcher activeEngine=');
     expect(switcherAt).toBeGreaterThan(rowAt);
   });

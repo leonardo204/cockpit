@@ -259,7 +259,7 @@ function WorkflowAgentRow({
             tabIndex={0}
             onClick={onOpen}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onOpen(); }}
-            className="text-xs text-brand hover:text-teal-10 cursor-pointer flex-shrink-0"
+            className="text-xs text-brand hover:text-brand/80 cursor-pointer flex-shrink-0"
             title={t('chat.subagentViewTitle')}
           >
             {t('chat.workflowViewAgent')}

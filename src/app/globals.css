@@ -67,46 +67,78 @@ html, body {
   --orange-10: 21 90% 45%;
   --orange-11: 16 80% 35%;
 
-  /* ---- Radix Violet scale (symbols: function/method icons) ---- */
-  --violet-9: 252 56% 57%;
-  --violet-10: 251 48% 53%;
-  --violet-11: 250 43% 48%;
+  /* ---- Violet scale (brand; also function/method symbol icons) ----
+   * Twelve steps on Radix violet's lightness spacing, re-anchored so step 9 is
+   * the prototype's primary (#6D4AFF) and step 10 its gradient end (#9B7BFF).
+   * Unlike Radix, 10 is LIGHTER than 9: it is the second gradient stop, not a
+   * hover shade. 11 is the readable text step on the 3-4 tints (chips). */
+  --violet-1: 255 100% 99.4%;
+  --violet-2: 252 100% 98.6%;
+  --violet-3: 253 100% 97%;
+  --violet-4: 253 100% 95%;
+  --violet-5: 253 100% 92.5%;
+  --violet-6: 253 100% 89%;
+  --violet-7: 253 100% 84%;
+  --violet-8: 252 100% 77%;
+  --violet-9: 252 100% 65%;
+  --violet-10: 255 100% 74%;
+  --violet-11: 252 72% 53%;
+  --violet-12: 254 60% 20%;
 
   /* ---- Radix Blue scale (symbols: interface icons) ---- */
   --blue-9: 206 100% 50%;
   --blue-10: 207 96% 43%;
   --blue-11: 208 88% 43%;
 
-  /* ---- Semantic colors (shadcn style) ---- */
-  --background: 0 0% 98%;
-  --foreground: var(--slate-12);
-  --card: 0 0% 100%;
-  --card-foreground: var(--slate-12);
+  /* ---- Semantic colors (shadcn style) ----
+   * Values follow the multi-agent-chat prototype palette
+   * (specs/shell-look-and-feel.md section 3.2); the prototype variable each one
+   * came from is noted at the end of the line. */
+  --background: 0 0% 100%;              /* --bg */
+  --sidebar: 240 23% 97%;               /* --side */
+  --foreground: 230 10% 12%;            /* --ink */
+  --card: 0 0% 100%;                    /* --card */
+  --card-foreground: 230 10% 12%;
   --popover: 0 0% 100%;
-  --popover-foreground: var(--slate-12);
-  --primary: var(--slate-12);
-  --primary-foreground: 0 0% 100%;
-  --secondary: var(--slate-3);
+  --popover-foreground: 230 10% 12%;
+  --primary: var(--violet-9);           /* --pri */
+  --primary-foreground: 0 0% 100%;      /* --onpri */
+  --secondary: 228 24% 96%;             /* --soft */
   --secondary-foreground: var(--slate-12);
-  --muted: var(--slate-3);
-  --muted-foreground: var(--slate-11);
-  --accent: var(--slate-3);
-  --accent-foreground: var(--slate-12);
-  --destructive: var(--red-9);
+  --muted: 228 24% 96%;                 /* --soft */
+  --muted-foreground: 225 7% 45%;       /* --sub */
+  --accent: 254 100% 96%;               /* --chip */
+  --accent-foreground: var(--violet-11);
+  --destructive: 0 73% 55%;             /* --bad */
   --destructive-foreground: 0 0% 100%;
-  --border: var(--slate-5);
-  --input: var(--slate-5);
-  --ring: var(--teal-9);
-  --brand: var(--teal-9);
-  --brand-foreground: var(--teal-11);
-  /* Semantic status colors (StatusDot, the chat status bar). Step 9 of the green
-   * and amber scales is the solid-fill step in both themes, so a dot reads the
-   * same on a light and a dark surface. Red already has `--destructive`. */
-  --success: var(--green-9);
-  --warning: var(--amber-9);
+  --border: 230 14% 91%;                /* --line */
+  --input: 230 14% 91%;
+  --ring: var(--violet-9);
+  --brand: var(--violet-9);             /* --pri */
+  --brand-foreground: var(--violet-11);
+  --brand-2: 255 100% 74%;              /* --pri2, gradient end */
+  --user-bubble: 252 100% 65%;          /* --ubub */
+  --user-bubble-foreground: 0 0% 100%;  /* --uink */
+  --code-surface: 240 16% 96%;          /* --code */
+  /* Semantic status colors (StatusDot, the chat status bar, every state that
+   * used to be a hardcoded red/amber/emerald class). Each has a `-foreground`
+   * for text drawn ON a solid fill of it. */
+  --success: 159 80% 35%;               /* --ok */
+  --success-foreground: 0 0% 100%;
+  --warning: 38 95% 39%;                /* --warn */
+  --warning-foreground: 0 0% 100%;
+  --info: var(--blue-9);
+  --info-foreground: 0 0% 100%;
 
-  /* ---- Border radius ---- */
-  --radius: 0.5rem;
+  /* ---- Elevation ----
+   * card: resting surfaces (bubbles, composer). float: modals, popovers, toasts. */
+  --shadow-card: 0 2px 14px rgba(30, 25, 80, 0.08);
+  --shadow-float: 0 30px 80px rgba(30, 25, 80, 0.18);
+
+  /* ---- Border radius ----
+   * 12px. The derived steps land on the prototype's sizes: xl 16 (cards),
+   * md 10 (inputs), sm 8 (chips). */
+  --radius: 0.75rem;
 
   /* ---- Fonts (user preference, four knobs) ----
    *
@@ -124,7 +156,7 @@ html, body {
    * <body>, `var(--font-inter)` inside this `:root` declaration would resolve to
    * the guaranteed-invalid value and take the whole font-family with it. */
   --app-font-sans: var(--font-inter), -apple-system, "Segoe UI", "Apple SD Gothic Neo",
-    "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif;
+    "Pretendard Variable", Pretendard, "Malgun Gothic", "PingFang SC", "Microsoft YaHei", sans-serif;
   --app-font-mono: "Maple Mono CN", "Maple Mono NF CN", "Sarasa Mono SC",
     var(--font-jetbrains-mono), ui-monospace, Menlo, Consolas, monospace;
   /* Unitless multipliers, not sizes: one scales the ROOT font size (so every rem
@@ -184,44 +216,66 @@ html, body {
   --orange-10: 27 96% 58%;
   --orange-11: 30 100% 68%;
 
-  /* Radix Violet Dark — function/method symbol icons. Brighter at -11
-     so the glyph reads at small sizes (12-14px) on dark surfaces. */
-  --violet-9: 252 56% 57%;
-  --violet-10: 251 63% 63%;
-  --violet-11: 252 87% 76%;
+  /* Violet Dark — step 9 is the prototype's dark primary (#9B7BFF), 10 its
+     gradient end (#C3B0FF). 11 stays bright so chip text and small
+     function/method glyphs read on dark surfaces. */
+  --violet-1: 250 20% 10%;
+  --violet-2: 255 30% 13%;
+  --violet-3: 253 37% 18%;
+  --violet-4: 252 40% 22.5%;
+  --violet-5: 252 45% 27%;
+  --violet-6: 252 50% 33%;
+  --violet-7: 253 60% 44%;
+  --violet-8: 254 80% 60%;
+  --violet-9: 255 100% 74%;
+  --violet-10: 254 100% 85%;
+  --violet-11: 254 100% 82%;
+  --violet-12: 252 100% 95%;
 
   /* Radix Blue Dark — interface symbol icons. */
   --blue-9: 206 100% 50%;
   --blue-10: 209 100% 60%;
   --blue-11: 210 100% 72%;
 
-  /* Semantic colors, dark */
-  --background: var(--slate-1);
-  --foreground: var(--slate-12);
-  --card: 0 0% 12%;
-  --card-foreground: var(--slate-12);
-  --popover: 0 0% 12%;
-  --popover-foreground: var(--slate-12);
-  --primary: var(--slate-12);
-  --primary-foreground: var(--slate-1);
-  --secondary: var(--slate-3);
+  /* Semantic colors, dark (prototype [data-theme=dark]) */
+  --background: 232 15% 11%;            /* --bg */
+  --sidebar: 231 16% 9%;                /* --side */
+  --foreground: 230 21% 95%;            /* --ink */
+  --card: 233 14% 13%;                  /* --card */
+  --card-foreground: 230 21% 95%;
+  --popover: 233 14% 13%;
+  --popover-foreground: 230 21% 95%;
+  --primary: var(--violet-9);           /* --pri */
+  --primary-foreground: 253 47% 10%;    /* --onpri */
+  --secondary: 229 14% 15%;             /* --soft */
   --secondary-foreground: var(--slate-12);
-  --muted: var(--slate-3);
-  --muted-foreground: var(--slate-11);
-  --accent: var(--slate-4);
-  --accent-foreground: var(--slate-12);
-  --destructive: var(--red-9);
+  --muted: 229 14% 15%;                 /* --soft */
+  --muted-foreground: 227 10% 64%;      /* --sub */
+  --accent: 254 31% 20%;                /* --chip */
+  --accent-foreground: var(--violet-11);
+  --destructive: 0 100% 71%;            /* --bad */
   --destructive-foreground: 0 0% 100%;
-  --border: var(--slate-6);
-  --input: var(--slate-6);
-  --ring: var(--teal-9);
-  --brand: var(--teal-9);
-  --brand-foreground: var(--teal-11);
-  /* Semantic status colors (StatusDot, the chat status bar). Step 9 of the green
-   * and amber scales is the solid-fill step in both themes, so a dot reads the
-   * same on a light and a dark surface. Red already has `--destructive`. */
-  --success: var(--green-9);
-  --warning: var(--amber-9);
+  --border: 230 12% 19%;                /* --line */
+  --input: 230 12% 19%;
+  --ring: var(--violet-9);
+  --brand: var(--violet-9);
+  --brand-foreground: var(--violet-11);
+  --brand-2: 254 100% 85%;              /* --pri2 */
+  --user-bubble: 251 41% 39%;           /* --ubub */
+  --user-bubble-foreground: 253 100% 96%; /* --uink */
+  --code-surface: 229 14% 15%;          /* --code */
+  /* Dark status fills are bright, so text ON them is the dark page ink. */
+  --success: 157 63% 53%;               /* --ok */
+  --success-foreground: 232 15% 11%;
+  --warning: 38 90% 61%;                /* --warn */
+  --warning-foreground: 232 15% 11%;
+  --info: var(--blue-9);
+  --info-foreground: 0 0% 100%;
+
+  /* Elevation, dark: cards sit flat (border only); floats need a deep shadow
+     because the card and the page behind it are close in luminance. */
+  --shadow-card: none;
+  --shadow-float: 0 30px 80px rgba(0, 0, 0, 0.55);
 }
 
 /* ---- Tailwind v4 theme registration ---- */
@@ -261,7 +315,16 @@ html, body {
   --color-brand: hsl(var(--brand));
   --color-brand-foreground: hsl(var(--brand-foreground));
   --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
   --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+  --color-sidebar: hsl(var(--sidebar));
+  --color-brand-2: hsl(var(--brand-2));
+  --color-user-bubble: hsl(var(--user-bubble));
+  --color-user-bubble-foreground: hsl(var(--user-bubble-foreground));
+  --color-code-surface: hsl(var(--code-surface));
 
   /* Teal scale */
   --color-teal-1: hsl(var(--teal-1));
@@ -304,9 +367,18 @@ html, body {
   --color-orange-9: hsl(var(--orange-9));
   --color-orange-10: hsl(var(--orange-10));
   --color-orange-11: hsl(var(--orange-11));
+  --color-violet-1: hsl(var(--violet-1));
+  --color-violet-2: hsl(var(--violet-2));
+  --color-violet-3: hsl(var(--violet-3));
+  --color-violet-4: hsl(var(--violet-4));
+  --color-violet-5: hsl(var(--violet-5));
+  --color-violet-6: hsl(var(--violet-6));
+  --color-violet-7: hsl(var(--violet-7));
+  --color-violet-8: hsl(var(--violet-8));
   --color-violet-9: hsl(var(--violet-9));
   --color-violet-10: hsl(var(--violet-10));
   --color-violet-11: hsl(var(--violet-11));
+  --color-violet-12: hsl(var(--violet-12));
   --color-blue-9: hsl(var(--blue-9));
   --color-blue-10: hsl(var(--blue-10));
   --color-blue-11: hsl(var(--blue-11));
@@ -316,6 +388,11 @@ html, body {
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+
+  /* Elevation — `shadow-card` / `shadow-float`. The values are themed in
+   * :root / .dark above; registering them here only names the utilities. */
+  --shadow-card: var(--shadow-card);
+  --shadow-float: var(--shadow-float);
 }
 
 /* ---- Base styles ---- */
@@ -444,19 +521,56 @@ body {
   }
 }
 
-/* The one hardcoded color in the toast: a shadow alpha, which has no token.
-   Everything else on the card is `bg-popover` / `border-border` / `text-*` and
-   therefore follows the theme on its own. Dark mode needs a deeper, wider
-   shadow because the card and the page behind it are close in luminance. */
+/* The toast's shadow is the shared floating elevation. Everything else on the
+   card is `bg-popover` / `border-border` / `text-*`, and `--shadow-float` is
+   itself themed (:root / .dark), so the toast follows the theme with no
+   per-theme rule of its own. */
 .toast-surface {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-float);
 }
 
-.dark .toast-surface {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+/* Brand gradient — one utility, not a token. Logo, the primary send button,
+   and user-bubble accents only. */
+@utility bg-brand-gradient {
+  background: linear-gradient(135deg, hsl(var(--brand)), hsl(var(--brand-2)));
 }
 
 /* Session-finished notification animation (bottom-left corner) */
+/* multi-agent-chat (MAC-M3): the speaking participant's avatar pulses in its
+   own colour (--participant-color, set inline by ParticipantAvatar), and the
+   round strip carries a moving brand bar while the round runs. */
+@keyframes participant-speak {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--participant-color) 60%, transparent); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+.participant-speaking {
+  animation: participant-speak 1s ease-in-out infinite;
+}
+@keyframes round-progress-slide {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+.round-progress-bar {
+  position: relative;
+  overflow: hidden;
+}
+.round-progress-bar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 35%;
+  background: linear-gradient(135deg, hsl(var(--brand)), hsl(var(--brand-2)));
+  animation: round-progress-slide 1.3s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .participant-speaking,
+  .round-progress-bar::after {
+    animation: none;
+  }
+}
+
 @keyframes slideInLeft {
   from {
     transform: translateX(-100%);
@@ -703,7 +817,7 @@ code[class*="language-"] .token {
 }
 
 .tiptap-editor code {
-  background: hsl(var(--slate-4));
+  background: hsl(var(--code-surface));
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
   /* The CODE FAMILY knob, like every other mono surface. It used to spell out
@@ -717,7 +831,7 @@ code[class*="language-"] .token {
 }
 
 .tiptap-editor pre {
-  background: hsl(var(--slate-4));
+  background: hsl(var(--code-surface));
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   margin-bottom: 0.5rem;

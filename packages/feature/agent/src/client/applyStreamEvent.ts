@@ -1,4 +1,4 @@
-import type { ChatMessage, ToolCallInfo } from './types';
+import type { ChatMessage, ChatRouting, ChatSpeaker, ToolCallInfo } from './types';
 import { renderHarnessPill } from './harnessPill';
 import {
   appendSubagentText,
@@ -98,6 +98,21 @@ export interface StreamEvent {
   harness_task_status?: 'completed' | 'failed' | 'stopped';
   /** When the RUNTIME observed this edge (epoch ms) — the elapsed clock's origin. */
   harness_task_at?: number;
+  /** `system/speaker` (multi-agent-chat §8.4): who speaks next in a round, and
+   *  the 1-based index of that speech. `persona` is naby. */
+  agent?: {
+    id?: string;
+    name?: string;
+    displayName?: string;
+    avatar?: ChatSpeaker['avatar'];
+    color?: string;
+    persona?: boolean;
+  };
+  speech?: number;
+  /** `system/routing` (multi-agent-chat §8.4): one routing step, numbered by
+   *  `seq` within the round so a replayed stream can recognise it. */
+  routing?: ChatRouting;
+  seq?: number;
   /** `result` only: how long the whole turn took, measured by the engine. */
   duration_ms?: number;
   /** `result` only: when the turn ENDED (epoch ms), read from the same clock at
@@ -253,6 +268,11 @@ export function applyStreamEvent(
   // below makes the reducer idempotent, so a replayed/duplicated event cannot stack up
   // repeated bars (the viewer re-runs this reducer over reconnect snapshots).
   if (ev.type === 'system' && ev.subtype === 'harness') {
+    // multi-agent-chat (MAC-M3): the round's `participants` notice (a name not in
+    // the session, a limit reached) was M2's stand-in for the routing chip. The
+    // `system/routing` event that comes with it now draws that line itself — as
+    // an always-visible system line — so the pill would only say it twice.
+    if (ev.harness_subtype === 'participants') return messages;
     // A SUBAGENT'S LIFECYCLE IS NOT A PILL — it is the state of a block.
     //
     // These events (`task_started` / `task_progress` / `task_updated` /
@@ -325,6 +345,28 @@ export function applyStreamEvent(
     return [...messages.slice(0, idx), row, ...messages.slice(idx)];
   }
 
+  // ---- multi-agent-chat (MAC-M2): a round with several speakers ------------
+  //
+  // THE REDUCER IS SCOPED TO ONE LIVE BUBBLE (`assistantId`), and a round has
+  // several speakers. So the live bubble is always "whoever speaks now": when a
+  // NEW speaker starts and the live bubble already holds a finished speech, that
+  // speech is FROZEN into its own bubble (id `<assistantId>-speech-<n>`) at the
+  // live bubble's place, and a fresh live bubble — labelled with the new speaker
+  // — goes to the end, after any routing markers the finished speech produced.
+  // A reload builds the same split from the stored rows (toChatMessages), since
+  // every speech's text is its own assistant row.
+  if (ev.type === 'system' && ev.subtype === 'speaker' && ev.agent) {
+    return applySpeaker(messages, ev, assistantId);
+  }
+  // A ROUTING STEP is a lightweight `system` marker row carrying `routing`, which
+  // MessageBubble renders as a RoutingChip (hidden unless "show routing" is on,
+  // except a not-in-session name and a round limit). Placed AFTER the live bubble when that bubble
+  // already holds a speech (the step followed it), else just before it (the step
+  // leads into it). Idempotent on `seq`.
+  if (ev.type === 'system' && ev.subtype === 'routing' && ev.routing) {
+    return applyRouting(messages, ev, assistantId);
+  }
+
   // in-stream error ({type:'error', error}) — emitted by codex/kimi/ollama/deepseek and the
   // orchestrator's failure path. Without this the viewer (useLiveStream, which routes through
   // this reducer) drops it silently and a failed turn shows as an empty bubble. (useChatStream
@@ -375,4 +417,99 @@ export function applyStreamEvent(
   }
 
   return messages;
+}
+
+/** Does the live bubble already hold something a speaker said or did? */
+function holdsSpeech(m: ChatMessage): boolean {
+  return (
+    !!m.content ||
+    (m.toolCalls?.length ?? 0) > 0 ||
+    (m.subagents?.length ?? 0) > 0 ||
+    !!m.thinking
+  );
+}
+
+function speakerOf(agent: NonNullable<StreamEvent['agent']>): ChatSpeaker | undefined {
+  if (agent.persona === true) return undefined; // naby's bubble keeps today's look
+  if (typeof agent.id !== 'string' || typeof agent.name !== 'string') return undefined;
+  return {
+    agentId: agent.id,
+    name: agent.name,
+    ...(typeof agent.displayName === 'string' ? { displayName: agent.displayName } : {}),
+    ...(agent.avatar && typeof agent.avatar === 'object' ? { avatar: agent.avatar } : {}),
+    ...(typeof agent.color === 'string' ? { color: agent.color } : {}),
+  };
+}
+
+function withSpeaker(m: ChatMessage, speaker: ChatSpeaker | undefined): ChatMessage {
+  if (speaker) return { ...m, speaker };
+  if (!m.speaker) return m;
+  const { speaker: _old, ...rest } = m;
+  void _old;
+  return rest;
+}
+
+function applySpeaker(messages: ChatMessage[], ev: StreamEvent, assistantId: string): ChatMessage[] {
+  const idx = messages.findIndex((m) => m.id === assistantId);
+  if (idx < 0) return messages;
+  const live = messages[idx]!;
+  const speaker = speakerOf(ev.agent!);
+  if (!holdsSpeech(live)) {
+    // Nothing said yet in this bubble: it simply becomes this speaker's.
+    if (live.speaker?.agentId === speaker?.agentId && (!!live.speaker === !!speaker)) return messages;
+    const out = [...messages];
+    out[idx] = withSpeaker(live, speaker);
+    return out;
+  }
+  const n = typeof ev.speech === 'number' && ev.speech > 1 ? ev.speech - 1 : undefined;
+  const frozenId = `${assistantId}-speech-${
+    n ?? messages.filter((m) => m.id.startsWith(`${assistantId}-speech-`)).length + 1
+  }`;
+  // A replay of a speaker event already applied: the speech is frozen already.
+  if (messages.some((m) => m.id === frozenId)) return messages;
+  const frozen: ChatMessage = {
+    ...live,
+    id: frozenId,
+    isStreaming: false,
+    ...(live.toolCalls ? { toolCalls: live.toolCalls.map((tc) => ({ ...tc, isLoading: false })) } : {}),
+  };
+  const fresh: ChatMessage = withSpeaker(
+    {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      toolCalls: [],
+      isStreaming: live.isStreaming ?? true,
+      ...(live.timestamp ? { timestamp: live.timestamp } : {}),
+      ...(live.runKey ? { runKey: live.runKey } : {}),
+    },
+    speaker,
+  );
+  const out = [...messages];
+  out[idx] = frozen;
+  out.push(fresh);
+  return out;
+}
+
+function applyRouting(messages: ChatMessage[], ev: StreamEvent, assistantId: string): ChatMessage[] {
+  const routing = ev.routing!;
+  const seq = typeof ev.seq === 'number' ? ev.seq : undefined;
+  const id =
+    seq !== undefined
+      ? `routing-${assistantId}-${seq}`
+      : `routing-${assistantId}-${routing.kind}-${routing.targetAgentId ?? routing.targetName ?? ''}-${routing.decision ?? ''}`;
+  if (messages.some((m) => m.id === id)) return messages;
+  const target = routing.targetName ?? routing.targetAgentId;
+  const row = {
+    id,
+    role: 'system',
+    content: `${routing.kind}${target ? ` → @${target}` : ''}${routing.decision ? ` (${routing.decision})` : ''}`,
+    systemEvent: { kind: 'meta', ...(routing.brief || routing.reason ? { detail: routing.brief ?? routing.reason } : {}) },
+    routing: { ...routing },
+  } as ChatMessage;
+  const idx = messages.findIndex((m) => m.id === assistantId);
+  if (idx < 0) return [...messages, row];
+  const live = messages[idx]!;
+  if (holdsSpeech(live)) return [...messages, row];
+  return [...messages.slice(0, idx), row, ...messages.slice(idx)];
 }

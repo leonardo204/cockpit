@@ -60,7 +60,13 @@ export function buildHandoffPrompt(messages: readonly RuntimeMessage[]): string 
       const calls = m.toolCalls?.length
         ? ` [called: ${m.toolCalls.map((c) => c.toolName).join(', ')}]`
         : '';
-      lines.push(`Assistant: ${m.content}${calls}`);
+      // WHO SPOKE survives the hand-off (multi-agent-chat R2.2): a participant's
+      // speech is labelled, naby's is the plain `Assistant:` it always was.
+      lines.push(`Assistant${m.speaker ? ` (@${m.speaker.name})` : ''}: ${m.content}${calls}`);
+    } else if (m.routing) {
+      // naby's hand-off to a participant — never the user's words.
+      const to = m.routing.targetName ?? m.routing.targetAgentId ?? '?';
+      lines.push(`naby → @${to}: ${m.content}`);
     } else {
       lines.push(`User: ${m.content}`);
     }

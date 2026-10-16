@@ -422,9 +422,9 @@ export function formatUsageCountdown(remainingMs: number): string | null {
  *  for its other states (muted / amber / red) so nothing new enters the palette. */
 export function gaugeToneClass(tier: ContextGaugeTier): string {
   return tier === 'critical'
-    ? 'text-red-500'
+    ? 'text-destructive'
     : tier === 'warn'
-      ? 'text-yellow-500'
+      ? 'text-warning'
       : 'text-muted-foreground';
 }
 

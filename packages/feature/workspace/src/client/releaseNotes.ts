@@ -85,6 +85,40 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.44.0 — 2026-10-16
+
+### en
+
+Add participants to a chat — agents that talk like people, led by naby — plus a new look.
+
+**New**
+
+- **Participants.** Settings → naby → Participants lets you create agents with their own identity, instructions, knowledge, guardrails, MCP servers, skills and model. Add one to a chat from the roster in the header or the @ menu. naby reads every message first and hands it to the right participant, who answers directly in the chat. Mention one with @name to skip naby's check.
+- **naby proposes.** When a registered participant fits but is not in the chat, naby asks you before adding it — an approval card in the app, and on Telegram if that is where you take approvals. Decline once and naby won't ask again in that session.
+- **Routing view.** A toggle in the header shows who naby handed off to and why; the activity log records tokens per speaker.
+- **Import and export.** Bring in a Claude Code subagent (.md), a naby sidecar file, or a SillyTavern character card (JSON or PNG). The preview shows exactly what comes in and what does not. Export any participant as .md + sidecar.
+
+**Improved**
+
+- **New look.** Violet accent, lighter surfaces and rounder cards in both light and dark themes. Status colors are consistent across every panel.
+- **Safety limits.** At most 5 participants per chat, 6 speeches per message and 3 naby↔participant round-trips; Stop ends the whole round. Participants never talk to each other, do not receive your memories by default, and cannot bypass tool approvals.
+
+### ko
+
+사람처럼 대화에 참여하는 에이전트를 나비가 이끌어요. 화면 모양도 새로워졌어요.
+
+**새로 생긴 것**
+
+- **참가자.** 설정 → 나비 → 참가자에서 정체성·지시·지식·가드레일·MCP 서버·스킬·모델을 가진 에이전트를 만들어요. 헤더의 참가자 명단이나 @ 메뉴에서 대화에 넣어요. 모든 메시지는 나비가 먼저 읽고 맞는 참가자에게 넘기고, 참가자가 채팅에 직접 답해요. @이름으로 부르면 나비의 확인 없이 바로 가요.
+- **나비의 제안.** 등록된 참가자가 맞겠는데 대화에 없으면 나비가 먼저 물어봐요. 앱의 승인 카드로, 텔레그램에서 승인을 받는 설정이면 거기서도요. 한 번 거절하면 그 대화에서는 다시 묻지 않아요.
+- **라우팅 보기.** 헤더의 토글을 켜면 나비가 누구에게 왜 넘겼는지 보여요. 활동 로그에는 발언자별 토큰이 남아요.
+- **가져오기·내보내기.** Claude Code 서브에이전트(.md), naby 사이드카 파일, SillyTavern 캐릭터 카드(JSON·PNG)를 들여와요. 미리보기에서 무엇이 들어오고 무엇이 빠지는지 그대로 보여요. 참가자는 .md + 사이드카로 내보내요.
+
+**나아진 것**
+
+- **새 모양.** 보라 강조색, 밝은 표면, 둥근 카드로 라이트·다크 둘 다 바뀌었어요. 상태 색이 모든 패널에서 같아요.
+- **안전장치.** 대화당 참가자 5명, 메시지당 발언 6회, 나비↔참가자 왕복 3회까지예요. 정지를 누르면 라운드 전체가 멈춰요. 참가자끼리는 말하지 않고, 기본으로 내 기억을 받지 않으며, 도구 승인을 건너뛸 수 없어요.
+
 ## 1.43.0 — 2026-10-13
 
 ### en

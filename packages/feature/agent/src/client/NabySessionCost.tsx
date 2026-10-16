@@ -88,7 +88,7 @@ export function NabySessionCost({ sessionId }: { sessionId: string | null }) {
   return (
     <div className="flex items-center gap-2 text-xs">
       <span
-        className={engine.ok ? 'text-muted-foreground' : 'text-amber-500'}
+        className={engine.ok ? 'text-muted-foreground' : 'text-warning'}
         title={engine.summary}
       >
         {engine.ok

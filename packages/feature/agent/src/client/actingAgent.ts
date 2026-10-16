@@ -41,6 +41,55 @@ export interface ActingAgent {
    *  on a normal install but stays `persona` on one that hit the name-collision
    *  concession, and a Korean user should read 나비 either way. */
   persona: boolean;
+  // ---- multi-agent-chat (MAC-M2) — set from a round's `system/speaker` --------
+  /** The agent's id. */
+  id?: string;
+  /** A participant's display name; the bubble names it by this when present. */
+  displayName?: string;
+  avatar?: { kind: 'emoji'; value: string } | { kind: 'image'; dataUrl: string };
+  color?: string;
+  /** A conversation participant (not naby, not a custom agent). */
+  participant?: boolean;
+}
+
+/** The subset of a `system/speaker` event this reads. */
+export interface SpeakerEventLike {
+  agent?: unknown;
+}
+
+/**
+ * Read the agent about to speak off a round's `system/speaker` event
+ * (multi-agent-chat §8.4), or `null` when the event is malformed. Defensive for
+ * the same reason as `actingAgentFromInit`: it crosses a wire.
+ */
+export function actingAgentFromSpeaker(event: SpeakerEventLike | null | undefined): ActingAgent | null {
+  const raw = event?.agent;
+  if (!raw || typeof raw !== 'object') return null;
+  const a = raw as {
+    id?: unknown;
+    name?: unknown;
+    displayName?: unknown;
+    avatar?: unknown;
+    color?: unknown;
+    persona?: unknown;
+  };
+  if (typeof a.name !== 'string' || a.name.trim() === '') return null;
+  const persona = a.persona === true;
+  const avatar =
+    a.avatar && typeof a.avatar === 'object' &&
+    (((a.avatar as { kind?: unknown }).kind === 'emoji' && typeof (a.avatar as { value?: unknown }).value === 'string') ||
+      ((a.avatar as { kind?: unknown }).kind === 'image' && typeof (a.avatar as { dataUrl?: unknown }).dataUrl === 'string'))
+      ? (a.avatar as ActingAgent['avatar'])
+      : undefined;
+  return {
+    name: a.name,
+    persona,
+    ...(typeof a.id === 'string' ? { id: a.id } : {}),
+    ...(typeof a.displayName === 'string' && a.displayName.trim() ? { displayName: a.displayName } : {}),
+    ...(avatar ? { avatar } : {}),
+    ...(typeof a.color === 'string' ? { color: a.color } : {}),
+    ...(persona ? {} : { participant: true }),
+  };
 }
 
 /**
@@ -89,5 +138,6 @@ export interface ThinkingNameInput {
 export function thinkingDisplayName({ acting, personaLabel, engineName }: ThinkingNameInput): string {
   if (!acting) return engineName;
   if (acting.persona) return personaLabel || acting.name;
+  if (acting.participant && acting.displayName) return acting.displayName;
   return acting.name;
 }
