@@ -30,9 +30,13 @@ import {
   RECOMMENDATION_ANCHOR_PREFIX,
   announceParticipantsChanged,
   participantInfosFrom,
+  permissionIsRisky,
+  permissionLabel,
+  permissionValueFrom,
   recommendationIdFromAnchor,
   recommendationInfosFrom,
   type ParticipantInfo,
+  type ParticipantPermissionValue,
   type RecommendationInfo,
 } from '@cockpit/feature-agent';
 import { ParticipantEditor } from './ParticipantEditor';
@@ -93,6 +97,8 @@ const BTN = 'text-xs px-2 py-1 rounded-md border border-border text-foreground h
 export interface ParticipantCardProps {
   participant: ParticipantInfo;
   model?: string;
+  /** The effective permission tier (§8.14), as `participant.list` resolved it. */
+  permission?: ParticipantPermissionValue;
   busy: boolean;
   confirmingDelete: boolean;
   onEdit: () => void;
@@ -104,6 +110,7 @@ export interface ParticipantCardProps {
 export const ParticipantCard = memo(function ParticipantCard({
   participant: p,
   model,
+  permission,
   busy,
   confirmingDelete,
   onEdit,
@@ -136,6 +143,17 @@ export const ParticipantCard = memo(function ParticipantCard({
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.714rem] text-muted-foreground">
             {model || t('participants.settings.modelSession', { defaultValue: 'Session model' })}
           </span>
+          {permission ? (
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[0.714rem] font-medium ${
+                permissionIsRisky(permission.level) ? 'bg-destructive/10 text-destructive' : 'bg-accent text-brand'
+              }`}
+              data-testid="participant-permission"
+              data-level={permission.level}
+            >
+              {permissionLabel(permission, t)}
+            </span>
+          ) : null}
           {p.origin ? (
             <span
               className="rounded-full bg-accent px-1.5 py-0.5 text-[0.714rem] font-medium text-brand"
@@ -191,6 +209,8 @@ export const ParticipantCard = memo(function ParticipantCard({
 export interface ParticipantSectionViewProps {
   participants: readonly ParticipantInfo[];
   models: Readonly<Record<string, string | undefined>>;
+  /** Per participant id: its effective permission tier (§8.14). */
+  permissions?: Readonly<Record<string, ParticipantPermissionValue | undefined>>;
   limits: Limits;
   /** `participants.recommendations.enabled` (§8.13). */
   recommendationsEnabled?: boolean;
@@ -210,6 +230,7 @@ export interface ParticipantSectionViewProps {
 export const ParticipantSectionView = memo(function ParticipantSectionView({
   participants,
   models,
+  permissions,
   limits,
   recommendationsEnabled = true,
   onToggleRecommendations,
@@ -309,6 +330,7 @@ export const ParticipantSectionView = memo(function ParticipantSectionView({
               key={p.id}
               participant={p}
               model={models[p.id]}
+              {...(permissions?.[p.id] ? { permission: permissions[p.id] } : {})}
               busy={busy}
               confirmingDelete={confirmingId === p.id}
               onEdit={() => onEdit(p.id)}
@@ -411,10 +433,14 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
 
   const participants = participantInfosFrom(rows);
   const models: Record<string, string | undefined> = {};
+  const permissions: Record<string, ParticipantPermissionValue | undefined> = {};
   for (const r of rows) {
     if (r && typeof r === 'object') {
-      const o = r as { id?: unknown; model?: unknown };
-      if (typeof o.id === 'string') models[o.id] = typeof o.model === 'string' ? o.model : undefined;
+      const o = r as { id?: unknown; model?: unknown; permission?: unknown };
+      if (typeof o.id === 'string') {
+        models[o.id] = typeof o.model === 'string' ? o.model : undefined;
+        permissions[o.id] = permissionValueFrom(o.permission);
+      }
     }
   }
 
@@ -550,6 +576,7 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
     <ParticipantSectionView
       participants={participants}
       models={models}
+      permissions={permissions}
       limits={limits}
       recommendationsEnabled={recommendationsEnabled}
       onToggleRecommendations={() => void onToggleRecommendations()}

@@ -85,6 +85,40 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.46.2 — 2026-10-19
+
+### en
+
+Hand a task to another tab and get the answer back, and give participants permissions in a few clicks.
+
+**New**
+
+- **Send work to another tab.** In tab 1, ask naby to have another tab of the same project do something — "have session 2 search this and bring the result back". naby sends the request and the context it needs; tab 2 shows "Request from ‹title›" and works on it where you can watch. When it finishes, the answer comes back to tab 1 as "Answer from ‹title›", and naby picks up where it left off.
+  - Tab 1 is not locked while it waits. If it is busy when the answer arrives, the answer waits (up to 30 minutes) until it is free.
+  - A tab working on another tab's request can't pass it on, so requests never bounce back and forth. Turn it off in Settings → naby → Participants.
+
+**Improved**
+
+- **Participant permissions as levels.** Instead of adding tools one by one, pick No tools, Read only, Up to writing, Important, or Everything. Each card lists the tools it includes on this machine.
+  - Tools inside the level run without asking. Tools outside it ask first, naming the participant, and once you allow a tool for that participant it isn't asked again. You can revoke it in the editor.
+  - "Ask me before every tool use" asks for every call, reads included, and remembers nothing. Picking tools one by one is still there under "Choose yourself (advanced)". Existing participants keep working exactly as before.
+
+### ko
+
+다른 탭에 일을 맡기고 답을 받아올 수 있어요. 참가자 권한도 몇 번 눌러서 정해요.
+
+**새로 생긴 것**
+
+- **다른 탭에 일 맡기기.** 1번 탭에서 "2번 세션에 이거 검색시켜서 결과 받아 줘"처럼 같은 프로젝트의 다른 탭에 일을 부탁할 수 있어요. 나비가 요청과 필요한 배경을 보내면, 2번 탭에 "‹제목›에서 온 요청"이 붙고 일하는 과정이 그 탭에 보여요. 끝나면 답이 1번 탭에 "‹제목›의 답"으로 돌아오고, 나비가 하던 일을 이어가요.
+  - 기다리는 동안 1번 탭은 잠기지 않아요. 답이 왔을 때 1번 탭이 바쁘면 끝날 때까지(최대 30분) 기다렸다 들어가요.
+  - 다른 탭의 요청을 받은 탭은 그 일을 또 넘기지 못해서, 요청이 탭 사이를 돌지 않아요. 설정 → 나비 → 참가자에서 끌 수 있어요.
+
+**나아진 것**
+
+- **참가자 권한을 수준으로 골라요.** 도구를 하나씩 넣는 대신 도구 없음 · 읽기만 · 쓰기까지 · 중요 권한 · 모든 권한 중에서 골라요. 카드마다 이 기기에서 들어가는 도구를 볼 수 있어요.
+  - 고른 수준 안의 도구는 묻지 않고 실행하고, 밖의 도구는 어느 참가자인지 밝히고 먼저 물어요. 한 번 허용한 도구는 그 참가자에게 다시 묻지 않아요. 편집기에서 언제든 거둘 수 있어요.
+  - "도구를 쓸 때마다 나에게 묻기"를 켜면 읽기까지 모든 호출을 묻고, 허용을 기억하지 않아요. 도구를 하나씩 고르는 방식은 "직접 고르기(고급)"에 남아 있어요. 이미 만든 참가자는 전과 똑같이 동작해요.
+
 ## 1.46.1 — 2026-10-19
 
 ### en

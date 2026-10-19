@@ -157,9 +157,15 @@ import {
   composeParticipantSystem,
   matchKnowledgeKeywords,
   mentionsHub,
+  participantCallPlan,
+  participantPermissionOf,
   parseMentions,
   ROUTE_TIER,
   type MessageSpeaker,
+  // cross-session-messaging §3.1: the tool names the exclusions key on, and the
+  // shape check for a turn another session started.
+  CROSS_SESSION_TOOL_NAMES,
+  isCrossSessionMeta,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
 // Re-exported so the session-browsing routes (Phase C-2) can type the store
@@ -243,6 +249,8 @@ import { stageInstruction } from '../lib/stageTurn';
 import { fastGrowthInstruction } from '../lib/fastGrowth';
 import { handoffInstruction } from '../lib/sessionHandoff';
 import { JOB_REPORT_SOURCE, makeJobSink } from '../lib/backgroundJobReport';
+import { makeCrossSessionTools, readCrossSessionEnabled, type CrossSessionDeps } from '../lib/crossSession';
+import { isRunActive as hubIsRunActive } from '../sessionRunHub';
 import { namedHarnessRows } from '../../shared/slashTokens';
 import {
   runParticipantRound,
@@ -250,13 +258,15 @@ import {
   type ProposalOutcome,
   type RoundAgent,
 } from './participantRound';
-import { readParticipantSettings } from '../lib/participants';
+import { readParticipantSettings, recordApprovedTool } from '../lib/participants';
 import {
   makeParticipantDraftTool,
   PARTICIPANT_DRAFT_RULE,
   PARTICIPANT_DRAFT_TOOL,
 } from '../lib/participantDraft';
 import {
+  participantApprovalReachable,
+  participantMayBeOffered,
   participantMayUseTool,
   recentForRoute,
   readParticipantProfile,
@@ -584,6 +594,12 @@ export interface NabyEngineDeps {
    * unless `resolveVoiceBackend` says otherwise. Production never sets it.
    */
   devClaudeEngine?: () => Engine;
+  /**
+   * Where `naby_send_to_session` delivers (cross-session-messaging §3.2). A test
+   * passes stub deps so a sent request never reaches the real orchestrator (and
+   * so a model). Production leaves it unset: `crossSessionRuntimeDeps`.
+   */
+  crossSessionDelivery?: () => Promise<CrossSessionDeps>;
   /**
    * What a finished turn kicks for participant recommendations (multi-agent-chat
    * §8.13, R9.4). Production leaves it unset and gets `kickRecommendationSweep`.
@@ -1440,9 +1456,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     // naby's own participant drafts stay with naby (§8.12): a
                     // delegated subagent is never offered the tool (and the gate
                     // refuses it for a subagent call anyway).
-                    toolSchemas: toolSchemas.filter((t) => t.name !== PARTICIPANT_DRAFT_TOOL),
+                    // Nor does it message other sessions (cross-session-messaging
+                    // §3.1): handing work to another tab is naby's, on its own turn.
+                    toolSchemas: toolSchemas.filter(
+                      (t) => t.name !== PARTICIPANT_DRAFT_TOOL && !CROSS_SESSION_TOOL_NAMES.includes(t.name),
+                    ),
                     executors: Object.fromEntries(
-                      Object.entries(executors).filter(([name]) => name !== PARTICIPANT_DRAFT_TOOL),
+                      Object.entries(executors).filter(
+                        ([name]) => name !== PARTICIPANT_DRAFT_TOOL && !CROSS_SESSION_TOOL_NAMES.includes(name),
+                      ),
                     ),
                     signal: ctx.signal,
                     ...(projectCwd ? { cwd: projectCwd } : {}),
@@ -1669,9 +1691,31 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               })
             : undefined;
 
+        // `naby_list_sessions` / `naby_send_to_session` (cross-session-messaging
+        // §3.1) — naby hands work to another tab of THIS project and gets the
+        // answer back as a new turn here. Offered on the same turns as the draft
+        // tool (naby's own, typed in the app or on Telegram), never on a turn
+        // another session started (R7: the request B runs, the reply A gets — so
+        // no A→B→A loop exists), never without a project (the scope is the
+        // project's open tabs), and not at all with the setting off (R10). A
+        // participant never gets them (participantTurn's exclusion list), a
+        // delegated run has them filtered out, and the gate refuses a subagent.
+        const crossSessionTurn = isCrossSessionMeta(ctx.params.crossSession) ? ctx.params.crossSession : undefined;
+        const crossSessionTools =
+          nabyOwnsTurn && roundEligible && !crossSessionTurn && projectCwd && readCrossSessionEnabled(store)
+            ? makeCrossSessionTools({
+                store,
+                sessionId,
+                cwd: projectCwd,
+                isRunActive: hubIsRunActive,
+                ...(deps.crossSessionDelivery ? { deliveryDeps: deps.crossSessionDelivery } : {}),
+              })
+            : undefined;
+
         const toolSchemas: ToolSchema[] = [
           ...builtin.toolSchemas,
           ...(draftTool ? [draftTool.schema] : []),
+          ...(crossSessionTools?.schemas ?? []),
           ...(workspace?.toolSchemas ?? []),
           ...(orgLoad ? [orgLoad.schema] : []),
           ...(mcp?.toolSchemas ?? []),
@@ -1679,6 +1723,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const executors: Record<string, Executor> = {
           ...builtin.executors,
           ...(draftTool ? { [draftTool.schema.name]: draftTool.executor } : {}),
+          ...(crossSessionTools?.executors ?? {}),
           ...(workspace?.executors ?? {}),
           ...(orgLoad ? { [orgLoad.schema.name]: orgLoad.executor } : {}),
           ...(mcp?.executors ?? {}),
@@ -2274,10 +2319,29 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // speeches (MAC-M2) — read by the approval prompt above. Undefined on every
         // other turn and during naby's own speeches.
         let currentSpeaker: { id: string; name: string; displayName: string } | undefined;
+        // Which calls a PERSON has already been asked about this turn — read by a
+        // participant set to "ask me every time" (§8.14 R10.2), so a call the
+        // policy or an org hook already put to the user is not asked twice.
+        const askedCallIds = new Set<string>();
+        // naby's own escalation setting, read when a participant needs to ask.
+        const personaEscalates = () => {
+          const e = readPersonaAutonomy(store).escalation;
+          return e === 'telegram' || e === 'both';
+        };
         const requestApproval = (
           call: ToolCall,
-          opts?: { reason?: string; source?: 'hook' | 'hook+policy'; script?: string; rewrittenBy?: string },
+          opts?: {
+            reason?: string;
+            source?: 'hook' | 'hook+policy' | 'participant_always' | 'participant_outside';
+            script?: string;
+            rewrittenBy?: string;
+          },
         ): Promise<GateDecision> => {
+          askedCallIds.add(call.toolCallId);
+          // A participant's question follows naby's own escalation setting, like a
+          // proposal (D12): the round is naby's turn, and an `@participant`
+          // address is not a routed agent with a channel of its own (§8.14).
+          const escalates = escalateToTelegram || (currentSpeaker !== undefined && personaEscalates());
           // A hook-only prompt keeps its own id: when the hook rewrote the input,
           // the policy may ask separately about the rewrite afterwards (§7.10),
           // and the two must not share an id.
@@ -2295,7 +2359,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // unwatches and confirms in-chat itself), so the user never gets a
               // duplicate — and never gets left with live buttons for a decision
               // that was already made in the app, aborted, or timed out.
-              if (escalateToTelegram) {
+              if (escalates) {
                 void finishEscalation({
                   store,
                   approvalId,
@@ -2340,7 +2404,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               approvalId,
               toolName: call.toolName,
               input: call.input,
-              escalatedToTelegram: escalateToTelegram,
+              escalatedToTelegram: escalates,
               ...(opts?.source ? { askedBy: opts.source } : {}),
               ...(opts?.script ? { hookScript: opts.script } : {}),
               ...(opts?.rewrittenBy ? { rewrittenBy: opts.rewrittenBy } : {}),
@@ -2371,7 +2435,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // promise, so a slow or failing Telegram send must not delay either.
             // The bridge starts its polling loop and a button press / "yes" reply
             // lands on `settle` through the same approvalRegistry entry.
-            if (escalateToTelegram) {
+            if (escalates) {
               // The same reasons the in-app prompt shows, so a merged request
               // reads as one question on the phone too (§7.10).
               const reasons = approvalReasonsForTelegram(opts ?? {});
@@ -2425,6 +2489,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             realPolicy({
               rules: policyRules,
               fallback: baseline,
+              requestApproval: approvalMerger.policyAsk,
+              writeProtectedRoots: [orgHarnessProtectedRoot(orgTurn.home)],
+              ...(projectCwd ? { cwd: projectCwd } : {}),
+            }),
+            (call) => hookOpinions.get(call.toolCallId),
+          ),
+        );
+        // A PARTICIPANT's policy gate (multi-agent-chat §8.14, MAC-M7): the same
+        // rules, hook merge and write-protected roots, but NO baseline — the
+        // participant's permission level is the user's grant for what it holds,
+        // and what it does not hold asks (the participant gate below decides
+        // which). Only the user's own rules speak here: `deny` refuses, `ask`
+        // asks once.
+        const participantGated = makeGate(
+          approvalMerger.wrap(
+            realPolicy({
+              rules: policyRules,
+              fallback: () => ({ behavior: 'allow' as const }),
               requestApproval: approvalMerger.policyAsk,
               writeProtectedRoots: [orgHarnessProtectedRoot(orgTurn.home)],
               ...(projectCwd ? { cwd: projectCwd } : {}),
@@ -2540,6 +2622,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           return undefined;
         };
         const gate: Gate = async (call) => {
+          // ---- sessions messaging each other are naby's (cross-session §3.1) --
+          // A subagent never lists or messages other tabs; the tools are not in
+          // a delegated run's toolset either, so this is the second barrier.
+          // Everything else about these two calls is the ordinary gate below.
+          if (call.subagent && CROSS_SESSION_TOOL_NAMES.includes(normalizeToolName(call.toolName))) {
+            console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (naby turns only)`);
+            return {
+              behavior: 'deny',
+              reason: 'only naby can message other sessions, on its own turn',
+              refusal: 'capability',
+            };
+          }
           // ---- naby's participant DRAFT always asks (multi-agent-chat §8.12, R8.2)
           //
           // OUTERMOST, before the policy engine and the allow-all baseline, because
@@ -3821,8 +3915,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   reason: profileFallback,
                 });
               }
-              const allowed = (name: string) => participantMayUseTool(normalizeToolName(name), agent, mcpToolNames);
-              const pSchemas = toolSchemas.filter((t) => allowed(t.name));
+              // §8.14 (MAC-M7, 2026-10-19 user rule): the participant's permission
+              // LEVEL is resolved against this turn's toolset per call —
+              // `toolTierOf` with the MCP servers' own read-only declarations — so
+              // a tool that appeared since the participant was saved joins its
+              // level unedited. Inside the level a call runs WITHOUT asking (the
+              // level is the user's grant); outside it the call ASKS. So the speech
+              // is offered every tool except naby's own — an out-of-level tool has
+              // to be callable to be asked about.
+              // The row as of now: an out-of-level tool the user allows is
+              // remembered (R10.7) and the next call in this speech reads it.
+              let liveAgent: Agent = agent;
+              const inLevel = (bare: string) => participantMayUseTool(bare, liveAgent, mcpToolNames, mcpAnnotations);
+              const askEveryTime = participantPermissionOf(agent).approval === 'always';
+              const pSchemas = toolSchemas.filter((t) => participantMayBeOffered(normalizeToolName(t.name)));
               const pExecutors: Record<string, Executor> = {};
               for (const t of pSchemas) {
                 const ex = executors[t.name];
@@ -3830,16 +3936,25 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               }
               const planOnly = profile.guardrails.permissionMode === 'plan' || planMode;
               const floor = phase1HarnessFloor(runtimeToolNames);
-              // THE SAME GATE, minus the stage contract and minus growth: the
-              // participant's allowlist first (a capability refusal), then the org
-              // hook, then the user's policy — whose `ask` reaches the USER (R3.7).
+              // THE PARTICIPANT GATE, minus the stage contract and minus growth:
+              //
+              //   naby's own tools          → refused (capability)
+              //   plan mode                 → the read-only floor still refuses
+              //   org hook deny             → refused
+              //   the user's policy `deny`  → refused, nobody asked
+              //   in level, switch off      → the user's rules only (`ask` asks
+              //                               once); no baseline prompt or floor
+              //   out of level, or switch   → the user is asked — ONCE: a policy
+              //   "ask me every time" on      or hook prompt for the same call
+              //                               counts. Nobody to ask (no card, no
+              //                               Telegram escalation) → refused.
               const participantGate: Gate = async (call) => {
                 const bare = normalizeToolName(call.toolName);
-                if (!participantMayUseTool(bare, agent, mcpToolNames)) {
-                  console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (participant @${agent.name})`);
+                if (!participantMayBeOffered(bare)) {
+                  console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (naby only, @${agent.name})`);
                   return {
                     behavior: 'deny',
-                    reason: `participant @${agent.name} is limited to its allowed tools`,
+                    reason: `participant @${agent.name} cannot use naby's own tools`,
                     refusal: 'capability',
                   };
                 }
@@ -3849,11 +3964,57 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 }
                 const hooked = await orgHookGate(call, false);
                 if (hooked) return hooked;
-                const decision = await gated.gate(call).finally(() => hookOpinions.delete(call.toolCallId));
+                const outside = !inLevel(bare);
+                const plan = participantCallPlan({
+                  inLevel: !outside,
+                  approval: askEveryTime ? 'always' : 'auto',
+                  policyEffect: resolvePolicyEffect(policyRules, bare),
+                  reachable: participantApprovalReachable(turnSource, escalateToTelegram || personaEscalates()),
+                });
+                if (plan === 'refuse') {
+                  hookOpinions.delete(call.toolCallId);
+                  console.log(
+                    `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (@${agent.name} must ask, no approval channel)`,
+                  );
+                  return {
+                    behavior: 'deny',
+                    reason: outside
+                      ? `${call.toolName} is outside participant @${agent.name}'s permission level, and nobody can be asked on this turn`
+                      : `participant @${agent.name} asks before every tool use, and nobody can be asked on this turn`,
+                    refusal: 'capability',
+                  };
+                }
+                const decision = await participantGated
+                  .gate(call)
+                  .finally(() => hookOpinions.delete(call.toolCallId));
                 console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${decision.behavior} (@${agent.name})`);
-                const entry = gated.log[gated.log.length - 1];
+                const entry = participantGated.log[participantGated.log.length - 1];
                 if (entry) deps.onGateDecision?.(entry);
-                return decision;
+                if (plan !== 'ask' || decision.behavior === 'deny' || askedCallIds.has(call.toolCallId)) return decision;
+                const asked = await requestApproval(call, {
+                  source: outside ? 'participant_outside' : 'participant_always',
+                });
+                console.log(
+                  `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → ${asked.behavior} (@${agent.name} ${outside ? 'outside its level' : 'asks every time'})`,
+                );
+                // R10.7 (2026-10-19 user decision): an ALLOWED out-of-level call is
+                // remembered for this participant — in the app or over Telegram,
+                // both settle this approval — so the same tool does not ask again.
+                // A refusal is not remembered; with "ask me every time" on nothing
+                // is recorded (`withApprovedTool` refuses it).
+                if (asked.behavior === 'allow' && outside && !askEveryTime) {
+                  liveAgent = recordApprovedTool(store, agent.id, bare) ?? liveAgent;
+                  logActivity('participant_route', {
+                    sessionId,
+                    agentId: agent.id,
+                    agentName: agent.name,
+                    note: 'tool-approved',
+                    toolName: bare,
+                  });
+                }
+                // An approval keeps the policy's own decision (an org hook's input
+                // rewrite rides on it); a refusal is the user's.
+                return asked.behavior === 'allow' ? decision : asked;
               };
               const inSessionNames = registeredParticipants
                 .filter((a) => activeParticipantIds.has(a.id))
@@ -3885,7 +4046,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               const pAvailable = engineId === 'dev-claude'
                 ? [
                     ...pSchemas.map((t) => t.name),
-                    ...[...OBSERVATION_BUILTINS, ...DANGEROUS_BUILTINS].filter((b) => allowed(b)),
+                    // Out-of-level built-ins are offered too: the gate asks for them.
+                    ...[...OBSERVATION_BUILTINS, ...DANGEROUS_BUILTINS].filter((b) => participantMayBeOffered(b)),
                   ]
                 : pSchemas.map((t) => t.name);
               return {
@@ -4056,15 +4218,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             step += 1;
             stepText = '';
             stepUsedTool = false;
-            await runTurn(
-              nabyTurnOptions(
+            await runTurn({
+              ...nabyTurnOptions(
                 step === 1
                   ? turnText
                   : stepDecision.reason === 'verify-nudge'
                     ? verificationNudgePrompt(step, maxSteps)
                     : continuationPrompt(step, maxSteps),
               ),
-            );
+              // The FIRST step's user row is the other session's request (or its
+              // reply) — labelled, so the transcript shows a notice and no
+              // learner reads it as the user's words (§3.3). Later steps are the
+              // harness's own continuation prompts, as on every turn.
+              ...(step === 1 && crossSessionTurn ? { crossSession: crossSessionTurn } : {}),
+            });
             // Between steps: tell the user (a muted one-line bar) that the agent
             // is continuing, or why it stopped. Emitted here rather than in the
             // `result` case so it lands after that step's events, and so the

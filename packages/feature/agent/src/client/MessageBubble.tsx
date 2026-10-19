@@ -819,7 +819,13 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             : '🔔'
         : ev?.kind === 'job-report'
           ? '⚙️'
-          : 'ℹ️';
+          : ev?.kind === 'cross-session'
+            ? ev.status === 'request'
+              ? '📥'
+              : ev.status === 'failure'
+                ? '⚠️'
+                : '📤'
+            : 'ℹ️';
     // WHAT THE PILL SAYS FOR A JOB REPORT. Its `content` is the prompt naby was
     // given — English, and addressed to naby ("tell the user how it went"),
     // which is not a sentence to show a reader in their own transcript. So the
@@ -827,10 +833,23 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     // away in the detail modal below, exactly as it does for every other
     // system row. Nothing is hidden; it is only no longer mistaken for
     // something the user said.
+    // A cross-session turn (cross-session-messaging R5) is the same: its content
+    // is the English prompt naby got, so the pill names the other session and
+    // the direction, and the original is in the modal.
+    const crossTitle = ev?.peer || t('chat.crossSession.untitled', { defaultValue: 'untitled' });
     const pillText =
       ev?.kind === 'job-report'
         ? t('chat.jobReportNotice', { defaultValue: 'A background job finished' })
-        : message.content;
+        : ev?.kind === 'cross-session'
+          ? ev.status === 'request'
+            ? t('chat.crossSession.request', { defaultValue: 'Request from session ‹{{title}}›', title: crossTitle })
+            : ev.status === 'failure'
+              ? t('chat.crossSession.failure', {
+                  defaultValue: 'The request to session ‹{{title}}› failed',
+                  title: crossTitle,
+                })
+              : t('chat.crossSession.reply', { defaultValue: 'Answer from session ‹{{title}}›', title: crossTitle })
+          : message.content;
     // Full text for the detail modal — the raw <task-notification> block, or the
     // message content itself (image annotation / compact-summary notice).
     const detail = ev?.detail || message.content;
@@ -862,7 +881,9 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                     <span>{icon}</span>
                     {ev?.kind === 'task-notification'
                       ? t('chat.taskNotification', { defaultValue: 'Task notification' })
-                      : t('chat.systemNotice', { defaultValue: 'Notice' })}
+                      : ev?.kind === 'cross-session'
+                        ? pillText
+                        : t('chat.systemNotice', { defaultValue: 'Notice' })}
                   </span>
                   <button
                     onClick={() => setShowEventDetail(false)}

@@ -24,9 +24,12 @@ import {
   HUB_MENTION_ALIASES,
   defaultParticipantProfile,
   parseParticipantProfile,
+  participantPermissionOf,
+  withApprovedTool,
   type Agent,
   type AgentInput,
   type MemoryScope,
+  type ParticipantPermission,
   type SessionParticipant,
   type SessionParticipantAddedBy,
   type SessionParticipantStatus,
@@ -247,6 +250,10 @@ export type ParticipantView = Agent & {
   addedBy?: SessionParticipantAddedBy;
   /** epoch ms of the session row's last status change. */
   statusUpdatedAt?: number;
+  /** The EFFECTIVE permission tier (§8.14) — the stored one, or the legacy
+   *  reading of a row saved before tiers existed. Read by the editor and the
+   *  roster badge so the client never re-derives it. `participant.list` only. */
+  permission?: ParticipantPermission;
 };
 
 export function isParticipant(agent: Agent | undefined): agent is Agent {
@@ -267,7 +274,7 @@ export function listParticipantsWithCounts(
   return store
     .listAgents()
     .filter((a) => a.kind === 'participant')
-    .map((a) => ({ ...a, activeSessions: counts.get(a.id) ?? 0 }));
+    .map((a) => ({ ...a, activeSessions: counts.get(a.id) ?? 0, permission: participantPermissionOf(a) }));
 }
 
 /** The session's ACTIVE participants, joined with their agent rows, in the order
@@ -361,6 +368,24 @@ export function putParticipant(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+  // The permission tier (§8.14) follows the same "omitted = keep" rule: a
+  // profile sent without one (an older client, an import's re-apply) must not
+  // quietly turn a "read only" participant back into its legacy reading.
+  if (profile.permission === undefined && existing?.profile?.permission !== undefined) {
+    profile = { ...profile, permission: existing.profile.permission };
+  }
+  // The remembered approvals (R10.7) likewise: a permission sent without an
+  // `approvedTools` key keeps the stored list; an explicit list (even []) replaces
+  // it — that is how the editor's × revokes one.
+  const sentPermission = (body.profile as { permission?: { approvedTools?: unknown } } | undefined)?.permission;
+  const storedApproved = existing?.profile?.permission?.approvedTools;
+  if (
+    profile.permission &&
+    storedApproved?.length &&
+    (sentPermission === undefined || sentPermission === null || sentPermission.approvedTools === undefined)
+  ) {
+    profile = { ...profile, permission: { ...profile.permission, approvedTools: storedApproved } };
+  }
 
   // toolRefs: a sent list replaces; an edit that does not mention it keeps the
   // row's; a NEW participant without one gets NO tools ([]), never "inherit the
@@ -390,6 +415,45 @@ export function putParticipant(
     return { ok: true, participant: store.putAgent(input) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Remember that the user allowed `toolName` for this participant (R10.7, the
+ * 2026-10-19 user decision: once allowed, the same tool is not asked again).
+ * Called after an out-of-level approval is ALLOWED — in the app or over Telegram,
+ * both land on the same approval. A refusal is never remembered, and nothing is
+ * recorded while the participant asks every time (`withApprovedTool`). A legacy
+ * row gets its effective permission written down with the tool added. Returns the
+ * row as stored (the same one when nothing changed); never throws.
+ */
+export function recordApprovedTool(
+  store: Pick<Store, 'getAgent' | 'putAgent'>,
+  agentId: string,
+  toolName: string,
+): Agent | undefined {
+  const agent = store.getAgent(agentId);
+  if (!isParticipant(agent) || !agent.profile) return agent;
+  const current = participantPermissionOf(agent);
+  const next = withApprovedTool(current, toolName);
+  if (next === current) return agent;
+  try {
+    const { id, name, kind, description, systemPrompt, model, toolRefs, memoryScope, autonomy } = agent;
+    return store.putAgent({
+      id,
+      name,
+      kind,
+      ...(description !== undefined ? { description } : {}),
+      systemPrompt,
+      ...(model !== undefined ? { model } : {}),
+      ...(toolRefs !== undefined ? { toolRefs } : {}),
+      memoryScope,
+      autonomy,
+      profile: { ...agent.profile, permission: next },
+    });
+  } catch (e) {
+    console.warn(`[participants] approved tool not recorded for ${agentId}: ${e instanceof Error ? e.message : String(e)}`);
+    return agent;
   }
 }
 

@@ -7,9 +7,11 @@
 // and event translation, but differs from it in a handful of decisions. Those
 // decisions are here, pure, so each is a unit test away from proof:
 //
-//   * which of the session's tools the participant may see (its `toolRefs`, the
-//     MCP servers its profile names, and never naby's own learning / check-in /
-//     delegation tools — R3.8, §8.9);
+//   * which tools a participant is offered (all but naby's own learning /
+//     check-in / delegation tools — R3.8, §8.9) and which of them are INSIDE its
+//     permission level and run without asking (its level or `toolRefs`, the MCP
+//     servers its profile names — §8.14); the rest ask;
+//   * whether a call that must ask has anyone to ask (R10.2);
 //   * which model answers (its own when the engine can run it, else the session's
 //     — §8.9 "모르는 값이면 세션 모델");
 //   * the identity the round loop and the stream events carry (`RoundAgent`);
@@ -19,8 +21,12 @@
 import type { Agent, ParticipantProfile, RuntimeMessage } from '../../../../../../../dist/naby-runtime.mjs';
 import {
   defaultParticipantProfile,
+  isApprovedTool,
   isUserAuthored,
+  levelIncludesTier,
   parseParticipantProfile,
+  participantPermissionOf,
+  toolTierOf,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type { RoundAgent } from '../engines/participantRound';
 
@@ -39,34 +45,88 @@ export const PARTICIPANT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
   'naby_delegate',
   'naby_add_mcp',
   'naby_participant_draft',
+  // Messaging other sessions (cross-session-messaging §3.1) is naby's too.
+  'naby_list_sessions',
+  'naby_send_to_session',
   'Task',
   'Agent',
 ]);
 
 /**
- * May a participant call `toolName` (the bare name the gate sees)?
+ * May a participant's speech be OFFERED `toolName` at all? Every tool but naby's
+ * own (§8.9, R3.8). Since the 2026-10-19 rule (§8.14) a tool outside the
+ * participant's level is offered and ASKS when called, so offering is no longer
+ * the same question as `participantMayUseTool` (which is now "is it inside the
+ * level — may it run without asking?").
+ */
+export function participantMayBeOffered(toolName: string): boolean {
+  return !PARTICIPANT_EXCLUDED_TOOLS.has(toolName);
+}
+
+/**
+ * Is `toolName` (the bare name the gate sees) INSIDE the participant's grant — may
+ * it run without asking the user? A tool outside it asks (§8.14, 2026-10-19).
+ * The legacy name is kept; the rules below are what "inside" means.
  *
- *   * an MCP tool (`<server>__<tool>`, named in `mcpToolNames`) — when its server
- *     is in `profile.mcpServers`, or the exact tool is in `toolRefs`;
- *   * anything else — only when it is in `toolRefs`;
- *   * never one of `PARTICIPANT_EXCLUDED_TOOLS`.
+ * Decided by the participant's PERMISSION (§8.14, MAC-M7), read through
+ * `participantPermissionOf` so a row saved before tiers existed keeps exactly
+ * what it had:
  *
- * An imported participant has `toolRefs: []` and no MCP servers, so it gets
- * nothing at all (agent-export §4: imported content is untrusted).
+ *   * `custom` (the old chip list) — an MCP tool (`<server>__<tool>`, named in
+ *     `mcpToolNames`) when its server is in `profile.mcpServers` or the exact tool
+ *     is in `toolRefs`; anything else only when it is in `toolRefs`;
+ *   * `none` — nothing;
+ *   * `read` / `write` / `elevated` — any tool whose tier (`toolTierOf`, the one
+ *     judge) the level includes; an MCP tool only from a server the participant
+ *     was given (`profile.mcpServers` — the editor's "external resources" choice
+ *     still says WHICH services, the level says WHAT KIND of act);
+ *   * `all` — every tool in the turn, MCP servers it was not given included;
+ *   * a tool the user already allowed once for it (`permission.approvedTools`,
+ *     R10.7) — at any level;
+ *   * never one of `PARTICIPANT_EXCLUDED_TOOLS`, at any level.
+ *
+ * Resolved per call against the turn's toolset, so a tool that appears later
+ * joins its level without an edit. An imported participant has `toolRefs: []`,
+ * no MCP servers and no permission — `none` — so it gets nothing at all
+ * (agent-export §4: imported content is untrusted).
  */
 export function participantMayUseTool(
   toolName: string,
-  agent: { toolRefs?: string[]; profile?: { mcpServers?: string[] } },
+  agent: { toolRefs?: string[]; profile?: { mcpServers?: string[]; permission?: unknown } },
   mcpToolNames: ReadonlySet<string>,
+  mcpAnnotations: Readonly<Record<string, { readOnlyHint?: boolean } | undefined>> = {},
 ): boolean {
   if (PARTICIPANT_EXCLUDED_TOOLS.has(toolName)) return false;
-  const refs = agent.toolRefs ?? [];
-  if (refs.includes(toolName)) return true;
-  if (mcpToolNames.has(toolName)) {
-    const sep = toolName.indexOf('__');
-    const server = sep > 0 ? toolName.slice(0, sep) : '';
-    return server !== '' && (agent.profile?.mcpServers ?? []).includes(server);
+  const permission = participantPermissionOf(agent);
+  // R10.7: a tool the user already allowed once for this participant is inside.
+  if (isApprovedTool(permission, toolName)) return true;
+  const { level } = permission;
+  if (level === 'none') return false;
+  if (level === 'all') return true;
+  const isMcp = mcpToolNames.has(toolName);
+  const sep = toolName.indexOf('__');
+  const server = isMcp && sep > 0 ? toolName.slice(0, sep) : '';
+  const serverGiven = server !== '' && (agent.profile?.mcpServers ?? []).includes(server);
+  if (level === 'custom') {
+    if ((agent.toolRefs ?? []).includes(toolName)) return true;
+    return isMcp && serverGiven;
   }
+  if (isMcp && !serverGiven) return false;
+  return levelIncludesTier(level, toolTierOf(toolName, mcpAnnotations[toolName]));
+}
+
+/**
+ * Can anyone answer an approval for this turn (R10.2)? A call outside the
+ * participant's level, or any call of one set to "ask me every time", needs a
+ * person on the other end. The chat has the
+ * in-app card; a Telegram turn has one only when the turn's escalation sends the
+ * question to the phone. Anything else (a scheduled run, a kickoff, a Telegram
+ * turn whose escalation stays in the app nobody is looking at) has no one to ask,
+ * so such a call is REFUSED rather than left to time out.
+ */
+export function participantApprovalReachable(turnSource: string, escalatesToTelegram: boolean): boolean {
+  if (turnSource === 'chat') return true;
+  if (turnSource === 'telegram') return escalatesToTelegram;
   return false;
 }
 

@@ -10,11 +10,20 @@
  *                        Both reasons are shown, and the "always" buttons are
  *                        offered with a note that they answer the policy part
  *                        only — the hook decides every call afresh.
+ *   source 'participant_always'
+ *                        the participant speaking is set to "ask me every time"
+ *                        (multi-agent-chat §8.14, R10.2). No "always" buttons:
+ *                        the user chose to be asked on every call, and a policy
+ *                        rule would not stop this prompt anyway.
+ *   source 'participant_outside'
+ *                        the tool is outside the speaking participant's level
+ *                        (§8.14, 2026-10-19 rule). No "always" buttons either: a
+ *                        policy rule cannot widen a level — the editor does.
  *   rewrittenBy          a policy prompt about input an org hook rewrote.
  */
 
 export type ApprovalAsker = {
-  source?: 'hook' | 'hook+policy';
+  source?: 'hook' | 'hook+policy' | 'participant_always' | 'participant_outside';
   reason?: string;
   hookScript?: string;
   rewrittenBy?: string;
@@ -28,7 +37,13 @@ export type ApprovalCopyLine =
 /** Read the asker fields off a raw `approval_request` event detail. */
 export function approvalAskerFrom(d: Record<string, unknown>): ApprovalAsker {
   const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
-  const source = d.source === 'hook' || d.source === 'hook+policy' ? d.source : undefined;
+  const source =
+    d.source === 'hook' ||
+    d.source === 'hook+policy' ||
+    d.source === 'participant_always' ||
+    d.source === 'participant_outside'
+      ? d.source
+      : undefined;
   const reason = str(d.reason);
   const hookScript = str(d.hook_script);
   const rewrittenBy = str(d.rewritten_by);
@@ -43,7 +58,18 @@ export function approvalAskerFrom(d: Record<string, unknown>): ApprovalAsker {
 /** The reason lines, in display order. */
 export function approvalReasonLines(a: ApprovalAsker): ApprovalCopyLine[] {
   const lines: ApprovalCopyLine[] = [];
-  if (a.source) {
+  if (a.source === 'participant_always') {
+    lines.push({
+      key: 'toolApproval.participantAlways',
+      defaultValue: 'This participant is set to ask you before every tool use.',
+    });
+  } else if (a.source === 'participant_outside') {
+    lines.push({
+      key: 'toolApproval.participantOutside',
+      defaultValue:
+        'This tool is outside this participant’s permission level. Allowing it remembers it for this participant — it will not ask again.',
+    });
+  } else if (a.source) {
     if (a.hookScript && a.reason) {
       lines.push({
         key: 'toolApproval.hookReasonScript',
@@ -77,7 +103,7 @@ export function approvalReasonLines(a: ApprovalAsker): ApprovalCopyLine[] {
 
 /** Whether "always allow/block" is offered: only when the policy is asking. */
 export function approvalOffersRemember(a: ApprovalAsker): boolean {
-  return a.source !== 'hook';
+  return a.source !== 'hook' && a.source !== 'participant_always' && a.source !== 'participant_outside';
 }
 
 /** The note under the "always" buttons of a merged prompt, or undefined. */

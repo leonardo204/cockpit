@@ -27,6 +27,14 @@ export interface DispatchParams {
    * reads as 'chat', which is what an unmarked caller is.
    */
   source?: string;
+  /**
+   * A turn ANOTHER SESSION started (specs/cross-session-messaging §3.3): the
+   * request this session received, or the reply / failure coming back. The naby
+   * engine stores it on the user row and withholds the send tool (R7); the
+   * orchestrator puts it on the live `_human` event so the tab draws the notice
+   * pill at once rather than after a reload.
+   */
+  crossSession?: { requestId: string; fromSessionId: string; fromTitle: string; role: 'request' | 'reply' | 'failure' };
 }
 
 /** Dispatch result. The run is detached (fire-and-forget); on success the caller gets the

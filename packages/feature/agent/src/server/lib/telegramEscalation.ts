@@ -219,8 +219,22 @@ function formatParticipantDraft(
       greeting: '첫 인사',
       avatar: '아바타',
       color: '색',
+      permission: '권한',
     };
     lines.push(`· 바뀌는 것: ${input.changed.map((f) => label[String(f)] ?? String(f)).join(', ')}`);
+  }
+  // The permission tier (multi-agent-chat §8.14), when the draft names one.
+  const perm = obj(draft.permission);
+  const levelKo: Record<string, string> = {
+    none: '도구 없음',
+    read: '읽기만',
+    write: '쓰기까지',
+    elevated: '중요 권한',
+    all: '모든 권한',
+    custom: '직접 고르기',
+  };
+  if (typeof perm.level === 'string' && levelKo[perm.level]) {
+    lines.push(`· 권한: ${levelKo[perm.level]}${perm.approval === 'always' ? ' · 도구를 쓸 때마다 승인' : ''}`);
   }
   if (toolName === 'participant.create') {
     lines.push(add ? '· 승인하면 이 대화에 추가합니다' : '· 승인해도 이 대화에는 추가하지 않습니다');
@@ -233,12 +247,18 @@ function formatParticipantDraft(
  *  reasons the in-app prompt shows, so a merged hook+policy request reads as ONE
  *  question on the phone too. Empty for a plain policy prompt (as before). */
 export function approvalReasonsForTelegram(opts: {
-  source?: 'hook' | 'hook+policy';
+  source?: 'hook' | 'hook+policy' | 'participant_always' | 'participant_outside';
   script?: string;
   reason?: string;
   rewrittenBy?: string;
 }): string[] {
   const reasons: string[] = [];
+  // multi-agent-chat §8.14: the participant is set to ask every time, or the
+  // tool is outside its permission level.
+  if (opts.source === 'participant_always') return ['This participant asks you before every tool use'];
+  if (opts.source === 'participant_outside') {
+    return ["This tool is outside the participant's permission level — allowing it remembers it, so it will not ask again"];
+  }
   if (opts.source) reasons.push(`Org harness (${opts.script ?? 'hook'}): ${opts.reason ?? 'asks to confirm this call'}`);
   if (opts.source === 'hook+policy') reasons.push('Your policy rule: ask before this tool');
   if (opts.rewrittenBy) reasons.push(`Input rewritten by the org harness (${opts.rewrittenBy})`);

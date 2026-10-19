@@ -343,8 +343,13 @@ describe('naby_participant_draft — source facts a live turn cannot show', () =
   });
 
   it('an ai-sdk delegated subagent is handed the toolset WITHOUT the draft tool', () => {
-    expect(SRC).toContain('toolSchemas: toolSchemas.filter((t) => t.name !== PARTICIPANT_DRAFT_TOOL),');
-    expect(SRC).toContain('Object.entries(executors).filter(([name]) => name !== PARTICIPANT_DRAFT_TOOL),');
+    // (The same filters also drop the cross-session tools — cross-session-messaging §3.1.)
+    expect(SRC).toContain(
+      '(t) => t.name !== PARTICIPANT_DRAFT_TOOL && !CROSS_SESSION_TOOL_NAMES.includes(t.name),',
+    );
+    expect(SRC).toContain(
+      '([name]) => name !== PARTICIPANT_DRAFT_TOOL && !CROSS_SESSION_TOOL_NAMES.includes(name),',
+    );
   });
 
   it('the R8.5 line is tied to the tool’s presence', () => {

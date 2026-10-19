@@ -144,6 +144,19 @@ export {
   participantNameError,
   type DraftFields as ParticipantDraftFields,
 } from './participantDraft';
+// MAC-M7 (§8.14): a participant's permission tier — the wire shape and the copy
+// the editor, the roster badge and the draft card share.
+export {
+  PERMISSION_LEVEL_CHOICES,
+  PERMISSION_LEVEL_COPY,
+  permissionIsRisky,
+  permissionLabel,
+  permissionValueFrom,
+  type ParticipantPermissionValue,
+  type PermissionApproval,
+  type PermissionLevel,
+  type PermissionLevelChoice,
+} from './participantPermission';
 // MAC-M6 (§8.13): the recommendation a `new` chip opens Settings on — the editor
 // reads it with the same parser the roster uses.
 export {

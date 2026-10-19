@@ -113,7 +113,15 @@ export interface ChatMessage {
    *  PROMPT and is therefore stored as a `user` row, which is how it came to be
    *  drawn in the reader's own bubble — see toChatMessages for why it is not
    *  moved to the assistant side either. */
-  systemEvent?: { kind: 'task-notification' | 'meta' | 'job-report'; status?: string; detail?: string };
+  /** `cross-session` is a turn another session started (cross-session-messaging
+   *  §3.3): `status` is the direction (`request` | `reply` | `failure`) and
+   *  `peer` the other session's title. */
+  systemEvent?: {
+    kind: 'task-notification' | 'meta' | 'job-report' | 'cross-session';
+    status?: string;
+    detail?: string;
+    peer?: string;
+  };
   // The RUNS this turn launched, as the backend reported their lifecycle:
   // delegated subagents (`Task`) and background shell jobs (`Bash` with
   // `run_in_background`), which arrive on the same four edges and are told apart

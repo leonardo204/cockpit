@@ -51,7 +51,14 @@ export interface ChatMessage {
   /** Why a `system` row is here, and what the pill should say. Mirrors the
    *  client's own field (feature/agent/src/client/types.ts); a reloaded
    *  transcript has to describe itself the same way a live one does. */
-  systemEvent?: { kind: 'task-notification' | 'meta' | 'job-report'; status?: string; detail?: string };
+  systemEvent?: {
+    kind: 'task-notification' | 'meta' | 'job-report' | 'cross-session';
+    status?: string;
+    detail?: string;
+    /** `cross-session`: the OTHER session's title (the sender on a request, the
+     *  target on a reply / failure). */
+    peer?: string;
+  };
   timestamp?: string;
   /** HOW LONG THE TURN TOOK, as the engine measured it (ms). Assistant bubbles
    *  only, and only on turns recorded after this existed — absent everywhere
@@ -166,6 +173,24 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
           role: 'system',
           content: m.content,
           systemEvent: { kind: 'job-report', detail: m.content },
+        });
+        return;
+      }
+      // A TURN ANOTHER SESSION STARTED (cross-session-messaging §3.3) — the
+      // request this tab received, or the answer / failure it got back. Read
+      // from the payload, never from the prompt's text. A notice pill whose
+      // `status` is the direction; the prompt as naby got it is the detail.
+      if (m.crossSession) {
+        out.push({
+          id: `cross-${i}`,
+          role: 'system',
+          content: m.content,
+          systemEvent: {
+            kind: 'cross-session',
+            status: m.crossSession.role,
+            detail: m.content,
+            peer: m.crossSession.fromTitle,
+          },
         });
         return;
       }

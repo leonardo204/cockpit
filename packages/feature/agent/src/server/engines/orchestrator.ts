@@ -97,7 +97,15 @@ export async function dispatchChat(
   // could otherwise both pass a separate check-then-act.
   // runId doubles as the turn's identity marker on the seeded _human event (`_turnId`),
   // letting clients dedup the live user bubble without comparing prompt text.
-  if (!startRun(currentKey, cwd || '', promptText, runId)) {
+  if (
+    !startRun(
+      currentKey,
+      cwd || '',
+      promptText,
+      runId,
+      body.crossSession ? { _crossSession: body.crossSession } : undefined,
+    )
+  ) {
     // No turn is coming from THIS call. Releasing is safe even when the loser of
     // the race is this one: releaseRun stays silent while a run is live under the
     // key, so the winner's turn is never ended early.

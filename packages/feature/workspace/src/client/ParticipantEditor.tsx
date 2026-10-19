@@ -17,8 +17,11 @@
  * models from the stored-model list feature-agent shares with the agent editor
  * (no `auto` — that value is the chat bar's only), and the tools a participant
  * can be granted from `tools.list` (MAC-M4 — built by the turn's own builders).
- * Allowed tools are chips: pick a suggestion or type a name (an MCP tool is
- * `server__tool`).
+ *
+ * WHAT IT MAY DO (§8.14, MAC-M7) is chosen as a permission level — five cards
+ * plus an "ask me every time" switch (`ParticipantPermissionField`). The old
+ * chips (pick a suggestion or type a name; an MCP tool is `server__tool`) are the
+ * folded advanced option, the `custom` level; touching them selects it.
  *
  * OPENED ON A RECOMMENDATION (§8.13, MAC-M6). With `recommendation`, the form is
  * naby's draft of a NEW participant (`formFromDraft`) and a banner on top says
@@ -45,11 +48,14 @@ import {
   newKnowledgeId,
   participantPutBody,
   validateParticipantForm,
+  withToolRefs,
   type FormError,
   type MemoryScope,
   type ParticipantForm,
 } from './participantForm';
 import { runRecommendationChoice, type RecommendationChoice } from './recommendationChoice';
+import { ParticipantPermissionField } from './ParticipantPermissionField';
+import type { ParticipantPermissionValue, PermissionLevelChoice } from '@cockpit/feature-agent';
 
 /** Field chrome without a width, so a sized field never fights `w-full`. */
 const FIELD = 'text-xs px-2 py-1.5 rounded-md border border-border bg-background text-foreground';
@@ -94,19 +100,30 @@ async function readMcpNames(): Promise<string[]> {
   }
 }
 
-/** The tools a participant can be granted on this machine (`tools.list`). */
-async function readToolNames(): Promise<string[]> {
+type ToolLevels = Record<PermissionLevelChoice, string[]>;
+
+/** The tools a participant can be granted on this machine (`tools.list`), and
+ *  the ones each permission level includes (§8.14 — resolved by the server). */
+async function readToolCatalog(): Promise<{ names: string[]; levels: ToolLevels }> {
+  const empty: ToolLevels = { none: [], read: [], write: [], elevated: [], all: [] };
   try {
     const res = await fetch('/api/naby', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'tools.list' }),
     });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { ok?: boolean; tools?: unknown };
-    return Array.isArray(json.tools) ? json.tools.filter((n): n is string => typeof n === 'string') : [];
+    if (!res.ok) return { names: [], levels: empty };
+    const json = (await res.json()) as { ok?: boolean; tools?: unknown; levels?: unknown };
+    const names = Array.isArray(json.tools) ? json.tools.filter((n): n is string => typeof n === 'string') : [];
+    const raw = json.levels && typeof json.levels === 'object' ? (json.levels as Record<string, unknown>) : {};
+    const levels = { ...empty };
+    for (const k of Object.keys(empty) as PermissionLevelChoice[]) {
+      const v = raw[k];
+      if (Array.isArray(v)) levels[k] = v.filter((n): n is string => typeof n === 'string');
+    }
+    return { names, levels };
   } catch {
-    return [];
+    return { names: [], levels: empty };
   }
 }
 
@@ -306,12 +323,17 @@ export const ParticipantEditor = memo(function ParticipantEditor({
   const [mcpNames, setMcpNames] = useState<string[]>([]);
   const [skills, setSkills] = useState<{ name: string; description?: string }[]>([]);
   const [toolNames, setToolNames] = useState<string[]>([]);
+  const [toolLevels, setToolLevels] = useState<ToolLevels | undefined>(undefined);
 
   useEffect(() => {
     let alive = true;
     void readMcpNames().then((n) => alive && setMcpNames(n));
     void readSkillNames(cwd).then((s) => alive && setSkills(s));
-    void readToolNames().then((n) => alive && setToolNames(n));
+    void readToolCatalog().then((c) => {
+      if (!alive) return;
+      setToolNames(c.names);
+      setToolLevels(c.levels);
+    });
     return () => {
       alive = false;
     };
@@ -406,12 +428,18 @@ export const ParticipantEditor = memo(function ParticipantEditor({
     [recommendation, form, onCancel, onSaved, t],
   );
 
+  // Touching the chip list means "pick tools yourself" — the `custom` level.
+  const setToolRefs = (next: string[]) => setForm((f) => withToolRefs(f, next));
   const addTool = () => {
     const name = toolDraft.trim();
     if (!name) return;
-    if (!form.toolRefs.includes(name)) set('toolRefs', [...form.toolRefs, name]);
+    if (!form.toolRefs.includes(name)) setToolRefs([...form.toolRefs, name]);
     setToolDraft('');
   };
+  const setPermission = useCallback(
+    (permission: ParticipantPermissionValue) => setForm((f) => ({ ...f, permission })),
+    [],
+  );
 
   const modelOptions = CLAUDE_MODELS_FOR_AGENTS.filter((o) => o.value !== '');
   const modelKnown = form.model === '' || modelOptions.some((o) => o.value === form.model);
@@ -724,63 +752,70 @@ export const ParticipantEditor = memo(function ParticipantEditor({
             <option value="plan">{t('participants.editor.permPlan', { defaultValue: 'Plan (read-only)' })}</option>
           </select>
         </label>
-        <div className="space-y-1">
-          <span className={LABEL}>{t('participants.editor.toolRefs', { defaultValue: 'Allowed tools' })}</span>
-          <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background p-1.5">
-            {form.toolRefs.map((tool) => (
-              <span key={tool} className="flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
-                {tool}
-                <button
-                  type="button"
-                  onClick={() => set('toolRefs', form.toolRefs.filter((x) => x !== tool))}
-                  className="text-muted-foreground hover:text-destructive"
-                  aria-label={t('participants.editor.remove', { defaultValue: 'Remove' })}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            <input
-              value={toolDraft}
-              onChange={(e) => setToolDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing) return;
-                if (e.key === 'Enter' || e.key === ',') {
-                  e.preventDefault();
-                  addTool();
-                }
-              }}
-              onBlur={addTool}
-              placeholder={t('participants.editor.toolRefsPh', { defaultValue: 'Type a tool name, then Enter' })}
-              className="min-w-[10rem] flex-1 bg-transparent px-1 py-0.5 font-mono text-xs text-foreground outline-none"
-            />
-          </div>
-          {toolNames.some((n) => !form.toolRefs.includes(n)) ? (
-            <div className="flex flex-wrap items-center gap-1" data-testid="tool-suggestions">
-              <span className="text-[0.714rem] text-muted-foreground">
-                {t('participants.editor.toolSuggest', { defaultValue: 'Available here:' })}
-              </span>
-              {toolNames
-                .filter((n) => !form.toolRefs.includes(n))
-                .map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => set('toolRefs', [...form.toolRefs, n])}
-                    className="rounded-sm border border-dashed border-border px-1.5 py-0.5 font-mono text-[0.714rem] text-muted-foreground hover:border-brand/45 hover:text-brand"
-                  >
-                    + {n}
-                  </button>
+        <ParticipantPermissionField
+          value={form.permission}
+          levels={toolLevels}
+          onChange={setPermission}
+          customEditor={
+            <div className="space-y-1">
+              <span className={LABEL}>{t('participants.editor.toolRefs', { defaultValue: 'Allowed tools' })}</span>
+              <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background p-1.5">
+                {form.toolRefs.map((tool) => (
+                  <span key={tool} className="flex items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+                    {tool}
+                    <button
+                      type="button"
+                      onClick={() => setToolRefs(form.toolRefs.filter((x) => x !== tool))}
+                      className="text-muted-foreground hover:text-destructive"
+                      aria-label={t('participants.editor.remove', { defaultValue: 'Remove' })}
+                    >
+                      ×
+                    </button>
+                  </span>
                 ))}
+                <input
+                  value={toolDraft}
+                  onChange={(e) => setToolDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing) return;
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault();
+                      addTool();
+                    }
+                  }}
+                  onBlur={addTool}
+                  placeholder={t('participants.editor.toolRefsPh', { defaultValue: 'Type a tool name, then Enter' })}
+                  className="min-w-[10rem] flex-1 bg-transparent px-1 py-0.5 font-mono text-xs text-foreground outline-none"
+                />
+              </div>
+              {toolNames.some((n) => !form.toolRefs.includes(n)) ? (
+                <div className="flex flex-wrap items-center gap-1" data-testid="tool-suggestions">
+                  <span className="text-[0.714rem] text-muted-foreground">
+                    {t('participants.editor.toolSuggest', { defaultValue: 'Available here:' })}
+                  </span>
+                  {toolNames
+                    .filter((n) => !form.toolRefs.includes(n))
+                    .map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => setToolRefs([...form.toolRefs, n])}
+                        className="rounded-sm border border-dashed border-border px-1.5 py-0.5 font-mono text-[0.714rem] text-muted-foreground hover:border-brand/45 hover:text-brand"
+                      >
+                        + {n}
+                      </button>
+                    ))}
+                </div>
+              ) : null}
+              <p className="text-[0.714rem] text-muted-foreground">
+                {t('participants.editor.toolRefsHint', {
+                  defaultValue:
+                    'Listed tools run without asking; any other tool asks first. MCP tools are named server__tool.',
+                })}
+              </p>
             </div>
-          ) : null}
-          <p className="text-[0.714rem] text-muted-foreground">
-            {t('participants.editor.toolRefsHint', {
-              defaultValue:
-                'Empty = no tools. A participant’s tool calls still pass the turn’s approval gate. MCP tools are named server__tool.',
-            })}
-          </p>
-        </div>
+          }
+        />
       </Section>
 
       {/* 5 — external resources */}

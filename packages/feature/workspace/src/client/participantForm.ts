@@ -13,7 +13,14 @@
  * unchanged, so saving an imported participant never strips what it came with.
  */
 
-import { AVATAR_PRESETS, COLOR_PRESETS, PARTICIPANT_HEX, participantNameError } from '@cockpit/feature-agent';
+import {
+  AVATAR_PRESETS,
+  COLOR_PRESETS,
+  PARTICIPANT_HEX,
+  participantNameError,
+  permissionValueFrom,
+  type ParticipantPermissionValue,
+} from '@cockpit/feature-agent';
 
 export type MemoryScope = 'session' | 'project' | 'user' | 'org';
 export type PermissionMode = 'default' | 'plan';
@@ -52,6 +59,10 @@ export type ParticipantForm = {
   knowledge: KnowledgeDraft[];
   policy: string;
   permissionMode: PermissionMode;
+  /** The permission tier (§8.14): one level and one approval mode. `toolRefs`
+   *  are read only while the level is `custom`, but kept either way, so going
+   *  back to "pick tools" restores the list. */
+  permission: ParticipantPermissionValue;
   toolRefs: string[];
   mcpServers: string[];
   skills: string[];
@@ -96,6 +107,7 @@ export function blankParticipantForm(): ParticipantForm {
     knowledge: [],
     policy: '',
     permissionMode: 'default',
+    permission: { level: 'none', approval: 'auto' },
     toolRefs: [],
     mcpServers: [],
     skills: [],
@@ -115,6 +127,15 @@ export function formFromParticipant(row: unknown): ParticipantForm {
   const guard = isObj(p.guardrails) ? p.guardrails : {};
   const params = isObj(p.params) ? p.params : {};
   const scope = row.memoryScope;
+  // The server sends the EFFECTIVE permission (`participant.list` resolves the
+  // legacy reading with the runtime's own rule); the fallbacks only cover a row
+  // that did not come from there.
+  const permission: ParticipantPermissionValue =
+    permissionValueFrom(row.permission) ??
+    permissionValueFrom(p.permission) ??
+    (strList(row.toolRefs).length > 0 || strList(p.mcpServers).length > 0
+      ? { level: 'custom', approval: 'auto' }
+      : { level: 'none', approval: 'auto' });
   return {
     ...(typeof row.id === 'string' ? { id: row.id } : {}),
     name: str(row.name),
@@ -145,6 +166,7 @@ export function formFromParticipant(row: unknown): ParticipantForm {
       : [],
     policy: str(guard.policy),
     permissionMode: guard.permissionMode === 'plan' ? 'plan' : 'default',
+    permission,
     toolRefs: strList(row.toolRefs),
     mcpServers: strList(p.mcpServers),
     skills: strList(p.skills),
@@ -170,13 +192,16 @@ export type DraftFieldsInput = {
   greeting: string;
   avatar: { kind: 'emoji'; value: string } | { kind: 'image'; dataUrl: string };
   color: string;
+  /** §8.14 R10.4: a draft may name a permission tier; absent = no tools. */
+  permission?: ParticipantPermissionValue;
 };
 
 /**
  * Fill the form from a draft — naby's recommendation of a NEW participant
  * (multi-agent-chat §8.13). A new participant, so no `id`; the safe defaults of
- * a draft (R8.1, R9.2): no tools, no MCP servers, no skills, the session's model
- * and `memoryScope: 'session'`. The user widens them here before saving.
+ * a draft (R8.1, R9.2): no tools (permission `none` unless the draft names a
+ * tier, §8.14), no MCP servers, no skills, the session's model and
+ * `memoryScope: 'session'`. The user widens them here before saving.
  */
 export function formFromDraft(draft: DraftFieldsInput): ParticipantForm {
   const base = blankParticipantForm();
@@ -191,12 +216,19 @@ export function formFromDraft(draft: DraftFieldsInput): ParticipantForm {
     instructions: draft.instructions,
     greeting: draft.greeting,
     policy: draft.guardrailsPolicy,
+    permission: draft.permission ?? { level: 'none', approval: 'auto' },
     toolRefs: [],
     mcpServers: [],
     skills: [],
     model: '',
     memoryScope: 'session',
   };
+}
+
+/** The form with a new chip list — which means "pick tools yourself": touching
+ *  the chips selects the `custom` level (§8.14), keeping the approval mode. */
+export function withToolRefs(f: ParticipantForm, toolRefs: string[]): ParticipantForm {
+  return { ...f, toolRefs, permission: { ...f.permission, level: 'custom' } };
 }
 
 /** One problem with the form. `code` is an i18n key under `participants.editor.err`. */
@@ -287,6 +319,13 @@ export function participantPutBody(f: ParticipantForm): Record<string, unknown> 
     },
     mcpServers: [...f.mcpServers],
     skills: [...f.skills],
+    // `approvedTools` is always sent (R10.7): an explicit list, even [], is how a
+    // revoked chip reaches the server — an absent key would keep the stored list.
+    permission: {
+      level: f.permission.level,
+      approval: f.permission.approval,
+      approvedTools: [...(f.permission.approvedTools ?? [])],
+    },
     ...(Object.keys(params).length ? { params } : {}),
     ...(f.keep.origin !== undefined ? { origin: f.keep.origin } : {}),
     ...(f.keep.extensions !== undefined ? { extensions: f.keep.extensions } : {}),

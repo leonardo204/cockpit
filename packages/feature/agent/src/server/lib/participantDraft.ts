@@ -19,10 +19,13 @@
 //      prompt is raised HERE, inside the executor, after the gate has already
 //      said allow. So a policy can tighten (deny) but never loosen.
 //   2. A DRAFT IS NARROW (R8.1). Only identity and words: handle, display name,
-//      description, instructions, guardrail policy, greeting, avatar, colour.
-//      Tools, MCP servers, skills, model and memory scope are not in the schema;
-//      a new participant gets the safe defaults (`toolRefs: []`, no MCP, no
-//      skills, `memoryScope: 'session'`), and an update keeps the stored ones.
+//      description, instructions, guardrail policy, greeting, avatar, colour —
+//      and, since MAC-M7 (§8.14 R10.4), an optional permission LEVEL when the
+//      user said what the participant may do. Individual tools, MCP servers,
+//      skills, model and memory scope are not in the schema; a new participant
+//      gets the safe defaults (`toolRefs: []`, no MCP, no skills, `memoryScope:
+//      'session'`, and no tools unless a level was asked for), and an update
+//      keeps the stored ones. The card shows the level before anything is saved.
 //   3. ONE WRITE PATH (R8.4). The approved draft — with the user's corrections
 //      merged and validated again — is written by `putParticipant`, the same
 //      function `participant.put` uses, and joined to the session by
@@ -32,12 +35,17 @@ import type {
   Agent,
   Executor,
   GateDecision,
+  ParticipantPermission,
   ParticipantProfile,
   Store,
   ToolOutput,
   ToolSchema,
 } from '../../../../../../../dist/naby-runtime.mjs';
-import { defaultParticipantProfile, parseParticipantProfile } from '../../../../../../../dist/naby-runtime.mjs';
+import {
+  defaultParticipantProfile,
+  parseParticipantProfile,
+  participantPermissionOf,
+} from '../../../../../../../dist/naby-runtime.mjs';
 import {
   PARTICIPANT_CREATE_TOOL,
   PARTICIPANT_DRAFT_TOOL_NAME,
@@ -65,14 +73,15 @@ export const DRAFT_LIMITS = {
 /** R8.5 — the line naby's system prompt carries whenever this tool is offered. */
 export const PARTICIPANT_DRAFT_RULE = [
   '## Creating or changing participants',
-  `- When the user asks you to create a conversation participant, or to change one's instructions or description, call \`${PARTICIPANT_DRAFT_TOOL}\` with a draft and wait for the user's approval on the card. Do not send them to Settings. Do not put tools, permissions, MCP servers, skills or a model they did not ask for into a draft. If the draft is declined, do not try again — ask the user what to change.`,
+  `- When the user asks you to create a conversation participant, or to change one's instructions or description, call \`${PARTICIPANT_DRAFT_TOOL}\` with a draft and wait for the user's approval on the card. Do not send them to Settings. Do not put tools, permissions, MCP servers, skills or a model they did not ask for into a draft — set \`permission\` only when the user said what the participant may do. If the draft is declined, do not try again — ask the user what to change.`,
 ].join('\n');
 
 const TOOL_DESCRIPTION = [
   'Draft a conversation participant — an agent that can speak in this chat — either a new one (action "create") or a change to an existing one (action "update").',
   'Use it whenever the user asks you to make, set up, rename or change a participant (e.g. "make me a translator participant"). Nothing is saved by this call: the user sees the draft on an approval card, may correct the name, display name, description, avatar and colour, and approves or declines. The call returns once they answer.',
   '`instructions` is the participant\'s system prompt, written to it in the second person. `description` is one sentence saying when the participant should be handed work — you read it later to decide whom to hand a request to.',
-  'Tools, MCP servers, skills, the model and memory are NOT part of a draft: a new participant starts with none, and only the user widens them in Settings. Do not promise them.',
+  'Individual tools, MCP servers, skills, the model and memory are NOT part of a draft: a new participant starts with none, and only the user widens them in Settings. Do not promise them.',
+  '`permission` is optional and only for when the USER said what the participant may do: level "read" (look at files and the web only), "write" (also edit project files), "elevated" (also run commands, start jobs, send messages), "all" (every tool in the chat), or "none"; approval "always" when they want to be asked before every tool use. Leave it out otherwise — the participant then starts with no tools.',
   'For "update", pass the participant\'s id or current @handle in `id`, and only the fields that change.',
   'If the result says the draft was declined or timed out, do not call again — ask the user what they want instead.',
 ].join(' ');
@@ -94,6 +103,15 @@ export const PARTICIPANT_DRAFT_SCHEMA: ToolSchema = {
       avatar: { type: 'string', description: 'one emoji, e.g. 🌐' },
       color: { type: 'string', description: 'hex colour like #0ea5e9' },
       addToSession: { type: 'boolean', description: 'add it to this conversation once approved (default true for create)' },
+      permission: {
+        type: 'object',
+        description: 'optional, only when the user said what it may do: a permission level and whether to ask before every tool use',
+        properties: {
+          level: { type: 'string', enum: ['none', 'read', 'write', 'elevated', 'all'] },
+          approval: { type: 'string', enum: ['auto', 'always'] },
+        },
+        required: ['level'],
+      },
     },
     required: ['action'],
   },
@@ -116,6 +134,10 @@ export type DraftToolInput = {
   avatar?: string;
   color?: string;
   addToSession?: boolean;
+  /** §8.14 R10.4 — only when the user said what the participant may do. The
+   *  model may not ask for `custom` (that is a tool list, which a draft never
+   *  carries); a carried-over update value may be anything stored. */
+  permission?: ParticipantPermission;
 };
 
 /** The fields a draft can change — the before/after comparison runs over these. */
@@ -128,6 +150,7 @@ export const DRAFT_FIELDS = [
   'greeting',
   'avatar',
   'color',
+  'permission',
 ] as const;
 export type DraftField = (typeof DRAFT_FIELDS)[number];
 
@@ -141,6 +164,9 @@ export type DraftFields = {
   greeting: string;
   avatar: ParticipantProfile['avatar'];
   color: string;
+  /** §8.14: the permission tier. A create carries it only when one was asked
+   *  for (absent = no tools); an update's sides always carry the effective one. */
+  permission?: ParticipantPermission;
 };
 
 /** The draft as it travels on `approval_request.input.draft`. */
@@ -193,6 +219,18 @@ export function parseDraftToolInput(raw: unknown): { ok: true; input: DraftToolI
     if (typeof r.addToSession !== 'boolean') return { ok: false, error: 'addToSession must be a boolean' };
     input.addToSession = r.addToSession;
   }
+  if (r.permission !== undefined && r.permission !== null) {
+    const p = r.permission;
+    if (typeof p !== 'object' || Array.isArray(p)) return { ok: false, error: 'permission must be an object' };
+    const { level, approval } = p as Record<string, unknown>;
+    if (level !== 'none' && level !== 'read' && level !== 'write' && level !== 'elevated' && level !== 'all') {
+      return { ok: false, error: "permission.level must be 'none', 'read', 'write', 'elevated' or 'all'" };
+    }
+    if (approval !== undefined && approval !== null && approval !== 'auto' && approval !== 'always') {
+      return { ok: false, error: "permission.approval must be 'auto' or 'always'" };
+    }
+    input.permission = { level, approval: approval === 'always' ? 'always' : 'auto' };
+  }
   return { ok: true, input };
 }
 
@@ -209,7 +247,12 @@ export function draftFieldsOf(agent: Agent, profile: ParticipantProfile): DraftF
     greeting: profile.greeting ?? '',
     avatar: profile.avatar,
     color: profile.color,
+    permission: participantPermissionOf({ toolRefs: agent.toolRefs, profile }),
   };
+}
+
+function samePermission(a: ParticipantPermission | undefined, b: ParticipantPermission | undefined): boolean {
+  return (a?.level ?? 'none') === (b?.level ?? 'none') && (a?.approval ?? 'auto') === (b?.approval ?? 'auto');
 }
 
 function sameAvatar(a: DraftFields['avatar'], b: DraftFields['avatar']): boolean {
@@ -221,7 +264,11 @@ function sameAvatar(a: DraftFields['avatar'], b: DraftFields['avatar']): boolean
 /** Which draftable fields differ between two sides. */
 export function changedDraftFields(before: DraftFields, after: DraftFields): DraftField[] {
   return DRAFT_FIELDS.filter((f) =>
-    f === 'avatar' ? !sameAvatar(before.avatar, after.avatar) : before[f] !== after[f],
+    f === 'avatar'
+      ? !sameAvatar(before.avatar, after.avatar)
+      : f === 'permission'
+        ? !samePermission(before.permission, after.permission)
+        : before[f] !== after[f],
   );
 }
 
@@ -330,6 +377,15 @@ export function composeDraft(
     candidate.mcpServers = [];
     candidate.skills = [];
   }
+  // The permission tier (§8.14 R10.4): written only when the draft asks for one
+  // that differs from what the participant has — so an update that does not
+  // mention it leaves a legacy row's reading exactly as it was.
+  const permission = input.permission ?? before?.permission;
+  if (input.permission && !(before && samePermission(before.permission, input.permission))) {
+    // Tools the user already allowed for it (R10.7) survive a level change.
+    const kept = baseProfile.permission?.approvedTools;
+    candidate.permission = { ...input.permission, ...(kept?.length ? { approvedTools: kept } : {}) };
+  }
   let profile: ParticipantProfile;
   try {
     profile = parseParticipantProfile(candidate);
@@ -346,6 +402,7 @@ export function composeDraft(
     greeting: profile.greeting ?? '',
     avatar: profile.avatar,
     color: profile.color,
+    ...(permission ? { permission } : {}),
   };
   const changed = before ? changedDraftFields(before, fields) : undefined;
   if (changed && changed.length === 0) return { ok: false, error: 'the draft changes nothing' };
@@ -402,6 +459,8 @@ export function draftInputWithEdits(draft: ParticipantDraft, edits: ApprovalExtr
         : {}),
     color: e.color ?? draft.color,
     addToSession: draft.addToSession,
+    // Not editable on the card; carried so the second composition writes it.
+    ...(draft.permission ? { permission: draft.permission } : {}),
   };
 }
 
@@ -426,6 +485,7 @@ const FIELD_LABEL_KO: Record<DraftField, string> = {
   greeting: '첫 인사',
   avatar: '아바타',
   color: '색',
+  permission: '권한',
 };
 
 export type DraftOutcome =

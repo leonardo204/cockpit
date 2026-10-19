@@ -204,7 +204,15 @@ export function getAttachAnnouncement(key: string): AttachAnnouncement {
  * text comparison suppresses the new turn's bubble. `_ts` (= startedAt) rides along for
  * the disk-copy check on the live-event path (no snapshot in hand there).
  */
-export function startRun(key: string, cwd: string, promptText?: string, runId?: string): boolean {
+export function startRun(
+  key: string,
+  cwd: string,
+  promptText?: string,
+  runId?: string,
+  /** Extra fields for the seeded `_human` event (e.g. `_crossSession`, so a tab
+   *  draws a cross-session turn's notice live). Absent = the event as before. */
+  humanExtra?: Record<string, unknown>,
+): boolean {
   const prev = registry.get(key);
   // Atomic one-active guard (#10/#5): refuse to start if a turn is already live under `key`.
   // The check and the registry.set below run in one synchronous tick (no await between), so two
@@ -239,6 +247,7 @@ export function startRun(key: string, cwd: string, promptText?: string, runId?: 
       _human: true,
       ...(runId ? { _turnId: runId } : {}),
       _ts: startedAt,
+      ...(humanExtra ?? {}),
       message: { role: 'user', content: promptText },
     });
   }

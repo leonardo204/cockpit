@@ -67,6 +67,9 @@ export interface StreamEvent {
   _human?: boolean; // synthetic human-prompt user event (rendered by useLiveStream)
   _turnId?: string; // per-turn unique id (the dispatch runId) — identity for live-bubble dedup
   _ts?: number; // server clock at startRun — time boundary for disk-copy dedup
+  /** On a `_human` event: the turn was started by another session
+   *  (cross-session-messaging §3.3) — drawn as a notice pill, not a user bubble. */
+  _crossSession?: { requestId?: string; fromSessionId?: string; fromTitle?: string; role?: string };
   message?: { model?: string; role?: string; content?: unknown };
   event?: { type?: string; delta?: { type?: string; text?: string } };
   result?: unknown;

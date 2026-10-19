@@ -13,6 +13,7 @@
  */
 
 import type { ParticipantAvatar } from './participants';
+import { permissionValueFrom, type ParticipantPermissionValue } from './participantPermission';
 
 // ---------------------------------------------------------------------------
 // Identity rules shared with the Settings editor
@@ -59,7 +60,8 @@ export type DraftField =
   | 'guardrailsPolicy'
   | 'greeting'
   | 'avatar'
-  | 'color';
+  | 'color'
+  | 'permission';
 
 export interface DraftFields {
   name: string;
@@ -70,6 +72,9 @@ export interface DraftFields {
   greeting: string;
   avatar: ParticipantAvatar;
   color: string;
+  /** §8.14: the permission tier, when the draft names one (an update's sides
+   *  always do). Shown on the card, never edited there. */
+  permission?: ParticipantPermissionValue;
 }
 
 /** An `approval_request` with `source:'participant_draft'`, as the card draws it. */
@@ -98,7 +103,9 @@ function avatarFrom(raw: unknown): ParticipantAvatar {
 }
 
 function fieldsFrom(raw: Record<string, unknown>): DraftFields {
+  const permission = permissionValueFrom(raw.permission);
   return {
+    ...(permission ? { permission } : {}),
     name: str(raw.name),
     displayName: str(raw.displayName),
     description: str(raw.description),
@@ -126,6 +133,7 @@ const ALL_FIELDS: DraftField[] = [
   'greeting',
   'avatar',
   'color',
+  'permission',
 ];
 
 /** Read a draft off a raw `approval_request` detail, or `null` when it is not one. */

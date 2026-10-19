@@ -68,6 +68,15 @@
  *   m6-settings-toggle       the "나비의 참가자 추천" switch in the participants section
  * Nothing is clicked that writes: the menu and the editor are only opened.
  *
+ * With `--permission` (MAC-M7, multi-agent-chat §8.14), also — in Settings › naby
+ * › Participants, the editor opened on the first participant:
+ *   m7-permission            the permission field (five cards, the "ask me every
+ *                            time" switch, the folded "pick tools yourself"),
+ *                            with the "Read only" card's tool list open
+ *   m7-permission-elevated   after clicking "중요 권한" + the switch: the warning
+ *   m7-permission-custom     the "pick tools yourself" option unfolded
+ * The clicks only change the open form; the editor is cancelled, nothing saved.
+ *
  * A surface that is not reachable (no project open, no session) is skipped with
  * a log line, not failed: the script is a camera, not a test.
  *
@@ -95,6 +104,7 @@ const participants = process.argv.includes('--participants');
 const importFile = arg('import', '');
 const drafts = process.argv.includes('--drafts');
 const recommendations = process.argv.includes('--recommendations');
+const permission = process.argv.includes('--permission');
 
 if (!base || !out) {
   console.error('usage: node scripts/ui-screenshots.mjs --base <url> --out <dir> [--themes light,dark]');
@@ -365,6 +375,44 @@ async function participantSettingsShots(page, theme) {
   }
 }
 
+/** MAC-M7: the editor's permission field (see header). Writes nothing. */
+async function permissionShots(page, theme) {
+  const section = page.locator('[data-testid="participant-section"]').first();
+  if (!(await section.count())) {
+    console.log(`[${theme}] no participant section in settings; skipping permission shots`);
+    return;
+  }
+  const edit = section.locator('button', { hasText: lang === 'ko-KR' ? '편집' : 'Edit' }).first();
+  if (!(await edit.count())) {
+    console.log(`[${theme}] no participant to edit; skipping permission shots`);
+    return;
+  }
+  await edit.click();
+  await settle(page, 900);
+  const field = page.locator('[data-testid="permission-field"]').first();
+  if (!(await field.count())) {
+    console.log(`[${theme}] no permission field; skipping`);
+    return;
+  }
+  await page.locator('[data-testid="permission-level-read"]').first().click();
+  await page.locator('[data-testid="permission-tools-read"] summary').first().click();
+  await field.scrollIntoViewIfNeeded();
+  await settle(page, 400);
+  await shoot(field, `${theme}-m7-permission`);
+  await page.locator('[data-testid="permission-tools-read"] summary').first().click();
+  await page.locator('[data-testid="permission-level-elevated"]').first().click();
+  await page.locator('[data-testid="permission-always"]').first().click();
+  await settle(page, 300);
+  await shoot(field, `${theme}-m7-permission-elevated`);
+  await page.locator('[data-testid="permission-custom"] summary').first().click();
+  await settle(page, 300);
+  await field.scrollIntoViewIfNeeded();
+  await shoot(field, `${theme}-m7-permission-custom`);
+  const cancel = page.locator('[data-testid="participant-editor"] button', { hasText: lang === 'ko-KR' ? '취소' : 'Cancel' }).last();
+  if (await cancel.count()) await cancel.click();
+  await settle(page, 400);
+}
+
 /** MAC-M4: Settings › naby › Participants › Import, with `importFile`. */
 async function participantImportShots(page, theme) {
   const section = page.locator('[data-testid="participant-section"]').first();
@@ -510,6 +558,7 @@ async function runTheme(browser, theme) {
       await shoot(page, `${theme}-settings-${key}`);
       if (importFile && key === 'naby') await participantImportShots(page, theme);
       if (participants && key === 'naby') await participantSettingsShots(page, theme);
+      if (permission && key === 'naby') await permissionShots(page, theme);
     }
     await page.keyboard.press('Escape');
   } else {

@@ -327,6 +327,11 @@
     }
   },
   "agentManager": {
+    "crossSession": {
+      "toggle": "다른 탭에 일 맡기기",
+      "hint": "요청하면 나비가 같은 프로젝트의 다른 탭에 일을 보내고, 그 탭의 답을 이 탭으로 받아 옵니다.",
+      "failed": "저장하지 못했습니다: {{error}}"
+    },
     "title": "나비",
     "description": "나비와 가져온 에이전트를 입력창에서 @이름으로 부릅니다.",
     "subagentHint": "특정 역할이 필요하면 하네스에서 서브에이전트를 추가합니다.",
@@ -622,6 +627,12 @@
     "memoryConfirmed": "기억했어요",
     "confirmMemoryHint": "동의하시면 나비가 앞으로 이대로 해요. 나비가 혼자 추측한 것보다 우선합니다.",
     "jobReportNotice": "백그라운드 작업이 끝났어요 — 나비가 받은 내용은 눌러서 볼 수 있어요",
+    "crossSession": {
+      "request": "세션 ‹{{title}}›에서 온 요청",
+      "reply": "세션 ‹{{title}}›의 답",
+      "failure": "세션 ‹{{title}}›에 보낸 요청이 실패했습니다",
+      "untitled": "제목 없음"
+    },
     "apiRetryBusy": "서버가 붐벼서 다시 보내는 중이에요. 사용량 한도 때문이 아니에요.",
     "apiRetryTransient": "요청이 한 번 실패해서 다시 보내는 중이에요.",
     "apiRetryAttempt": "{{maxRetries}}번 중 {{attempt}}번째 시도, {{seconds}}초 뒤",
@@ -2148,7 +2159,9 @@
     "policyReason": "내 정책 규칙: 이 도구는 실행 전에 묻습니다",
     "rewrittenBy": "조직 하네스({{script}})가 바꾼 입력입니다",
     "rememberPolicyOnly": "'항상' 버튼은 내 정책 규칙에만 적용됩니다. 조직 하네스는 호출마다 따로 판단합니다.",
-    "askedBy": "요청한 참가자: {{name}}"
+    "askedBy": "요청한 참가자: {{name}}",
+    "participantAlways": "이 참가자는 도구를 쓸 때마다 묻도록 설정되어 있습니다.",
+    "participantOutside": "이 참가자의 권한 수준 밖의 도구입니다. 허용하면 이 참가자에게 기억해 두고 다시 묻지 않습니다."
   },
   "checkin": {
     "title": "나비가 어떻게 진행할지 묻습니다",
@@ -2447,7 +2460,7 @@
       "updateQuestion": "@{{name}} 참가자를 이렇게 고치겠습니까?",
       "descriptionHint": "나비가 이 문장을 읽고 언제 일을 맡길지 정합니다.",
       "avatarImage": "이미지",
-      "safeDefaults": "도구·MCP 서버·스킬 없이 시작하고, 이 세션 안에서만 기억합니다. 넓히려면 설정에서 바꿉니다.",
+      "safeDefaults": "'도구 없음'(모든 도구를 먼저 묻습니다)으로 시작하고, MCP 서버·스킬 없이 이 세션만 기억합니다. 설정에서 바꿉니다.",
       "before": "변경 전",
       "after": "변경 후",
       "decline": "거절",
@@ -2465,7 +2478,8 @@
         "guardrailsPolicy": "가드레일 정책",
         "greeting": "첫 인사",
         "avatar": "아바타",
-        "color": "색"
+        "color": "색",
+        "permission": "권한"
       },
       "err": {
         "name": "핸들을 입력합니다.",
@@ -2478,7 +2492,8 @@
         "avatar": "이모지를 고릅니다.",
         "avatarLong": "이모지 아바타는 {{max}}자까지입니다.",
         "color": "#4F46E5 같은 색을 고릅니다."
-      }
+      },
+      "safeDefaultsWithPermission": "MCP 서버와 스킬 없이 시작하고 이 세션만 기억합니다. 설정에서 바꿉니다."
     },
     "settings": {
       "title": "참가자",
@@ -2561,7 +2576,7 @@
       "permPlan": "계획 (읽기 전용)",
       "toolRefs": "허용 도구",
       "toolRefsPh": "도구 이름을 입력하고 Enter",
-      "toolRefsHint": "비우면 도구를 쓰지 않습니다. 참가자의 도구 호출도 그 턴의 승인 게이트를 지납니다. MCP 도구 이름은 server__tool 형식입니다.",
+      "toolRefsHint": "적은 도구는 묻지 않고 쓰고, 그 밖의 도구는 먼저 묻습니다. MCP 도구 이름은 server__tool 형식입니다.",
       "mcpHint": "API는 MCP 서버를 통해서만 연결합니다. 나비의 MCP 서버 중 이 참가자에게 보일 것만 고릅니다.",
       "mcpNone": "등록된 MCP 서버가 없습니다.",
       "skillsNone": "등록된 스킬이 없습니다.",
@@ -2611,6 +2626,40 @@
       "listTitle": "나비의 추천",
       "more": "+{{count}} 추천",
       "review": "설정에서 보기"
+    },
+    "permission": {
+      "label": "할 수 있는 일",
+      "level": {
+        "none": "도구 없음",
+        "read": "읽기만",
+        "write": "쓰기까지",
+        "elevated": "중요 권한",
+        "all": "모든 권한",
+        "custom": "직접 고르기"
+      },
+      "desc": {
+        "none": "모든 도구를 쓰기 전에 먼저 묻습니다.",
+        "read": "파일과 웹을 묻지 않고 읽고 찾습니다. 그 밖의 도구는 먼저 묻습니다.",
+        "write": "프로젝트 파일 고치기·만들기까지 묻지 않고 합니다.",
+        "elevated": "명령 실행, 백그라운드 작업 시작, 메시지 보내기까지 묻지 않고 합니다.",
+        "all": "고르지 않은 MCP 서버까지 대화의 모든 도구를 묻지 않고 씁니다.",
+        "custom": "적은 도구는 묻지 않고 쓰고, 그 밖의 도구는 먼저 묻습니다."
+      },
+      "alwaysShort": "매번 승인",
+      "showTools": "포함된 도구 보기",
+      "noTools": "이 기기에는 없습니다",
+      "warnAll": "명령·메시지와 모든 MCP 서버를 포함해 대화의 모든 도구를 쓸 수 있습니다.",
+      "warnElevated": "명령을 실행하고 메시지를 보낼 수 있습니다. 스냅샷으로 되돌릴 수 없는 일입니다.",
+      "mcpNote": "'외부 자원'에서 고른 서버의 MCP 도구는 수준을 따릅니다('읽기만'에는 서버가 읽기 전용이라고 밝힌 도구만 들어갑니다).",
+      "always": "도구를 쓸 때마다 나에게 묻기",
+      "alwaysHint": "모든 도구 호출을 실행 전에 묻습니다. 답할 사람이 없는 곳에서는 호출을 거절합니다.",
+      "customSummary": "직접 고르기 (고급)",
+      "inUse": "사용 중",
+      "useCustom": "아래 목록의 도구만 쓰기",
+      "levelHint": "고른 수준 안의 도구는 묻지 않고 쓰고, 밖의 도구는 먼저 묻습니다. 한 번 허용한 도구는 다시 묻지 않습니다.",
+      "approvedLabel": "허용해 둔 도구",
+      "revoke": "{{name}} 다시 묻기",
+      "approvedHint": "승인 카드에서 한 번 허용해 더는 묻지 않는 도구입니다. ×로 지우면 다시 묻습니다."
     }
   },
   "participantImport": {

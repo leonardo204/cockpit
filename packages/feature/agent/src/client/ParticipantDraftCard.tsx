@@ -30,6 +30,7 @@ import {
   type DraftFormError,
   type ParticipantDraftCard as DraftCardData,
 } from './participantDraft';
+import { permissionIsRisky, permissionLabel } from './participantPermission';
 
 const BTN = 'text-xs font-semibold px-3 py-1.5 rounded-md border disabled:opacity-50 transition-colors';
 const FIELD = 'text-xs px-2 py-1.5 rounded-md border border-border bg-background text-foreground';
@@ -44,6 +45,7 @@ const FIELD_LABEL: Record<DraftField, { key: string; en: string }> = {
   greeting: { key: 'participants.draft.field.greeting', en: 'Greeting' },
   avatar: { key: 'participants.draft.field.avatar', en: 'Avatar' },
   color: { key: 'participants.draft.field.color', en: 'Colour' },
+  permission: { key: 'participants.draft.field.permission', en: 'Permission' },
 };
 
 function FieldError({ errors, field }: { errors: DraftFormError[]; field: DraftFormError['field'] }) {
@@ -103,6 +105,9 @@ export const ParticipantDraftCard = memo(function ParticipantDraftCard({
       : card.draft.avatar;
   const color = /^#/.test(form.color) ? form.color : '#8B8FA3';
   const label = (f: DraftField) => t(FIELD_LABEL[f].key, { defaultValue: FIELD_LABEL[f].en });
+  // §8.14: a permission is shown, never edited here — widen or narrow it in Settings.
+  const say = (key: string, opts: { defaultValue: string }) => t(key, opts);
+  const permText = (p: DraftCardData['draft']['permission']) => (p ? permissionLabel(p, say) : '—');
   // An update shows only what changes (R8.3); the identity inputs are always there.
   const changedText = card.changed.filter((f) => f !== 'avatar' && f !== 'color');
 
@@ -223,17 +228,33 @@ export const ParticipantDraftCard = memo(function ParticipantDraftCard({
           {card.draft.greeting ? (
             <Folded label={label('greeting')} text={card.draft.greeting} testId="draft-greeting" />
           ) : null}
+          {card.draft.permission && card.draft.permission.level !== 'none' ? (
+            <div
+              className={`rounded-lg px-2.5 py-1.5 text-xs ${
+                permissionIsRisky(card.draft.permission.level) ? 'bg-destructive/10 text-destructive' : 'bg-muted text-foreground'
+              }`}
+              data-testid="draft-permission"
+            >
+              <span className="font-semibold">{label('permission')}</span>
+              <span className="ml-1.5">{permText(card.draft.permission)}</span>
+            </div>
+          ) : null}
           <div className="text-[0.714rem] text-muted-foreground" data-testid="draft-safe-defaults">
-            {t('participants.draft.safeDefaults', {
-              defaultValue: 'Starts with no tools, MCP servers or skills, and remembers only this session. Widen them in Settings.',
-            })}
+            {card.draft.permission && card.draft.permission.level !== 'none'
+              ? t('participants.draft.safeDefaultsWithPermission', {
+                  defaultValue: 'Starts with no MCP servers or skills, and remembers only this session. Change them in Settings.',
+                })
+              : t('participants.draft.safeDefaults', {
+                  defaultValue:
+                    'Starts at "No tools" (every tool asks first), with no MCP servers or skills, and remembers only this session. Change them in Settings.',
+                })}
           </div>
         </div>
       ) : (
         <div className="mt-2 space-y-1.5" data-testid="draft-changes">
           {changedText.map((f) => {
-            const before = card.before ? card.before[f] : '';
-            const after = card.draft[f];
+            const before = f === 'permission' ? permText(card.before?.permission) : card.before ? card.before[f] : '';
+            const after = f === 'permission' ? permText(card.draft.permission) : card.draft[f];
             const long = f === 'instructions' || f === 'guardrailsPolicy' || f === 'greeting';
             return (
               <div key={f} className="rounded-lg bg-muted px-2.5 py-1.5 text-xs" data-testid={`draft-change-${f}`}>

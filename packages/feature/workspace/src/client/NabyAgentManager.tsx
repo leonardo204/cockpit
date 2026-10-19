@@ -34,6 +34,7 @@ import { AgentExportButton } from './AgentExportButton';
 import { AgentImportButton } from './AgentImportButton';
 import { SettingsDetails } from './SettingsDetails';
 import { ParticipantSection } from './ParticipantSection';
+import { CrossSessionToggle } from './CrossSessionToggle';
 
 type Escalation = 'inline' | 'telegram' | 'both';
 type MemoryScope = 'session' | 'project' | 'user' | 'org';
@@ -635,6 +636,11 @@ export function NabyAgentManager({
 
       <div className="pt-2">
         <ParticipantSection isOpen={isOpen} {...(cwd ? { cwd } : {})} />
+      </div>
+
+      {/* Sessions handing work to each other (cross-session-messaging R10). */}
+      <div className="pt-2">
+        <CrossSessionToggle isOpen={isOpen} />
       </div>
 
       {!loading && agents.some((a) => a.kind !== 'persona' && (a.kind as string) !== 'participant') ? (

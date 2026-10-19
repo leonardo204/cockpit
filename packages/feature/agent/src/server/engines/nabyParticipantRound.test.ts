@@ -200,7 +200,11 @@ describe('naby engine — participant round', () => {
     const spec = createNabySpec({ resolveModel: once(scriptedModel({}, calls) as never) });
     await spec.runner.run(harness(sessionId, `@${tr.name} hi`).ctx);
     const p = calls.find((c) => c.kind === 'participant')!;
-    expect(p.tools).toEqual([]); // imported/new participants have toolRefs []
+    // §8.14 (2026-10-19): a new participant is offered the turn's tools — every
+    // call of a `none` participant ASKS — but never naby's own.
+    for (const t of ['naby_remember', 'naby_checkin', 'naby_delegate', 'naby_participant_draft']) {
+      expect(p.tools).not.toContain(t);
+    }
     expect(p.system).toContain('Only the user can approve anything');
     expect(p.system).not.toContain('naby_remember');
     expect(store.listEvalEvents(tr.id, {})).toEqual([]);

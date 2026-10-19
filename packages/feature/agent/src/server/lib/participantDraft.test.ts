@@ -134,9 +134,13 @@ const create = (name: string, extra: Record<string, unknown> = {}) => ({
 describe('the tool schema (R8.1)', () => {
   it('has the R8.1 fields and nothing that widens a participant', () => {
     const props = Object.keys(PARTICIPANT_DRAFT_SCHEMA.parameters.properties ?? {});
+    // `permission` is the §8.14 (R10.4) tier: a LEVEL, never a tool list.
     expect(props.sort()).toEqual(
-      ['action', 'id', 'name', 'displayName', 'description', 'instructions', 'guardrailsPolicy', 'greeting', 'avatar', 'color', 'addToSession'].sort(),
+      ['action', 'id', 'name', 'displayName', 'description', 'instructions', 'guardrailsPolicy', 'greeting', 'avatar', 'color', 'addToSession', 'permission'].sort(),
     );
+    const perm = (PARTICIPANT_DRAFT_SCHEMA.parameters.properties as Record<string, { properties?: Record<string, { enum?: string[] }> }>)
+      .permission!;
+    expect(perm.properties?.level?.enum).toEqual(['none', 'read', 'write', 'elevated', 'all']);
     for (const absent of ['toolRefs', 'mcpServers', 'skills', 'model', 'memoryScope']) expect(props).not.toContain(absent);
     expect(PARTICIPANT_DRAFT_SCHEMA.description).toMatch(/not part of a draft/i);
   });

@@ -114,6 +114,32 @@ export function useLiveStream(
       const turnId = typeof ev._turnId === 'string' ? ev._turnId : null;
       const startedAt = typeof ev._ts === 'number' ? ev._ts : null;
       const id = turnId ? `live-user-${turnId}` : `live-user-${++seq.current}`;
+      // A TURN ANOTHER SESSION STARTED (cross-session-messaging §3.3) is drawn
+      // as the same notice pill the reloaded transcript shows, not as the
+      // reader's own bubble. Its prompt carries the request id, so matching an
+      // already-loaded copy by text cannot confuse two different requests.
+      const cross = ev._crossSession;
+      if (cross && typeof cross.role === 'string') {
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === id)) return prev;
+          if (prev.some((m) => m.systemEvent?.kind === 'cross-session' && m.systemEvent.detail === text)) return prev;
+          return [
+            ...prev,
+            {
+              id,
+              role: 'system',
+              content: text,
+              systemEvent: {
+                kind: 'cross-session',
+                status: cross.role,
+                detail: text,
+                ...(typeof cross.fromTitle === 'string' ? { peer: cross.fromTitle } : {}),
+              },
+            } as ChatMessage,
+          ];
+        });
+        return;
+      }
       setMessages((prev) => {
         // Layer 1 — identity: this turn's live bubble was already rendered.
         if (turnId && prev.some((m) => m.id === id)) return prev;

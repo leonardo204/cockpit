@@ -145,6 +145,8 @@ import {
   exportParticipantBundle,
   IMPORTABLE_FORMATS,
   participantToolCatalog,
+  participantToolTiers,
+  participantToolsByLevel,
   planParticipantImport,
   readDecisions,
 } from '../lib/participantImport';
@@ -178,6 +180,7 @@ import {
   type ParticipantSettings,
   type ParticipantView,
 } from '../lib/participants';
+import { readCrossSessionEnabled, writeCrossSessionEnabled } from '../lib/crossSession';
 import {
   closeRecommendation,
   pendingRecommendationViews,
@@ -821,6 +824,7 @@ export type NabyAction =
   | { action: 'participant.exportBundle'; ids: string[] }
   // The tools a participant can be granted on this machine (the editor's chips,
   // and what `participant.import` keeps). Built by the turn's own builders.
+  // `tiers` maps each to its permission tier (§8.14).
   | { action: 'tools.list' }
   | { action: 'session.participants.list'; sessionId: string }
   | { action: 'session.participants.add'; sessionId: string; agentId: string }
@@ -924,6 +928,9 @@ export type NabyAction =
   // that decides whether rows are ever written is a different kind of thing.
   | { action: 'learning.get' }
   | { action: 'learning.set'; enabled: boolean }
+  // cross-session-messaging R10: naby may hand work to another tab (default ON).
+  | { action: 'crossSession.get' }
+  | { action: 'crossSession.set'; enabled: boolean }
   // P3-M13c (§3.3): READ-ONLY. The style fingerprint is counted from the user's
   // own messages by the reflection sweep and has no setter at all — there is
   // nothing here for a person to configure, only something for them to SEE. It
@@ -964,6 +971,9 @@ export type NabyActionResult =
       ok: true;
       message?: string;
       tools?: string[];
+      /** `tools.list` (§8.14): each tool's permission tier, and each level's tools. */
+      tiers?: Record<string, 'read' | 'write' | 'elevated'>;
+      levels?: Record<'none' | 'read' | 'write' | 'elevated' | 'all', string[]>;
       allowChanges?: boolean;
       removed?: boolean;
       /** `claude.login`: the flow was launched — the UI must now poll status. */
@@ -1096,6 +1106,7 @@ export type NabyActionResult =
       /** `learning.get`/`set` (P3-M10): whether new memory may be captured at all.
        *  Injection is unaffected either way — see memory-hygiene §3. */
       learningEnabled?: boolean;
+      crossSessionEnabled?: boolean;
       /** `style.get` (P3-M13c): the counted writing profile, or null when there
        *  is not one yet. */
       style?: StyleFingerprint | null;
@@ -1422,6 +1433,19 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       writeLearningEnabled(store, body.enabled);
       return { ok: true, learningEnabled: body.enabled };
+    }
+
+    case 'crossSession.get':
+      return { ok: true, crossSessionEnabled: readCrossSessionEnabled(store) };
+
+    case 'crossSession.set': {
+      // Strictly boolean, like `learning.set`: a malformed request must not be
+      // able to flip the switch either way.
+      if (typeof body.enabled !== 'boolean') {
+        return { ok: false, error: 'enabled must be a boolean' };
+      }
+      writeCrossSessionEnabled(store, body.enabled);
+      return { ok: true, crossSessionEnabled: body.enabled };
     }
 
     case 'session.noLearn.list':
@@ -1882,7 +1906,14 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     }
 
     case 'tools.list': {
-      return { ok: true, tools: participantToolCatalog() };
+      // `tiers` / `levels` (§8.14): each tool's permission tier, and the tools
+      // each level includes — resolved here so the editor never judges a tool.
+      return {
+        ok: true,
+        tools: participantToolCatalog(),
+        tiers: participantToolTiers(),
+        levels: participantToolsByLevel(),
+      };
     }
 
     case 'session.participants.list': {

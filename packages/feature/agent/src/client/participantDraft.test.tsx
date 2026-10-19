@@ -149,7 +149,7 @@ describe('ParticipantDraftCard', () => {
     expect(html).not.toContain('data-testid="draft-apply"');
     expect(html).not.toMatch(/Always allow/);
     expect(html).toContain('Create and add to this chat');
-    expect(html).toContain('Starts with no tools');
+    expect(html).toContain('Starts at &quot;No tools&quot;');
   });
 
   it('update: only the changed fields before → after, and apply / decline', () => {

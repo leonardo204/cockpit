@@ -327,6 +327,11 @@
     }
   },
   "agentManager": {
+    "crossSession": {
+      "toggle": "Hand work to other tabs",
+      "hint": "When you ask, naby sends a request to another tab of the same project, and that tab’s answer comes back here.",
+      "failed": "Could not save: {{error}}"
+    },
     "title": "Naby",
     "description": "naby, and anything you imported — address one in the composer with @name.",
     "subagentHint": "For a specialist role, add a harness subagent under Harness.",
@@ -622,6 +627,12 @@
     "memoryConfirmed": "Remembered",
     "confirmMemoryHint": "Agree to this, and naby will use it from now on — and it will outrank anything naby merely inferred.",
     "jobReportNotice": "A background job finished — click to see what naby was told",
+    "crossSession": {
+      "request": "Request from session ‹{{title}}›",
+      "reply": "Answer from session ‹{{title}}›",
+      "failure": "The request to session ‹{{title}}› failed",
+      "untitled": "untitled"
+    },
     "apiRetryBusy": "The server is busy, so this is being sent again — this is not your usage limit.",
     "apiRetryTransient": "That request did not go through. Trying again.",
     "apiRetryAttempt": "Attempt {{attempt}} of {{maxRetries}}, in {{seconds}}s",
@@ -2148,7 +2159,9 @@
     "policyReason": "Your policy rule: ask before this tool",
     "rewrittenBy": "Input rewritten by the org harness ({{script}})",
     "rememberPolicyOnly": "\"Always\" applies to your policy rule only. The org harness decides each call on its own.",
-    "askedBy": "Requested by {{name}}"
+    "askedBy": "Requested by {{name}}",
+    "participantAlways": "This participant is set to ask you before every tool use.",
+    "participantOutside": "This tool is outside this participant’s permission level. Allowing it remembers it for this participant — it will not ask again."
   },
   "checkin": {
     "title": "naby is asking how to proceed",
@@ -2447,7 +2460,7 @@
       "updateQuestion": "Apply these changes to @{{name}}?",
       "descriptionHint": "naby reads this sentence to decide when to hand work over.",
       "avatarImage": "image",
-      "safeDefaults": "Starts with no tools, MCP servers or skills, and remembers only this session. Widen them in Settings.",
+      "safeDefaults": "Starts at \"No tools\" (every tool asks first), with no MCP servers or skills, and remembers only this session. Change them in Settings.",
       "before": "Before",
       "after": "After",
       "decline": "Decline",
@@ -2465,7 +2478,8 @@
         "guardrailsPolicy": "Guardrail policy",
         "greeting": "Greeting",
         "avatar": "Avatar",
-        "color": "Colour"
+        "color": "Colour",
+        "permission": "Permission"
       },
       "err": {
         "name": "Enter a handle.",
@@ -2478,7 +2492,8 @@
         "avatar": "Pick an emoji.",
         "avatarLong": "An emoji avatar is at most {{max}} characters.",
         "color": "Pick a colour like #4F46E5."
-      }
+      },
+      "safeDefaultsWithPermission": "Starts with no MCP servers or skills, and remembers only this session. Change them in Settings."
     },
     "settings": {
       "title": "Participants",
@@ -2561,7 +2576,7 @@
       "permPlan": "Plan (read-only)",
       "toolRefs": "Allowed tools",
       "toolRefsPh": "Type a tool name, then Enter",
-      "toolRefsHint": "Empty = no tools. A participant’s tool calls still pass the turn’s approval gate. MCP tools are named server__tool.",
+      "toolRefsHint": "Listed tools run without asking; any other tool asks first. MCP tools are named server__tool.",
       "mcpHint": "APIs connect through MCP servers only. Pick which of naby’s servers this participant may see.",
       "mcpNone": "No MCP servers are set up.",
       "skillsNone": "No skills are set up.",
@@ -2611,6 +2626,40 @@
       "listTitle": "naby's suggestions",
       "more": "+{{count}} suggested",
       "review": "Review in Settings"
+    },
+    "permission": {
+      "label": "What it may do",
+      "level": {
+        "none": "No tools",
+        "read": "Read only",
+        "write": "Read and write",
+        "elevated": "Elevated",
+        "all": "Everything",
+        "custom": "Pick tools"
+      },
+      "desc": {
+        "none": "Every tool asks you first.",
+        "read": "Reads and searches files and the web without asking. Other tools ask first.",
+        "write": "Also edits and creates project files without asking.",
+        "elevated": "Also runs commands, starts background jobs and sends messages without asking.",
+        "all": "Uses every tool in the chat without asking, MCP servers you did not pick included.",
+        "custom": "The tools you list run without asking; other tools ask first."
+      },
+      "alwaysShort": "asks every time",
+      "showTools": "Show included tools",
+      "noTools": "None on this machine",
+      "warnAll": "It can use every tool in the chat — commands, messages and every MCP server included.",
+      "warnElevated": "It can run commands and send messages — things a snapshot cannot undo.",
+      "mcpNote": "MCP tools from the servers picked under External resources follow the level (\"Read only\" takes the ones a server marks read-only).",
+      "always": "Ask me every time it uses a tool",
+      "alwaysHint": "Every tool call asks before it runs. Where nobody can answer, the call is refused.",
+      "customSummary": "Pick tools yourself (advanced)",
+      "inUse": "in use",
+      "useCustom": "Use only the tools listed below",
+      "levelHint": "Tools inside the level run without asking; tools outside it ask you first. A tool you allow once is not asked again.",
+      "approvedLabel": "Tools you have allowed",
+      "revoke": "Ask again for {{name}}",
+      "approvedHint": "Allowed once from an approval card, so they no longer ask. Remove one with × to be asked again."
     }
   },
   "participantImport": {

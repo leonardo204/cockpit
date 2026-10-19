@@ -20,7 +20,9 @@ import {
   buildParticipantExport,
   DEFAULT_USER_ID,
   importParticipant,
+  resolvePermissionTools,
   runtimeToolNames,
+  toolTierOf,
   type Agent,
   type ImportEnv,
   type ImportFormat,
@@ -28,6 +30,7 @@ import {
   type ParticipantBundle,
   type ParticipantExportResult,
   type Store,
+  type ToolTier,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { PARTICIPANT_EXCLUDED_TOOLS } from './participantTurn';
 import { validateParticipantName } from './participants';
@@ -56,6 +59,34 @@ export const IMPORTABLE_FORMATS: readonly ImportFormat[] = [
  */
 export function participantToolCatalog(): string[] {
   return runtimeToolNames().filter((n) => !PARTICIPANT_EXCLUDED_TOOLS.has(n));
+}
+
+/**
+ * Each catalogue tool's permission tier (§8.14, MAC-M7) — what the editor's
+ * "show included tools" lists under each level. Judged by `toolTierOf`, the same
+ * function the gate resolves a level with, so the list and the gate agree.
+ */
+export function participantToolTiers(): Record<string, ToolTier> {
+  const out: Record<string, ToolTier> = {};
+  for (const name of participantToolCatalog()) out[name] = toolTierOf(name);
+  return out;
+}
+
+/**
+ * The catalogue tools each permission level includes (§8.14) — the editor's
+ * "show included tools" list, resolved by the same `resolvePermissionTools` a
+ * turn's gate applies, so the client never decides a level itself. MCP tools are
+ * not here (they need a live connection); the editor says how they join.
+ */
+export function participantToolsByLevel(): Record<'none' | 'read' | 'write' | 'elevated' | 'all', string[]> {
+  const names = participantToolCatalog();
+  return {
+    none: [],
+    read: resolvePermissionTools({ level: 'read' }, names),
+    write: resolvePermissionTools({ level: 'write' }, names),
+    elevated: resolvePermissionTools({ level: 'elevated' }, names),
+    all: resolvePermissionTools({ level: 'all' }, names),
+  };
 }
 
 /** Registered MCP server names, minus agent-proposed ones nobody approved. */
