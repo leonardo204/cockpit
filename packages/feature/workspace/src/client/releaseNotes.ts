@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.46.1 — 2026-10-19
+
+### en
+
+A little breathing room between naby's bubbles.
+
+**Fixed**
+
+- **Bubbles no longer touch.** When naby answers in several bubbles in one turn, they now have a small gap between them, and a bubble after a tool or subagent row has one too. The gap under the name line is unchanged.
+
+### ko
+
+나비 말풍선 사이에 숨 쉴 틈을 줬어요.
+
+**고친 것**
+
+- **말풍선이 서로 붙지 않아요.** 나비가 한 턴에 말풍선을 여러 개 내면 그 사이에 작은 간격이 생겨요. 도구 호출이나 서브에이전트 줄 다음 말풍선도 마찬가지예요. 이름 줄 아래 간격은 그대로예요.
+
 ## 1.46.0 — 2026-10-19
 
 ### en

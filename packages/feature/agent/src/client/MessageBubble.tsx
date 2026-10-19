@@ -204,7 +204,14 @@ const MessageBalloon = memo(function MessageBalloon({
   speakerColor,
 }: MessageBalloonProps) {
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full`}>
+    // SPACING BETWEEN THE BALLOONS OF ONE TURN. A turn is drawn as a sequence
+    // (prose, tools, prose…), and two prose balloons back to back used to touch.
+    // Only a balloon that FOLLOWS another balloon or a tool/subagent row gets a
+    // top margin — the gap under the name line stays as it was.
+    <div
+      data-balloon=""
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} w-full [[data-balloon]+&]:mt-2 [[data-segment-block]+&]:mt-1.5`}
+    >
       {/* Action buttons for user messages — on the left */}
       {isUser && (onCopy || onResend || onEdit) && (
         <div className="self-start mt-2 mr-1 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -300,7 +307,7 @@ const ToolSegmentRow = memo(
     const [expanded, setExpanded] = useState(false);
     const useHeader = shouldGroupUnderHeader(calls.length);
     return (
-      <div className="w-full max-w-[90%] mt-1" data-testid="tool-call-group">
+      <div className="w-full max-w-[90%] mt-1" data-testid="tool-call-group" data-segment-block="">
         {useHeader ? (
           <>
             <button
@@ -1019,7 +1026,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             // row that reports for as long as the job runs.
             if (seg.kind === 'background') {
               return (
-                <div key={seg.id} className="w-full max-w-[90%] mt-1">
+                <div key={seg.id} className="w-full max-w-[90%] mt-1" data-segment-block="">
                   <BackgroundJobBlock
                     job={seg.job}
                     cwd={cwd}
@@ -1033,7 +1040,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
             // launched it — so four subagents running in parallel are four rows
             // sitting where they were spawned, not one merged batch at the end.
             return (
-              <div key={seg.id} className="w-full max-w-[90%] mt-1">
+              <div key={seg.id} className="w-full max-w-[90%] mt-1" data-segment-block="">
                 <SubagentBlock group={seg.group} cwd={cwd} sessionId={sessionId} />
               </div>
             );
