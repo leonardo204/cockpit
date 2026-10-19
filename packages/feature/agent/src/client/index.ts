@@ -142,4 +142,16 @@ export {
   COLOR_PRESETS,
   PARTICIPANT_HEX,
   participantNameError,
+  type DraftFields as ParticipantDraftFields,
 } from './participantDraft';
+// MAC-M6 (§8.13): the recommendation a `new` chip opens Settings on — the editor
+// reads it with the same parser the roster uses.
+export {
+  RECOMMENDATION_ANCHOR_PREFIX,
+  RECOMMENDATION_SETTINGS_SECTION,
+  recommendationAnchor,
+  recommendationIdFromAnchor,
+  recommendationInfoFrom,
+  recommendationInfosFrom,
+  type RecommendationInfo,
+} from './recommendations';

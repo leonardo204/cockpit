@@ -102,3 +102,15 @@ if (process.platform !== 'win32') {
  * `syncOrgHarnessNow` with an injected fetch instead (lib/orgHarness.test.ts).
  */
 process.env.NABY_ORG_HARNESS_SYNC = '0';
+
+/**
+ * NO BACKGROUND RECOMMENDATION CALL FROM A TEST (multi-agent-chat §8.13).
+ *
+ * A finished turn kicks the participant-recommendation sweep, and its default
+ * judge picks its own backend — a provider key or the local Claude sign-in. The
+ * per-worker database is shared across a test file, so a turn in one test could
+ * find a session another test left with four user messages and send it to a
+ * real model. Set unconditionally: the default sweep answers "no provider" in
+ * every test, and the suites that cover the sweep inject their own judge.
+ */
+process.env.NABY_PARTICIPANT_RECOMMEND = '0';

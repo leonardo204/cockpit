@@ -66,6 +66,7 @@ beforeEach(() => {
     'participants.maxSpeechesPerRound',
     'participants.maxRoundTrips',
     'participants.showRouting',
+    'participants.recommendations.enabled',
   ]) {
     store.setSetting(key, '');
   }
@@ -395,6 +396,7 @@ describe('participants.get / participants.set', () => {
       maxSpeechesPerRound: 6,
       maxRoundTrips: 3,
       showRouting: false,
+      recommendationsEnabled: true,
     });
   });
 

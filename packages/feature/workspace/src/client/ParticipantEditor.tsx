@@ -19,12 +19,25 @@
  * can be granted from `tools.list` (MAC-M4 — built by the turn's own builders).
  * Allowed tools are chips: pick a suggestion or type a name (an MCP tool is
  * `server__tool`).
+ *
+ * OPENED ON A RECOMMENDATION (§8.13, MAC-M6). With `recommendation`, the form is
+ * naby's draft of a NEW participant (`formFromDraft`) and a banner on top says
+ * why naby suggested it — "naby's suggestion · <reason>" — with the three ways
+ * out: "Save and add to conversation" (`participant.put` →
+ * `session.participants.add` → `session.recommendations.accept`), "Save only"
+ * (`put` → `accept`) and "Discard" (`session.recommendations.dismiss`). Nothing
+ * from the draft reaches a turn until it is saved here.
  */
 
 import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from '@cockpit/shared-ui';
-import { CLAUDE_MODELS_FOR_AGENTS, ParticipantAvatar, announceParticipantsChanged } from '@cockpit/feature-agent';
+import { NabyAvatar, toast } from '@cockpit/shared-ui';
+import {
+  CLAUDE_MODELS_FOR_AGENTS,
+  ParticipantAvatar,
+  announceParticipantsChanged,
+  type RecommendationInfo,
+} from '@cockpit/feature-agent';
 import {
   AVATAR_PRESETS,
   COLOR_PRESETS,
@@ -36,6 +49,7 @@ import {
   type MemoryScope,
   type ParticipantForm,
 } from './participantForm';
+import { runRecommendationChoice, type RecommendationChoice } from './recommendationChoice';
 
 /** Field chrome without a width, so a sized field never fights `w-full`. */
 const FIELD = 'text-xs px-2 py-1.5 rounded-md border border-border bg-background text-foreground';
@@ -44,16 +58,23 @@ const LABEL = 'text-[0.714rem] font-semibold text-muted-foreground';
 const SMALL_BTN =
   'shrink-0 whitespace-nowrap text-xs px-2 py-1 rounded-md border border-border text-foreground hover:bg-accent disabled:opacity-50';
 
-async function nabyPost(body: Record<string, unknown>): Promise<{ ok: boolean; error?: string; participants?: unknown }> {
+type EditorReply = { ok: boolean; error?: string; participants?: unknown; participant?: { id?: unknown } };
+
+async function nabyPost(body: Record<string, unknown>): Promise<EditorReply> {
   try {
     const res = await fetch('/api/naby', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const json = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; participants?: unknown } | null;
+    const json = (await res.json().catch(() => null)) as Omit<EditorReply, 'ok'> & { ok?: boolean } | null;
     if (!json) return { ok: false, error: `request failed (${res.status})` };
-    return { ok: !!json.ok && res.ok, ...(json.error ? { error: json.error } : {}), participants: json.participants };
+    return {
+      ok: !!json.ok && res.ok,
+      ...(json.error ? { error: json.error } : {}),
+      participants: json.participants,
+      ...(json.participant ? { participant: json.participant } : {}),
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -197,17 +218,85 @@ function CheckList({
   );
 }
 
+export type { RecommendationChoice };
+
+/** The banner above a form opened on naby's recommendation. Pure props. */
+export const RecommendationBanner = memo(function RecommendationBanner({
+  recommendation,
+  busy,
+  onChoose,
+}: {
+  recommendation: Pick<RecommendationInfo, 'reason' | 'specialty'>;
+  busy: boolean;
+  onChoose: (choice: RecommendationChoice) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="rounded-lg border-[1.5px] border-dashed border-brand/60 bg-accent/60 p-3" data-testid="recommendation-banner">
+      <div className="flex items-start gap-2">
+        <NabyAvatar size={22} />
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold text-foreground" data-testid="recommendation-banner-reason">
+            {t('participants.recommend.why', {
+              defaultValue: "naby's suggestion · {{reason}}",
+              reason: recommendation.reason,
+            })}
+          </p>
+          <p className="mt-0.5 text-[0.714rem] font-semibold text-brand">{recommendation.specialty}</p>
+          <p className="mt-0.5 text-[0.714rem] text-muted-foreground">
+            {t('participants.recommend.editorHint', {
+              defaultValue: 'Check the draft, then save it. Nothing from it reaches a conversation until it is saved.',
+            })}
+          </p>
+        </div>
+      </div>
+      <div className="mt-2.5 flex flex-wrap justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={() => onChoose('discard')}
+          disabled={busy}
+          className="text-xs px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground disabled:opacity-50"
+          data-testid="recommendation-discard"
+        >
+          {t('participants.recommend.discard', { defaultValue: 'Discard' })}
+        </button>
+        <button
+          type="button"
+          onClick={() => onChoose('save-only')}
+          disabled={busy}
+          className="text-xs px-3 py-1.5 rounded-md border border-border text-foreground hover:bg-accent disabled:opacity-50"
+          data-testid="recommendation-save-only"
+        >
+          {t('participants.recommend.saveOnly', { defaultValue: 'Save only' })}
+        </button>
+        <button
+          type="button"
+          onClick={() => onChoose('save-add')}
+          disabled={busy}
+          className="text-xs px-3 py-1.5 rounded-md border border-transparent bg-primary font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          data-testid="recommendation-save-add"
+        >
+          {t('participants.recommend.saveAdd', { defaultValue: 'Save and add to conversation' })}
+        </button>
+      </div>
+    </div>
+  );
+});
+
 export const ParticipantEditor = memo(function ParticipantEditor({
   initial,
   cwd,
   onCancel,
   onSaved,
+  recommendation,
 }: {
   initial: ParticipantForm;
   cwd?: string;
   onCancel: () => void;
   /** Called with the server's participant list after a save. */
   onSaved: (participants: unknown) => void;
+  /** Opened on naby's recommendation of a new participant (§8.13). */
+  recommendation?: RecommendationInfo;
 }) {
   const { t } = useTranslation();
   const [form, setForm] = useState<ParticipantForm>(initial);
@@ -257,6 +346,66 @@ export const ParticipantEditor = memo(function ParticipantEditor({
     onSaved(res.participants);
   }, [form, onSaved, t]);
 
+  // The recommendation banner's three ways out (§8.13 R9.3) — the request
+  // sequences live in recommendationChoice.ts; this only validates and reports.
+  const choose = useCallback(
+    async (choice: RecommendationChoice) => {
+      if (!recommendation) return;
+      if (choice !== 'discard') {
+        setTriedSave(true);
+        if (validateParticipantForm(form).length > 0) return;
+      }
+      setBusy(true);
+      const out = await runRecommendationChoice(
+        choice,
+        recommendation,
+        choice === 'discard' ? null : participantPutBody(form),
+        nabyPost,
+      );
+      setBusy(false);
+      if (!out.ok) {
+        toast(
+          t('participants.settings.actionFailed', { defaultValue: 'Could not do that: {{error}}', error: out.error }),
+          'error',
+        );
+        return;
+      }
+      announceParticipantsChanged();
+      if (choice === 'discard') {
+        toast(t('participants.recommend.discarded', { defaultValue: 'Suggestion discarded.' }), 'success');
+        onCancel();
+        return;
+      }
+      if (out.acceptError) {
+        toast(
+          t('participants.recommend.savedNotClosed', {
+            defaultValue: 'Saved, but the suggestion could not be closed: {{error}}',
+            error: out.acceptError,
+          }),
+          'error',
+        );
+      }
+      if (out.addError) {
+        toast(
+          t('participants.recommend.savedNotAdded', {
+            defaultValue: 'Saved, but could not add it to the conversation: {{error}}',
+            error: out.addError,
+          }),
+          'error',
+        );
+      } else if (!out.acceptError) {
+        toast(
+          choice === 'save-add'
+            ? t('participants.recommend.savedAdded', { defaultValue: 'Saved and added to the conversation.' })
+            : t('participants.settings.saved', { defaultValue: 'Participant saved.' }),
+          'success',
+        );
+      }
+      onSaved(out.participants);
+    },
+    [recommendation, form, onCancel, onSaved, t],
+  );
+
   const addTool = () => {
     const name = toolDraft.trim();
     if (!name) return;
@@ -281,6 +430,10 @@ export const ParticipantEditor = memo(function ParticipantEditor({
           })}
         </p>
       </div>
+
+      {recommendation ? (
+        <RecommendationBanner recommendation={recommendation} busy={busy} onChoose={(c) => void choose(c)} />
+      ) : null}
 
       {/* 1 — identity */}
       <Section n={1} id="identity" title={t('participants.editor.sec.identity', { defaultValue: 'Identity' })}>
@@ -726,15 +879,17 @@ export const ParticipantEditor = memo(function ParticipantEditor({
         >
           {t('participants.editor.cancel', { defaultValue: 'Cancel' })}
         </button>
-        <button
-          type="button"
-          onClick={() => void save()}
-          disabled={busy}
-          className="text-xs px-3 py-1.5 rounded-md border border-transparent bg-primary font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-          data-testid="participant-save"
-        >
-          {t('participants.editor.save', { defaultValue: 'Save' })}
-        </button>
+        {recommendation ? null : (
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={busy}
+            className="text-xs px-3 py-1.5 rounded-md border border-transparent bg-primary font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            data-testid="participant-save"
+          >
+            {t('participants.editor.save', { defaultValue: 'Save' })}
+          </button>
+        )}
       </div>
     </div>
   );

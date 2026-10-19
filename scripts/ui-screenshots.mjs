@@ -11,9 +11,14 @@
  *   node scripts/ui-screenshots.mjs --base http://127.0.0.1:3457 --out /tmp/shots
  *     [--themes light,dark] [--width 1440] [--height 900] [--locale ko-KR]
  *
- * Start the server against a THROWAWAY store, never the real one:
+ * Start the server against a THROWAWAY store, never the real one, and with
+ * every background model call off — a dev checkout has the Agent SDK installed,
+ * so the boot recommendation sweep (multi-agent-chat §8.13) would otherwise try
+ * the sign-in it finds:
  *   HOME=<tmp> NABY_HOME=<tmp>/.naby NABY_DB_PATH=<tmp>/app.db \
- *   COCKPIT_HOME=<tmp>/.cockpit COCKPIT_NO_OPEN=1 PORT=<port> node server.mjs
+ *   COCKPIT_HOME=<tmp>/.cockpit COCKPIT_NO_OPEN=1 \
+ *   NABY_PARTICIPANT_RECOMMEND=0 NABY_ORG_HARNESS_SYNC=0 PORT=<port> node server.mjs
+ * (This script does not start the server itself; it only drives a browser.)
  *
  * What it captures, per theme:
  *   window          the whole window with the sidebar
@@ -52,6 +57,17 @@
  *   m5a-draft-update, m5a-draft-update-card   naby's draft of a change (before →
  *                       after of the changed fields only)
  *
+ * With `--recommendations` (MAC-M6, multi-agent-chat §8.13), also — against a
+ * store seeded with PENDING recommendations on the opened session (one
+ * `existing`, one `new`; seed the throwaway store, there is no model login):
+ *   m6-chat, m6-roster       the roster with its dashed "추천" chips before `+`
+ *   m6-roster-menu           the `existing` chip's menu (reason · 대화에 추가 · 무시)
+ *   m6-roster-list           the "+N 추천" pill's list (when more than one is pending)
+ *   m6-editor-banner         the `new` chip → Settings › naby › the participant
+ *                            editor prefilled from the draft, under naby's banner
+ *   m6-settings-toggle       the "나비의 참가자 추천" switch in the participants section
+ * Nothing is clicked that writes: the menu and the editor are only opened.
+ *
  * A surface that is not reachable (no project open, no session) is skipped with
  * a log line, not failed: the script is a camera, not a test.
  *
@@ -78,6 +94,7 @@ const locale = arg('locale', 'ko-KR');
 const participants = process.argv.includes('--participants');
 const importFile = arg('import', '');
 const drafts = process.argv.includes('--drafts');
+const recommendations = process.argv.includes('--recommendations');
 
 if (!base || !out) {
   console.error('usage: node scripts/ui-screenshots.mjs --base <url> --out <dir> [--themes light,dark]');
@@ -246,6 +263,81 @@ async function draftShots(page, frame, theme) {
   }
 }
 
+/** MAC-M6: the roster's recommendation chips, the `existing` menu, and the
+ *  `new` chip's Settings deep link. Opens things; never presses a write button. */
+async function recommendationShots(page, frame, theme) {
+  const screen = frame.locator('#chat-screen');
+  const chips = frame.locator('[data-roster-recommendation]');
+  if (!(await chips.count())) {
+    console.log(`[${theme}] no recommendation chips (seed pending recommendations); skipping m6-* shots`);
+    return;
+  }
+  await shoot(screen, `${theme}-m6-chat`);
+  const controls = frame.locator('[data-slot="participant-controls"]').first();
+  if (await controls.count()) await shoot(controls, `${theme}-m6-roster`);
+
+  const existing = frame.locator('[data-recommendation-kind="existing"] > button').first();
+  if (await existing.count()) {
+    await existing.click();
+    await settle(page, 500);
+    if (await frame.locator('[data-testid="roster-recommendation-menu"]').count()) {
+      await shoot(screen, `${theme}-m6-roster-menu`);
+    } else {
+      console.log(`[${theme}] recommendation menu did not open; skipping`);
+    }
+    await page.keyboard.press('Escape');
+    await settle(page, 300);
+  }
+
+  // More than one pending folds into a "+N" pill: shoot its list, and reach
+  // the draft's editor from the list's "review" button when it has no chip.
+  const more = frame.locator('[data-testid="roster-recommendation-more"]').first();
+  let fresh = frame.locator('[data-recommendation-kind="new"] > button').first();
+  if (await more.count()) {
+    await more.click();
+    await settle(page, 500);
+    if (await frame.locator('[data-testid="roster-recommendation-list"]').count()) {
+      await shoot(screen, `${theme}-m6-roster-list`);
+    }
+    if (!(await fresh.count())) {
+      fresh = frame.locator('[data-testid="roster-recommendation-list"] button', {
+        hasText: lang === 'ko-KR' ? '설정에서 보기' : 'Review in Settings',
+      }).first();
+    } else {
+      await page.keyboard.press('Escape');
+      await settle(page, 300);
+    }
+  }
+  if (await fresh.count()) {
+    await fresh.click();
+    const banner = page.locator('[data-testid="recommendation-banner"]').first();
+    try {
+      await banner.waitFor({ timeout: 15000 });
+    } catch {
+      console.log(`[${theme}] the editor banner did not open from the new chip; skipping`);
+      return;
+    }
+    await banner.evaluate((el) => (el.closest('[data-testid="participant-editor"]') ?? el).scrollIntoView({ block: 'start' }));
+    await settle(page, 700);
+    await shoot(page, `${theme}-m6-editor-banner`);
+    await shoot(banner, `${theme}-m6-editor-banner-card`);
+    // Leave the editor without writing anything, then show the switch.
+    const cancel = page.locator('[data-testid="participant-editor"] button', { hasText: lang === 'ko-KR' ? '취소' : 'Cancel' }).last();
+    if (await cancel.count()) {
+      await cancel.click();
+      await settle(page, 600);
+      const toggle = page.locator('[data-testid="participant-recommendations-toggle"]').first();
+      if (await toggle.count()) {
+        await toggle.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+        await settle(page, 400);
+        await shoot(page, `${theme}-m6-settings-toggle`);
+      }
+    }
+    await page.keyboard.press('Escape');
+    await settle(page, 500);
+  }
+}
+
 /** Settings › naby › Participants, then the editor on the first participant. */
 async function participantSettingsShots(page, theme) {
   const section = page.locator('[data-testid="participant-section"]').first();
@@ -397,6 +489,7 @@ async function runTheme(browser, theme) {
     }
     if (participants) await participantShots(page, frame, theme);
     if (drafts) await draftShots(page, frame, theme);
+    if (recommendations) await recommendationShots(page, frame, theme);
   } else {
     console.log(`[${theme}] no chat frame (no project open); skipping chat, bubbles, approval`);
   }

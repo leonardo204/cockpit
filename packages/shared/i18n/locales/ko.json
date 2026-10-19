@@ -150,7 +150,6 @@
     "loadingText": "불러오는 중...",
     "openProject": "프로젝트 열기",
     "sidebarProjects": "프로젝트",
-    "sidebarSessions": "세션",
     "expandSidebar": "사이드바 펼치기",
     "collapseSidebar": "사이드바 접기",
     "resizeSidebar": "사이드바 너비 조절",
@@ -2591,6 +2590,27 @@
         "temperature": "온도는 0에서 2 사이 숫자입니다."
       },
       "toolSuggest": "이 기기에서 쓸 수 있는 도구:"
+    },
+    "recommend": {
+      "badge": "추천",
+      "why": "나비의 추천 · {{reason}}",
+      "addToChat": "대화에 추가",
+      "dismiss": "무시",
+      "dismissFailed": "추천을 무시하지 못했습니다: {{error}}",
+      "saveAdd": "저장하고 대화에 추가",
+      "saveOnly": "저장만",
+      "discard": "버리기",
+      "editorHint": "초안을 확인한 뒤 저장합니다. 저장하기 전에는 어떤 대화에도 들어가지 않습니다.",
+      "discarded": "추천을 버렸습니다.",
+      "savedAdded": "저장하고 대화에 추가했습니다.",
+      "savedNotAdded": "저장했지만 대화에 추가하지 못했습니다: {{error}}",
+      "gone": "이 추천은 더 이상 대기 중이 아닙니다.",
+      "toggle": "나비의 참가자 추천",
+      "toggleHint": "대화에서 같은 전문 업무가 반복되면 나비가 그 일을 맡을 참가자를 추천합니다. 대화를 읽는 데 몇 메시지마다 작은 모델 호출이 한 번 듭니다.",
+      "savedNotClosed": "저장했지만 추천을 닫지 못했습니다: {{error}}",
+      "listTitle": "나비의 추천",
+      "more": "+{{count}} 추천",
+      "review": "설정에서 보기"
     }
   },
   "participantImport": {

@@ -14,6 +14,12 @@
  * would turn a participant into a custom agent and drop its profile. Every change
  * is announced (`announceParticipantsChanged`) so an open chat's roster, palette
  * and speaker cards re-read it.
+ *
+ * RECOMMENDATIONS (§8.13, MAC-M6). The "naby's participant suggestions" switch
+ * (`participants.recommendations.enabled`) lives here. And a roster chip for a
+ * NEW participant opens Settings on `recommendation:<id>`: this section takes
+ * that request (`takeSettingsFocus`), reads the recommendation and opens the
+ * editor prefilled from its draft (`formFromDraft`) under naby's banner.
  */
 
 import { memo, useCallback, useEffect, useState } from 'react';
@@ -21,17 +27,28 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import {
   ParticipantAvatar,
+  RECOMMENDATION_ANCHOR_PREFIX,
   announceParticipantsChanged,
   participantInfosFrom,
+  recommendationIdFromAnchor,
+  recommendationInfosFrom,
   type ParticipantInfo,
+  type RecommendationInfo,
 } from '@cockpit/feature-agent';
 import { ParticipantEditor } from './ParticipantEditor';
 import { ParticipantImportDialog, originBadgeText } from './ParticipantImportDialog';
-import { blankParticipantForm, formFromParticipant, type ParticipantForm } from './participantForm';
+import { blankParticipantForm, formFromDraft, formFromParticipant, type ParticipantForm } from './participantForm';
+import { SETTINGS_FOCUS_EVENT, takeSettingsFocus } from './settingsFocus';
 
 type Limits = { maxPerSession: number; maxSpeechesPerRound: number; maxRoundTrips: number };
 
-type Reply = { ok: boolean; error?: string; participants?: unknown; participantSettings?: Partial<Limits> };
+type Reply = {
+  ok: boolean;
+  error?: string;
+  participants?: unknown;
+  recommendations?: unknown;
+  participantSettings?: Partial<Limits> & { recommendationsEnabled?: boolean };
+};
 
 async function nabyPost(body: Record<string, unknown>): Promise<Reply> {
   try {
@@ -175,6 +192,9 @@ export interface ParticipantSectionViewProps {
   participants: readonly ParticipantInfo[];
   models: Readonly<Record<string, string | undefined>>;
   limits: Limits;
+  /** `participants.recommendations.enabled` (§8.13). */
+  recommendationsEnabled?: boolean;
+  onToggleRecommendations?: () => void;
   loading: boolean;
   busy: boolean;
   confirmingId: string | null;
@@ -191,6 +211,8 @@ export const ParticipantSectionView = memo(function ParticipantSectionView({
   participants,
   models,
   limits,
+  recommendationsEnabled = true,
+  onToggleRecommendations,
   loading,
   busy,
   confirmingId,
@@ -228,6 +250,27 @@ export const ParticipantSectionView = memo(function ParticipantSectionView({
               </span>
             ))}
           </div>
+          <label className="mt-2 flex cursor-pointer items-start gap-2" data-testid="participant-recommendations-toggle">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={recommendationsEnabled}
+              disabled={busy || !onToggleRecommendations}
+              onChange={() => onToggleRecommendations?.()}
+              aria-label={t('participants.recommend.toggle', { defaultValue: "naby's participant suggestions" })}
+            />
+            <span className="min-w-0">
+              <span className="block text-xs font-semibold text-foreground">
+                {t('participants.recommend.toggle', { defaultValue: "naby's participant suggestions" })}
+              </span>
+              <span className="block text-[0.714rem] text-muted-foreground">
+                {t('participants.recommend.toggleHint', {
+                  defaultValue:
+                    'When the same specialised work keeps coming up in a conversation, naby suggests a participant for it. Reading the conversation costs one small model call every few messages.',
+                })}
+              </span>
+            </span>
+          </label>
         </div>
         <div className="flex gap-1.5">
           <button
@@ -288,6 +331,8 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<ParticipantForm | null>(null);
+  const [recommendation, setRecommendation] = useState<RecommendationInfo | null>(null);
+  const [recommendationsEnabled, setRecommendationsEnabled] = useState(true);
   const [importing, setImporting] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
@@ -306,6 +351,7 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
         maxSpeechesPerRound: s.maxSpeechesPerRound ?? l.maxSpeechesPerRound,
         maxRoundTrips: s.maxRoundTrips ?? l.maxRoundTrips,
       }));
+      if (typeof s.recommendationsEnabled === 'boolean') setRecommendationsEnabled(s.recommendationsEnabled);
     }
     setLoading(false);
   }, [t]);
@@ -313,6 +359,55 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
   useEffect(() => {
     if (isOpen) void reload();
   }, [isOpen, reload]);
+
+  // A roster chip asked for the editor on one recommendation
+  // (`recommendation:<id>`, §8.13). Taken on mount (the request was made before
+  // this section rendered) or on the request event (Settings was already here).
+  const openRecommendation = useCallback(
+    async (anchor: string) => {
+      const id = recommendationIdFromAnchor(anchor);
+      if (!id) return;
+      const res = await nabyPost({ action: 'session.recommendations.list', id });
+      const rec = res.ok ? recommendationInfosFrom(res.recommendations).find((r) => r.id === id) : undefined;
+      if (!rec || rec.kind !== 'new' || !rec.draft) {
+        toast(
+          t('participants.recommend.gone', { defaultValue: 'That suggestion is no longer waiting.' }),
+          'info',
+        );
+        return;
+      }
+      setImporting(false);
+      setRecommendation(rec);
+      setEditing(formFromDraft(rec.draft));
+    },
+    [t],
+  );
+  useEffect(() => {
+    if (!isOpen) return;
+    const taken = takeSettingsFocus(RECOMMENDATION_ANCHOR_PREFIX);
+    if (taken) void openRecommendation(taken);
+    const onRequest = () => {
+      const anchor = takeSettingsFocus(RECOMMENDATION_ANCHOR_PREFIX);
+      if (anchor) void openRecommendation(anchor);
+    };
+    window.addEventListener(SETTINGS_FOCUS_EVENT, onRequest);
+    return () => window.removeEventListener(SETTINGS_FOCUS_EVENT, onRequest);
+  }, [isOpen, openRecommendation]);
+
+  const onToggleRecommendations = useCallback(async () => {
+    const next = !recommendationsEnabled;
+    setRecommendationsEnabled(next);
+    const res = await nabyPost({ action: 'participants.set', recommendationsEnabled: next });
+    if (!res.ok) {
+      setRecommendationsEnabled(!next);
+      toast(t('participants.settings.actionFailed', { defaultValue: 'Could not do that: {{error}}', error: res.error ?? '' }), 'error');
+      return;
+    }
+    if (typeof res.participantSettings?.recommendationsEnabled === 'boolean') {
+      setRecommendationsEnabled(res.participantSettings.recommendationsEnabled);
+    }
+    announceParticipantsChanged();
+  }, [recommendationsEnabled, t]);
 
   const participants = participantInfosFrom(rows);
   const models: Record<string, string | undefined> = {};
@@ -433,12 +528,19 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
   if (editing) {
     return (
       <ParticipantEditor
+        // A fresh editor per recommendation: its form state starts from `initial`.
+        key={recommendation?.id ?? editing.id ?? 'new'}
         initial={editing}
         {...(cwd ? { cwd } : {})}
-        onCancel={() => setEditing(null)}
+        {...(recommendation ? { recommendation } : {})}
+        onCancel={() => {
+          setEditing(null);
+          setRecommendation(null);
+        }}
         onSaved={(list) => {
           if (Array.isArray(list)) setRows(list);
           setEditing(null);
+          setRecommendation(null);
         }}
       />
     );
@@ -449,15 +551,23 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
       participants={participants}
       models={models}
       limits={limits}
+      recommendationsEnabled={recommendationsEnabled}
+      onToggleRecommendations={() => void onToggleRecommendations()}
       loading={loading}
       busy={busy}
       confirmingId={confirmingId}
-      onAdd={() => setEditing(blankParticipantForm())}
+      onAdd={() => {
+        setRecommendation(null);
+        setEditing(blankParticipantForm());
+      }}
       onImport={() => setImporting(true)}
       onExport={(id) => void onExport(id)}
       onEdit={(id) => {
         const row = rows.find((r) => (r as { id?: unknown })?.id === id);
-        if (row) setEditing(formFromParticipant(row));
+        if (row) {
+          setRecommendation(null);
+          setEditing(formFromParticipant(row));
+        }
       }}
       onDuplicate={(id) => void onDuplicate(id)}
       onDelete={(id) => void onDelete(id)}

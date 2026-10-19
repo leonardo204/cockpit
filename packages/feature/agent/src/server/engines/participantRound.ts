@@ -153,6 +153,14 @@ export type RoundInput = {
   routeCall: (system: string) => Promise<RouteCallResult>;
   /** Ask the USER whether to add `agent` (R3.9). */
   propose: (agent: RoundAgent, reason: string) => Promise<ProposalOutcome>;
+  /** An approved proposal has just put `agentId` in the roster. The caller
+   *  closes a matching pending recommendation as accepted (§8.13 R9.5).
+   *  Must not throw; a throw is swallowed. */
+  onJoined?: (agentId: string) => void;
+  /** The user declined (or let lapse) a proposal of `agentId`: the caller
+   *  dismisses a matching pending recommendation (§8.13). Must not throw; a
+   *  throw is swallowed. */
+  onDeclined?: (agentId: string) => void;
   /** Stream events (`system/speaker`, `system/routing`, `system/harness`). The
    *  caller stamps `session_id`. */
   emit: (event: Record<string, unknown>) => void;
@@ -621,6 +629,11 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
           } catch {
             /* the roster write failing must not lose the user's answer for this round */
           }
+          try {
+            input.onJoined?.(agent.id);
+          } catch {
+            /* bookkeeping only — never the round's problem */
+          }
           active.add(agent.id);
           state = {
             at: 'DELEGATE',
@@ -631,6 +644,11 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
             input.store.putSessionParticipant(input.sessionId, agent.id, { status: 'declined', addedBy: 'naby' });
           } catch {
             /* best effort */
+          }
+          try {
+            input.onDeclined?.(agent.id);
+          } catch {
+            /* bookkeeping only — never the round's problem */
           }
           declined.add(agent.id);
           state = outcome === 'abort' || signal.aborted ? { at: 'END', by: 'abort' } : { at: 'NABY', reason: 'declined' };

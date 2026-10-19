@@ -212,6 +212,11 @@ import {
 import { ensureOrgHarnessQuitHandler, makeOrgTurnHooks, orgHookContextBlock } from '../lib/orgHarnessHooks';
 import { unclaimedLineLedVerbs } from '../lib/slashCommands';
 import { kickReflectionSweep } from '../lib/reflection';
+import {
+  closeRecommendationsOnDecline,
+  closeRecommendationsOnJoin,
+  kickRecommendationSweep,
+} from '../lib/participantRecommend';
 import { createVoicePort } from '../lib/voice';
 import type { JudgeBackend } from '../lib/reflection';
 import { runNestedTurn } from '../lib/delegation';
@@ -579,6 +584,15 @@ export interface NabyEngineDeps {
    * unless `resolveVoiceBackend` says otherwise. Production never sets it.
    */
   devClaudeEngine?: () => Engine;
+  /**
+   * What a finished turn kicks for participant recommendations (multi-agent-chat
+   * §8.13, R9.4). Production leaves it unset and gets `kickRecommendationSweep`.
+   * Like the Naby layer, it DEFAULTS TO SILENCE when `resolveModel` or
+   * `devClaudeEngine` is injected: the sweep picks its own backend, and a
+   * scripted-model run must not reach a real provider behind the script. A test
+   * that covers the wiring injects a recorder here.
+   */
+  recommendationSweep?: (store: Store, opts: { sessionId: string }) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -3997,6 +4011,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               },
               routeCall,
               propose,
+              // §8.13 R9.5: a proposal that brought a participant in settles a
+              // pending recommendation of the same participant.
+              onJoined: (agentId) => {
+                closeRecommendationsOnJoin(store, sessionId, agentId);
+              },
+              onDeclined: (agentId) => {
+                closeRecommendationsOnDecline(store, sessionId, agentId);
+              },
               emit: (e) => ctx.emit({ ...e, session_id: sessionId } as unknown as RunEvent),
               log: (kind, fields) =>
                 logActivity(kind, { sessionId, agentId: hubAgent.id, agentName: hubAgent.name, ...fields }),
@@ -4111,6 +4133,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             ...measureTurn(),
             num_turns: turns,
           });
+        }
+
+        // ---- participant recommendations, fire-and-forget (MAC-M6) --------
+        //
+        // The turn is over — every event is out — so the sweep reads the
+        // transcript as it now stands, this turn's answer included (§8.13 R9.4).
+        // Not awaited, never throws: a recommendation is never the turn's
+        // problem. Skipped on a stop (the user cut the exchange short).
+        if (!ctx.signal.aborted) {
+          const sweep =
+            deps.recommendationSweep ??
+            (deps.resolveModel || deps.devClaudeEngine
+              ? undefined
+              : (s: Store, o: { sessionId: string }) => {
+                  void kickRecommendationSweep(s, o);
+                });
+          try {
+            sweep?.(store, { sessionId });
+          } catch (e) {
+            console.log(`[engine:naby] recommendation sweep not kicked: ${e instanceof Error ? e.message : String(e)}`);
+          }
         }
 
         // ---- the final report (Phase 3, P3-M3b) --------------------------

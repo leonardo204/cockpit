@@ -420,9 +420,6 @@ export function ProjectSidebar({
 
               {showBranch && (
                 <div className="mt-0.5 space-y-0.5" data-testid="sidebar-session-branch" data-cwd={project.cwd}>
-                  <div className="pl-8 pr-1 pt-0.5 text-[0.714rem] font-semibold tracking-wide text-muted-foreground select-none">
-                    {t('workspace.sidebarSessions')}
-                  </div>
                   {branch.isLoading && branch.sessions.length === 0 && (
                     <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
                       {t('sessions.loadingSessions')}

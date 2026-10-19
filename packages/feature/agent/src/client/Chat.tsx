@@ -50,6 +50,10 @@ import { ParticipantRoster, ShowRoutingToggle, type SpeakingId } from './Partici
 import { RoundProgressStrip } from './RoundProgressStrip';
 import { roundProgress } from './participants';
 
+/** How long after a turn ends the roster reads once more for a recommendation
+ *  naby's background sweep may have written (§8.13). */
+const RECOMMENDATION_LATE_READ_MS = 20_000;
+
 // Migrated from src/components/project/Chat.tsx.
 
 interface ChatProps {
@@ -525,6 +529,20 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // cards, the routing chips and the `@` palette (ParticipantsContext.tsx).
   const participantsState = useParticipantsState(liveSessionId ?? null);
   const roundRunning = isLoading || liveRunning;
+  // A turn just ENDED: re-read the roster (§8.13). naby's recommendation sweep
+  // starts after the turn and has no stream event of its own, so a chip it
+  // writes is read here — once at once, and once more after the sweep has had
+  // time for its one model call.
+  const { refresh: refreshParticipants } = participantsState;
+  const prevRoundRunningRef = useRef(false);
+  useEffect(() => {
+    const was = prevRoundRunningRef.current;
+    prevRoundRunningRef.current = roundRunning;
+    if (!was || roundRunning) return;
+    refreshParticipants();
+    const late = setTimeout(refreshParticipants, RECOMMENDATION_LATE_READ_MS);
+    return () => clearTimeout(late);
+  }, [roundRunning, refreshParticipants]);
   // Who the roster marks as speaking: the acting agent while a turn runs.
   const speakingId: SpeakingId = !roundRunning
     ? null
@@ -988,7 +1006,10 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             side question is not where any of that is decided, and the row does not
             fit across a popup anyway. The popup inherits whatever the app is set to. */}
         {isClaudeEngine && !ephemeral && (
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-background">
+          // `flex-wrap`: with the roster at its right end (and naby's
+          // recommendation chips in it), a narrow window wraps the roster to a
+          // second line instead of pushing it — or the controls — out of view.
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5 border-b border-border bg-background">
             <EngineSwitcher liveModel={liveModel} onOpenSettings={onOpenSettings} onEngineName={handleEngineName} onActiveEngine={handleActiveEngine} onUserSelect={handleUserSwitch} />
             {/* The model chip sits BETWEEN the engine and the account chip — it
                 picks WHICH model the selected engine uses (Claude aliases /
@@ -1038,7 +1059,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
                 header above is hidden and this row IS the chat's header, so the
                 roster and the "show routing" toggle sit at its right end; when
                 the header is shown they live in its roster slot instead. */}
-            {hideHeader ? <div className="ml-auto pl-2">{participantControls}</div> : null}
+            {hideHeader ? <div className="ml-auto shrink-0 pl-2">{participantControls}</div> : null}
           </div>
         )}
 

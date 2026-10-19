@@ -49,6 +49,9 @@ export const PARTICIPANTS_MAX_ROUND_TRIPS_KEY = 'participants.maxRoundTrips';
 /** Whether the chat draws routing chips (R6.4). A view preference, saved from the
  *  client toggle. */
 export const PARTICIPANTS_SHOW_ROUTING_KEY = 'participants.showRouting';
+/** naby may recommend a participant for a session from its background read of
+ *  the conversation (§8.13, R9.6). Off = the sweep never runs a model call. */
+export const PARTICIPANTS_RECOMMENDATIONS_KEY = 'participants.recommendations.enabled';
 
 export const PARTICIPANT_SETTINGS_DEFAULTS = {
   proposalsEnabled: true,
@@ -56,6 +59,7 @@ export const PARTICIPANT_SETTINGS_DEFAULTS = {
   maxSpeechesPerRound: 6,
   maxRoundTrips: 3,
   showRouting: false,
+  recommendationsEnabled: true,
 } as const;
 
 /** Every integer setting is clamped into this range — on the write AND the read,
@@ -69,6 +73,7 @@ export type ParticipantSettings = {
   maxSpeechesPerRound: number;
   maxRoundTrips: number;
   showRouting: boolean;
+  recommendationsEnabled: boolean;
 };
 
 export type ParticipantSettingsStore = {
@@ -105,6 +110,10 @@ export function readParticipantSettings(store: ParticipantSettingsStore): Partic
       maxSpeechesPerRound: readInt(store.getSetting(PARTICIPANTS_MAX_SPEECHES_KEY), d.maxSpeechesPerRound),
       maxRoundTrips: readInt(store.getSetting(PARTICIPANTS_MAX_ROUND_TRIPS_KEY), d.maxRoundTrips),
       showRouting: readBool(store.getSetting(PARTICIPANTS_SHOW_ROUTING_KEY), d.showRouting),
+      recommendationsEnabled: readBool(
+        store.getSetting(PARTICIPANTS_RECOMMENDATIONS_KEY),
+        d.recommendationsEnabled,
+      ),
     };
   } catch {
     return { ...d };
@@ -123,6 +132,9 @@ export function writeParticipantSettings(
   }
   if (input.showRouting !== undefined) {
     store.setSetting(PARTICIPANTS_SHOW_ROUTING_KEY, input.showRouting ? 'true' : 'false');
+  }
+  if (input.recommendationsEnabled !== undefined) {
+    store.setSetting(PARTICIPANTS_RECOMMENDATIONS_KEY, input.recommendationsEnabled ? 'true' : 'false');
   }
   const ints: [keyof ParticipantSettings, string, number][] = [
     ['maxPerSession', PARTICIPANTS_MAX_PER_SESSION_KEY, d.maxPerSession],
@@ -143,7 +155,7 @@ export function parseParticipantSettingsInput(
   body: Record<string, unknown>,
 ): { ok: true; input: Partial<ParticipantSettings> } | { ok: false; error: string } {
   const input: Partial<ParticipantSettings> = {};
-  for (const field of ['proposalsEnabled', 'showRouting'] as const) {
+  for (const field of ['proposalsEnabled', 'showRouting', 'recommendationsEnabled'] as const) {
     const v = body[field];
     if (v === undefined) continue;
     if (typeof v !== 'boolean') return { ok: false, error: `${field} must be a boolean` };

@@ -16,10 +16,16 @@
  * Telegram) — and so is naby's participant draft (§8.12), whose resolved event is
  * sent AFTER the row is written; or Settings edits the registry
  * (`naby:participants_changed`).
+ *
+ * RECOMMENDATIONS (§8.13, MAC-M6) ride the same read: `session.participants.list`
+ * answers with the session's pending ones, and a turn ending re-reads (the chat
+ * calls `refresh`) — naby's background analysis runs after the turn, so there is
+ * no stream event to wait for.
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { draftResolvedSaved } from './participantDraft';
+import { acceptExistingRecommendation, recommendationInfosFrom, type RecommendationInfo } from './recommendations';
 import {
   DEFAULT_PARTICIPANT_CHAT_SETTINGS,
   chatSettingsFrom,
@@ -32,10 +38,37 @@ import {
 /** Window event: something outside the chat (Settings) changed the registry. */
 export const PARTICIPANTS_CHANGED_EVENT = 'naby:participants_changed';
 
-/** Tell every mounted chat to re-read its participants. */
+/**
+ * Tell every mounted chat to re-read its participants.
+ *
+ * ACROSS FRAMES. Settings is a TOP-window view and each project's chat lives in
+ * its own same-origin iframe, so an event on one `window` reaches nobody in the
+ * others. The signal is dispatched on this window, its parent and every iframe
+ * of the top document — each with that window's own `CustomEvent` (an event
+ * from another realm is refused by `dispatchEvent`). A frame that cannot be
+ * reached (cross-origin) is skipped.
+ */
 export function announceParticipantsChanged(): void {
   if (typeof window === 'undefined') return;
-  window.dispatchEvent(new CustomEvent(PARTICIPANTS_CHANGED_EVENT));
+  const targets = new Set<Window>([window]);
+  try {
+    if (window.parent && window.parent !== window) targets.add(window.parent);
+    const top = window.top ?? window;
+    targets.add(top);
+    for (const frame of Array.from(top.document.querySelectorAll('iframe'))) {
+      if (frame.contentWindow) targets.add(frame.contentWindow);
+    }
+  } catch {
+    /* a cross-origin ancestor: this window still hears it */
+  }
+  for (const w of targets) {
+    try {
+      const Ctor = (w as unknown as { CustomEvent: typeof CustomEvent }).CustomEvent ?? CustomEvent;
+      w.dispatchEvent(new Ctor(PARTICIPANTS_CHANGED_EVENT));
+    } catch {
+      /* unreachable frame */
+    }
+  }
 }
 
 type ActionReply = { ok: true } | { ok: false; error: string };
@@ -47,10 +80,16 @@ export interface ParticipantsContextValue {
   hub: HubInfo | null;
   registered: ParticipantInfo[];
   inSession: ParticipantInfo[];
+  /** naby's pending recommendations for this session (§8.13). */
+  recommendations: RecommendationInfo[];
   settings: ParticipantChatSettings;
   lookup: (id: string, name?: string) => ParticipantInfo | undefined;
   add: (agentId: string) => Promise<ActionReply>;
   remove: (agentId: string) => Promise<ActionReply>;
+  /** `existing` recommendation → add its participant, then close it (D16). */
+  acceptRecommendation: (rec: RecommendationInfo) => Promise<ActionReply>;
+  /** Throw a recommendation away (never made again in this session). */
+  dismissRecommendation: (id: string) => Promise<ActionReply>;
   setShowRouting: (on: boolean) => void;
   refresh: () => void;
 }
@@ -64,10 +103,13 @@ export const EMPTY_PARTICIPANTS: ParticipantsContextValue = {
   hub: null,
   registered: [],
   inSession: [],
+  recommendations: [],
   settings: DEFAULT_PARTICIPANT_CHAT_SETTINGS,
   lookup: () => undefined,
   add: noSession,
   remove: noSession,
+  acceptRecommendation: noSession,
+  dismissRecommendation: noSession,
   setShowRouting: noop,
   refresh: noop,
 };
@@ -84,6 +126,7 @@ type NabyReply = {
   ok?: boolean;
   error?: string;
   participants?: unknown;
+  recommendations?: unknown;
   naby?: { id?: unknown; name?: unknown };
   participantSettings?: unknown;
 };
@@ -117,6 +160,7 @@ function hubFrom(raw: NabyReply['naby']): HubInfo | null {
 export function useParticipantsState(sessionId: string | null): ParticipantsContextValue {
   const [registered, setRegistered] = useState<ParticipantInfo[]>([]);
   const [inSession, setInSession] = useState<ParticipantInfo[]>([]);
+  const [recommendations, setRecommendations] = useState<RecommendationInfo[]>([]);
   const [hub, setHub] = useState<HubInfo | null>(null);
   const [settings, setSettings] = useState<ParticipantChatSettings>(DEFAULT_PARTICIPANT_CHAT_SETTINGS);
   const sessionRef = useRef(sessionId);
@@ -135,6 +179,7 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
     const sid = sessionRef.current;
     if (!sid) {
       setInSession([]);
+      setRecommendations([]);
       return;
     }
     const res = await nabyAction({ action: 'session.participants.list', sessionId: sid });
@@ -142,6 +187,7 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
     if (sessionRef.current !== sid) return;
     if (res?.ok) {
       setInSession(participantInfosFrom(res.participants));
+      setRecommendations(recommendationInfosFrom(res.recommendations));
       const h = hubFrom(res.naby);
       if (h) setHub(h);
     }
@@ -214,6 +260,29 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
     [applyRoster, readRegistry],
   );
 
+  const dismissRecommendation = useCallback(async (id: string): Promise<ActionReply> => {
+    const res = await nabyAction({ action: 'session.recommendations.dismiss', id });
+    if (!res) return { ok: false, error: 'request failed' };
+    if (!res.ok) return { ok: false, error: res.error ?? 'request failed' };
+    setRecommendations(recommendationInfosFrom(res.recommendations));
+    return { ok: true };
+  }, []);
+
+  const acceptRecommendation = useCallback(
+    async (rec: RecommendationInfo): Promise<ActionReply> => {
+      // Only an `existing` one is accepted from the chip (D16); a `new` one is
+      // saved in Settings first.
+      const out = await acceptExistingRecommendation(rec, {
+        add,
+        accept: (id) => nabyAction({ action: 'session.recommendations.accept', id }),
+      });
+      if (out.recommendations) setRecommendations(out.recommendations);
+      else if (out.reply.ok) void readSession();
+      return out.reply;
+    },
+    [add, readSession],
+  );
+
   const setShowRouting = useCallback((on: boolean) => {
     // Optimistic: it is a view preference, and the server answers with what it
     // stored — which replaces the guess.
@@ -238,13 +307,30 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
       hub,
       registered,
       inSession,
+      recommendations,
       settings,
       lookup,
       add,
       remove,
+      acceptRecommendation,
+      dismissRecommendation,
       setShowRouting,
       refresh,
     }),
-    [sessionId, hub, registered, inSession, settings, lookup, add, remove, setShowRouting, refresh],
+    [
+      sessionId,
+      hub,
+      registered,
+      inSession,
+      recommendations,
+      settings,
+      lookup,
+      add,
+      remove,
+      acceptRecommendation,
+      dismissRecommendation,
+      setShowRouting,
+      refresh,
+    ],
   );
 }

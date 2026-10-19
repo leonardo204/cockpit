@@ -7,6 +7,7 @@
 
 import { getStore } from '../engines/naby';
 import { reconcileOnBoot } from './bootReconcile';
+import { kickRecommendationSweep } from './participantRecommend';
 
 /** Settle what an unclean shutdown left behind. Never throws — a boot that
  *  cannot tidy is still a boot. */
@@ -20,5 +21,13 @@ export function runBootReconcile(): void {
     }
   } catch (e) {
     console.warn(`[boot] reconcile skipped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  // Back-fill participant recommendations (multi-agent-chat §8.13, D18): one
+  // sweep over the most recent sessions that were never analysed. Fire and
+  // forget — it never holds the boot up and never throws.
+  try {
+    void kickRecommendationSweep(getStore(), {});
+  } catch (e) {
+    console.warn(`[boot] recommendation sweep not started: ${e instanceof Error ? e.message : String(e)}`);
   }
 }

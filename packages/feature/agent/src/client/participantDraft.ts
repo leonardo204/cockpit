@@ -110,6 +110,13 @@ function fieldsFrom(raw: Record<string, unknown>): DraftFields {
   };
 }
 
+/** Read a draft's fields off the wire (a draft card's payload, a `new`
+ *  recommendation's draft, §8.13). Defensive: missing text reads as '', a
+ *  missing avatar as 🤖, a bad colour as the first preset. */
+export function draftFieldsFrom(raw: unknown): DraftFields {
+  return fieldsFrom(isObj(raw) ? raw : {});
+}
+
 const ALL_FIELDS: DraftField[] = [
   'name',
   'displayName',

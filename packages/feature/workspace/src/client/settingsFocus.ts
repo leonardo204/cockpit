@@ -24,6 +24,11 @@ function bringIntoView(el: HTMLElement): void {
   el.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true });
 }
 
+/** Window event fired when a request is left WAITING — for an entry that is
+ *  not a DOM node yet but knows how to become one (a recommendation's editor,
+ *  §8.13: `takeSettingsFocus` below). `detail` is the anchor. */
+export const SETTINGS_FOCUS_EVENT = 'naby:settings-focus';
+
 export function requestSettingsFocus(anchor: string): void {
   pending = anchor;
   if (typeof document === 'undefined') return;
@@ -31,7 +36,24 @@ export function requestSettingsFocus(anchor: string): void {
   if (el) {
     pending = undefined;
     bringIntoView(el);
+    return;
   }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(SETTINGS_FOCUS_EVENT, { detail: anchor }));
+  }
+}
+
+/**
+ * Take a waiting request whose anchor starts with `prefix`, and return it. For
+ * an entry that has to LOAD something before it can render (the participant
+ * editor opened on a recommendation, `recommendation:<id>`): it takes the
+ * request on mount and on `SETTINGS_FOCUS_EVENT`, whichever comes first.
+ */
+export function takeSettingsFocus(prefix: string): string | undefined {
+  if (!pending || !pending.startsWith(prefix)) return undefined;
+  const anchor = pending;
+  pending = undefined;
+  return anchor;
 }
 
 /** Called by an anchored entry on mount. True when it took the focus. */

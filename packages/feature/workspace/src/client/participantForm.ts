@@ -159,6 +159,46 @@ export function formFromParticipant(row: unknown): ParticipantForm {
   };
 }
 
+/** The draft side of a participant (§8.12 `DraftFields`) — what a `new`
+ *  recommendation carries (§8.13). */
+export type DraftFieldsInput = {
+  name: string;
+  displayName: string;
+  description: string;
+  instructions: string;
+  guardrailsPolicy: string;
+  greeting: string;
+  avatar: { kind: 'emoji'; value: string } | { kind: 'image'; dataUrl: string };
+  color: string;
+};
+
+/**
+ * Fill the form from a draft — naby's recommendation of a NEW participant
+ * (multi-agent-chat §8.13). A new participant, so no `id`; the safe defaults of
+ * a draft (R8.1, R9.2): no tools, no MCP servers, no skills, the session's model
+ * and `memoryScope: 'session'`. The user widens them here before saving.
+ */
+export function formFromDraft(draft: DraftFieldsInput): ParticipantForm {
+  const base = blankParticipantForm();
+  return {
+    ...base,
+    name: draft.name.trim().replace(/^@/, ''),
+    displayName: draft.displayName.trim() || draft.name.trim(),
+    description: draft.description,
+    avatarEmoji: draft.avatar.kind === 'emoji' && draft.avatar.value.trim() ? draft.avatar.value : base.avatarEmoji,
+    ...(draft.avatar.kind === 'image' && draft.avatar.dataUrl ? { avatarImage: draft.avatar.dataUrl } : {}),
+    color: HEX.test(draft.color.trim()) ? draft.color.trim() : base.color,
+    instructions: draft.instructions,
+    greeting: draft.greeting,
+    policy: draft.guardrailsPolicy,
+    toolRefs: [],
+    mcpServers: [],
+    skills: [],
+    model: '',
+    memoryScope: 'session',
+  };
+}
+
 /** One problem with the form. `code` is an i18n key under `participants.editor.err`. */
 export type FormError = {
   field: string;

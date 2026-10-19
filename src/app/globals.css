@@ -117,7 +117,7 @@ html, body {
   --brand: var(--violet-9);             /* --pri */
   --brand-foreground: var(--violet-11);
   --brand-2: 255 100% 74%;              /* --pri2, gradient end */
-  --user-bubble: 252 100% 65%;          /* --ubub */
+  --user-bubble: 252 52% 57%;           /* --ubub (toned down from 252 100% 65%) */
   --user-bubble-foreground: 0 0% 100%;  /* --uink */
   --code-surface: 240 16% 96%;          /* --code */
   /* Semantic status colors (StatusDot, the chat status bar, every state that

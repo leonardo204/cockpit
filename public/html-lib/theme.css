@@ -64,7 +64,7 @@
   --brand-foreground: hsl(252 72% 53%);
   --brand-2: hsl(255 100% 74%);
   --brand-gradient: linear-gradient(135deg, var(--brand), var(--brand-2));
-  --user-bubble: hsl(252 100% 65%);
+  --user-bubble: hsl(252 52% 57%);
   --user-bubble-foreground: hsl(0 0% 100%);
   --code-surface: hsl(240 16% 96%);
   --destructive: hsl(0 73% 55%);

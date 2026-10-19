@@ -89,7 +89,9 @@ describe('nothing clips the popover', () => {
   });
 
   it('not the engine row in Chat that the chip sits in', () => {
-    const row = /<div className="flex items-center gap-2 px-3 py-1\.5 border-b border-border bg-background">/.exec(chat)?.[0];
+    // The row may wrap (MAC-M6: the roster with recommendation chips wraps to a
+    // second line at narrow widths) — what matters is that it never clips.
+    const row = /<div className="flex[^"]*items-center[^"]*px-3 py-1\.5 border-b border-border bg-background">/.exec(chat)?.[0];
     expect(row, 'engine row not found — did Chat.tsx change?').toBeDefined();
     expect(row).not.toContain('overflow-hidden');
     // And the switcher really is in that row.

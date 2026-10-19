@@ -150,7 +150,6 @@
     "loadingText": "Loading...",
     "openProject": "Open Project",
     "sidebarProjects": "Projects",
-    "sidebarSessions": "Sessions",
     "expandSidebar": "Expand sidebar",
     "collapseSidebar": "Collapse sidebar",
     "resizeSidebar": "Resize sidebar",
@@ -2591,6 +2590,27 @@
         "temperature": "Temperature is a number from 0 to 2."
       },
       "toolSuggest": "Available here:"
+    },
+    "recommend": {
+      "badge": "Suggested",
+      "why": "naby's suggestion · {{reason}}",
+      "addToChat": "Add to conversation",
+      "dismiss": "Dismiss",
+      "dismissFailed": "Could not dismiss the suggestion: {{error}}",
+      "saveAdd": "Save and add to conversation",
+      "saveOnly": "Save only",
+      "discard": "Discard",
+      "editorHint": "Check the draft, then save it. Nothing from it reaches a conversation until it is saved.",
+      "discarded": "Suggestion discarded.",
+      "savedAdded": "Saved and added to the conversation.",
+      "savedNotAdded": "Saved, but could not add it to the conversation: {{error}}",
+      "gone": "That suggestion is no longer waiting.",
+      "toggle": "naby's participant suggestions",
+      "toggleHint": "When the same specialised work keeps coming up in a conversation, naby suggests a participant for it. Reading the conversation costs one small model call every few messages.",
+      "savedNotClosed": "Saved, but the suggestion could not be closed: {{error}}",
+      "listTitle": "naby's suggestions",
+      "more": "+{{count}} suggested",
+      "review": "Review in Settings"
     }
   },
   "participantImport": {

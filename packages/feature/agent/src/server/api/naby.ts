@@ -179,6 +179,11 @@ import {
   type ParticipantView,
 } from '../lib/participants';
 import {
+  closeRecommendation,
+  pendingRecommendationViews,
+  type RecommendationView,
+} from '../lib/participantRecommend';
+import {
   readTelegramConfig,
   writeTelegramConfig,
   redactToken,
@@ -820,6 +825,15 @@ export type NabyAction =
   | { action: 'session.participants.list'; sessionId: string }
   | { action: 'session.participants.add'; sessionId: string; agentId: string }
   | { action: 'session.participants.remove'; sessionId: string; agentId: string }
+  // MAC-M6 (§8.13) — naby's background RECOMMENDATIONS for a session. `list`
+  // returns the pending ones (by session, or the one `id` Settings was opened
+  // on); `dismiss` throws one away for good in that session; `accept` closes it
+  // after the client has saved (`participant.put`) and/or added
+  // (`session.participants.add`) — `agentId` names the participant a `new`
+  // draft became.
+  | { action: 'session.recommendations.list'; sessionId?: string; id?: string }
+  | { action: 'session.recommendations.dismiss'; id: string }
+  | { action: 'session.recommendations.accept'; id: string; agentId?: string }
   | { action: 'participants.get' }
   | {
       action: 'participants.set';
@@ -828,6 +842,7 @@ export type NabyAction =
       maxSpeechesPerRound?: number;
       maxRoundTrips?: number;
       showRouting?: boolean;
+      recommendationsEnabled?: boolean;
     }
   // Phase 3 (P3-M3) — the Telegram escalation channel config. `get` returns the
   // config with the token REDACTED; `set` persists (a token '' is left unchanged
@@ -1036,6 +1051,9 @@ export type NabyActionResult =
       participant?: Agent;
       /** `session.participants.*`: the hub, always in the roster (R2.1). */
       naby?: { id: string; name: string };
+      /** `session.participants.list` and `session.recommendations.*`: the
+       *  session's PENDING recommendations (§8.13). */
+      recommendations?: RecommendationView[];
       /** `participants.get`/`set`: the five settings as now stored (clamped). */
       participantSettings?: ParticipantSettings;
       /** `personaAutonomy.get`/`set`: the persona delegation settings as they now
@@ -1871,7 +1889,49 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (typeof body.sessionId !== 'string' || !body.sessionId) {
         return { ok: false, error: 'sessionId is required' };
       }
-      return { ok: true, naby: hubOf(store), participants: sessionRoster(store, body.sessionId) };
+      // The roster reads its recommendation chips in the same request (§8.13).
+      return {
+        ok: true,
+        naby: hubOf(store),
+        participants: sessionRoster(store, body.sessionId),
+        recommendations: pendingRecommendationViews(store, body.sessionId),
+      };
+    }
+
+    // -- participant recommendations (multi-agent-chat MAC-M6, §8.13) ---------
+
+    case 'session.recommendations.list': {
+      if (typeof body.id === 'string' && body.id) {
+        // Settings opened on ONE recommendation (`recommendation:<id>`): it does
+        // not know the session, so the row says it.
+        const rec = store.getParticipantRecommendation(body.id);
+        if (!rec || rec.status !== 'pending') return { ok: true, recommendations: [] };
+        return {
+          ok: true,
+          recommendations: pendingRecommendationViews(store, rec.sessionId).filter((r) => r.id === rec.id),
+        };
+      }
+      if (typeof body.sessionId !== 'string' || !body.sessionId) {
+        return { ok: false, error: 'sessionId or id is required' };
+      }
+      return { ok: true, recommendations: pendingRecommendationViews(store, body.sessionId) };
+    }
+
+    case 'session.recommendations.dismiss':
+    case 'session.recommendations.accept': {
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      const accepting = body.action === 'session.recommendations.accept';
+      const extra: Record<string, unknown> = {};
+      if (accepting && 'agentId' in body && body.agentId !== undefined) {
+        if (typeof body.agentId !== 'string' || !body.agentId) return { ok: false, error: 'agentId must be a string' };
+        if (!isParticipant(store.getAgent(body.agentId))) {
+          return { ok: false, error: `not a conversation participant: ${body.agentId}` };
+        }
+        extra.savedAgentId = body.agentId;
+      }
+      const closed = closeRecommendation(store, body.id, accepting ? 'accepted' : 'dismissed', extra);
+      if (!closed.ok) return { ok: false, error: closed.error };
+      return { ok: true, recommendations: pendingRecommendationViews(store, closed.recommendation.sessionId) };
     }
 
     case 'session.participants.add': {

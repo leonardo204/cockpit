@@ -85,6 +85,44 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.46.0 — 2026-10-19
+
+### en
+
+naby now suggests participants when it sees the same specialist work coming back, and the light-mode user bubble is easier on the eyes.
+
+**New**
+
+- **Participant suggestions.** After a chat has a few messages, naby reads it in the background and, only when one kind of specialist work keeps coming back (three times or more), suggests a participant for it. A suggestion appears as a dashed chip next to the + in the roster. A registered participant can be added or dismissed right there; a new one opens Settings with the draft filled in, where you choose "Save and add to this chat", "Save only" or "Discard".
+  - Nothing is saved or used in a turn until you approve it. Drafts carry no tools, MCP servers or skills.
+  - Existing chats are looked at too, a few at a time, newest first. One short model call per analysis, billed to your provider. Turn it off in Settings → naby → Participants.
+
+**Improved**
+
+- **Softer user bubble in light mode.** The vivid violet was tiring on long messages. It is now a calmer violet with the same white text contrast.
+
+**Fixed**
+
+- **Removed the "Sessions" label** under each project in the sidebar. The session list speaks for itself.
+
+### ko
+
+같은 전문 작업이 반복되면 나비가 참가자를 추천해요. 라이트 모드의 사용자 말풍선도 눈이 덜 아프게 바꿨어요.
+
+**새로 생긴 것**
+
+- **참가자 추천.** 대화가 몇 번 오가면 나비가 뒤에서 대화를 읽고, 한 가지 전문 작업이 세 번 이상 반복될 때만 그 일을 맡을 참가자를 추천해요. 추천은 명단의 + 옆에 점선 칩으로 보여요. 이미 등록된 참가자는 그 자리에서 추가하거나 무시하고, 새 참가자는 설정이 초안으로 채워져 열려요. 거기서 "저장하고 대화에 추가", "저장만", "버리기"를 골라요.
+  - 승인하기 전에는 아무것도 저장되지 않고 어떤 대화에도 들어가지 않아요. 초안에는 도구·MCP 서버·스킬이 없어요.
+  - 이미 있던 대화도 최근 것부터 조금씩 살펴봐요. 분석 한 번에 짧은 모델 호출 한 번이고, 비용은 내 프로바이더로 나가요. 설정 → 나비 → 참가자에서 끌 수 있어요.
+
+**나아진 것**
+
+- **라이트 모드 사용자 말풍선이 차분해졌어요.** 긴 메시지에서 보라색이 너무 강했어요. 흰 글자 대비는 그대로 두고 색만 낮췄어요.
+
+**고친 것**
+
+- **사이드바의 "세션" 라벨을 뺐어요.** 프로젝트 아래 세션 목록은 라벨 없이도 알 수 있어요.
+
 ## 1.45.0 — 2026-10-16
 
 ### en
