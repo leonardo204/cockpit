@@ -52,6 +52,8 @@
 // It is pure and testable — jsdom cannot draw an OS banner, so the decision is
 // the part that gets asserted, and the wiring is pinned by a source assertion.
 
+import { projectNameFromCwd } from '@cockpit/shared-utils';
+
 /** The shape this module needs from a `/ws/global-state` row. Structurally a
  *  subset of `GlobalSession`/`RecentSession`, declared here so the pure rules do
  *  not drag a server type into a unit test. */
@@ -169,8 +171,7 @@ export function notificationLabel(row: SessionStatusRow): string {
   if (title) return title;
   const asked = row.lastUserMessage?.trim();
   if (asked) return asked;
-  const folder = row.cwd?.split('/').filter(Boolean).pop();
-  return folder ?? '';
+  return projectNameFromCwd(row.cwd);
 }
 
 /** The two languages the app has words for. Anything else is English. */

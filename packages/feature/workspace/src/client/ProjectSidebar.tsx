@@ -26,6 +26,7 @@ import {
   withoutSession,
   type ProjectSessionTree,
 } from './projectSessionTree';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 export interface ProjectInfo {
   cwd: string;
@@ -70,10 +71,9 @@ interface ProjectSidebarProps {
   onAddProject: (cwd: string) => void;
 }
 
-// Extract project name from cwd
+// Extract project name from cwd (either separator: Windows cwds use `\`)
 function getProjectName(cwd: string): string {
-  const parts = cwd.split('/').filter(Boolean);
-  return parts[parts.length - 1] || cwd;
+  return projectNameFromCwd(cwd) || cwd;
 }
 
 export function ProjectSidebar({

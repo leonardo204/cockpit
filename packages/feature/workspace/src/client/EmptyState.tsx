@@ -10,6 +10,7 @@ import {
   rememberProjectFolder,
 } from './effect/workspaceClient';
 import { useProjectFolderMenu } from './ProjectFolderMenu';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 interface SessionInfo {
   path: string;
@@ -71,8 +72,7 @@ function encodeProjectPath(cwd: string): string {
 }
 
 function projectName(cwd: string): string {
-  const parts = cwd.split('/').filter(Boolean);
-  return parts[parts.length - 1] || cwd;
+  return projectNameFromCwd(cwd) || cwd;
 }
 
 export function EmptyState({

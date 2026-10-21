@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.46.3 — 2026-10-21
+
+### en
+
+Project names on Windows look the same as on Mac.
+
+**Fixed**
+
+- **Folder name instead of the full path on Windows.** The sidebar showed a Windows project as its whole path (C:\\Users\\…\\naby). It now shows just the folder name, as on Mac. The same goes for recent and pinned sessions, scheduled tasks, the session monitor, the start screen, the mobile view and the "session done" notification.
+
+### ko
+
+Windows에서도 프로젝트 이름이 Mac처럼 보여요.
+
+**고친 것**
+
+- **Windows에서 전체 경로 대신 폴더 이름만 보여요.** 사이드바에 Windows 프로젝트가 전체 경로(C:\\Users\\…\\naby)로 보였어요. 이제 Mac처럼 폴더 이름만 보여요. 최근·고정 세션, 예약 작업, 세션 모니터, 시작 화면, 모바일 화면, "세션 완료" 알림도 같아요.
+
 ## 1.46.2 — 2026-10-19
 
 ### en

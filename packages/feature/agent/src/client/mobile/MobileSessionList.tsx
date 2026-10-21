@@ -7,6 +7,7 @@ import { useWebSocket, useTheme } from '@cockpit/shared-ui';
 import { usePinnedSessions } from '../usePinnedSessions';
 import { usePushSubscription } from '../usePushSubscription';
 import type { GlobalSession } from '../GlobalSessionMonitor';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 // What the list needs to open a session — satisfied by both a recent
 // GlobalSession and a pinned session.
@@ -58,7 +59,7 @@ export function MobileSessionList({ onOpen, onUseDesktop, initialSessions }: Mob
     return t('common.daysAgo', { count: Math.floor(hours / 24) });
   }, [now, t]);
 
-  const projectName = (cwd: string) => cwd.split('/').pop() || cwd;
+  const projectName = (cwd: string) => projectNameFromCwd(cwd) || cwd;
   const loadingCount = sessions.filter((s) => s.status === 'loading').length;
 
   const tabBtn = (key: Tab, label: string) => (

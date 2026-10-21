@@ -18,6 +18,7 @@ import {
 import { GENERIC_ENGINE_NAME } from '../engineName';
 import i18n from '@cockpit/shared-i18n';
 import type { ChatMessage, ChatEngine } from '../types';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 // Per-session engine, persisted by the desktop tab system. Naby is single-engine
 // (the ollama/deepseek per-model tab state was removed with the engine picker),
@@ -182,7 +183,7 @@ export function MobileChat({ cwd, initialSessionId, initialTitle, onBack, isActi
         </button>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{title || '…'}</div>
-          <div className="truncate text-xs text-muted-foreground">{cwd.split('/').pop()}</div>
+          <div className="truncate text-xs text-muted-foreground">{projectNameFromCwd(cwd)}</div>
         </div>
       </div>
 

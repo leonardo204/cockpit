@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ScheduledTask } from './useScheduledTasks';
 import { ScheduleTaskPopover } from './ScheduleTaskPopover';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 interface ScheduledTasksPanelProps {
   collapsed?: boolean;
@@ -20,7 +21,7 @@ interface ScheduledTasksPanelProps {
 }
 
 function getProjectName(cwd: string): string {
-  return cwd.split('/').pop() || cwd;
+  return projectNameFromCwd(cwd) || cwd;
 }
 
 function formatNextFire(ts: number, t: (key: string, opts?: Record<string, unknown>) => string): string {

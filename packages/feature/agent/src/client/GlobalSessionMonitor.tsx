@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { RecentSessionsModal } from './RecentSessionsModal';
 import { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
 import { recentTooltipPosition } from './recentTooltipAnchor';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 export interface GlobalSession {
   cwd: string;
@@ -116,7 +117,7 @@ export function GlobalSessionMonitor({ currentCwd, onSwitchProject, collapsed, s
 
   // Get project name. A projectless session arrives with cwd '' — it is still a
   // real session, opened by sessionId, so it gets a label rather than a blank.
-  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd || t('sessions.noProject');
+  const getProjectName = (cwd: string) => projectNameFromCwd(cwd) || cwd || t('sessions.noProject');
 
   return (
     <div className="relative" ref={dropdownRef}>

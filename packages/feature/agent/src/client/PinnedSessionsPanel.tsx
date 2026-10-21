@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PinnedSession } from './usePinnedSessions';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 interface PinnedSessionsPanelProps {
   collapsed?: boolean;
@@ -61,7 +62,7 @@ export function PinnedSessionsPanel({
     }
   }, [editingId]);
 
-  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd;
+  const getProjectName = (cwd: string) => projectNameFromCwd(cwd) || cwd;
 
   const handleSessionClick = useCallback((session: PinnedSession) => {
     if (editingId) return; // Do not navigate while editing

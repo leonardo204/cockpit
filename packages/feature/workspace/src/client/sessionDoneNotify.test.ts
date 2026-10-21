@@ -158,6 +158,7 @@ describe('what the banner says', () => {
     expect(notificationLabel(row({ title: 'Deploy prod' }))).toBe('Deploy prod');
     expect(notificationLabel(row({ lastUserMessage: '배포해줘' }))).toBe('배포해줘');
     expect(notificationLabel(row())).toBe('naby');
+    expect(notificationLabel(row({ cwd: 'C:\\Users\\me\\naby' }))).toBe('naby');
   });
 
   it('picks Korean only for a Korean UI', () => {

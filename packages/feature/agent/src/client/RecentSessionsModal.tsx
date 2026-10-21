@@ -11,6 +11,7 @@ import {
 } from './effect/agentClient';
 import { RecentSessionDeleteButton } from './RecentSessionDeleteButton';
 import { withoutRecentSession } from './recentSessionDelete';
+import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 interface RecentSessionsModalProps {
   isOpen: boolean;
@@ -144,7 +145,7 @@ export function RecentSessionsModal({ isOpen, onClose, onSwitchProject, onDelete
 
   // A projectless (legacy) session arrives with cwd === ''. It is still a valid
   // recent session — show a placeholder here and let the row open by sessionId.
-  const getProjectName = (cwd: string) => cwd.split('/').pop() || cwd || t('sessions.noProject');
+  const getProjectName = (cwd: string) => projectNameFromCwd(cwd) || cwd || t('sessions.noProject');
 
   const formatDate = (timestamp: number) => {
     const date = new Date(timestamp);
