@@ -38,7 +38,7 @@
 // because the bug being fixed is one that cannot be reproduced on the machine
 // this is written on.
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -254,18 +254,80 @@ export function searchPath(
   return null;
 }
 
+/** How long one `reg query` gets. It answers in milliseconds; the bound only
+ *  keeps a wedged registry service from hanging a settings check. */
+const REG_QUERY_TIMEOUT_MS = 3_000;
+
+/** The two registry keys Windows builds a new process's PATH from. */
+const REGISTRY_PATH_KEYS = [
+  'HKCU\\Environment',
+  'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment',
+] as const;
+
+/**
+ * Pull the `Path` value out of `reg query <key> /v Path` output, or ''.
+ * PURE, so the parser is testable from a Mac. A line looks like
+ * `    Path    REG_EXPAND_SZ    %USERPROFILE%\bin;C:\Tools`.
+ */
+export function parseRegQueryPath(stdout: string): string {
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/i.exec(line);
+    if (m) return m[1]!.trim();
+  }
+  return '';
+}
+
+/** Expand `%NAME%` against `env` (case-insensitive, as Windows does). An
+ *  unknown name is left as written — a directory that cannot exist, harmlessly. */
+export function expandWindowsEnv(value: string, env: NodeJS.ProcessEnv): string {
+  const lower = new Map(Object.entries(env).map(([k, v]) => [k.toLowerCase(), v]));
+  return value.replace(/%([^%;]+)%/g, (whole, name: string) => lower.get(name.toLowerCase()) ?? whole);
+}
+
+function regQueryPath(key: string): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      'reg',
+      ['query', key, '/v', 'Path'],
+      { timeout: REG_QUERY_TIMEOUT_MS, windowsHide: true },
+      (err, stdout) => resolve(err ? '' : parseRegQueryPath(String(stdout))),
+    );
+  });
+}
+
+/**
+ * THE PATH A PROCESS STARTED NOW WOULD GET — user PATH, then system PATH, read
+ * fresh from the registry. Windows only.
+ *
+ * Why `process.env.PATH` is not enough: it is the PATH the app was LAUNCHED
+ * with. An installer that adds its folder to the user PATH while naby is running
+ * (Aside's CLI installer does exactly this) changes the registry, not the
+ * running process, so "check again" kept answering "not installed" until the app
+ * was restarted. Reading the registry on each check sees the install at once.
+ */
+export async function readRegistryPath(env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  const parts = await Promise.all(REGISTRY_PATH_KEYS.map(regQueryPath));
+  return parts
+    .filter(Boolean)
+    .map((p) => expandWindowsEnv(p, env))
+    .join(';');
+}
+
 export type ResolveCommandPathOptions = {
   /** Override the environment (the pinned path, PATH, PATHEXT, USERPROFILE). */
   env?: NodeJS.ProcessEnv;
   /** Override the platform, so the Windows search order is testable anywhere. */
   platform?: NodeJS.Platform;
+  /** Override the registry PATH read (Windows), so tests never run `reg`. */
+  readRegistryPath?: (env: NodeJS.ProcessEnv) => Promise<string>;
 };
 
 /**
  * The absolute path of `bin`, or null.
  *
  * Order: the explicit override, then the login shell (POSIX only), then — on
- * Windows — PATH, then the well-known install directories. An override that is
+ * Windows — PATH, then the registry's current PATH (for tools installed after
+ * the app started), then the well-known install directories. An override that is
  * SET BUT WRONG returns null instead of falling through — someone who pointed
  * naby at a specific binary wants to be told it is not there, not to be silently
  * given a different one.
@@ -287,6 +349,12 @@ export async function resolveCommandPath(
   if (platform === 'win32') {
     const fromPath = searchPath(bin, platform, env);
     if (fromPath) return fromPath;
+    // Installed after launch: the registry already has it, our PATH does not.
+    const fresh = await (opts.readRegistryPath ?? readRegistryPath)(env);
+    if (fresh) {
+      const fromRegistry = searchPath(bin, platform, { ...env, PATH: fresh });
+      if (fromRegistry) return fromRegistry;
+    }
   }
 
   for (const dir of wellKnownDirs(platform, env)) {

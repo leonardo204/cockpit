@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import {
   candidateNames,
   commandPathEnvVar,
+  expandWindowsEnv,
   isExecutableFile,
   launchSpec,
+  parseRegQueryPath,
   resolveCommandPath,
   searchPath,
   wellKnownDirs,
@@ -310,6 +312,66 @@ describe('resolveCommandPath on Windows', () => {
       if (realUserProfile === undefined) delete process.env.USERPROFILE;
       else process.env.USERPROFILE = realUserProfile;
     }
+  });
+});
+
+describe('registry PATH on Windows — tools installed after launch', () => {
+  it('parses the Path value of `reg query` output', () => {
+    const out =
+      '\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\bin;C:\\Tools\r\n\r\n';
+    expect(parseRegQueryPath(out)).toBe('%USERPROFILE%\\bin;C:\\Tools');
+    expect(parseRegQueryPath('    Path    REG_SZ    C:\\A')).toBe('C:\\A');
+    expect(parseRegQueryPath('ERROR: The system was unable to find the specified registry key')).toBe('');
+  });
+
+  it('expands %VARS% case-insensitively and leaves unknown ones', () => {
+    expect(expandWindowsEnv('%UserProfile%\\bin;%NOPE%\\x', asEnv({ USERPROFILE: 'C:\\Users\\me' }))).toBe(
+      'C:\\Users\\me\\bin;%NOPE%\\x',
+    );
+  });
+
+  it('finds a CLI the registry PATH has but the launch-time PATH does not', async () => {
+    // The reported case: Aside's installer added its folder to the user PATH
+    // while naby was running; "check again" must see it without a restart.
+    const installed = tempDir('asideinstall');
+    const exe = fakeBinary('aside.exe', installed);
+    await expect(
+      resolveCommandPath('aside', {
+        platform: 'win32',
+        env: asEnv({ PATH: tempDir('stalepath'), USERPROFILE: tempDir('winhome3') }),
+        readRegistryPath: async () => installed,
+      }),
+    ).resolves.toBe(exe);
+  });
+
+  it('does not read the registry when the launch-time PATH already answers', async () => {
+    const binDir = tempDir('winfast');
+    const exe = fakeBinary('aside.exe', binDir);
+    let reads = 0;
+    await expect(
+      resolveCommandPath('aside', {
+        platform: 'win32',
+        env: asEnv({ PATH: binDir, USERPROFILE: tempDir('winhome4') }),
+        readRegistryPath: async () => {
+          reads += 1;
+          return '';
+        },
+      }),
+    ).resolves.toBe(exe);
+    expect(reads).toBe(0);
+  });
+
+  it('never reads the registry off Windows', async () => {
+    let reads = 0;
+    await resolveCommandPath('definitely-not-a-real-bin-xyz', {
+      platform: 'darwin',
+      env: asEnv({ PATH: tempDir('posix'), NABY_DEFINITELY_NOT_A_REAL_BIN_XYZ_PATH: '' }),
+      readRegistryPath: async () => {
+        reads += 1;
+        return '';
+      },
+    });
+    expect(reads).toBe(0);
   });
 });
 

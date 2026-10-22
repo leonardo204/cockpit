@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.47.1 — 2026-10-22
+
+### en
+
+Tools you install while naby is open are found without restarting it.
+
+**Fixed**
+
+- **Windows: a CLI installed while naby was running wasn't detected.** After installing the Aside CLI, Check again kept saying the CLI was missing until naby was restarted. naby now also reads the current PATH from Windows, so Check again finds it right away.
+  - The same applies to other connections that need a command-line tool, such as uvx for Atlassian.
+
+### ko
+
+나비를 켜 둔 채 설치한 도구도 재시작 없이 찾아요.
+
+**고친 것**
+
+- **Windows: 나비 실행 중에 설치한 CLI를 못 찾던 문제.** Aside CLI를 설치해도 나비를 다시 켜기 전까지는 다시 확인을 눌러도 CLI가 없다고 나왔어요. 이제 Windows에 저장된 최신 PATH를 다시 읽어서, 다시 확인만 누르면 바로 찾아요.
+  - Atlassian 연결에 쓰는 uvx처럼 명령줄 도구가 필요한 다른 연결도 똑같이 바로 찾아요.
+
 ## 1.47.0 — 2026-10-22
 
 ### en
