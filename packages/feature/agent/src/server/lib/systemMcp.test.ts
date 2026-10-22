@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ATLASSIAN_MCP_URL, type McpEntry } from '../../../../../../../dist/naby-runtime.mjs';
 import {
+  ASIDE_SERVER_NAME,
   ATLASSIAN_SERVER_NAME,
   ATLASSIAN_URL_KEY,
   CIC_SERVER_NAME,
@@ -12,6 +13,7 @@ import {
   SYSTEM_MCP_PRESETS,
   SYSTEM_MCP_PRESET_NAMES,
   findSystemMcpPreset,
+  launcherPresets,
   mergeSystemMcpFields,
   normalizeBearerToken,
   readNonSecretFields,
@@ -89,6 +91,7 @@ describe('the registry itself', () => {
       SKILL_HUB_SERVER_NAME,
       ATLASSIAN_SERVER_NAME,
       CIC_SERVER_NAME,
+      ASIDE_SERVER_NAME,
     ]);
   });
 
@@ -99,6 +102,10 @@ describe('the registry itself', () => {
       if (preset.oauth) {
         // org-harness-sync §3.8: a log-in button, no form.
         expect(preset.fields, `${preset.name} is OAuth and still asks for fields`).toEqual([]);
+        continue;
+      }
+      if (preset.launcher && preset.fields.length === 0) {
+        // skill-hub-builtin §2.8: a local CLI with nothing to type — Connect only.
         continue;
       }
       expect(preset.fields.length, `${preset.name} asks for nothing`).toBeGreaterThan(0);
@@ -476,5 +483,77 @@ describe('mergeSystemMcpFields', () => {
     expect(merged).toEqual({ token: 'shub_new' });
     // Nor into a browser-OAuth preset, which declares none.
     expect(mergeSystemMcpFields(atlassian, LEGACY_ATLASSIAN, { apiToken: 'x' })).toEqual({});
+  });
+});
+
+describe('the aside preset (local CLI over stdio, skill-hub-builtin §2.8)', () => {
+  const aside = findSystemMcpPreset(ASIDE_SERVER_NAME)!;
+  const ASIDE = '/usr/local/bin/aside';
+
+  it('is a field-less launcher preset that switches no bundle', () => {
+    expect(aside.fields).toEqual([]);
+    expect(aside.launcher).toBe('aside');
+    expect(aside.oauth).toBeUndefined();
+    expect(aside.harnessBundle).toBeUndefined();
+    expect(aside.ownsOrgHarnessKey).toBeUndefined();
+    expect(launcherPresets().map((p) => p.name)).toEqual([ASIDE_SERVER_NAME]);
+  });
+
+  it('assembles `<resolved aside> mcp` over stdio, enabled', () => {
+    expect(built(aside, {}, { commandPath: ASIDE })).toEqual({
+      name: ASIDE_SERVER_NAME,
+      transport: 'stdio',
+      command: ASIDE,
+      args: ['mcp'],
+      status: 'enabled',
+    });
+  });
+
+  it('on Windows runs aside.exe directly and wraps aside.cmd in cmd.exe /d /c', () => {
+    const comSpec = 'C:\\Windows\\System32\\cmd.exe';
+    const exe = 'C:\\Users\\me\\.local\\bin\\aside.exe';
+    const shim = 'C:\\Users\\me\\AppData\\Roaming\\npm\\aside.cmd';
+    const direct = built(aside, {}, { commandPath: exe, platform: 'win32', comSpec });
+    expect(direct).toMatchObject({ transport: 'stdio', command: exe, args: ['mcp'] });
+    const wrapped = built(aside, {}, { commandPath: shim, platform: 'win32', comSpec });
+    expect(wrapped).toMatchObject({ transport: 'stdio', command: comSpec, args: ['/d', '/c', shim, 'mcp'] });
+    const refused = aside.build({}, { commandPath: 'C:\\Program Files (x86)\\aside.cmd', platform: 'win32' });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect(refused.errorKey).toBe('systemMcp.cli.shimPath');
+  });
+
+  it('ignores whatever fields a client sends', () => {
+    expect(built(aside, { token: 'x' }, { commandPath: ASIDE })).toEqual(
+      built(aside, {}, { commandPath: ASIDE }),
+    );
+  });
+
+  it('REFUSES to build when the CLI did not resolve', () => {
+    for (const opts of [undefined, {}, { commandPath: '  ' }]) {
+      const res = aside.build({}, opts);
+      expect(res.ok).toBe(false);
+      if (res.ok) continue;
+      expect(res.errorKey).toBe('systemMcp.cli.missing');
+    }
+  });
+
+  it('has no URL to override', () => {
+    expect(readPresetUrl(fakeStore([], { 'aside.url': 'https://x' }), aside)).toBe('');
+  });
+
+  it('carries `cli` in its status only when the caller looked', () => {
+    expect(readSystemMcpStatus(fakeStore())[ASIDE_SERVER_NAME]).toEqual({ configured: false });
+    const missing = readSystemMcpStatus(fakeStore(), { cli: { [ASIDE_SERVER_NAME]: false } });
+    expect(missing[ASIDE_SERVER_NAME]).toEqual({ configured: false, cli: { found: false } });
+    // A non-launcher preset never takes a `cli` answer, even if one is passed.
+    const stray = readSystemMcpStatus(fakeStore(), { cli: { [SKILL_HUB_SERVER_NAME]: true } });
+    expect(stray[SKILL_HUB_SERVER_NAME]).toEqual({ configured: false });
+  });
+
+  it('reads an entry the user added by hand as connected — not as a second row', () => {
+    const manual: McpEntry = { name: 'aside', transport: 'stdio', command: 'aside', args: ['mcp'] };
+    const status = readSystemMcpStatus(fakeStore([manual]), { cli: { aside: true } });
+    expect(status[ASIDE_SERVER_NAME]).toEqual({ configured: true, status: 'enabled', cli: { found: true } });
+    expect(SYSTEM_MCP_PRESET_NAMES).toContain('aside');
   });
 });

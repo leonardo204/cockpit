@@ -297,3 +297,53 @@ export async function resolveCommandPath(
   }
   return null;
 }
+
+/**
+ * HOW TO SPAWN A RESOLVED LAUNCHER, given that the MCP loader spawns it with
+ * `shell: false` (`@ai-sdk/mcp`'s stdio transport; src/runtime/mcp.ts).
+ *
+ * A `.exe` (and anything on POSIX) runs directly. A Windows `.cmd`/`.bat` shim —
+ * what npm-style and some installer routes leave behind — cannot: since the
+ * CVE-2024-27980 fix Node refuses to spawn one without a shell (EINVAL). So it
+ * is handed to the command interpreter explicitly:
+ *
+ *   <ComSpec> /d /c <path> <args…>
+ *
+ * WHY NOT `/s` WITH A PRE-QUOTED PATH. The transport gives us no
+ * `windowsVerbatimArguments`, so Node quotes each argument itself: a path with
+ * spaces becomes `"C:\…\aside.cmd"`, and a quote WE put inside an argument is
+ * escaped to `\"`, which cmd does not understand. Without `/s`, cmd keeps the
+ * quotes when the line has exactly two of them around an existing file and no
+ * special characters — exactly the shape Node produces. A path that DOES hold a
+ * cmd metacharacter (`&<>()@^|%!"`, e.g. `Program Files (x86)`) would be split
+ * by cmd, so it is refused here rather than stored as an entry that can never
+ * start. `/d` skips AutoRun, so a user's cmd macros cannot change the launch.
+ *
+ * PURE: `platform` and `comSpec` are parameters, so both branches are testable
+ * from any OS.
+ */
+export type LaunchSpec =
+  | { ok: true; command: string; args: string[] }
+  | { ok: false; error: string };
+
+const WINDOWS_SHIM = /\.(cmd|bat)$/i;
+const CMD_METACHARS = /[&<>()@^|%!"]/;
+
+export function launchSpec(
+  resolvedPath: string,
+  args: readonly string[],
+  opts: { platform?: NodeJS.Platform; comSpec?: string } = {},
+): LaunchSpec {
+  const platform = opts.platform ?? process.platform;
+  if (platform !== 'win32' || !WINDOWS_SHIM.test(resolvedPath)) {
+    return { ok: true, command: resolvedPath, args: [...args] };
+  }
+  if (CMD_METACHARS.test(resolvedPath) || args.some((a) => CMD_METACHARS.test(a))) {
+    return {
+      ok: false,
+      error: `cannot launch the shim "${resolvedPath}" through cmd.exe safely (special characters in the path)`,
+    };
+  }
+  const command = opts.comSpec?.trim() || 'cmd.exe';
+  return { ok: true, command, args: ['/d', '/c', resolvedPath, ...args] };
+}

@@ -38,6 +38,10 @@ export type SystemMcpPresetView = {
   /** Signs in through the browser (org-harness-sync §3.8): a log-in button, no
    *  form. Mirrors the server registry's `oauth`. */
   oauth?: boolean;
+  /** Spawns a local CLI and has no fields (skill-hub-builtin §2.8): the card
+   *  shows CLI missing / Connect / Disconnect. Mirrors the server registry's
+   *  `launcher` as a flag — the executable itself stays on the server. */
+  cli?: boolean;
 };
 
 export const SYSTEM_MCP_PRESETS: readonly SystemMcpPresetView[] = [
@@ -80,6 +84,15 @@ export const SYSTEM_MCP_PRESETS: readonly SystemMcpPresetView[] = [
       },
     ],
   },
+  {
+    // The Aside browser's own MCP CLI over stdio. No fields: Connect creates
+    // the entry, Disconnect deletes it, and nothing exists before Connect.
+    name: 'aside',
+    titleKey: 'systemMcp.presets.aside.title',
+    descriptionKey: 'systemMcp.presets.aside.description',
+    fields: [],
+    cli: true,
+  },
 ];
 
 /** The names the general MCP list must filter out, so a preset's entry is never
@@ -97,4 +110,7 @@ export type SystemMcpStatus = {
   /** Stored values of the fields marked NON-secret, so the form shows which
    *  account is connected instead of a blank box. Secrets are never in here. */
   nonSecretFields?: Record<string, string>;
+  /** CLI presets: whether the local CLI resolved, when the server just looked
+   *  (`systemMcp.check`, set, remove). Absent = not checked in that reply. */
+  cli?: { found: boolean };
 };

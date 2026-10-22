@@ -3,7 +3,8 @@
 // SYSTEM MCP PRESETS — the in-house servers, declared once (skill-hub-builtin §2.1).
 //
 // An in-house MCP server is an ordinary MCP server. skill-hub and cic are
-// http+headers; atlassian is http+browser OAuth (org-harness-sync §3.8); the
+// http+headers; atlassian is http+browser OAuth (org-harness-sync §3.8); aside is
+// a local CLI over stdio with no fields (§2.8); the
 // runtime loader (src/runtime/mcp.ts) carries all of them. So NOTHING HERE IS A NEW TRANSPORT. What is
 // new is that the product, not the user, knows the URL, the transport, the header
 // name and the env var names — the user knows a token, and maybe their own email
@@ -42,6 +43,7 @@ import {
   mcpOAuthStatus,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type { McpEntry, McpOAuthStatus, Store } from '../../../../../../../dist/naby-runtime.mjs';
+import { launchSpec } from './commandPath';
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -67,6 +69,11 @@ export type SystemMcpBuildOptions = {
    *  Absent/blank makes a launcher-bearing preset refuse to build (see §2.1: the
    *  refusal is deliberate — better than an entry that ENOENTs on first use). */
   readonly commandPath?: string;
+  /** The OS the entry will be spawned on, and its `ComSpec` — how a Windows
+   *  `.cmd`/`.bat` launcher is wrapped (`launchSpec`). Passed in so the build
+   *  stays pure; default `process.platform` / `cmd.exe`. */
+  readonly platform?: NodeJS.Platform;
+  readonly comSpec?: string;
 };
 
 export type SystemMcpBuildResult =
@@ -95,9 +102,10 @@ export type SystemMcpPreset = {
    *  resolved at save time and frozen into the entry. */
   readonly launcher?: string;
   /** The built-in endpoint, and the setting key that overrides it per install.
-   *  The override is never shown in the UI — it exists for in-house staging. */
-  readonly defaultUrl: string;
-  readonly urlSettingKey: string;
+   *  The override is never shown in the UI — it exists for in-house staging.
+   *  Absent on a stdio preset, which has no endpoint to override. */
+  readonly defaultUrl?: string;
+  readonly urlSettingKey?: string;
   /**
    * The BUILT-IN HARNESS BUNDLE this credential switches (skill-hub-builtin §2.7).
    *
@@ -146,6 +154,11 @@ export type SystemMcpStatus = {
    *  every agent-added server waits on — the row shows that state rather than
    *  pretending the server is live. */
   status?: 'enabled' | 'proposed';
+  /** Launcher presets only (`preset.launcher`), and only when the server just
+   *  looked: whether the local CLI resolves on this machine. Absent means "not
+   *  checked in this reply" — the plain GET never spawns the login-shell probe;
+   *  the `systemMcp.check` action does (skill-hub-builtin §2.8). */
+  cli?: { found: boolean };
   /** Stored values of the NON-SECRET fields, so the form can show what is
    *  configured (an email address) instead of a blank box that implies nothing is.
    *  Secret fields are never in here, by construction (see `readNonSecretFields`).
@@ -350,6 +363,73 @@ const CIC_PRESET: SystemMcpPreset = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// aside — a local CLI over stdio, no fields (skill-hub-builtin §2.8)
+// ---------------------------------------------------------------------------
+//
+// The Aside browser's MCP server is its own CLI: `aside mcp` (Claude Code:
+// `claude mcp add aside -- aside mcp`). There is no URL, no token and no OAuth —
+// the CLI talks to the Aside app the user is already signed in to. So this is the
+// first preset with NO FIELDS that is not a browser sign-in: "connect" is
+// `systemMcp.set` with an empty field set, "disconnect" is `systemMcp.remove`.
+//
+// DEFAULT IS READY, NOT CONNECTED. Nothing writes this entry until the user
+// presses Connect. The CLI's absolute path is resolved at that moment through the
+// `launcher` mechanism (lib/commandPath.ts) and frozen into the row, for the same
+// reason the old uvx row was: a Finder-launched app has no user bin directories
+// on PATH, so a stored bare `aside` would ENOENT in the packaged build. A CLI
+// that does not resolve refuses the build — the card shows the install guidance
+// instead of an entry that can never start.
+//
+// THE NAME IS THE TOOL PREFIX: tools arrive as `mcp__aside__*`, and an entry the
+// user added by hand under the same name before this preset existed reads as
+// connected (status is keyed on the name), never as a second row.
+
+export const ASIDE_SERVER_NAME = 'aside';
+export const ASIDE_LAUNCHER = 'aside';
+export const ASIDE_MCP_ARGS: readonly string[] = ['mcp'];
+
+const ASIDE_PRESET: SystemMcpPreset = {
+  name: ASIDE_SERVER_NAME,
+  titleKey: 'systemMcp.presets.aside.title',
+  descriptionKey: 'systemMcp.presets.aside.description',
+  launcher: ASIDE_LAUNCHER,
+  fields: [],
+  build(_fields, opts) {
+    const command = (opts?.commandPath ?? '').trim();
+    if (!command) {
+      return {
+        ok: false,
+        error: `the "${ASIDE_LAUNCHER}" CLI was not found on this machine`,
+        errorKey: 'systemMcp.cli.missing',
+      };
+    }
+    // A Windows `.cmd`/`.bat` shim cannot be spawned with `shell: false`; it is
+    // wrapped in `cmd.exe /d /c` (lib/commandPath.ts `launchSpec`).
+    const launch = launchSpec(command, ASIDE_MCP_ARGS, {
+      platform: opts?.platform,
+      comSpec: opts?.comSpec,
+    });
+    if (!launch.ok) {
+      return { ok: false, error: launch.error, errorKey: 'systemMcp.cli.shimPath' };
+    }
+    return {
+      ok: true,
+      entry: {
+        name: ASIDE_SERVER_NAME,
+        transport: 'stdio',
+        command: launch.command,
+        args: launch.args,
+        // Pressing Connect IS the approval, like a typed token.
+        status: 'enabled',
+      },
+    };
+  },
+  readStoredFields() {
+    return {};
+  },
+};
+
 /** "This field has no value" — one shape for every preset, so the UI renders the
  *  same sentence with the field's own label whichever preset raised it. */
 function missing(field: string): SystemMcpBuildResult {
@@ -370,6 +450,7 @@ export const SYSTEM_MCP_PRESETS: readonly SystemMcpPreset[] = [
   SKILL_HUB_PRESET,
   ATLASSIAN_PRESET,
   CIC_PRESET,
+  ASIDE_PRESET,
 ];
 
 /** The names a preset owns — what the general MCP list filters out, so a preset's
@@ -389,8 +470,21 @@ export function orgHarnessKeyPreset(): SystemMcpPreset | undefined {
 /** The endpoint this install should use for a preset: the settings override when
  *  set, otherwise the built-in constant. One reader for the setting key. */
 export function readPresetUrl(store: Pick<Store, 'getSetting'>, preset: SystemMcpPreset): string {
-  return store.getSetting(preset.urlSettingKey)?.trim() || preset.defaultUrl;
+  const override = preset.urlSettingKey ? store.getSetting(preset.urlSettingKey)?.trim() : '';
+  return override || preset.defaultUrl || '';
 }
+
+/** The presets that spawn a local CLI — the ones whose status can carry `cli`. */
+export function launcherPresets(): SystemMcpPreset[] {
+  return SYSTEM_MCP_PRESETS.filter((p) => !!p.launcher);
+}
+
+/** Options for `readSystemMcpStatus`. */
+export type SystemMcpStatusOptions = {
+  /** Per preset name: whether its launcher resolved, as the CALLER just found
+   *  out. Only launcher presets read it; the reader itself never probes. */
+  cli?: Readonly<Record<string, boolean>>;
+};
 
 /** The subset of a stored entry's field values that is safe to hand the UI. Built
  *  by FILTERING the single reader rather than by a second reader, so a field that
@@ -439,6 +533,7 @@ export function configuredHarnessBundles(store: Pick<Store, 'listMcpEntries'>): 
 
 export function readSystemMcpStatus(
   store: Pick<Store, 'listMcpEntries'> & Partial<Pick<Store, 'getSetting'>>,
+  opts: SystemMcpStatusOptions = {},
 ): Record<string, SystemMcpStatus> {
   const entries = store.listMcpEntries();
   const out: Record<string, SystemMcpStatus> = {};
@@ -453,8 +548,10 @@ export function readSystemMcpStatus(
             },
           }
         : {};
+    const found = preset.launcher ? opts.cli?.[preset.name] : undefined;
+    const cli = typeof found === 'boolean' ? { cli: { found } } : {};
     if (!entry) {
-      out[preset.name] = { configured: false, ...oauth };
+      out[preset.name] = { configured: false, ...oauth, ...cli };
       continue;
     }
     const nonSecret = readNonSecretFields(preset, entry);
@@ -463,6 +560,7 @@ export function readSystemMcpStatus(
       status: entry.status === 'proposed' ? 'proposed' : 'enabled',
       ...(Object.keys(nonSecret).length > 0 ? { nonSecretFields: nonSecret } : {}),
       ...oauth,
+      ...cli,
     };
   }
   return out;

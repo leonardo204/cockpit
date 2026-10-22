@@ -37,6 +37,8 @@ describe('the client preset mirror', () => {
       })),
       // org-harness-sync §3.8: a browser-OAuth preset renders a log-in button.
       ...(p.oauth ? { oauth: true } : {}),
+      // skill-hub-builtin §2.8: a launcher preset renders the CLI card.
+      ...(p.launcher ? { cli: true } : {}),
     }));
     expect(SYSTEM_MCP_PRESETS).toEqual(projected);
   });
@@ -125,6 +127,11 @@ describe('the i18n dictionaries answer every key the presets name', () => {
         'systemMcp.fieldRequired',
         'systemMcp.secretKept',
         'systemMcp.uvxMissing',
+        'systemMcp.cli.missing',
+        'systemMcp.cli.ready',
+        'systemMcp.cli.checking',
+        'systemMcp.cli.checkAgain',
+        'systemMcp.cli.disconnect',
         'systemMcp.onboardingTitle',
         'systemMcp.onboardingBody',
         'systemMcp.later',

@@ -54,6 +54,7 @@ import { SettingsDetails } from './SettingsDetails';
 import { AtlassianLoginButton } from './AtlassianLoginButton';
 import type { AtlassianView } from './orgHarnessView';
 import { McpOAuthLoginButton, McpOAuthStatusBadge, McpQuickConnectSection } from './NabyMcpOAuth';
+import { SystemMcpCliControls } from './SystemMcpCliForm';
 
 // ---------------------------------------------------------------------------
 // The preload bridge (electron/preload.ts). Typed locally so this file compiles
@@ -656,6 +657,17 @@ export function NabyOnboardingWizard() {
                   variant="wizard"
                   onChanged={() => void reloadSystemMcp()}
                 />
+              ) : preset.cli ? (
+                <SystemMcpCliForm
+                  preset={preset}
+                  state={systemMcp[preset.name] ?? { configured: false }}
+                  onChanged={() => void reloadSystemMcp()}
+                  onConnected={() =>
+                    setConnected((prev) =>
+                      prev.includes(preset.name) ? prev : [...prev, preset.name],
+                    )
+                  }
+                />
               ) : (
                 <SystemMcpForm
                   preset={preset}
@@ -920,6 +932,9 @@ type NabyPostResult = {
   errorField?: string;
   message?: string;
   toolCount?: number;
+  /** `systemMcp.*`: every preset's status after the call. Read by the CLI card
+   *  for `cli.found`, which only these replies carry (never the GET). */
+  systemMcp?: Record<string, SystemMcpStatus>;
   /** `models.list`: the live model catalog for the provider that was asked for.
    *  Model IDS ONLY — the key that fetched them stays in the server. */
   models?: { claude?: unknown[]; google?: string[]; fetchedAt?: number; cached?: boolean };
@@ -939,11 +954,13 @@ async function nabyPost(body: unknown): Promise<NabyPostResult> {
         error: json?.error ?? `request failed (${res.status})`,
         ...(json?.errorKey ? { errorKey: json.errorKey } : {}),
         ...(json?.errorField ? { errorField: json.errorField } : {}),
+        ...(json?.systemMcp ? { systemMcp: json.systemMcp } : {}),
       };
     }
     return {
       ok: true,
       ...(json?.message ? { message: json.message } : {}),
+      ...(json?.systemMcp ? { systemMcp: json.systemMcp } : {}),
       // `systemMcp.test` answers with a COUNT rather than a sentence, so the two
       // surfaces that show it can phrase it in the user's own language.
       ...(typeof json?.toolCount === 'number' ? { toolCount: json.toolCount } : {}),
@@ -2220,6 +2237,111 @@ function SystemMcpOAuthForm({
   );
 }
 
+/**
+ * A LOCAL-CLI preset (skill-hub-builtin §2.8): the posts behind
+ * `SystemMcpCliControls`. Connect is `systemMcp.set` with no fields (the server
+ * resolves the CLI and refuses when it is missing), Disconnect is
+ * `systemMcp.remove`, and "check again" is `systemMcp.check`, which writes
+ * nothing. The CLI answer arrives only on those replies, so it is kept here
+ * rather than in the GET state the parent reloads.
+ */
+function SystemMcpCliForm({
+  preset,
+  state,
+  onChanged,
+  onConnected,
+}: {
+  preset: SystemMcpPresetView;
+  state: SystemMcpStatus;
+  onChanged: () => void;
+  onConnected?: (toolCount: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [cliFound, setCliFound] = useState<boolean | undefined>(state.cli?.found);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
+
+  const absorb = useCallback(
+    (res: NabyPostResult) => {
+      const found = res.systemMcp?.[preset.name]?.cli?.found;
+      if (typeof found === 'boolean') setCliFound(found);
+    },
+    [preset.name],
+  );
+
+  const check = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await nabyPost({ action: 'systemMcp.check', preset: preset.name });
+      absorb(res);
+      if (!res.ok) setNote({ text: t('systemMcp.failed', { error: res.error }), ok: false });
+      else setNote(null);
+    } finally {
+      setBusy(false);
+    }
+  }, [absorb, preset.name, t]);
+
+  // Look once on mount; the plain GET never spawns the probe.
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  const connect = useCallback(async () => {
+    setBusy(true);
+    setNote({ text: t('systemMcp.connecting'), ok: true });
+    try {
+      const res = await nabyPost({ action: 'systemMcp.set', preset: preset.name, fields: {} });
+      absorb(res);
+      if (!res.ok) {
+        setNote({
+          text: res.errorKey ? t(res.errorKey) : t('systemMcp.failed', { error: res.error }),
+          ok: false,
+        });
+        return;
+      }
+      onChanged();
+      announceConnectionsChanged();
+      // The same one-shot probe the token presets run: lists tools, calls none.
+      const probe = await nabyPost({ action: 'systemMcp.test', preset: preset.name });
+      if (!probe.ok) {
+        setNote({ text: t('systemMcp.failed', { error: probe.error }), ok: false });
+        return;
+      }
+      const tools = probe.toolCount ?? 0;
+      setNote({ text: t('systemMcp.toolCount', { tools }), ok: true });
+      onConnected?.(tools);
+    } finally {
+      setBusy(false);
+    }
+  }, [absorb, onChanged, onConnected, preset.name, t]);
+
+  const disconnect = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await nabyPost({ action: 'systemMcp.remove', preset: preset.name });
+      absorb(res);
+      setNote(null);
+      onChanged();
+      announceConnectionsChanged();
+    } finally {
+      setBusy(false);
+    }
+  }, [absorb, onChanged, preset.name]);
+
+  return (
+    <SystemMcpCliControls
+      preset={preset}
+      state={state}
+      cliFound={cliFound}
+      busy={busy}
+      note={note}
+      onConnect={() => void connect()}
+      onDisconnect={() => void disconnect()}
+      onCheck={() => void check()}
+    />
+  );
+}
+
 /** One preset's row: name, connection state, description, form, and — when an
  *  agent proposed the same server — the approval the existing HITL path expects.
  *  A single bordered interactive row: the description is plain muted text and the
@@ -2274,6 +2396,8 @@ function SystemMcpRow({
       <div className="border border-border rounded px-2 py-2">
         {preset.oauth ? (
           <SystemMcpOAuthForm preset={preset} state={state} variant="settings" onChanged={onChanged} />
+        ) : preset.cli ? (
+          <SystemMcpCliForm preset={preset} state={state} onChanged={onChanged} />
         ) : (
           <SystemMcpForm preset={preset} state={state} variant="settings" onChanged={onChanged} />
         )}

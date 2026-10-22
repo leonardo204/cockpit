@@ -207,12 +207,31 @@ import {
 } from '../lib/telegramEscalation';
 import {
   findSystemMcpPreset,
+  launcherPresets,
   mergeSystemMcpFields,
   readPresetUrl,
   readSystemMcpStatus,
+  type SystemMcpPreset,
   type SystemMcpStatus,
 } from '../lib/systemMcp';
 import { resolveCommandPath } from '../lib/commandPath';
+
+/**
+ * Does each launcher preset's CLI resolve on this machine (skill-hub-builtin
+ * §2.8)? Asked only by the actions that need the answer — `systemMcp.check` and
+ * a launcher preset's own set/remove — never by the GET, because a resolution can
+ * cost a login shell and the GET runs on every Settings open.
+ */
+async function resolveLauncherClis(
+  presets: readonly SystemMcpPreset[],
+): Promise<Record<string, boolean>> {
+  const out: Record<string, boolean> = {};
+  for (const preset of presets) {
+    if (!preset.launcher) continue;
+    out[preset.name] = (await resolveCommandPath(preset.launcher)) !== null;
+  }
+  return out;
+}
 // THE ORG HARNESS (specs/org-harness-sync.md, M1). The rules live in the runtime;
 // this lib resolves the Skill Hub key from the preset registry and owns the
 // background pass. Nothing it returns carries the key or the metrics token.
@@ -698,6 +717,9 @@ export type NabyAction =
   | { action: 'systemMcp.set'; preset: string; fields?: Record<string, string> }
   | { action: 'systemMcp.test'; preset: string }
   | { action: 'systemMcp.remove'; preset: string }
+  // Re-resolve the local CLI of every launcher preset (or just `preset`) and
+  // answer the status with `cli` filled in — the card's "check again" (§2.8).
+  | { action: 'systemMcp.check'; preset?: string }
   // THE ORG HARNESS (org-harness-sync M1). `get` is the state the GET also carries;
   // `set` is the Settings switch (§4.8 — off disables the org rows and gives back
   // any copy the user set aside, on restores exactly that); `sync` runs one pass
@@ -1236,6 +1258,9 @@ export type NabyActionResult =
        *  Sent only alongside `installHelp`, since that is the one refusal whose
        *  full text is a paragraph. */
       errorHeadline?: string;
+      /** `systemMcp.set` refused for a missing local CLI (§2.8): the status, with
+       *  `cli.found: false`, so the card can show its install guidance. */
+      systemMcp?: Record<string, SystemMcpStatus>;
     };
 
 /**
@@ -2811,20 +2836,30 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       // `uvx` works in dev and ENOENTs in the packaged app, where the child
       // process inherits a PATH with no user bin directories on it.
       let commandPath: string | undefined;
+      const cli: Record<string, boolean> = {};
       if (preset.launcher) {
         commandPath = (await resolveCommandPath(preset.launcher)) ?? undefined;
+        cli[preset.name] = commandPath !== undefined;
       }
 
       // The URL override is read HERE, not inside the pure builder, so the policy
       // ("settings win, otherwise the built-in URL") lives on the server side of
       // the boundary and the builder stays a function of its arguments.
-      const built = preset.build(fields, { url: readPresetUrl(store, preset), commandPath });
+      const built = preset.build(fields, {
+        url: readPresetUrl(store, preset),
+        commandPath,
+        platform: process.platform,
+        comSpec: process.env.ComSpec,
+      });
       if (!built.ok) {
         return {
           ok: false,
           error: built.error,
           ...(built.errorKey ? { errorKey: built.errorKey } : {}),
           ...(built.errorField ? { errorField: built.errorField } : {}),
+          // A launcher preset refused for a missing CLI: the status says so, so
+          // the card can switch to its install guidance without a second call.
+          ...(preset.launcher ? { systemMcp: readSystemMcpStatus(store, { cli }) } : {}),
         };
       }
 
@@ -2861,7 +2896,7 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
 
       // The status, and only the status. The secrets are now in the store and
       // have no way back out through this route.
-      return { ok: true, systemMcp: readSystemMcpStatus(store) };
+      return { ok: true, systemMcp: readSystemMcpStatus(store, { cli }) };
     }
 
     case 'systemMcp.test': {
@@ -2906,7 +2941,23 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       // No key, no org harness: the rows switch off (not deleted) at once.
       if (preset.ownsOrgHarnessKey) kickOrgHarnessSync(store);
-      return { ok: true, systemMcp: readSystemMcpStatus(store) };
+      // A launcher preset goes back to "ready" or "CLI missing" — which one is
+      // a fresh question, since the CLI may have been uninstalled meanwhile.
+      const cli = preset.launcher ? await resolveLauncherClis([preset]) : {};
+      return { ok: true, systemMcp: readSystemMcpStatus(store, { cli }) };
+    }
+
+    case 'systemMcp.check': {
+      // "Check again" after installing the CLI. Nothing is written: the entry
+      // still appears only when the user presses Connect (§2.8).
+      let presets = launcherPresets();
+      if (body.preset !== undefined) {
+        const preset = findSystemMcpPreset(body.preset);
+        if (!preset) return { ok: false, error: `unknown system MCP preset "${body.preset}"` };
+        presets = [preset];
+      }
+      const cli = await resolveLauncherClis(presets);
+      return { ok: true, systemMcp: readSystemMcpStatus(store, { cli }) };
     }
 
     // -- the org harness (org-harness-sync M1) ------------------------------

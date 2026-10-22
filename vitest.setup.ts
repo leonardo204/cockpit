@@ -114,3 +114,14 @@ process.env.NABY_ORG_HARNESS_SYNC = '0';
  * every test, and the suites that cover the sweep inject their own judge.
  */
 process.env.NABY_PARTICIPANT_RECOMMEND = '0';
+
+/**
+ * NO LOOKUP OF THE REAL `aside` CLI FROM A TEST (skill-hub-builtin §2.8).
+ *
+ * The Aside preset resolves its CLI through lib/commandPath.ts, which would ask
+ * the developer's login shell and scan their bin directories — so "is Aside
+ * installed" would depend on the machine running the suite. A pinned override
+ * that points at nothing answers "missing" without any search (a set-but-wrong
+ * override never falls through). Tests that need "present" point it at a stub.
+ */
+process.env.NABY_ASIDE_PATH = join(home, 'no-such-aside');

@@ -77,6 +77,13 @@
  *   m7-permission-custom     the "pick tools yourself" option unfolded
  * The clicks only change the open form; the editor is cancelled, nothing saved.
  *
+ * With `--system-mcp` (skill-hub-builtin §2.8), also — in Settings › Connections:
+ *   system-mcp           the System MCP section (every preset row)
+ *   system-mcp-aside     the Aside row alone (CLI missing / ready / connected,
+ *                        whichever the server's machine is in)
+ * Nothing is clicked inside the section; the card's own mount-time CLI check
+ * is the only request it makes, and it writes nothing.
+ *
  * A surface that is not reachable (no project open, no session) is skipped with
  * a log line, not failed: the script is a camera, not a test.
  *
@@ -105,6 +112,7 @@ const importFile = arg('import', '');
 const drafts = process.argv.includes('--drafts');
 const recommendations = process.argv.includes('--recommendations');
 const permission = process.argv.includes('--permission');
+const systemMcp = process.argv.includes('--system-mcp');
 
 if (!base || !out) {
   console.error('usage: node scripts/ui-screenshots.mjs --base <url> --out <dir> [--themes light,dark]');
@@ -130,6 +138,31 @@ const NAV_LABEL = {
   en: { general: 'General', naby: 'Naby', memory: 'Memory' },
 };
 const lang = locale.startsWith('ko') ? 'ko-KR' : 'en';
+const CONNECTIONS_LABEL = { 'ko-KR': '연결', en: 'Connections' };
+
+/** Settings › Connections › System MCP (skill-hub-builtin §2.8). */
+async function systemMcpShots(page, theme) {
+  const tab = page.locator('nav button', { hasText: CONNECTIONS_LABEL[lang] ?? CONNECTIONS_LABEL.en }).first();
+  if (!(await tab.count())) {
+    console.log(`[${theme}] connections tab not found; skipping system-mcp shots`);
+    return;
+  }
+  await tab.click();
+  await settle(page, 1500);
+  const section = page.locator('[data-testid="system-mcp-section"]').first();
+  if (!(await section.count())) {
+    console.log(`[${theme}] no system-mcp section; skipping`);
+    return;
+  }
+  await section.scrollIntoViewIfNeeded();
+  await shoot(section, `${theme}-system-mcp`);
+  const aside = page.locator('[data-testid="system-mcp-row-aside"]').first();
+  if (await aside.count()) {
+    await aside.scrollIntoViewIfNeeded();
+    await settle(page, 600);
+    await shoot(aside, `${theme}-system-mcp-aside`);
+  }
+}
 
 const settle = (page, ms = 800) => page.waitForTimeout(ms);
 
@@ -560,6 +593,7 @@ async function runTheme(browser, theme) {
       if (participants && key === 'naby') await participantSettingsShots(page, theme);
       if (permission && key === 'naby') await permissionShots(page, theme);
     }
+    if (systemMcp) await systemMcpShots(page, theme);
     await page.keyboard.press('Escape');
   } else {
     console.log(`[${theme}] settings opener not found; skipping settings`);

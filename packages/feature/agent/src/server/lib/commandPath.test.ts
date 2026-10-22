@@ -6,6 +6,7 @@ import {
   candidateNames,
   commandPathEnvVar,
   isExecutableFile,
+  launchSpec,
   resolveCommandPath,
   searchPath,
   wellKnownDirs,
@@ -309,5 +310,41 @@ describe('resolveCommandPath on Windows', () => {
       if (realUserProfile === undefined) delete process.env.USERPROFILE;
       else process.env.USERPROFILE = realUserProfile;
     }
+  });
+});
+
+describe('launchSpec — spawning a resolved launcher with shell: false', () => {
+  it('runs a Windows .exe directly', () => {
+    expect(
+      launchSpec('C:\\Users\\me\\.local\\bin\\aside.exe', ['mcp'], { platform: 'win32', comSpec: 'C:\\Windows\\System32\\cmd.exe' }),
+    ).toEqual({ ok: true, command: 'C:\\Users\\me\\.local\\bin\\aside.exe', args: ['mcp'] });
+  });
+
+  it('wraps a Windows .cmd/.bat shim in ComSpec /d /c', () => {
+    for (const path of ['C:\\Users\\me\\AppData\\Roaming\\npm\\aside.cmd', 'C:\\Program Files\\Aside\\aside.BAT']) {
+      expect(launchSpec(path, ['mcp'], { platform: 'win32', comSpec: 'C:\\Windows\\System32\\cmd.exe' })).toEqual({
+        ok: true,
+        command: 'C:\\Windows\\System32\\cmd.exe',
+        args: ['/d', '/c', path, 'mcp'],
+      });
+    }
+  });
+
+  it('falls back to cmd.exe when ComSpec is unset', () => {
+    const spec = launchSpec('C:\\npm\\aside.cmd', ['mcp'], { platform: 'win32' });
+    expect(spec).toEqual({ ok: true, command: 'cmd.exe', args: ['/d', '/c', 'C:\\npm\\aside.cmd', 'mcp'] });
+  });
+
+  it('refuses a shim whose path cmd.exe would split', () => {
+    const spec = launchSpec('C:\\Program Files (x86)\\Aside\\aside.cmd', ['mcp'], { platform: 'win32' });
+    expect(spec.ok).toBe(false);
+  });
+
+  it('never wraps on POSIX, even a name ending in .cmd', () => {
+    expect(launchSpec('/usr/local/bin/aside.cmd', ['mcp'], { platform: 'darwin' })).toEqual({
+      ok: true,
+      command: '/usr/local/bin/aside.cmd',
+      args: ['mcp'],
+    });
   });
 });

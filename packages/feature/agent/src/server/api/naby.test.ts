@@ -1249,3 +1249,92 @@ describe('POST /api/naby — reflection.run reports the M10 counters', () => {
     expect(typeof result.reflection?.skippedNoLearn).toBe('number');
   });
 });
+
+/**
+ * The aside preset (skill-hub-builtin §2.8): a field-less local CLI. Connect is
+ * `systemMcp.set` with no fields, Disconnect is `systemMcp.remove`, "check again"
+ * is `systemMcp.check`. The CLI is never run here: NABY_ASIDE_PATH points at a
+ * stub file for "present" and at nothing for "missing" (the suite default).
+ */
+describe('POST /api/naby — the aside preset (local CLI, §2.8)', () => {
+  const ASIDE_ENV = commandPathEnvVar('aside');
+  const fakeAside = join(mkdtempSync(join(tmpdir(), 'naby-aside-')), 'aside');
+  const original = process.env[ASIDE_ENV];
+
+  beforeAll(() => {
+    writeFileSync(fakeAside, '#!/bin/sh\nexit 0\n');
+    chmodSync(fakeAside, 0o755);
+  });
+  afterEach(() => {
+    process.env[ASIDE_ENV] = original;
+    getStore().removeMcpEntry('aside');
+  });
+
+  const withAside = () => {
+    process.env[ASIDE_ENV] = fakeAside;
+  };
+  const withoutAside = () => {
+    process.env[ASIDE_ENV] = join(fakeAside, 'missing', 'aside');
+  };
+
+  it('creates nothing until Connect — the GET says not configured and never probes', async () => {
+    withoutAside();
+    expect(storedEntry('aside')).toBeUndefined();
+    expect((await readNabyState(null)).systemMcp.aside).toEqual({ configured: false });
+  });
+
+  it('check answers cli.found both ways and writes nothing', async () => {
+    withoutAside();
+    const missing = await runNabyAction({ action: 'systemMcp.check', preset: 'aside' });
+    expect(missing.ok).toBe(true);
+    if (missing.ok) expect(missing.systemMcp?.aside).toEqual({ configured: false, cli: { found: false } });
+    withAside();
+    const found = await runNabyAction({ action: 'systemMcp.check' });
+    expect(found.ok).toBe(true);
+    if (found.ok) expect(found.systemMcp?.aside).toEqual({ configured: false, cli: { found: true } });
+    expect(storedEntry('aside')).toBeUndefined();
+    const unknown = await runNabyAction({ action: 'systemMcp.check', preset: 'nope' });
+    expect(unknown.ok).toBe(false);
+  });
+
+  it('REFUSES Connect when the CLI is missing, and stores nothing', async () => {
+    withoutAside();
+    const result = await runNabyAction({ action: 'systemMcp.set', preset: 'aside', fields: {} });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errorKey).toBe('systemMcp.cli.missing');
+    expect(result.systemMcp?.aside).toEqual({ configured: false, cli: { found: false } });
+    expect(storedEntry('aside')).toBeUndefined();
+  });
+
+  it('connects and disconnects: the entry appears enabled, then is deleted', async () => {
+    withAside();
+    const connected = await runNabyAction({ action: 'systemMcp.set', preset: 'aside' });
+    expect(connected.ok).toBe(true);
+    if (connected.ok) {
+      expect(connected.systemMcp?.aside).toEqual({
+        configured: true,
+        status: 'enabled',
+        cli: { found: true },
+      });
+    }
+    expect(storedEntry('aside')).toEqual({
+      name: 'aside',
+      transport: 'stdio',
+      command: fakeAside,
+      args: ['mcp'],
+      status: 'enabled',
+    });
+
+    const removed = await runNabyAction({ action: 'systemMcp.remove', preset: 'aside' });
+    expect(removed.ok).toBe(true);
+    if (removed.ok) expect(removed.systemMcp?.aside).toEqual({ configured: false, cli: { found: true } });
+    expect(storedEntry('aside')).toBeUndefined();
+  });
+
+  it('reads a hand-added `aside` entry as connected', async () => {
+    withoutAside();
+    getStore().upsertMcpEntry({ name: 'aside', transport: 'stdio', command: 'aside', args: ['mcp'] });
+    expect((await readNabyState(null)).systemMcp.aside).toEqual({ configured: true, status: 'enabled' });
+  });
+});

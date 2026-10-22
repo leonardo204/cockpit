@@ -85,6 +85,28 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.47.0 — 2026-10-22
+
+### en
+
+Aside, the browser that uses your own logins, is built in and ready to connect.
+
+**New**
+
+- **Aside browser MCP.** Settings › Connections › System MCP now has an Aside card. With the Aside CLI installed, press Connect and naby can open pages in your signed-in Aside browser, click through them and take screenshots — "open the staging admin, go to the device list and screenshot it". It uses your existing SSO session, so no test login setup is needed.
+  - Nothing is added until you press Connect, and Disconnect removes it. If the CLI isn't found, the card tells you how to install it (Aside › Settings › Developers, or the official PowerShell script on Windows) and lets you check again.
+  - Aside tools ask before they act like any other connected tool. On another PC or a remote machine, run aside login there first; naby doesn't do that for you.
+
+### ko
+
+내 로그인을 그대로 쓰는 브라우저 Aside를 내장했어요. 연결만 하면 바로 써요.
+
+**새로 생긴 것**
+
+- **Aside 브라우저 MCP.** 설정 › 연결 › System MCP에 Aside 카드가 생겼어요. Aside CLI가 깔려 있으면 연결을 누르는 것만으로, 나비가 로그인된 Aside 브라우저로 페이지를 열고 클릭하고 스크린샷을 남겨요. "스테이징 관리자 웹 열어서 단말 목록까지 가서 스크린샷 남겨 줘"처럼 쓰면 돼요. 내 SSO 세션을 그대로 쓰니 테스트용 로그인 설정이 필요 없어요.
+  - 연결을 누르기 전에는 아무것도 추가되지 않고, 연결 끊기를 누르면 지워져요. CLI가 없으면 카드가 설치 방법(Aside › 설정 › Developers, Windows는 공식 PowerShell 스크립트)을 알려 주고 다시 확인할 수 있어요.
+  - Aside 도구도 다른 연결 도구처럼 실행 전에 확인을 거쳐요. 다른 PC나 원격 환경에서는 거기서 먼저 aside login을 해야 해요. 나비가 대신하지 않아요.
+
 ## 1.46.3 — 2026-10-21
 
 ### en

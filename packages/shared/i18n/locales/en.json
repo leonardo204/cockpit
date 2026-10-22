@@ -1353,6 +1353,10 @@
             "placeholder": "The token CIC issued you"
           }
         }
+      },
+      "aside": {
+        "title": "Aside (browser)",
+        "description": "Opens pages, clicks and takes screenshots in the browser you are already signed in to, through the local Aside CLI. Nothing is added until you press Connect."
       }
     },
     "oauthUseLogin": "This server signs in through the browser. Use the log-in button.",
@@ -1361,6 +1365,18 @@
       "relogin": "The sign-in expired — log in again.",
       "legacy": "Still using the old API-token connection. Log in once to switch; the API token is removed after that.",
       "none": "Not signed in."
+    },
+    "cli": {
+      "missing": "The Aside CLI was not found on this machine.",
+      "installHint": "Install it from the Aside app: Settings › Developers. On Windows, use the official PowerShell install script.",
+      "remoteHint": "To use it on another PC or a remote machine, run aside login --email … there and approve the device code in the Aside app. Naby does not run this for you.",
+      "ready": "The Aside CLI is installed. Press Connect to add it.",
+      "checking": "Looking for the Aside CLI…",
+      "checkAgain": "Check again",
+      "disconnect": "Disconnect",
+      "connectedNote": "Connected. Its tools appear as mcp__aside__* and go through the approval gate.",
+      "notChecked": "Not checked yet.",
+      "shimPath": "The Aside CLI was found, but its path contains characters cmd.exe cannot launch safely. Reinstall it into a folder without & ( ) % ! ^ | < > @ \" characters."
     }
   },
   "mcpOAuth": {
