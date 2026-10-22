@@ -85,6 +85,30 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.0 — 2026-10-22
+
+### en
+
+Group your projects in the sidebar.
+
+**New**
+
+- **Project groups.** Press + next to Projects in the left sidebar to create a group, then drag projects onto it. Drag a project below the groups to take it out again.
+  - Rename a group by double-clicking its header or from its ⋯ menu. Deleting a group only removes the group; its projects move back below the groups.
+  - Drag a group header above or below another to change the group order. Groups can be collapsed, and a collapsed group shows a dot when one of its projects has unread sessions.
+  - With no groups, the sidebar looks exactly as before.
+
+### ko
+
+사이드바에서 프로젝트를 그룹으로 묶을 수 있어요.
+
+**새로 생긴 것**
+
+- **프로젝트 그룹.** 왼쪽 사이드바의 프로젝트 옆 +를 눌러 그룹을 만들고, 프로젝트를 끌어다 놓으면 그 그룹에 들어가요. 그룹 아래쪽으로 끌어 놓으면 다시 빠져요.
+  - 그룹 제목을 더블클릭하거나 ⋯ 메뉴에서 이름을 바꿀 수 있어요. 그룹을 지워도 프로젝트는 지워지지 않고 그룹 아래로 돌아가요.
+  - 그룹 제목을 다른 그룹 위나 아래로 끌어 놓으면 순서가 바뀌어요. 그룹은 접을 수 있고, 접힌 그룹 안에 읽지 않은 세션이 있으면 점이 보여요.
+  - 그룹을 만들지 않으면 사이드바는 예전과 똑같아요.
+
 ## 1.47.1 — 2026-10-22
 
 ### en

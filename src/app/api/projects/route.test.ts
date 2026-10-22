@@ -120,3 +120,72 @@ describe('POST /api/projects — an absent field means "leave it alone"', () => 
     expect(data.projects).toHaveLength(1);
   });
 });
+
+describe('/api/projects — sidebar project groups (project-groups §3)', () => {
+  const getGroups = async () => {
+    const res = await route.GET(new Request('http://127.0.0.1/api/projects'));
+    return ((await res.json()) as { groups?: Array<{ id: string; name: string; cwds: string[] }> }).groups;
+  };
+
+  it('stores normalized groups and returns them on GET', async () => {
+    await post({ projects: [{ cwd: '/work/alpha' }, { cwd: '/work/beta' }, { cwd: '/work/gamma' }] });
+    await post({
+      groups: [
+        { id: 'g_one', name: '  Client A  ', collapsed: true, cwds: ['/work/alpha', '/work/nowhere'] },
+        { id: 'g_two', name: 'Personal', cwds: ['/work/alpha', '/work/beta'] },
+        { id: 'g_bad', name: '   ', cwds: ['/work/gamma'] },
+      ],
+    });
+
+    expect(await getGroups()).toEqual([
+      { id: 'g_one', name: 'Client A', collapsed: true, cwds: ['/work/alpha'] },
+      { id: 'g_two', name: 'Personal', collapsed: false, cwds: ['/work/beta'] },
+    ]);
+    expect(JSON.parse(store.getSetting('sidebar.projectGroups') ?? '{}').groups).toHaveLength(2);
+  });
+
+  it('a POST without `groups` leaves the stored groups alone', async () => {
+    const before = store.getSetting('sidebar.projectGroups');
+    await post({ sidebarWidth: 280 });
+    await post({ activeIndex: 0, collapsed: false });
+    await post({ projects: [{ cwd: '/work/alpha' }, { cwd: '/work/beta' }, { cwd: '/work/gamma' }] });
+    expect(store.getSetting('sidebar.projectGroups')).toBe(before);
+    expect((await getGroups())?.map((x) => x.id)).toEqual(['g_one', 'g_two']);
+  });
+
+  it('removing a project takes it out of its group, in storage too', async () => {
+    await post({ projects: [{ cwd: '/work/beta' }, { cwd: '/work/gamma' }] });
+
+    const groups = await getGroups();
+    expect(groups?.find((x) => x.id === 'g_one')?.cwds).toEqual([]);
+    expect(groups?.find((x) => x.id === 'g_two')?.cwds).toEqual(['/work/beta']);
+    expect(store.getSetting('sidebar.projectGroups')).not.toContain('/work/alpha');
+
+    // Reopening the project does not resurrect the old membership.
+    await post({ projects: [{ cwd: '/work/alpha' }, { cwd: '/work/beta' }, { cwd: '/work/gamma' }] });
+    expect((await getGroups())?.find((x) => x.id === 'g_one')?.cwds).toEqual([]);
+  });
+
+  it('an empty `groups` clears them; a broken stored value reads as none', async () => {
+    await post({ groups: [] });
+    expect(await getGroups()).toEqual([]);
+
+    (store as unknown as { setSetting(k: string, v: string): void }).setSetting(
+      'sidebar.projectGroups',
+      '{not json',
+    );
+    const res = await route.GET(new Request('http://127.0.0.1/api/projects'));
+    expect(res.ok).toBe(true);
+    expect(((await res.json()) as { groups: unknown[] }).groups).toEqual([]);
+  });
+
+  it('keeps the group order it was given', async () => {
+    await post({
+      groups: [
+        { id: 'g_b', name: 'B', cwds: [] },
+        { id: 'g_a', name: 'A', cwds: [] },
+      ],
+    });
+    expect((await getGroups())?.map((x) => x.id)).toEqual(['g_b', 'g_a']);
+  });
+});

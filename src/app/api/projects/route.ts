@@ -26,6 +26,11 @@ import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError } from "@cockpit/effect-core"
 import type { ProjectsData } from "@cockpit/feature-workspace/server"
+import {
+  normalizeGroups,
+  parseStoredGroups,
+  serializeGroups,
+} from "@cockpit/feature-workspace/server"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
 
 export const runtime = "nodejs"
@@ -35,6 +40,8 @@ const ACTIVE_INDEX_KEY = "ui.activeIndex"
 const COLLAPSED_KEY = "ui.collapsed"
 const SIDEBAR_WIDTH_KEY = "ui.sidebarWidth"
 const FILES_WIDTH_KEY = "ui.filesWidth"
+/** Sidebar project groups, JSON `{ groups: [...] }` (specs/project-groups.md §3). */
+const PROJECT_GROUPS_KEY = "sidebar.projectGroups"
 
 /** Kept in step with the panels' own MIN/MAX constants. Clamped here too,
  *  because a stored width is read straight into a layout and a bad one from any
@@ -75,10 +82,17 @@ export const GET = handler(() =>
         FILES_MIN_WIDTH,
         FILES_MAX_WIDTH
       )
+      // Normalized on the way out too: a value written by an older build, or
+      // broken by hand, reads as "no groups" instead of failing the boot path.
+      const groups = parseStoredGroups(
+        store.getSetting(PROJECT_GROUPS_KEY),
+        projects.map((p) => p.cwd)
+      )
       return {
         projects,
         activeIndex,
         collapsed,
+        groups,
         ...(sidebarWidth === undefined ? {} : { sidebarWidth }),
         ...(filesWidth === undefined ? {} : { filesWidth }),
       }
@@ -133,6 +147,24 @@ export const POST = handler((req) =>
                 ? { lastOpenedAt: p.lastOpenedAt }
                 : {}),
             })
+          }
+        }
+
+        // Groups. Present → replace, normalized against the project list as it
+        // stands after the reconcile above. Absent but the project list changed
+        // → prune the stored groups, so a removed project leaves its group in
+        // storage as well as on screen. Absent otherwise → untouched.
+        const knownCwds = () => store.listProjects().map((p) => p.cwd)
+        if (Array.isArray(body?.groups)) {
+          store.setSetting(
+            PROJECT_GROUPS_KEY,
+            serializeGroups(normalizeGroups(body.groups, knownCwds()))
+          )
+        } else if (Array.isArray(body?.projects)) {
+          const raw = store.getSetting(PROJECT_GROUPS_KEY)
+          if (raw) {
+            const pruned = serializeGroups(parseStoredGroups(raw, knownCwds()))
+            if (pruned !== raw) store.setSetting(PROJECT_GROUPS_KEY, pruned)
           }
         }
 

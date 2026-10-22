@@ -10,6 +10,7 @@
 import { Effect } from "effect"
 import { AppError } from "@cockpit/effect-core"
 import type { ProjectsData } from "../../server/effect/project"
+import type { ProjectGroup } from "../projectGroups"
 
 /** Browser fetch wrapper; failures are uniformly mapped to AppError. */
 export const fetchProjects: Effect.Effect<ProjectsData, AppError> =
@@ -64,9 +65,18 @@ export const saveFilesWidth = (
   filesWidth: number
 ): Effect.Effect<void, AppError> => savePref({ filesWidth }, "file browser width")
 
+/**
+ * Persist ONLY the sidebar project groups. Same one-field rule: a groups save
+ * never carries the project list, and a project-list save never carries the
+ * groups (the route leaves absent groups alone and prunes removed projects).
+ */
+export const saveProjectGroups = (
+  groups: ReadonlyArray<ProjectGroup>
+): Effect.Effect<void, AppError> => savePref({ groups }, "project groups")
+
 /** One-field POST. See the note above about absent fields being left alone. */
 const savePref = (
-  body: Record<string, number>,
+  body: Record<string, unknown>,
   what: string
 ): Effect.Effect<void, AppError> =>
   Effect.tryPromise({

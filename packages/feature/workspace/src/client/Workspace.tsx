@@ -32,7 +32,9 @@ import {
   fetchProjects,
   saveProjects as saveProjectsEffect,
   saveSidebarWidth as saveSidebarWidthEffect,
+  saveProjectGroups as saveProjectGroupsEffect,
 } from './effect/projectClient';
+import type { ProjectGroup } from './projectGroups';
 
 interface ProjectsData {
   projects: ProjectInfo[];
@@ -40,6 +42,7 @@ interface ProjectsData {
   collapsed: boolean;
   /** Expanded sidebar width in px. Absent on an install that never resized it. */
   sidebarWidth?: number;
+  groups?: ReadonlyArray<ProjectGroup>;
 }
 
 /**
@@ -80,6 +83,9 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
+  // Sidebar project groups (specs/project-groups.md). Saved on their own, like
+  // the width — see handleChangeProjectGroups.
+  const [projectGroups, setProjectGroups] = useState<ReadonlyArray<ProjectGroup>>([]);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isSessionBrowserOpen, setIsSessionBrowserOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -177,6 +183,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       setActiveIndex(data.activeIndex || 0);
       setCollapsed(data.collapsed || false);
       if (typeof data.sidebarWidth === 'number') setSidebarWidth(data.sidebarWidth);
+      if (Array.isArray(data.groups)) setProjectGroups(data.groups);
       setIsLoaded(true);
     } else if (projectsQuery.status === 'error') {
       console.error('Failed to load projects:', projectsQuery.error);
@@ -221,6 +228,26 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       );
       if (exit._tag === 'Left') {
         console.error('Failed to save sidebar width:', exit.left);
+      }
+    },
+    []
+  );
+
+  // Groups are saved on their OWN too, for the same reason as the width: none of
+  // saveProjects' call sites should have to carry them, and a groups-only POST
+  // leaves the project list alone. A drop that moves a project into another
+  // group AND reorders it sends two saves (reorder, then this) — membership and
+  // order are independent fields, so their arrival order does not matter.
+  const handleChangeProjectGroups = useCallback(
+    async (nextGroups: ReadonlyArray<ProjectGroup>) => {
+      setProjectGroups(nextGroups);
+      const { Effect } = await import('effect');
+      const { BrowserRuntime } = await import('@cockpit/effect-runtime');
+      const exit = await BrowserRuntime.runPromise(
+        saveProjectGroupsEffect(nextGroups).pipe(Effect.either)
+      );
+      if (exit._tag === 'Left') {
+        console.error('Failed to save project groups:', exit.left);
       }
     },
     []
@@ -732,6 +759,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onSelectProject={handleSelectProject}
         onRemoveProject={handleRemoveProject}
         onReorderProjects={handleReorderProjects}
+        groups={projectGroups}
+        onChangeGroups={handleChangeProjectGroups}
         onToggleCollapse={handleToggleCollapse}
         // The sidebar's "Open Project" now goes straight to the folder picker,
         // matching the home screen. It used to open the session browser — a

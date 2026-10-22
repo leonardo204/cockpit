@@ -1,8 +1,35 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { ProjectItem } from './ProjectItem';
+import {
+  GROUP_DRAG_TYPE,
+  GroupNameInput,
+  PROJECT_DRAG_TYPE,
+  ProjectGroupHeader,
+  type GroupHeaderDropHint,
+} from './ProjectGroupHeader';
+import {
+  buildSidebarModel,
+  createGroup,
+  deleteGroup,
+  moveProject,
+  normalizeGroups,
+  renameGroup,
+  reorderGroups,
+  toggleGroupCollapsed,
+  type ProjectDropTarget,
+  type ProjectGroup,
+} from './projectGroups';
 import { ProjectSessionRow } from './ProjectSessionRow';
 import { GlobalSessionMonitor, GlobalSession } from '@cockpit/feature-agent';
 import { PinnedSessionsPanel } from '@cockpit/feature-agent';
@@ -60,6 +87,11 @@ interface ProjectSidebarProps {
   onSelectProject: (index: number) => void;
   onRemoveProject: (index: number) => void;
   onReorderProjects: (projects: ProjectInfo[]) => void;
+  /** User-defined groups (specs/project-groups.md). Absent or empty → the
+   *  sidebar renders exactly the flat list it always did. */
+  groups?: ReadonlyArray<ProjectGroup>;
+  /** Persist a changed group set. Called only when something actually changed. */
+  onChangeGroups?: (groups: ReadonlyArray<ProjectGroup>) => void;
   onToggleCollapse: () => void;
   /** "Open Project". Given the click so the quick folder menu can open under
    *  the button and hand focus back to it. */
@@ -69,6 +101,16 @@ interface ProjectSidebarProps {
   onOpenNote: (cwd?: string) => void;
   onSwitchProject: (cwd: string, sessionId: string) => void;
   onAddProject: (cwd: string) => void;
+}
+
+const EMPTY_GROUPS: ReadonlyArray<ProjectGroup> = [];
+/** `editingGroupId` value while the "new group" field is open. */
+const NEW_GROUP = '__new__';
+
+/** Top or bottom half of the hovered header — where a dragged GROUP lands. */
+function halfOf(e: ReactDragEvent): 'before' | 'after' {
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
 }
 
 // Extract project name from cwd (either separator: Windows cwds use `\`)
@@ -86,6 +128,8 @@ export function ProjectSidebar({
   onSelectProject,
   onRemoveProject,
   onReorderProjects,
+  groups = EMPTY_GROUPS,
+  onChangeGroups,
   onToggleCollapse,
   onOpenSessionBrowser,
   onBrowseAllSessions,
@@ -246,36 +290,338 @@ export function ProjectSidebar({
     sessions.filter(s => s.status === 'unread').map(s => s.cwd)
   );
 
+  // ── Drag and drop ──
+  //
+  // TWO KINDS OF DRAG, KEPT APART. A project drag (`dragIndex`) reorders
+  // projects and moves them between groups; a group drag (`dragGroupId`)
+  // reorders group headers. Each drop target accepts exactly one kind — a
+  // project row ignores a group drag, and a header dropped on by a project
+  // means "join", never "reorder" — so neither can do the other's job.
+  const [dragGroupId, setDragGroupId] = useState<string | null>(null);
+  const [groupDropHint, setGroupDropHint] = useState<{ id: string; hint: GroupHeaderDropHint } | null>(null);
+  /** A project is hovering the ungrouped end area, or an empty group's slot. */
+  const [dropZone, setDropZone] = useState<string | null>(null);
+  const [menuGroupId, setMenuGroupId] = useState<string | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+
+  const model = useMemo(() => buildSidebarModel(projects, groups), [projects, groups]);
+  const hasGroups = groups.length > 0;
+
+  // Ref indirection for the memo'd group headers: their callbacks keep one
+  // identity for the life of the panel, yet read the current lists and drag.
+  const liveRef = useRef({ projects, groups, dragIndex, dragGroupId, onReorderProjects, onChangeGroups });
+  useEffect(() => {
+    liveRef.current = { projects, groups, dragIndex, dragGroupId, onReorderProjects, onChangeGroups };
+  });
+
+  const applyGroups = useCallback((next: ReadonlyArray<ProjectGroup>) => {
+    const live = liveRef.current;
+    if (next === live.groups) return;
+    // Prune members that are no longer projects before saving, so a stale
+    // client copy never resurrects a removed project into its old group.
+    live.onChangeGroups?.(normalizeGroups(next, live.projects.map((p) => p.cwd)));
+  }, []);
+
+  const clearDrag = useCallback(() => {
+    setDragIndex(null);
+    setDragOverIndex(null);
+    setDragGroupId(null);
+    setGroupDropHint(null);
+    setDropZone(null);
+  }, []);
+
+  const applyProjectDrop = useCallback((target: ProjectDropTarget) => {
+    const live = liveRef.current;
+    if (live.dragIndex === null) return;
+    const result = moveProject(live.projects, live.groups, live.dragIndex, target);
+    if (result.projects !== live.projects) live.onReorderProjects([...result.projects]);
+    if (result.groups !== live.groups) applyGroups(result.groups);
+  }, [applyGroups]);
+
   // Drag start
-  const handleDragStart = useCallback((index: number) => {
+  const handleDragStart = useCallback((index: number, e: ReactDragEvent) => {
+    e.dataTransfer?.setData(PROJECT_DRAG_TYPE, String(index));
+    setDragGroupId(null);
     setDragIndex(index);
   }, []);
 
-  // Drag over
+  // Drag over a project row. A GROUP drag is not accepted here: no
+  // preventDefault, so the browser shows "no drop" and onDrop never fires.
   const handleDragOver = useCallback((e: React.DragEvent, index: number) => {
+    if (dragGroupId !== null) {
+      setGroupDropHint(null);
+      return;
+    }
     e.preventDefault();
+    setGroupDropHint(null);
+    setDropZone(null);
     if (dragIndex !== null && dragIndex !== index) {
       setDragOverIndex(index);
     }
-  }, [dragIndex]);
+  }, [dragIndex, dragGroupId]);
 
-  // Drop
+  // Drop on a project row
   const handleDrop = useCallback((targetIndex: number) => {
     if (dragIndex !== null && dragIndex !== targetIndex) {
-      const newProjects = [...projects];
-      const [removed] = newProjects.splice(dragIndex, 1);
-      newProjects.splice(targetIndex, 0, removed);
-      onReorderProjects(newProjects);
+      applyProjectDrop({ kind: 'project', index: targetIndex });
     }
-    setDragIndex(null);
-    setDragOverIndex(null);
-  }, [dragIndex, projects, onReorderProjects]);
+    clearDrag();
+  }, [dragIndex, applyProjectDrop, clearDrag]);
 
   // Drag end
-  const handleDragEnd = useCallback(() => {
+  const handleDragEnd = clearDrag;
+
+  // A project hovering a drop zone that is not a row (the ungrouped end area,
+  // an empty group's placeholder). `zone` is the group id or 'ungrouped'.
+  const handleZoneDragOver = useCallback((e: ReactDragEvent, zone: string) => {
+    if (liveRef.current.dragIndex === null) return;
+    e.preventDefault();
+    setDragOverIndex(null);
+    setGroupDropHint(null);
+    setDropZone(zone);
+  }, []);
+
+  const handleZoneDrop = useCallback((e: ReactDragEvent, zone: string) => {
+    e.preventDefault();
+    applyProjectDrop(zone === 'ungrouped' ? { kind: 'ungrouped-end' } : { kind: 'group', groupId: zone });
+    clearDrag();
+  }, [applyProjectDrop, clearDrag]);
+
+  // ── Group header callbacks (stable; see liveRef) ──
+  const handleToggleGroup = useCallback((id: string) => {
+    applyGroups(toggleGroupCollapsed(liveRef.current.groups, id));
+  }, [applyGroups]);
+
+  const handleStartRename = useCallback((id: string) => {
+    setMenuGroupId(null);
+    setEditingGroupId(id);
+  }, []);
+
+  const handleDeleteGroup = useCallback((id: string) => {
+    applyGroups(deleteGroup(liveRef.current.groups, id));
+  }, [applyGroups]);
+
+  const handleCommitGroupName = useCallback((id: string, name: string) => {
+    setEditingGroupId(null);
+    const current = liveRef.current.groups;
+    applyGroups(id === NEW_GROUP ? createGroup(current, name) : renameGroup(current, id, name));
+  }, [applyGroups]);
+
+  const handleCommitNewGroup = useCallback((name: string) => {
+    handleCommitGroupName(NEW_GROUP, name);
+  }, [handleCommitGroupName]);
+
+  const handleCancelEdit = useCallback(() => setEditingGroupId(null), []);
+
+  const handleGroupDragStart = useCallback((id: string, e: ReactDragEvent) => {
+    e.dataTransfer?.setData(GROUP_DRAG_TYPE, id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
     setDragIndex(null);
     setDragOverIndex(null);
+    setMenuGroupId(null);
+    setDragGroupId(id);
   }, []);
+
+  const handleGroupDragOver = useCallback((id: string, e: ReactDragEvent) => {
+    const live = liveRef.current;
+    if (live.dragGroupId !== null) {
+      // Group onto group: reorder. Hovering itself shows nothing.
+      e.preventDefault();
+      setGroupDropHint(live.dragGroupId === id ? null : { id, hint: halfOf(e) });
+      return;
+    }
+    if (live.dragIndex !== null) {
+      // Project onto group: join it.
+      e.preventDefault();
+      setDragOverIndex(null);
+      setDropZone(null);
+      setGroupDropHint({ id, hint: 'into' });
+    }
+  }, []);
+
+  const handleGroupDrop = useCallback((id: string, e: ReactDragEvent) => {
+    e.preventDefault();
+    const live = liveRef.current;
+    if (live.dragGroupId !== null) {
+      applyGroups(reorderGroups(live.groups, live.dragGroupId, id, halfOf(e)));
+    } else if (live.dragIndex !== null) {
+      applyProjectDrop({ kind: 'group', groupId: id });
+    }
+    clearDrag();
+  }, [applyGroups, applyProjectDrop, clearDrag]);
+
+  const renderProjectRow = (project: ProjectInfo, index: number, inGroup: boolean) => {
+    const branch = projectStateAt(sessionTree, project.cwd);
+    // The collapsed rail is an icon strip 48px wide — a session title has
+    // nowhere to go there, so the whole tree folds away with it.
+    const showBranch = !collapsed && branch.isExpanded;
+    return (
+      <div
+        key={project.cwd}
+        draggable
+        onDragStart={(e) => handleDragStart(index, e)}
+        onDragOver={(e) => handleDragOver(e, index)}
+        onDrop={() => handleDrop(index)}
+        onDragEnd={handleDragEnd}
+        className={`${inGroup && !collapsed ? 'ml-3 ' : ''}${
+          dragOverIndex === index ? 'border-t-2 border-brand' : ''
+        } ${dragIndex === index ? 'opacity-50' : ''}`}
+      >
+        <div className="flex items-center">
+          {/* Expand/collapse. A separate control from the project row —
+              unfolding the sessions must never also switch project. */}
+          {!collapsed && (
+            <button
+              data-testid="sidebar-project-expand"
+              data-cwd={project.cwd}
+              aria-expanded={branch.isExpanded}
+              aria-label={t('sessions.projectSessions')}
+              title={t('sessions.projectSessions')}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleToggleProject(project.cwd);
+              }}
+              className="flex-shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <svg
+                className={`w-3.5 h-3.5 transition-transform ${branch.isExpanded ? 'rotate-90' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
+          <div className="flex-1 min-w-0">
+            <ProjectItem
+              index={index}
+              name={getProjectName(project.cwd)}
+              cwd={project.cwd}
+              isActive={index === activeIndex}
+              collapsed={collapsed}
+              hasUnread={unreadCwds.has(project.cwd)}
+              isLoading={loadingCwds.has(project.cwd)}
+              onClick={() => onSelectProject(index)}
+              onRemove={() => onRemoveProject(index)}
+              onOpenNote={() => onOpenNote(project.cwd)}
+            />
+          </div>
+        </div>
+
+        {showBranch && (
+          <div className="mt-0.5 space-y-0.5" data-testid="sidebar-session-branch" data-cwd={project.cwd}>
+            {branch.isLoading && branch.sessions.length === 0 && (
+              <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
+                {t('sessions.loadingSessions')}
+              </div>
+            )}
+            {!branch.isLoading && branch.error && (
+              <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
+                {t('sessions.loadSessionsFailed')}
+              </div>
+            )}
+            {!branch.isLoading && !branch.error && branch.sessions.length === 0 && (
+              <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
+                {t('sessions.noSessionsYet')}
+              </div>
+            )}
+            {branch.sessions.map((session) => {
+              const sessionId = sessionIdOf(session);
+              return (
+                <ProjectSessionRow
+                  key={sessionId}
+                  cwd={project.cwd}
+                  sessionId={sessionId}
+                  title={session.title}
+                  isActive={index === activeIndex && project.sessionId === sessionId}
+                  onSelect={handleSelectSession}
+                  onDelete={handleDeleteSession}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /** The list body: flat when there are no groups (exactly the old markup),
+   *  grouped sections + the ungrouped rest otherwise. */
+  const renderProjectList = () => {
+    if (!hasGroups) return projects.map((project, index) => renderProjectRow(project, index, false));
+
+    if (collapsed) {
+      // The rail has no room for headers: icons in group order, with a thin
+      // divider between non-empty runs.
+      const runs = [...model.groups.map((g) => g.items), model.ungrouped].filter((r) => r.length > 0);
+      return runs.map((run, i) => (
+        <div key={`run-${i}`} className="space-y-1">
+          {i > 0 && <div data-testid="sidebar-group-divider" className="mx-2 border-t border-border" />}
+          {run.map(({ project, index }) => renderProjectRow(project, index, true))}
+        </div>
+      ));
+    }
+
+    return (
+      <>
+        {model.groups.map(({ group, items }) => {
+          const hint = groupDropHint?.id === group.id ? groupDropHint.hint : null;
+          return (
+            <div key={group.id} data-testid="sidebar-group" data-group-id={group.id} className="space-y-1">
+              <ProjectGroupHeader
+                id={group.id}
+                name={group.name}
+                collapsed={group.collapsed}
+                count={items.length}
+                hasUnread={items.some(({ project }) => unreadCwds.has(project.cwd))}
+                menuOpen={menuGroupId === group.id}
+                editing={editingGroupId === group.id}
+                dropHint={hint}
+                isDragging={dragGroupId === group.id}
+                onToggle={handleToggleGroup}
+                onSetMenu={setMenuGroupId}
+                onStartRename={handleStartRename}
+                onDelete={handleDeleteGroup}
+                onCommitName={handleCommitGroupName}
+                onCancelEdit={handleCancelEdit}
+                onDragStart={handleGroupDragStart}
+                onDragOver={handleGroupDragOver}
+                onDrop={handleGroupDrop}
+                onDragEnd={handleDragEnd}
+              />
+              {!group.collapsed && items.length === 0 && (
+                <div
+                  data-testid="sidebar-group-empty"
+                  onDragOver={(e) => handleZoneDragOver(e, group.id)}
+                  onDrop={(e) => handleZoneDrop(e, group.id)}
+                  className={`ml-3 px-2 py-1.5 rounded-lg text-xs text-muted-foreground border border-dashed ${
+                    dropZone === group.id ? 'border-brand bg-brand/10' : 'border-border'
+                  }`}
+                >
+                  {t('workspace.groupEmptyHint')}
+                </div>
+              )}
+              {!group.collapsed && items.map(({ project, index }) => renderProjectRow(project, index, true))}
+            </div>
+          );
+        })}
+        {model.ungrouped.map(({ project, index }) => renderProjectRow(project, index, false))}
+        {/* The ungrouped end area: drop a project here to take it out of its
+            group. Only meaningful (and only shown) once groups exist. */}
+        <div
+          data-testid="sidebar-ungrouped-drop"
+          onDragOver={(e) => handleZoneDragOver(e, 'ungrouped')}
+          onDrop={(e) => handleZoneDrop(e, 'ungrouped')}
+          className={`min-h-8 rounded-lg flex items-center justify-center text-xs text-muted-foreground transition-colors ${
+            dropZone === 'ungrouped' ? 'bg-brand/10 ring-1 ring-brand' : ''
+          }`}
+        >
+          {dragIndex !== null && t('workspace.ungroupDropHint')}
+        </div>
+      </>
+    );
+  };
 
   return (
     // NO `overflow-hidden` HERE. It was added with the drag-to-resize handle to
@@ -353,107 +699,40 @@ export function ProjectSidebar({
           element that may clip, and the nested rows live inside it. */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
         {/* Section label (shell-look-and-feel section 5). The collapsed rail is
-            an icon strip with no room for words, so it drops the label. */}
-        {!collapsed && projects.length > 0 && (
-          <div className="px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground select-none">
-            {t('workspace.sidebarProjects')}
+            an icon strip with no room for words, so it drops the label. The
+            `+` beside it opens the "new group" field (project-groups R1). */}
+        {!collapsed && (projects.length > 0 || hasGroups) && (
+          <div className="flex items-center px-2 pt-1 pb-0.5 text-xs font-semibold tracking-wide text-muted-foreground select-none">
+            <span className="flex-1 min-w-0 truncate">{t('workspace.sidebarProjects')}</span>
+            <button
+              type="button"
+              data-testid="sidebar-new-group"
+              aria-label={t('workspace.newGroup')}
+              title={t('workspace.newGroup')}
+              onClick={() => {
+                setMenuGroupId(null);
+                setEditingGroupId(NEW_GROUP);
+              }}
+              className="flex-shrink-0 -mr-1 p-0.5 rounded hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
           </div>
         )}
-        {projects.map((project, index) => {
-          const branch = projectStateAt(sessionTree, project.cwd);
-          // The collapsed rail is an icon strip 48px wide — a session title has
-          // nowhere to go there, so the whole tree folds away with it.
-          const showBranch = !collapsed && branch.isExpanded;
-          return (
-            <div
-              key={project.cwd}
-              draggable
-              onDragStart={() => handleDragStart(index)}
-              onDragOver={(e) => handleDragOver(e, index)}
-              onDrop={() => handleDrop(index)}
-              onDragEnd={handleDragEnd}
-              className={`${
-                dragOverIndex === index ? 'border-t-2 border-brand' : ''
-              } ${dragIndex === index ? 'opacity-50' : ''}`}
-            >
-              <div className="flex items-center">
-                {/* Expand/collapse. A separate control from the project row —
-                    unfolding the sessions must never also switch project. */}
-                {!collapsed && (
-                  <button
-                    data-testid="sidebar-project-expand"
-                    data-cwd={project.cwd}
-                    aria-expanded={branch.isExpanded}
-                    aria-label={t('sessions.projectSessions')}
-                    title={t('sessions.projectSessions')}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleProject(project.cwd);
-                    }}
-                    className="flex-shrink-0 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                  >
-                    <svg
-                      className={`w-3.5 h-3.5 transition-transform ${branch.isExpanded ? 'rotate-90' : ''}`}
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                )}
-                <div className="flex-1 min-w-0">
-                  <ProjectItem
-                    index={index}
-                    name={getProjectName(project.cwd)}
-                    cwd={project.cwd}
-                    isActive={index === activeIndex}
-                    collapsed={collapsed}
-                    hasUnread={unreadCwds.has(project.cwd)}
-                    isLoading={loadingCwds.has(project.cwd)}
-                    onClick={() => onSelectProject(index)}
-                    onRemove={() => onRemoveProject(index)}
-                    onOpenNote={() => onOpenNote(project.cwd)}
-                  />
-                </div>
-              </div>
-
-              {showBranch && (
-                <div className="mt-0.5 space-y-0.5" data-testid="sidebar-session-branch" data-cwd={project.cwd}>
-                  {branch.isLoading && branch.sessions.length === 0 && (
-                    <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
-                      {t('sessions.loadingSessions')}
-                    </div>
-                  )}
-                  {!branch.isLoading && branch.error && (
-                    <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
-                      {t('sessions.loadSessionsFailed')}
-                    </div>
-                  )}
-                  {!branch.isLoading && !branch.error && branch.sessions.length === 0 && (
-                    <div className="pl-8 pr-1 py-1 text-xs text-muted-foreground">
-                      {t('sessions.noSessionsYet')}
-                    </div>
-                  )}
-                  {branch.sessions.map((session) => {
-                    const sessionId = sessionIdOf(session);
-                    return (
-                      <ProjectSessionRow
-                        key={sessionId}
-                        cwd={project.cwd}
-                        sessionId={sessionId}
-                        title={session.title}
-                        isActive={index === activeIndex && project.sessionId === sessionId}
-                        onSelect={handleSelectSession}
-                        onDelete={handleDeleteSession}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {!collapsed && editingGroupId === NEW_GROUP && (
+          <div className="flex items-center px-1">
+            <GroupNameInput
+              initial=""
+              placeholder={t('workspace.groupNamePlaceholder')}
+              onCommit={handleCommitNewGroup}
+              onCancel={handleCancelEdit}
+              testId="sidebar-new-group-input"
+            />
+          </div>
+        )}
+        {renderProjectList()}
       </div>
 
       {/* Bottom button area */}

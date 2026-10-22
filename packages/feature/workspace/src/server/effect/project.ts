@@ -8,6 +8,8 @@
  * are imported as `type`s by the route and the browser client.
  */
 
+import type { ProjectGroup } from "../../client/projectGroups"
+
 // ─────────────────────────────────────────────────────────
 // Data model — wire contract for /api/projects/route.ts.
 // ─────────────────────────────────────────────────────────
@@ -43,4 +45,11 @@ export interface ProjectsData {
   readonly sidebarWidth?: number
   /** File-browser panel width in px. Same optional-both-ways rule as above. */
   readonly filesWidth?: number
+  /**
+   * Sidebar project groups (specs/project-groups.md), stored in the settings key
+   * `sidebar.projectGroups`. Always present on a GET (normalized against the
+   * project list; `[]` when there are none). OPTIONAL on a POST: absent means
+   * "leave the stored groups alone", like every other field here.
+   */
+  readonly groups?: ReadonlyArray<ProjectGroup>
 }
