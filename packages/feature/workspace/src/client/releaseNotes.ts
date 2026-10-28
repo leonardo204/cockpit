@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.2 — 2026-10-28
+
+### en
+
+Work naby hands to a participant actually reaches them.
+
+**Fixed**
+
+- **naby said it handed work to a participant, but nothing started.** naby sometimes used a leftover test tool that only pretended to send a message, so it reported "handed to @aside" while @aside never got anything. That tool is gone from real conversations; naby now hands work over in the conversation, where you can see the participant start.
+
+### ko
+
+나비가 참가자에게 넘긴 일이 실제로 전달돼요.
+
+**고친 것**
+
+- **나비가 참가자에게 일을 넘겼다고 했는데 아무 일도 시작되지 않던 문제.** 나비가 메시지를 보내는 척만 하는 테스트용 도구를 가끔 써서, @aside에게 "맡겼다"고 말해도 @aside는 아무것도 받지 못했어요. 실제 대화에서 그 도구를 뺐어요. 이제 나비는 대화 안에서 일을 넘기고, 참가자가 시작하는 것을 바로 볼 수 있어요.
+
 ## 1.48.1 — 2026-10-28
 
 ### en

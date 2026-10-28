@@ -125,3 +125,6 @@ process.env.NABY_PARTICIPANT_RECOMMEND = '0';
  * override never falls through). Tests that need "present" point it at a stub.
  */
 process.env.NABY_ASIDE_PATH = join(home, 'no-such-aside');
+// Engine tests script calls to the spike fixtures (echo_note, send_message),
+// which real turns strip (runtime tools.ts withoutTestTools).
+process.env.NABY_TEST_TOOLS = '1';

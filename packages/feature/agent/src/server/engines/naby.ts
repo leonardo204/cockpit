@@ -64,6 +64,7 @@ import {
   activeClaudeAccountId,
   AiSdkEngine,
   buildToolset,
+  withoutTestTools,
   buildWorkspaceTools,
   canCaptureMemory,
   isMcpEntryActive,
@@ -1528,7 +1529,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // started is something a read-only turn should still do — but the gate
         // floor below denies `naby_start_job` there, so plan mode cannot start
         // work by calling it a job.
-        const builtin = buildToolset(
+        // withoutTestTools: the spike fixtures (echo_note, send_message) must never
+        // reach a real model — send_message "delivers" into an outbox nobody reads.
+        const builtin = withoutTestTools(buildToolset(
           outbox,
           store,
           growthSubject && capturesMemory
@@ -1543,7 +1546,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           checkinSink,
           delegationSink,
           projectCwd ? { cwd: projectCwd, sink: makeJobSink(), sessionId } : undefined,
-        );
+        ));
 
         // ---- MCP tools (F1-08) -------------------------------------------
         //
