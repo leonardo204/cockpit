@@ -39,7 +39,7 @@ describe('ParticipantSectionView', () => {
       <ParticipantSectionView
         participants={[TR]}
         models={{ a1: 'sonnet' }}
-        limits={{ maxPerSession: 5, maxSpeechesPerRound: 6, maxRoundTrips: 3 }}
+        limits={{ maxPerSession: 5 }}
         loading={false}
         busy={false}
         confirmingId={null}
@@ -89,12 +89,18 @@ describe('ParticipantSectionView', () => {
     expect(html).toContain('Imported from minji.json (sha256 abcdef01)');
   });
 
-  it('shows the round limits and a two-step delete', () => {
+  it('shows the roster limit and a two-step delete', () => {
     const html = view({ confirmingId: 'a1' });
     expect(html).toContain('5 per session');
-    expect(html).toContain('6 speeches per message');
-    expect(html).toContain('3 naby↔participant round trips');
     expect(html).toContain('Delete for good?');
+  });
+
+  it('no longer shows the speech and round-trip limits (multi-agent-chat 0.7.0, §8.15 R11.1)', () => {
+    const html = view({});
+    expect(html).not.toMatch(/speeches per message/);
+    expect(html).not.toMatch(/round trips/);
+    expect(html).not.toContain('limitSpeeches');
+    expect(html).not.toContain('limitRoundTrips');
   });
 
   it('an empty registry says how to start', () => {

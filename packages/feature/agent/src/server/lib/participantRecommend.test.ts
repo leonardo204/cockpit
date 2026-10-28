@@ -423,7 +423,7 @@ describe('closing recommendations', () => {
         userText: 'translate this',
         mentions: [],
         registered: [agent],
-        settings: { proposalsEnabled: true, maxPerSession: 5, maxSpeechesPerRound: 6, maxRoundTrips: 3 },
+        settings: { proposalsEnabled: true, maxPerSession: 5 },
         recent: () => [],
         runNabyTurn: async () => ({ text: 'ok', ok: true }),
         runParticipantTurn: async () => ({ text: 'done', ok: true }),

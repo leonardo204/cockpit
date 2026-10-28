@@ -45,10 +45,9 @@ import {
 export const PARTICIPANTS_PROPOSALS_KEY = 'participants.proposals.enabled';
 /** Participants one session may hold (R2.4). naby is not counted. */
 export const PARTICIPANTS_MAX_PER_SESSION_KEY = 'participants.maxPerSession';
-/** Agent speeches per user message, naby included (R3.5a). */
-export const PARTICIPANTS_MAX_SPEECHES_KEY = 'participants.maxSpeechesPerRound';
-/** naby ↔ one participant hand-offs per user message (R3.5b). */
-export const PARTICIPANTS_MAX_ROUND_TRIPS_KEY = 'participants.maxRoundTrips';
+// `participants.maxSpeechesPerRound` and `participants.maxRoundTrips` are gone
+// (0.7.0, §8.15 R11.1): a round is bounded by loop detection and the backstop,
+// not by fixed limits. Rows already stored are left alone and never read.
 /** Whether the chat draws routing chips (R6.4). A view preference, saved from the
  *  client toggle. */
 export const PARTICIPANTS_SHOW_ROUTING_KEY = 'participants.showRouting';
@@ -59,8 +58,6 @@ export const PARTICIPANTS_RECOMMENDATIONS_KEY = 'participants.recommendations.en
 export const PARTICIPANT_SETTINGS_DEFAULTS = {
   proposalsEnabled: true,
   maxPerSession: 5,
-  maxSpeechesPerRound: 6,
-  maxRoundTrips: 3,
   showRouting: false,
   recommendationsEnabled: true,
 } as const;
@@ -73,8 +70,6 @@ export const PARTICIPANT_SETTING_MAX = 20;
 export type ParticipantSettings = {
   proposalsEnabled: boolean;
   maxPerSession: number;
-  maxSpeechesPerRound: number;
-  maxRoundTrips: number;
   showRouting: boolean;
   recommendationsEnabled: boolean;
 };
@@ -110,8 +105,6 @@ export function readParticipantSettings(store: ParticipantSettingsStore): Partic
     return {
       proposalsEnabled: readBool(store.getSetting(PARTICIPANTS_PROPOSALS_KEY), d.proposalsEnabled),
       maxPerSession: readInt(store.getSetting(PARTICIPANTS_MAX_PER_SESSION_KEY), d.maxPerSession),
-      maxSpeechesPerRound: readInt(store.getSetting(PARTICIPANTS_MAX_SPEECHES_KEY), d.maxSpeechesPerRound),
-      maxRoundTrips: readInt(store.getSetting(PARTICIPANTS_MAX_ROUND_TRIPS_KEY), d.maxRoundTrips),
       showRouting: readBool(store.getSetting(PARTICIPANTS_SHOW_ROUTING_KEY), d.showRouting),
       recommendationsEnabled: readBool(
         store.getSetting(PARTICIPANTS_RECOMMENDATIONS_KEY),
@@ -141,8 +134,6 @@ export function writeParticipantSettings(
   }
   const ints: [keyof ParticipantSettings, string, number][] = [
     ['maxPerSession', PARTICIPANTS_MAX_PER_SESSION_KEY, d.maxPerSession],
-    ['maxSpeechesPerRound', PARTICIPANTS_MAX_SPEECHES_KEY, d.maxSpeechesPerRound],
-    ['maxRoundTrips', PARTICIPANTS_MAX_ROUND_TRIPS_KEY, d.maxRoundTrips],
   ];
   for (const [field, key, fallback] of ints) {
     const v = input[field];
@@ -164,7 +155,7 @@ export function parseParticipantSettingsInput(
     if (typeof v !== 'boolean') return { ok: false, error: `${field} must be a boolean` };
     input[field] = v;
   }
-  for (const field of ['maxPerSession', 'maxSpeechesPerRound', 'maxRoundTrips'] as const) {
+  for (const field of ['maxPerSession'] as const) {
     const v = body[field];
     if (v === undefined) continue;
     if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: `${field} must be a number` };

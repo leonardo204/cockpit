@@ -23,7 +23,6 @@ export const RoundProgressStrip = memo(function RoundProgressStrip({
   acting,
   speakerName,
   next,
-  maxSpeeches,
   onStop,
 }: {
   progress: RoundProgress;
@@ -32,7 +31,6 @@ export const RoundProgressStrip = memo(function RoundProgressStrip({
   speakerName: string;
   /** The participant `next` points at, when the registry knows it. */
   next?: ParticipantInfo;
-  maxSpeeches: number;
   onStop?: () => void;
 }) {
   const { t } = useTranslation();
@@ -66,10 +64,10 @@ export const RoundProgressStrip = memo(function RoundProgressStrip({
           </>
         ) : null}
         ·{' '}
+        {/* No "/max": the round has no fixed speech limit (§8.15 R11.1). */}
         {t('participants.progress.speech', {
-          defaultValue: 'speech {{n}}/{{max}}',
-          n: Math.min(progress.speech, maxSpeeches),
-          max: maxSpeeches,
+          defaultValue: 'speech {{n}}',
+          n: progress.speech,
         })}
       </span>
       <span className="flex-1" />

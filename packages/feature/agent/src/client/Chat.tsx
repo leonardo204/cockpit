@@ -1144,7 +1144,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             acting={actingAgent}
             speakerName={thinkingName}
             {...(progressNext ? { next: progressNext } : {})}
-            maxSpeeches={participantsState.settings.maxSpeechesPerRound}
             onStop={handleStop}
           />
         ) : null}

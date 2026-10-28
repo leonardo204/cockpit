@@ -45,15 +45,11 @@ export interface HubInfo {
 export interface ParticipantChatSettings {
   showRouting: boolean;
   maxPerSession: number;
-  maxSpeechesPerRound: number;
-  maxRoundTrips: number;
 }
 
 export const DEFAULT_PARTICIPANT_CHAT_SETTINGS: ParticipantChatSettings = {
   showRouting: false,
   maxPerSession: 5,
-  maxSpeechesPerRound: 6,
-  maxRoundTrips: 3,
 };
 
 /** The fallback look of a participant whose profile is missing or unreadable. */
@@ -132,8 +128,6 @@ export function chatSettingsFrom(raw: unknown): ParticipantChatSettings {
   return {
     showRouting: raw.showRouting === true,
     maxPerSession: int(raw.maxPerSession, d.maxPerSession),
-    maxSpeechesPerRound: int(raw.maxSpeechesPerRound, d.maxSpeechesPerRound),
-    maxRoundTrips: int(raw.maxRoundTrips, d.maxRoundTrips),
   };
 }
 
@@ -180,7 +174,10 @@ export type RoutingChipKind =
 
 export function routingChipKind(routing: ChatRouting, hub?: HubInfo | null): RoutingChipKind {
   if (routing.decision === 'not-in-session') return 'not-in-session';
-  if (routing.decision === 'cap' || routing.blocked) return 'cap';
+  // A limit, a loop stop or the backstop (§8.15 R11.4) — one system line.
+  if (routing.decision === 'cap' || routing.decision === 'loop' || routing.decision === 'backstop' || routing.blocked) {
+    return 'cap';
+  }
   if (routing.decision === 'ignored-mention') return 'ignored-mention';
   if (routing.kind === 'return') return 'return';
   if (routing.kind === 'propose') return 'propose';

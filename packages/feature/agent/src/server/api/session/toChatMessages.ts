@@ -36,9 +36,17 @@ export interface ChatRouting {
   targetName?: string;
   reason?: string;
   brief?: string;
-  decision?: 'route' | 'user-mention' | 'hub-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
-  /** A limit stopped naby's line-start hand-off (R3.10); stored on naby's note. */
-  blocked?: { by: 'hub-mention'; cap: 'speeches' | 'roundTrips'; limit: number; agentId: string; name: string };
+  decision?: 'route' | 'user-mention' | 'hub-mention' | 'cap' | 'loop' | 'backstop' | 'ignored-mention' | 'not-in-session';
+  /** Why the round stopped short (R3.10 legacy rows; §8.15 R11.4 loop / backstop). */
+  blocked?:
+    | { by: 'hub-mention'; cap: 'speeches' | 'roundTrips'; limit: number; agentId: string; name: string }
+    | {
+        by: 'loop';
+        loop: 'repeated-speech' | 'repeated-brief' | 'no-progress' | 'cycle';
+        agentId?: string;
+        name?: string;
+      }
+    | { by: 'backstop'; limit: number; agentId?: string; name?: string };
 }
 
 export interface ChatMessage {

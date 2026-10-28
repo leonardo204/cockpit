@@ -14,6 +14,7 @@
 import i18n from 'i18next';
 import en from '../locales/en.json';
 import ko from '../locales/ko.json';
+import { JOSA_KINDS, withJosa } from './josa';
 
 if (!i18n.isInitialized) {
   i18n.init({
@@ -27,6 +28,10 @@ if (!i18n.isInitialized) {
       escapeValue: false,
     },
   });
+  // `{{name, iga}}` etc. — see josa.ts. Only ko strings use them.
+  for (const kind of JOSA_KINDS) {
+    i18n.services.formatter?.add(kind, (value) => withJosa(String(value ?? ''), kind));
+  }
 }
 
 export default i18n;

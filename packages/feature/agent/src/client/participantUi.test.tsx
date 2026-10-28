@@ -191,20 +191,74 @@ describe('RoutingChip visibility (R6.4)', () => {
     // One click adds it — it is registered and the session exists.
     expect(notIn).toContain('>Add</button>');
 
-    const cap = render(<RoutingChip routing={{ kind: 'end', decision: 'cap', reason: 'roundTrips' }} />);
+    const cap = render(<RoutingChip routing={{ kind: 'end', decision: 'cap', reason: 'proposals', limit: 1 }} />);
     expect(cap).toContain('data-routing-kind="cap"');
-    expect(cap).toContain('round-trip limit (3)');
+    expect(cap).toContain('one participant per message');
   });
 
   it("MAC-M4: a cap line uses the event's own limit, and a routed chip shows the routing call's tokens", () => {
-    const cap = render(<RoutingChip routing={{ kind: 'end', decision: 'cap', reason: 'roundTrips', limit: 7 }} />);
-    expect(cap).toContain('round-trip limit (7)');
+    const cap = render(<RoutingChip routing={{ kind: 'end', decision: 'cap', reason: 'participants', limit: 7 }} />);
+    expect(cap).toContain('participant limit (7)');
     const on = ctx({ settings: { ...ctx().settings, showRouting: true } });
     expect(render(<RoutingChip routing={{ ...delegate, tokens: { input: 1200, output: 34 } }} />, on)).toContain('1234 tok');
     expect(render(<RoutingChip routing={{ ...delegate, tokens: { input: 0, output: 0 } }} />, on)).not.toContain('routing-tokens');
   });
 
-  it('R3.10: a blocked line-start hand-off is a system line naming the participant, for both limits', async () => {
+  it('§8.15 R11.4: a loop stop is a system line with the reason, live and reloaded, en and ko', async () => {
+    const live = {
+      kind: 'end' as const,
+      decision: 'loop' as const,
+      reason: 'repeated-brief',
+      targetAgentId: 'a2',
+      targetName: 'aside',
+      blocked: { by: 'loop' as const, loop: 'repeated-brief' as const, agentId: 'a2', name: 'aside' },
+    };
+    // The reloaded shape: naby's note row carries only `blocked` (no decision).
+    const reloaded = {
+      kind: 'end' as const,
+      targetAgentId: 'naby',
+      reason: 'repeated-brief',
+      blocked: { by: 'loop' as const, loop: 'repeated-brief' as const, agentId: 'a2', name: 'aside' },
+    };
+    const noProgress = {
+      kind: 'end' as const,
+      reason: 'no-progress',
+      blocked: { by: 'loop' as const, loop: 'no-progress' as const },
+    };
+    const a = render(<RoutingChip routing={live} />);
+    expect(a).toContain('data-routing-kind="cap"');
+    expect(a).toContain('going in circles');
+    expect(a).toContain('about to send @aside the same request again');
+    expect(render(<RoutingChip routing={reloaded} />)).toContain('about to send @aside the same request again');
+    expect(render(<RoutingChip routing={noProgress} />)).toContain('no new work or information');
+    await i18n.changeLanguage('ko');
+    try {
+      expect(render(<RoutingChip routing={reloaded} />)).toContain(
+        '같은 대화가 반복돼 자동으로 멈췄습니다. (이유: @aside에게 같은 부탁을 다시 보내려 함)',
+      );
+      expect(render(<RoutingChip routing={{ kind: 'end', reason: 'cycle', blocked: { by: 'loop', loop: 'cycle' } }} />)).toContain(
+        '같은 순서의 주고받기가 두 번 되풀이됨',
+      );
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  it('§8.15: the backstop stop is a system line, live and reloaded, en and ko', async () => {
+    const b = { kind: 'end' as const, reason: 'backstop', blocked: { by: 'backstop' as const, limit: 60 } };
+    const html = render(<RoutingChip routing={b} />);
+    expect(html).toContain('data-routing-kind="cap"');
+    expect(html).toContain('Stopped after 60 messages in one round.');
+    expect(render(<RoutingChip routing={{ kind: 'end', decision: 'backstop', limit: 60 }} />)).toContain('60 messages');
+    await i18n.changeLanguage('ko');
+    try {
+      expect(render(<RoutingChip routing={b} />)).toContain('발언이 60회에 이르러 멈췄습니다.');
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  it('R3.10 (0.6.2 rows): a blocked line-start hand-off still reads, for both old limits', async () => {
     const speeches = {
       kind: 'end' as const,
       decision: 'cap' as const,
@@ -380,13 +434,14 @@ describe('RoundProgressStrip (R6.5)', () => {
         acting={{ name: 'translator', persona: false, participant: true, id: 'a1', avatar: { kind: 'emoji', value: '🌐' }, color: '#0EA5E9' }}
         speakerName="Translator"
         next={REVIEWER}
-        maxSpeeches={6}
         onStop={noop}
       />,
     );
     expect(html).toContain('Translator is speaking');
     expect(html).toContain('@Reviewer');
-    expect(html).toContain('speech 2/6');
+    expect(html).toContain('speech 2');
+    // No fixed speech limit any more (§8.15 R11.1).
+    expect(html).not.toContain('speech 2/');
     expect(html).toContain('data-testid="round-stop"');
     expect(html).toContain('>Stop</button>');
   });

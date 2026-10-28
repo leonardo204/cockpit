@@ -3062,6 +3062,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // an engine may stream one message and not the next.
         let sawPartialText = false;
         let stepUsedTool = false;
+        // The tools this step asked for, by name (multi-agent-chat §8.15 R11.2:
+        // the round ledger's evidence that a speech did work). Reset with
+        // `stepUsedTool`.
+        let stepTools: string[] = [];
         let stepDecision: AutonomyDecision = { proceed: false, reason: 'not-autonomous' };
         // P3-M9 (G4): the run's ONE verification nudge, spent at most once. Per
         // RUN, not per step — that is the whole bound. Without it, an agent that
@@ -3251,6 +3255,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // denies is still the agent trying to act, so a denied step
                   // gets to try something else rather than ending the run.
                   stepUsedTool = true;
+                  stepTools.push(ev.toolName);
                   // Remembered for PostToolUse, whose result event carries only
                   // the id (org-harness-sync §3.5).
                   if (orgHooks.enabled) {
@@ -3744,6 +3749,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               step += 1;
               stepText = '';
               stepUsedTool = false;
+              stepTools = [];
               sawPartialText = false;
               speechOk = true;
             };
@@ -4164,13 +4170,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                       }
                     : {}),
                   // R3.7: naby is told what the labelled participant lines are,
-                  // plus the round's limit notice when it has hit one.
-                  system: [base.system, HUB_ROUND_RULES, i.note].filter(Boolean).join('\n\n'),
+                  // plus the round's progress so far (§8.15 R11.2) and the limit
+                  // notice when a proposal limit stopped the round.
+                  system: [base.system, HUB_ROUND_RULES, i.progress, i.note].filter(Boolean).join('\n\n'),
                   hub: hubSpeaker,
                   activity: { ...base.activity, step },
                 });
                 speeches.push({ agent: hubAgent, persona: true, text: stepText });
-                return { text: stepText, ok: speechOk };
+                return { text: stepText, ok: speechOk, toolCalls: stepTools.length, tools: [...stepTools] };
               },
               runParticipantTurn: async (i) => {
                 const agent = byId.get(i.agent.id);
@@ -4185,7 +4192,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   currentSpeaker = undefined;
                 }
                 speeches.push({ agent: i.agent, persona: false, text: stepText });
-                return { text: stepText, ok: speechOk };
+                return { text: stepText, ok: speechOk, toolCalls: stepTools.length, tools: [...stepTools] };
               },
               routeCall,
               propose,
@@ -4197,10 +4204,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               onDeclined: (agentId) => {
                 closeRecommendationsOnDecline(store, sessionId, agentId);
               },
-              // R3.10: a limit stopped naby's line-start hand-off. Stored as
-              // naby's note to itself so the system line survives a reload and
-              // naby later reads that the participant never got the message.
-              onHandoffBlocked: (blocked, note) => {
+              // §8.15 R11.4: the round stopped itself (a loop, or the backstop).
+              // Stored as naby's note to itself so the system line survives a
+              // reload and naby reads on its next turn why the round stopped.
+              onRoundStopped: (blocked, note) => {
                 store.appendMessage(sessionId, {
                   role: 'user',
                   content: note,
@@ -4209,11 +4216,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     kind: 'end',
                     targetAgentId: hubAgent.id,
                     targetName: hubAgent.name,
-                    reason: blocked.cap,
+                    reason: blocked.by === 'loop' ? blocked.loop : blocked.by,
                     blocked,
                   },
                 });
               },
+              ...(typeof ctx.params.runId === 'string' ? { roundId: ctx.params.runId } : {}),
               emit: (e) => ctx.emit({ ...e, session_id: sessionId } as unknown as RunEvent),
               log: (kind, fields) =>
                 logActivity(kind, { sessionId, agentId: hubAgent.id, agentName: hubAgent.name, ...fields }),
@@ -4221,7 +4229,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             });
             console.log(
               `[engine:naby] participants: round ended (${result.endedBy}, ${result.speeches} speech(es), ` +
-                `${result.proposals} proposal(s))`,
+                `${result.proposals} proposal(s)${result.loop ? `, loop: ${result.loop.kind}` : ''})`,
             );
             // THE ROUND'S ONE `result` (the client ends its turn on it). Skipped on a
             // stop: the fallback below reports a stopped run the way it always has.
@@ -4251,6 +4259,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             step += 1;
             stepText = '';
             stepUsedTool = false;
+            stepTools = [];
             await runTurn({
               ...nabyTurnOptions(
                 step === 1

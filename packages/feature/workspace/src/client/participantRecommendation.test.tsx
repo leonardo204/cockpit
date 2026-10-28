@@ -227,7 +227,7 @@ describe("Settings: naby's participant suggestions switch", () => {
       <ParticipantSectionView
         participants={[]}
         models={{}}
-        limits={{ maxPerSession: 5, maxSpeechesPerRound: 6, maxRoundTrips: 3 }}
+        limits={{ maxPerSession: 5 }}
         loading={false}
         busy={false}
         confirmingId={null}

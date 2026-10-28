@@ -44,7 +44,9 @@ import { ParticipantImportDialog, originBadgeText } from './ParticipantImportDia
 import { blankParticipantForm, formFromDraft, formFromParticipant, type ParticipantForm } from './participantForm';
 import { SETTINGS_FOCUS_EVENT, takeSettingsFocus } from './settingsFocus';
 
-type Limits = { maxPerSession: number; maxSpeechesPerRound: number; maxRoundTrips: number };
+/** The limits the section shows. Only the roster size is left: the speech and
+ *  round-trip limits are gone (multi-agent-chat 0.7.0, §8.15 R11.1). */
+type Limits = { maxPerSession: number };
 
 type Reply = {
   ok: boolean;
@@ -263,8 +265,6 @@ export const ParticipantSectionView = memo(function ParticipantSectionView({
           <div className="mt-1.5 flex flex-wrap gap-1">
             {[
               t('participants.settings.limitPerSession', { defaultValue: '{{n}} per session', n: limits.maxPerSession }),
-              t('participants.settings.limitSpeeches', { defaultValue: '{{n}} speeches per message', n: limits.maxSpeechesPerRound }),
-              t('participants.settings.limitRoundTrips', { defaultValue: '{{n}} naby↔participant round trips', n: limits.maxRoundTrips }),
             ].map((label) => (
               <span key={label} className="rounded-full bg-muted px-1.5 py-0.5 text-[0.714rem] text-muted-foreground">
                 {label}
@@ -349,7 +349,7 @@ export const ParticipantSectionView = memo(function ParticipantSectionView({
 export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: string }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<unknown[]>([]);
-  const [limits, setLimits] = useState<Limits>({ maxPerSession: 5, maxSpeechesPerRound: 6, maxRoundTrips: 3 });
+  const [limits, setLimits] = useState<Limits>({ maxPerSession: 5 });
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<ParticipantForm | null>(null);
@@ -370,8 +370,6 @@ export function ParticipantSection({ isOpen, cwd }: { isOpen: boolean; cwd?: str
       const s = conf.participantSettings;
       setLimits((l) => ({
         maxPerSession: s.maxPerSession ?? l.maxPerSession,
-        maxSpeechesPerRound: s.maxSpeechesPerRound ?? l.maxSpeechesPerRound,
-        maxRoundTrips: s.maxRoundTrips ?? l.maxRoundTrips,
       }));
       if (typeof s.recommendationsEnabled === 'boolean') setRecommendationsEnabled(s.recommendationsEnabled);
     }

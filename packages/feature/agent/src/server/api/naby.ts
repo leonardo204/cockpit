@@ -865,8 +865,6 @@ export type NabyAction =
       action: 'participants.set';
       proposalsEnabled?: boolean;
       maxPerSession?: number;
-      maxSpeechesPerRound?: number;
-      maxRoundTrips?: number;
       showRouting?: boolean;
       recommendationsEnabled?: boolean;
     }

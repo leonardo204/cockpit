@@ -74,9 +74,10 @@ describe('chatSettingsFrom', () => {
     expect(chatSettingsFrom({ showRouting: true, maxPerSession: 3 })).toEqual({
       showRouting: true,
       maxPerSession: 3,
-      maxSpeechesPerRound: 6,
-      maxRoundTrips: 3,
     });
+    // The speech / round-trip limits are gone (§8.15 R11.1): a stale server
+    // value is not carried.
+    expect(chatSettingsFrom({ maxSpeechesPerRound: 6, maxRoundTrips: 3 })).not.toHaveProperty('maxSpeechesPerRound');
     expect(chatSettingsFrom(undefined).showRouting).toBe(false);
   });
 });

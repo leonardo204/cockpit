@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createNabySpec, getStore } from './naby';
 import { resolveApproval } from '../lib/approvalRegistry';
 import { toChatMessages } from '../api/session/toChatMessages';
-import { writeParticipantSettings } from '../lib/participants';
 import type { Agent, ParticipantProfile } from '../../../../../../../dist/naby-runtime.mjs';
 import type { RunCtx, RunEvent } from './types';
 
@@ -18,7 +17,7 @@ import type { RunCtx, RunEvent } from './types';
  * the throwaway one vitest.setup.ts points NABY_DB_PATH at.
  */
 
-type Call = { system: string; tools: string[]; kind: 'route' | 'participant' | 'naby' };
+type Call = { system: string; tools: string[]; kind: 'route' | 'participant' | 'naby'; prompt?: string };
 
 function scriptedModel(script: { routes?: string[]; participant?: string; naby?: string }, calls: Call[]) {
   const routes = [...(script.routes ?? [])];
@@ -44,7 +43,7 @@ function scriptedModel(script: { routes?: string[]; participant?: string; naby?:
         kind = 'naby';
         text = script.naby ?? 'naby here.';
       }
-      calls.push({ system, tools, kind });
+      calls.push({ system, tools, kind, prompt: JSON.stringify(prompt) });
       return {
         content: [{ type: 'text' as const, text }],
         finishReason: { unified: 'stop' as const, raw: 'end_turn' },
@@ -291,41 +290,61 @@ describe('naby engine — participant round', () => {
     expect(delegate).toMatchObject({ routing: { decision: 'hub-mention', targetName: tr.name } });
   });
 
-  it('R3.10: a hand-off a limit stops is stored as naby\'s note and reloads as the blocked system line', async () => {
+  it('§8.15: a repeated hand-off stops the round, is stored as naby\'s note, reloads as the stop line, and naby reads it next turn', async () => {
     const store = getStore();
     const tr = participant();
     const { sessionId } = store.createSession('', 'round');
     store.putSessionParticipant(sessionId, tr.id, { status: 'active', addedBy: 'user' });
-    writeParticipantSettings(store, { maxSpeechesPerRound: 2 });
-    try {
-      const calls: Call[] = [];
-      const spec = createNabySpec({
-        resolveModel: once(scriptedModel(
-          { routes: ['{"action":"answer","reason":"mine"}'], naby: `@${tr.name} 이것 좀 옮겨 주세요` },
-          calls,
-        ) as never),
-      });
-      const { ctx, events } = harness(sessionId, '번역 부탁');
-      await spec.runner.run(ctx);
-      expect(calls.map((c) => c.kind)).toEqual(['route', 'naby']);
-      const live = events.find((e) => e.subtype === 'routing' && (e.routing as { decision?: string }).decision === 'cap');
-      expect(live).toMatchObject({ routing: { blocked: { cap: 'speeches', limit: 2, agentId: tr.id, name: tr.name } } });
-      const rows = store.getMessages(sessionId);
-      expect(rows.map((r) => r.role)).toEqual(['user', 'assistant', 'user']);
-      expect(rows[2]).toMatchObject({
-        role: 'user',
-        speaker: { name: 'naby' },
-        routing: { kind: 'end', reason: 'speeches', blocked: { by: 'hub-mention', cap: 'speeches', limit: 2, name: tr.name } },
-      });
-      expect(rows[2]!.role === 'user' && rows[2]!.content).toContain(`Not handed to @${tr.name}`);
-      // Reload: a system marker row carrying `blocked` (the chip draws it as a cap line).
-      const chat = toChatMessages(rows);
-      const marker = chat.find((m) => m.role === 'system' && m.routing?.blocked);
-      expect(marker?.routing).toMatchObject({ kind: 'end', blocked: { cap: 'speeches', limit: 2, name: tr.name } });
-      expect(chat.filter((m) => m.role === 'user')).toHaveLength(1);
-    } finally {
-      writeParticipantSettings(store, { maxSpeechesPerRound: 6 });
-    }
+    const calls: Call[] = [];
+    const spec = createNabySpec({
+      resolveModel: once(scriptedModel(
+        {
+          // First decision: naby answers; the follow-up after the participant: naby again.
+          routes: ['{"action":"answer","reason":"mine"}', '{"action":"answer","reason":"more"}'],
+          // naby hands the SAME paragraph over twice.
+          naby: `@${tr.name} 이것 좀 옮겨 주세요`,
+          participant: '어떤 문장인가요?',
+        },
+        calls,
+      ) as never),
+    });
+    const { ctx, events } = harness(sessionId, '번역 부탁');
+    await spec.runner.run(ctx);
+    expect(calls.map((c) => c.kind)).toEqual(['route', 'naby', 'participant', 'route', 'naby']);
+    // naby's second speech and the follow-up routing call read the round's progress (R11.2).
+    expect(calls[3]!.system).toContain('## This round so far');
+    expect(calls[4]!.system).toContain('## This round so far');
+    expect(calls[4]!.system).toContain(`1) @naby → @${tr.name}: @${tr.name} 이것 좀 옮겨 주세요`);
+    expect(calls[4]!.system).toContain(`2) @${tr.name}: 어떤 문장인가요?`);
+    expect(calls[1]!.system).not.toContain('## This round so far');
+    // The live stop line.
+    const want = { by: 'loop', loop: 'repeated-brief', agentId: tr.id, name: tr.name };
+    const live = events.find((e) => e.subtype === 'routing' && (e.routing as { decision?: string }).decision === 'loop');
+    expect(live).toMatchObject({ routing: { kind: 'end', reason: 'repeated-brief', blocked: want } });
+    // Stored as naby's note to itself (R11.4) — the last row.
+    const rows = store.getMessages(sessionId);
+    const last = rows[rows.length - 1]!;
+    expect(last).toMatchObject({
+      role: 'user',
+      speaker: { name: 'naby' },
+      routing: { kind: 'end', reason: 'repeated-brief', blocked: want },
+    });
+    expect(last.role === 'user' && last.content).toContain('loop detection');
+    // The participant was handed the turn ONCE.
+    expect(rows.filter((r) => r.role === 'assistant' && r.speaker?.agentId === tr.id)).toHaveLength(1);
+    // Reload: a system marker row carrying `blocked` (the chip draws it as the stop line).
+    const chat = toChatMessages(rows);
+    const marker = chat.filter((m) => m.role === 'system' && m.routing?.blocked);
+    expect(marker).toHaveLength(1);
+    expect(marker[0]!.routing).toMatchObject({ kind: 'end', blocked: want });
+    expect(chat.filter((m) => m.role === 'user')).toHaveLength(1);
+
+    // naby's NEXT turn reads the note in its history.
+    const next: Call[] = [];
+    const spec2 = createNabySpec({ resolveModel: once(scriptedModel({ naby: '알겠어요.' }, next) as never) });
+    await spec2.runner.run(harness(sessionId, '@naby 왜 멈췄어?').ctx);
+    expect(next.map((c) => c.kind)).toEqual(['naby']);
+    expect(next[0]!.prompt).toContain('Round stopped automatically by loop detection');
   });
 
   it('outside a round (@naby), naby gets the reading rules but no hand-off promise', async () => {

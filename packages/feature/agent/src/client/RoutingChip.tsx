@@ -11,16 +11,19 @@
  *
  * Two kinds are never hidden, because they are not routing internals but things
  * the user has to be told: a name they called that is not in this conversation
- * (with a one-click add), and a round limit that cut the round short. Those draw
- * as centred system lines instead of chips (`routingChipVisible`).
+ * (with a one-click add), and a round that stopped short — a loop the round
+ * detected, the emergency backstop (§8.15 R11.4), or a proposal limit. Those
+ * draw as centred system lines instead of chips (`routingChipVisible`).
  */
 
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NabyAvatar, toast } from '@cockpit/shared-ui';
-import type { ChatRouting } from './types';
+import type { ChatRouting, ChatRoundLoopKind } from './types';
 import { routingChipKind, routingChipVisible, type RoutingChipKind } from './participants';
 import { useParticipants } from './ParticipantsContext';
+
+type TFunction = ReturnType<typeof useTranslation>['t'];
 
 /** `'naby'` = naby's own step, drawn with its avatar (MAC-M3b); the rest are
  *  glyphs for things that are not naby acting. */
@@ -49,6 +52,74 @@ const CHIP_TONE: Partial<Record<RoutingChipKind, string>> = {
   'user-mention': 'text-success bg-success/10 border-success/45',
 };
 
+/** The loop reason, as the user reads it (§8.15 R11.4). */
+function loopReason(t: TFunction, loop: ChatRoundLoopKind, name: string | undefined): string {
+  switch (loop) {
+    case 'repeated-brief':
+      return name
+        ? t('participants.route.loopReason.repeatedBrief', {
+            defaultValue: 'about to send @{{name}} the same request again',
+            name,
+          })
+        : t('participants.route.loopReason.repeatedBriefAnon', { defaultValue: 'about to send the same request again' });
+    case 'repeated-speech':
+      return name
+        ? t('participants.route.loopReason.repeatedSpeech', {
+            defaultValue: '@{{name}} said nearly the same thing again',
+            name,
+          })
+        : t('participants.route.loopReason.repeatedSpeechAnon', { defaultValue: 'the same thing was said again' });
+    case 'no-progress':
+      return t('participants.route.loopReason.noProgress', {
+        defaultValue: 'several messages in a row with no new work or information',
+      });
+    default:
+      return t('participants.route.loopReason.cycle', { defaultValue: 'the same exchange went round twice' });
+  }
+}
+
+/** The always-visible line for a round that stopped short. */
+function stopLine(t: TFunction, routing: ChatRouting): string {
+  const b = routing.blocked;
+  if (b?.by === 'loop' || (!b && routing.decision === 'loop')) {
+    const loop: ChatRoundLoopKind =
+      b?.by === 'loop' ? b.loop : ((routing.reason as ChatRoundLoopKind | undefined) ?? 'cycle');
+    const who = b?.by === 'loop' ? b.name : routing.targetName;
+    return t('participants.route.stoppedLoop', {
+      defaultValue: 'Stopped automatically: the conversation was going in circles. (Reason: {{reason}})',
+      reason: loopReason(t, loop, who),
+    });
+  }
+  if (b?.by === 'backstop' || (!b && routing.decision === 'backstop')) {
+    return t('participants.route.stoppedBackstop', {
+      defaultValue: 'Stopped after {{limit}} messages in one round.',
+      limit: b?.by === 'backstop' ? b.limit : (routing.limit ?? 60),
+    });
+  }
+  // Rows stored by 0.6.2: a speech / round-trip limit stopped a hand-off.
+  if (b?.by === 'hub-mention') {
+    return b.cap === 'roundTrips'
+      ? t('participants.route.blockedRoundTrips', {
+          defaultValue: 'Reached the round-trip limit with @{{name}} ({{limit}}) — couldn’t hand this over.',
+          name: b.name,
+          limit: b.limit,
+        })
+      : t('participants.route.blockedSpeeches', {
+          defaultValue: 'Reached the speech limit ({{limit}}) — couldn’t hand this to @{{name}}.',
+          name: b.name,
+          limit: b.limit,
+        });
+  }
+  return routing.reason === 'participants'
+    ? t('participants.route.capParticipants', {
+        defaultValue: 'This conversation is at its participant limit ({{limit}}); naby wraps up',
+        limit: routing.limit ?? 5,
+      })
+    : t('participants.route.capProposals', {
+        defaultValue: 'naby proposes one participant per message; naby wraps up',
+      });
+}
+
 export const RoutingChip = memo(function RoutingChip({ routing }: { routing: ChatRouting }) {
   const { t } = useTranslation();
   const ctx = useParticipants();
@@ -62,31 +133,7 @@ export const RoutingChip = memo(function RoutingChip({ routing }: { routing: Cha
   // ---- always-visible system lines -------------------------------------
   if (kind === 'not-in-session' || kind === 'cap') {
     const text =
-      kind === 'cap' && routing.blocked
-        ? routing.blocked.cap === 'roundTrips'
-          ? t('participants.route.blockedRoundTrips', {
-              defaultValue: 'Reached the round-trip limit with @{{name}} ({{limit}}) — couldn’t hand this over.',
-              name: routing.blocked.name,
-              limit: routing.blocked.limit,
-            })
-          : t('participants.route.blockedSpeeches', {
-              defaultValue: 'Reached the speech limit ({{limit}}) — couldn’t hand this to @{{name}}.',
-              name: routing.blocked.name,
-              limit: routing.blocked.limit,
-            })
-        : kind === 'cap'
-        ? routing.reason === 'roundTrips'
-          ? t('participants.route.capRoundTrips', {
-              defaultValue: 'Reached the round-trip limit ({{limit}}); naby wraps up',
-              // The event's own number (MAC-M4) — the settings may have changed
-              // since this round ran.
-              limit: routing.limit ?? ctx.settings.maxRoundTrips,
-            })
-          : t('participants.route.capSpeeches', {
-              defaultValue: 'Reached the speech limit ({{limit}}); naby wraps up',
-              limit: routing.limit ?? ctx.settings.maxSpeechesPerRound,
-            })
-        : t('participants.route.notInSession', {
+      kind === 'cap' ? stopLine(t, routing) : t('participants.route.notInSession', {
             defaultValue: '@{{name}} is not in this conversation. Add it as a participant.',
             name,
           });
@@ -152,7 +199,7 @@ export const RoutingChip = memo(function RoutingChip({ routing }: { routing: Cha
   })();
   // A reason worth reading: not the machine codes the round uses as reasons.
   const reason =
-    routing.reason && !['user-mention', 'hub-mention', 'asked', 'not-in-session', 'speeches', 'roundTrips'].includes(routing.reason)
+    routing.reason && !['user-mention', 'hub-mention', 'asked', 'not-in-session', 'speeches', 'roundTrips', 'proposals', 'participants', 'backstop', 'repeated-speech', 'repeated-brief', 'no-progress', 'cycle'].includes(routing.reason)
       ? routing.reason
       : undefined;
   const tone = CHIP_TONE[kind] ?? 'text-brand bg-accent border-brand/45';

@@ -61,24 +61,23 @@ export interface ChatRouting {
   targetName?: string;
   reason?: string;
   brief?: string;
-  decision?: 'route' | 'user-mention' | 'hub-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+  decision?: 'route' | 'user-mention' | 'hub-mention' | 'cap' | 'loop' | 'backstop' | 'ignored-mention' | 'not-in-session';
   /** Live events only (MAC-M4): the routing call's token use behind this step. */
   tokens?: { input: number; output: number };
-  /** Live `cap` events only (MAC-M4): the limit the round actually ran under. */
+  /** Live `cap` / `backstop` events only (MAC-M4): the limit that was reached. */
   limit?: number;
-  /** A limit stopped naby's own line-start hand-off (R3.10) — live and on
-   *  reload (stored on naby's note row). */
+  /** Why the round stopped short — live and on reload (stored on naby's note
+   *  row): a loop or the backstop (§8.15 R11.4), or, on rows written by 0.6.2,
+   *  a speech / round-trip limit that stopped a line-start hand-off (R3.10). */
   blocked?: ChatRoutingBlocked;
 }
 
-/** Who a line-start hand-off did not reach, and which limit stopped it. */
-export interface ChatRoutingBlocked {
-  by: 'hub-mention';
-  cap: 'speeches' | 'roundTrips';
-  limit: number;
-  agentId: string;
-  name: string;
-}
+/** Why a round stopped short. Mirrors the runtime's `MessageRoutingBlocked`. */
+export type ChatRoundLoopKind = 'repeated-speech' | 'repeated-brief' | 'no-progress' | 'cycle';
+export type ChatRoutingBlocked =
+  | { by: 'hub-mention'; cap: 'speeches' | 'roundTrips'; limit: number; agentId: string; name: string }
+  | { by: 'loop'; loop: ChatRoundLoopKind; agentId?: string; name?: string }
+  | { by: 'backstop'; limit: number; agentId?: string; name?: string };
 
 export interface ChatMessage {
   id: string;

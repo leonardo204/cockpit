@@ -89,21 +89,37 @@ export const RELEASE_NOTES_MARKDOWN = `
 
 ### en
 
-The CIC connection follows the service to its new address.
+naby and participants can keep working together as long as the job needs, and CIC follows the service to its new address.
+
+**Improved**
+
+- **No more fixed limits on how long naby and participants work together.** The 6-speech and 3-round-trip limits are gone, so a long hand-off chain (naby asks @aside, checks the result, asks for the next step) no longer stops halfway.
+  - Instead naby keeps a record of each step and stops on its own only when the conversation is going in circles, for example the same request sent again or only thank-yous going back and forth. The chat says why: "Stopped automatically because the conversation was repeating."
+  - As a last safety net, a single message stops at 60 speeches.
+  - The two limit settings are removed from Settings.
 
 **Fixed**
 
 - **CIC moved to https://cic.altimedia.com.** The old address now returns an error, so CIC searches stopped working. naby now connects to the new address, and an existing CIC connection is switched over automatically when naby starts — your token stays, nothing to re-enter.
   - If you had set a different CIC address yourself, it is left as it is.
+- **Korean particles after names read naturally.** Messages such as "앱스토어 심사 담당가 생각하는 중" now pick the right particle for the name ("담당이").
 
 ### ko
 
-CIC 연결이 새 주소로 옮겨 가요.
+나비와 참가자가 일이 끝날 때까지 이어서 일하고, CIC는 새 주소로 연결돼요.
+
+**나아진 것**
+
+- **나비와 참가자가 함께 일하는 횟수 제한이 없어졌어요.** 발언 6회, 왕복 3회 제한을 없애서, 나비가 @aside에게 맡기고 결과를 보고 다음 단계를 다시 맡기는 긴 작업도 중간에 끊기지 않아요.
+  - 대신 나비가 단계마다 기록을 남기고, 같은 부탁을 다시 보내거나 감사 인사만 오가는 것처럼 대화가 같은 자리를 돌 때만 스스로 멈춰요. 멈추면 "같은 대화가 반복돼 자동으로 멈췄습니다"라고 이유와 함께 알려 줘요.
+  - 마지막 안전장치로 메시지 하나에 발언이 60회가 되면 멈춰요.
+  - 설정의 두 제한 항목은 없어졌어요.
 
 **고친 것**
 
 - **CIC가 https://cic.altimedia.com으로 옮겨 갔어요.** 옛 주소는 이제 응답하지 않아서 CIC 검색이 멈췄어요. 이제 나비가 새 주소로 연결하고, 이미 연결해 둔 CIC도 나비를 켤 때 자동으로 새 주소로 바뀌어요. 토큰은 그대로라 다시 입력할 필요가 없어요.
   - CIC 주소를 직접 다른 값으로 바꿔 두었다면 그대로 둬요.
+- **이름 뒤 조사가 자연스러워졌어요.** "앱스토어 심사 담당가 생각하는 중"처럼 어색하던 문구가 이제 이름에 맞는 조사를 골라 "담당이"로 나와요.
 
 ## 1.48.3 — 2026-10-28
 

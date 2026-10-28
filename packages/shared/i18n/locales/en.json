@@ -2453,10 +2453,20 @@
       "propose": "naby proposes adding @{{name}}",
       "ignored": "@{{name}} mention ignored · only naby hands the turn on",
       "notInSession": "@{{name}} is not in this conversation. Add it as a participant.",
-      "capSpeeches": "Reached the speech limit ({{limit}}); naby wraps up",
-      "capRoundTrips": "Reached the round-trip limit ({{limit}}); naby wraps up",
       "blockedSpeeches": "Reached the speech limit ({{limit}}) — couldn’t hand this to @{{name}}.",
       "blockedRoundTrips": "Reached the round-trip limit with @{{name}} ({{limit}}) — couldn’t hand this over.",
+      "stoppedLoop": "Stopped automatically: the conversation was going in circles. (Reason: {{reason}})",
+      "stoppedBackstop": "Stopped after {{limit}} messages in one round.",
+      "capProposals": "naby proposes one participant per message; naby wraps up",
+      "capParticipants": "This conversation is at its participant limit ({{limit}}); naby wraps up",
+      "loopReason": {
+        "repeatedBrief": "about to send @{{name}} the same request again",
+        "repeatedBriefAnon": "about to send the same request again",
+        "repeatedSpeech": "@{{name}} said nearly the same thing again",
+        "repeatedSpeechAnon": "the same thing was said again",
+        "noProgress": "several messages in a row with no new work or information",
+        "cycle": "the same exchange went round twice"
+      },
       "end": "Round ended",
       "brief": "Brief",
       "tokens": "{{count}} tok"
@@ -2464,7 +2474,7 @@
     "progress": {
       "speaking": "{{name}} is speaking",
       "next": "next",
-      "speech": "speech {{n}}/{{max}}"
+      "speech": "speech {{n}}"
     },
     "palette": {
       "sessionGroup": "In this conversation",
@@ -2528,8 +2538,6 @@
       "count": "{{count}}",
       "description": "Conversational agents naby hands work to after checking. Only naby speaks to participants.",
       "limitPerSession": "{{n}} per session",
-      "limitSpeeches": "{{n}} speeches per message",
-      "limitRoundTrips": "{{n}} naby↔participant round trips",
       "add": "+ Add",
       "import": "Import",
       "export": "Export",

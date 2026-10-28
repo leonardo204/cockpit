@@ -118,7 +118,8 @@ describe('reading the acting agent off system/init', () => {
 
 describe('the sentence itself, in both locales', () => {
   it('reads as the agent speaking once the persona name is interpolated', () => {
-    expect(dict('ko').chat!.thinking.replace('{{name}}', dict('ko').chat!.personaName))
+    // ko picks its particle from the name (`{{name, iga}}`, shared-i18n josa.ts).
+    expect(dict('ko').chat!.thinking.replace('{{name, iga}}', `${dict('ko').chat!.personaName}가`))
       .toBe('나비가 생각하는 중…');
     expect(dict('en').chat!.thinking.replace('{{name}}', dict('en').chat!.personaName))
       .toBe('naby is thinking…');

@@ -166,7 +166,9 @@ describe('growth, check-in and export copy is complete in every locale', () => {
       for (const [key, placeholders] of required) {
         const value = String(lookup(d, key) ?? '');
         for (const p of placeholders) {
-          expect(value, `${locale} ${key} must interpolate ${p}`).toContain(p);
+          // `{{name, eulreul}}` (a ko particle formatter) still interpolates {{name}}.
+          const formatted = new RegExp(p.replace(/[{}]/g, '\\$&').replace('\\}\\}', '(?:,[^}]*)?\\}\\}'));
+          expect(value, `${locale} ${key} must interpolate ${p}`).toMatch(formatted);
         }
       }
     });

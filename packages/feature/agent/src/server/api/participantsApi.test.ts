@@ -393,8 +393,6 @@ describe('participants.get / participants.set', () => {
     expect(PARTICIPANT_SETTINGS_DEFAULTS).toEqual({
       proposalsEnabled: true,
       maxPerSession: 5,
-      maxSpeechesPerRound: 6,
-      maxRoundTrips: 3,
       showRouting: false,
       recommendationsEnabled: true,
     });
@@ -404,14 +402,13 @@ describe('participants.get / participants.set', () => {
     const r = await runNabyAction({ action: 'participants.set', showRouting: true, maxPerSession: 99 });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.participantSettings).toMatchObject({ showRouting: true, maxPerSession: 20, maxRoundTrips: 3 });
+    expect(r.participantSettings).toMatchObject({ showRouting: true, maxPerSession: 20 });
     expect(getStore().getSetting(PARTICIPANTS_MAX_PER_SESSION_KEY)).toBe('20');
 
-    const low = await runNabyAction({ action: 'participants.set', maxSpeechesPerRound: 0, maxRoundTrips: 2.6 });
+    const low = await runNabyAction({ action: 'participants.set', maxPerSession: 0 });
     expect(low.ok).toBe(true);
     if (low.ok) {
-      expect(low.participantSettings?.maxSpeechesPerRound).toBe(1);
-      expect(low.participantSettings?.maxRoundTrips).toBe(3);
+      expect(low.participantSettings?.maxPerSession).toBe(1);
       expect(low.participantSettings?.showRouting).toBe(true);
     }
     const off = await runNabyAction({ action: 'participants.set', proposalsEnabled: false });
@@ -424,20 +421,37 @@ describe('participants.get / participants.set', () => {
     expect(a.ok).toBe(false);
     const b = await runNabyAction({ action: 'participants.set', maxPerSession: Number.NaN });
     expect(b.ok).toBe(false);
-    const c = await runNabyAction({ action: 'participants.set', maxRoundTrips: '4' } as never);
+    const c = await runNabyAction({ action: 'participants.set', maxPerSession: '4' } as never);
     expect(c.ok).toBe(false);
     expect(readParticipantSettings(getStore())).toEqual(PARTICIPANT_SETTINGS_DEFAULTS);
+  });
+
+  it('the removed speech / round-trip limits are neither read nor written (§8.15 R11.1)', async () => {
+    const store = getStore();
+    // A value stored by an older build stays where it is and is never read.
+    store.setSetting('participants.maxSpeechesPerRound', '2');
+    store.setSetting('participants.maxRoundTrips', '1');
+    const g = await runNabyAction({ action: 'participants.get' });
+    expect(g.ok).toBe(true);
+    if (g.ok) {
+      expect(g.participantSettings).not.toHaveProperty('maxSpeechesPerRound');
+      expect(g.participantSettings).not.toHaveProperty('maxRoundTrips');
+    }
+    // An old client sending them is not an error, and nothing is written.
+    const s = await runNabyAction({ action: 'participants.set', maxSpeechesPerRound: 9, maxRoundTrips: 9 } as never);
+    expect(s.ok).toBe(true);
+    expect(store.getSetting('participants.maxSpeechesPerRound')).toBe('2');
+    expect(store.getSetting('participants.maxRoundTrips')).toBe('1');
   });
 
   it('a garbage stored value reads as its default (clamped when numeric)', () => {
     const fake = new Map<string, string>([
       ['participants.maxPerSession', 'lots'],
-      ['participants.maxRoundTrips', '500'],
       ['participants.proposals.enabled', 'maybe'],
     ]);
     const s = readParticipantSettings({ getSetting: (k) => fake.get(k) });
     expect(s.maxPerSession).toBe(5);
-    expect(s.maxRoundTrips).toBe(20);
+    expect(readParticipantSettings({ getSetting: (k) => (k === 'participants.maxPerSession' ? '500' : undefined) }).maxPerSession).toBe(20);
     expect(s.proposalsEnabled).toBe(true);
     expect(clampParticipantInt(Number.POSITIVE_INFINITY, 4)).toBe(4);
   });
