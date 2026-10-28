@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.4 — 2026-10-29
+
+### en
+
+The CIC connection follows the service to its new address.
+
+**Fixed**
+
+- **CIC moved to https://cic.altimedia.com.** The old address now returns an error, so CIC searches stopped working. naby now connects to the new address, and an existing CIC connection is switched over automatically when naby starts — your token stays, nothing to re-enter.
+  - If you had set a different CIC address yourself, it is left as it is.
+
+### ko
+
+CIC 연결이 새 주소로 옮겨 가요.
+
+**고친 것**
+
+- **CIC가 https://cic.altimedia.com으로 옮겨 갔어요.** 옛 주소는 이제 응답하지 않아서 CIC 검색이 멈췄어요. 이제 나비가 새 주소로 연결하고, 이미 연결해 둔 CIC도 나비를 켤 때 자동으로 새 주소로 바뀌어요. 토큰은 그대로라 다시 입력할 필요가 없어요.
+  - CIC 주소를 직접 다른 값으로 바꿔 두었다면 그대로 둬요.
+
 ## 1.48.3 — 2026-10-28
 
 ### en

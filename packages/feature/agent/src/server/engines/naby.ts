@@ -65,6 +65,8 @@ import {
   AiSdkEngine,
   buildToolset,
   withoutTestTools,
+  migrateCicUrl,
+  CIC_MCP_URL,
   buildWorkspaceTools,
   canCaptureMemory,
   isMcpEntryActive,
@@ -460,6 +462,14 @@ export function getStore(): Store {
     // agent that learns the user and (P3-M2+) acts on their behalf. Idempotent:
     // seeds exactly one persona and never overwrites the user's later edits.
     seedBuiltinPersona(sharedStore);
+    // CIC moved to k8s (2026-10-28): a stored cic row or `cic.url` override still
+    // on the retired VM path (skills host, /cic prefix) gets the new address. Idempotent.
+    {
+      const moved = migrateCicUrl(sharedStore);
+      if (moved.entries.length > 0 || moved.setting) {
+        console.log(`[mcp] cic moved to ${CIC_MCP_URL} (entries: ${moved.entries.join(', ') || 'none'}, override: ${moved.setting})`);
+      }
+    }
     // skill-hub-builtin §2.7: the built-in harness bundles (`cic` — the
     // `confluence-context` skill and the `confluence-researcher` subagent; and
     // `atlassian` — the `confluence-upload` skill) exist as ROWS, seeded here for

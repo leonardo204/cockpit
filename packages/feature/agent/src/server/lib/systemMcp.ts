@@ -319,7 +319,7 @@ export function readAtlassianPresetState(store: Pick<Store, 'listMcpEntries' | '
 // `harnessBundle` below and src/runtime/harness-seed.ts.
 
 export const CIC_SERVER_NAME = 'cic';
-export const DEFAULT_CIC_URL = 'https://skills.altimedia.com/cic/mcp';
+export const DEFAULT_CIC_URL = 'https://cic.altimedia.com/mcp';
 export const CIC_URL_KEY = 'cic.url';
 
 const CIC_PRESET: SystemMcpPreset = {
