@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.1 — 2026-10-28
+
+### en
+
+A clear message when the project folder is missing.
+
+**Fixed**
+
+- **Missing project folder showed a misleading Claude error.** If a project lives on an external drive that isn't connected, sending a message used to fail with "Claude Code native binary … failed to launch … libc", which pointed at your Node or Claude install. naby now checks the folder first and says the project folder was not found, so you know to connect the drive.
+
+### ko
+
+프로젝트 폴더가 없을 때 정확하게 알려 줘요.
+
+**고친 것**
+
+- **프로젝트 폴더가 없을 때 엉뚱한 Claude 오류가 나던 문제.** 외장 디스크에 있는 프로젝트를 디스크 없이 열고 메시지를 보내면 "Claude Code native binary … failed to launch … libc" 오류가 나서 Node나 Claude 설치가 잘못된 것처럼 보였어요. 이제 폴더가 있는지 먼저 확인하고, 프로젝트 폴더를 찾을 수 없다고 알려 줘요. 디스크를 연결하면 바로 다시 쓸 수 있어요.
+
 ## 1.48.0 — 2026-10-22
 
 ### en

@@ -52,6 +52,21 @@ describe('orchestrator dispatch contract', () => {
     expect(out).toEqual({ ok: false, status: 400, error: 'Missing prompt or images' });
   });
 
+  it('a missing project folder is refused before any run starts (unplugged drive)', async () => {
+    let ran = false;
+    const out = await dispatchChat(spec(async () => { ran = true; }), {
+      prompt: 'hi',
+      cwd: '/Volumes/__naby_test_unplugged__/project',
+    });
+    expect(out).toEqual({
+      ok: false,
+      status: 422,
+      error: 'project folder not found: /Volumes/__naby_test_unplugged__/project',
+      code: 'cwd_missing',
+    });
+    expect(ran).toBe(false);
+  });
+
   it('success: returns runKey, run is active then idle, events recorded', async () => {
     const runId = freshRunId();
     const events: RunEvent[] = [{ type: 'assistant', text: 'hi' }, { type: 'result' }];

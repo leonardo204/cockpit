@@ -16,6 +16,7 @@ import { createTranscriptRecorder } from '../state/transcriptRecorder';
 import { getStore } from './naby';
 import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import { randomUUID } from 'crypto';
+import { statSync } from 'node:fs';
 import type { DispatchParams, DispatchOutcome, RunCtx, RunEvent, EngineSpec } from './types';
 
 /**
@@ -57,6 +58,15 @@ export async function dispatchChat(
   const hasContent = (prompt && typeof prompt === 'string') || (images && images.length > 0);
   if (!hasContent) {
     return { ok: false, status: 400, error: 'Missing prompt or images' };
+  }
+
+  // The project folder must exist before any engine spawns into it. A missing
+  // cwd (an unplugged external drive, a renamed folder) makes spawn() fail with
+  // ENOENT naming the EXECUTABLE, and the Agent SDK reports that as "native
+  // binary failed to launch … libc mismatch" — wrong, and it sends the user
+  // after their Node install. Say what is actually wrong instead.
+  if (cwd && !isDirectory(cwd)) {
+    return { ok: false, status: 422, error: `project folder not found: ${cwd}`, code: 'cwd_missing' };
   }
 
   // A turn for this session is now COMING. Said out loud here, before the
@@ -333,4 +343,12 @@ export async function dispatchChat(
   })();
 
   return { ok: true, runKey: currentKey, sessionId: actualSessionId ?? null };
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }

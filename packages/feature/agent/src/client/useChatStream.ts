@@ -786,6 +786,15 @@ export function useChatStream(
         });
 
         if (!response.ok) {
+          const failed = (await response.json().catch(() => ({}))) as { code?: string };
+          if (failed.code === 'cwd_missing') {
+            throw new Error(
+              i18n.t('chat.projectFolderMissing', {
+                path: cwd,
+                defaultValue: 'The project folder was not found: {{path}}. If it is on an external drive, connect it and try again.',
+              })
+            );
+          }
           throw new Error(i18n.t('chat.requestFailed', { defaultValue: 'Request failed' }));
         }
 

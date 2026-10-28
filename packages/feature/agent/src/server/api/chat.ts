@@ -18,7 +18,7 @@ export const POST = handler((request) =>
     const body = (yield* parseJsonRaw(request)) as DispatchParams;
     const outcome = yield* Effect.promise(() => dispatchChat(nabySpec, body, request));
     if (!outcome.ok) {
-      return new Response(JSON.stringify({ error: outcome.error }), {
+      return new Response(JSON.stringify({ error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) }), {
         status: outcome.status,
         headers: { 'Content-Type': 'application/json' },
       });

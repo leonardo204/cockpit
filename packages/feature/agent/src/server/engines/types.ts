@@ -42,7 +42,7 @@ export interface DispatchParams {
  *  streams it through /ws/session-stream; the scheduler polls isRunActive/getRunSnapshot. */
 export type DispatchOutcome =
   | { ok: true; runKey: string; sessionId: string | null }
-  | { ok: false; status: number; error: string };
+  | { ok: false; status: number; error: string; code?: 'cwd_missing' };
 
 /** One event fanned out to the run registry. Must carry a discriminating `type`. */
 export type RunEvent = { type: string; [key: string]: unknown };

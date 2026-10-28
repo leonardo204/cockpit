@@ -677,6 +677,7 @@
     "viewQuestions": "View questions",
     "viewAllFileChanges": "View all file changes",
     "requestFailed": "Request failed",
+    "projectFolderMissing": "The project folder was not found: {{path}}. If it is on an external drive, connect it and try again.",
     "cannotReadStream": "Cannot read response stream",
     "errorRetry": "An error occurred, please retry",
     "runFailedTitle": "This turn failed",
