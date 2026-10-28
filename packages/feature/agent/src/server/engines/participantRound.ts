@@ -7,6 +7,9 @@
  * participant in the session, or proposes adding one that is registered but not
  * here (R3.9). A participant answers in the chat itself and the turn comes back to
  * naby, which may end the round, hand it on, or add a word of its own (R3.3).
+ * naby may also hand over IN ITS OWN WORDS: a participant it addresses with
+ * `@name` at the start of a line speaks next (R3.10). A participant that asks
+ * naby (`@naby`) is always answered — `end` is not a choice then (R3.4).
  *
  * WHAT THIS MODULE IS. The state machine of §8.2 and its limits — and NOTHING that
  * runs a model. Every effect is a dependency: a speech is `runNabyTurn` /
@@ -27,6 +30,7 @@
 
 import {
   mentionsHub,
+  parseLeadingMentions,
   parseMentions,
   parseRouteDecision,
   routePrompt,
@@ -77,11 +81,16 @@ export type ParticipantSpeakInput = {
   brief: string;
   /** Why naby handed it over (the routing decision's reason). */
   reason: string;
-  /** How the participant was chosen. */
-  decision: 'route' | 'user-mention';
+  /** How the participant was chosen. `hub-mention`: naby's own speech
+   *  addressed it at the start of a line (R3.10). */
+  decision: HandoffDecision;
   /** 1-based index of this speech in the round. */
   speech: number;
 };
+
+/** How a participant came to be handed the turn: naby's routing decision, the
+ *  user's `@`, or naby's own speech addressing it at a line start (R3.10). */
+export type HandoffDecision = 'route' | 'user-mention' | 'hub-mention';
 
 /** The `routing` stream event's payload (§8.4). */
 export type RoundRoutingEvent = {
@@ -90,13 +99,26 @@ export type RoundRoutingEvent = {
   targetName?: string;
   reason?: string;
   brief?: string;
-  decision: 'route' | 'user-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+  decision: HandoffDecision | 'cap' | 'ignored-mention' | 'not-in-session';
   /** The routing call's token use, on the event its decision produced (R6.6).
-   *  `user-mention` hand-offs made no call and carry zeros. */
+   *  `user-mention` and `hub-mention` hand-offs made no call and carry zeros. */
   tokens?: { input: number; output: number };
   /** A `cap` event: the limit that was reached (the settings value in force for
    *  THIS round, so the chip never shows a number the round did not use). */
   limit?: number;
+  /** A `cap` event that stopped naby's own line-start hand-off (R3.10): who was
+   *  not handed the turn. The same object is stored on naby's note row. */
+  blocked?: BlockedHandoff;
+};
+
+/** A line-start hand-off a limit stopped (R3.10). Mirrors the runtime's
+ *  `MessageRoutingBlocked`. */
+export type BlockedHandoff = {
+  by: 'hub-mention';
+  cap: 'speeches' | 'roundTrips';
+  limit: number;
+  agentId: string;
+  name: string;
 };
 
 export type RouteCallResult = {
@@ -161,6 +183,11 @@ export type RoundInput = {
    *  dismisses a matching pending recommendation (§8.13). Must not throw; a
    *  throw is swallowed. */
   onDeclined?: (agentId: string) => void;
+  /** naby addressed a participant at a line start but a limit stopped the
+   *  hand-off (R3.10). The caller stores `note` as naby's note to itself carrying
+   *  `blocked`, so the line survives a reload. Must not throw; a throw is
+   *  swallowed. */
+  onHandoffBlocked?: (blocked: BlockedHandoff, note: string) => void;
   /** Stream events (`system/speaker`, `system/routing`, `system/harness`). The
    *  caller stamps `session_id`. */
   emit: (event: Record<string, unknown>) => void;
@@ -225,6 +252,16 @@ export function capInstruction(cap: RoundCap, limit: number, agentName?: string)
   );
 }
 
+/** naby's stored note when a limit stopped its line-start hand-off (R3.10) —
+ *  read by naby on later turns, so it knows the participant never got it. */
+export function blockedHandoffNote(blocked: Pick<BlockedHandoff, 'cap' | 'limit' | 'name'>): string {
+  const what =
+    blocked.cap === 'speeches'
+      ? `the speech limit for one message (${blocked.limit})`
+      : `the hand-off limit for @${blocked.name} (${blocked.limit})`;
+  return `Not handed to @${blocked.name}: ${what} was reached, so @${blocked.name} did not get this message.`;
+}
+
 /** naby's note to itself when it speaks after a participant. */
 export function followupInstruction(after: RoundAgent | undefined, asked: boolean): string {
   if (!after) return "Answer the user's latest message yourself.";
@@ -243,7 +280,7 @@ type DelegateItem = {
   agent: RoundAgent;
   brief: string;
   reason: string;
-  decision: 'route' | 'user-mention';
+  decision: HandoffDecision;
   tokens?: RouteTokens;
 };
 
@@ -414,6 +451,11 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     if (followup && decision.reason.startsWith('fallback:')) {
       decision = { action: followup.asked ? 'answer' : 'end', reason: decision.reason };
     }
+    // R3.4 (2026-10-28 user decision): a participant that addressed naby is
+    // ANSWERED. `end` is not a choice then — naby speaks (or hands it on).
+    if (followup?.asked && decision.action === 'end') {
+      decision = { action: 'answer', reason: decision.reason };
+    }
     lastRouteTokens = { input: raw.inputTokens ?? 0, output: raw.outputTokens ?? 0 };
     input.log('participant_route', {
       decision: 'route',
@@ -508,6 +550,24 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     const res = await input.runNabyTurn(speakInput);
     lastText = res.text;
     lastOk = res.ok;
+  };
+
+  /**
+   * R3.10: the participants naby's speech just ADDRESSED — `@name` at the start
+   * of a line, in the session, not naby itself, outside code. Each gets the
+   * paragraph that opens with its name. Mid-sentence mentions are talk ABOUT a
+   * participant and hand nothing over.
+   */
+  const addressedBy = (text: string): DelegateItem[] => {
+    const here = inSession();
+    if (here.length === 0 || !text) return [];
+    const items: DelegateItem[] = [];
+    for (const m of parseLeadingMentions(text, here.map((a) => a.name), { hubNames: [hub.name] })) {
+      const agent = here.find((a) => a.name === m.name);
+      if (!agent || agent.id === hub.id) continue;
+      items.push({ agent, brief: m.brief, reason: 'hub-mention', decision: 'hub-mention' });
+    }
+    return items;
   };
 
   let state: State;
@@ -658,6 +718,7 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
 
       case 'DELEGATE': {
         let asked = false;
+        let spokeInQueue = false;
         let next: State | undefined;
         for (const item of state.queue) {
           if (signal.aborted) {
@@ -666,10 +727,50 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
           }
           const cap = capFor(item.agent);
           if (cap) {
+            // R3.10: naby addressed a participant the limits no longer allow.
+            // Its turn is not opened and naby does not speak again just to say
+            // so — the round ends where naby's speech left it. (Once somebody in
+            // this queue has spoken, the ordinary wrap-up applies.)
+            if (item.decision === 'hub-mention' && !spokeInQueue && (cap.cap === 'speeches' || cap.cap === 'roundTrips')) {
+              input.log('participant_cap', {
+                cap: cap.cap,
+                limit: cap.limit,
+                speeches,
+                source: 'hub-mention',
+                agentId: item.agent.id,
+                agentName: item.agent.name,
+              });
+              // The user is told, as a system line (not a speech): naby called
+              // @name, and @name did not get it.
+              const blocked: BlockedHandoff = {
+                by: 'hub-mention',
+                cap: cap.cap,
+                limit: cap.limit,
+                agentId: item.agent.id,
+                name: item.agent.name,
+              };
+              emitRouting({
+                kind: 'end',
+                decision: 'cap',
+                reason: cap.cap,
+                limit: cap.limit,
+                targetAgentId: item.agent.id,
+                targetName: item.agent.name,
+                blocked,
+              });
+              try {
+                input.onHandoffBlocked?.(blocked, blockedHandoffNote(blocked));
+              } catch {
+                /* bookkeeping only — never the round's problem */
+              }
+              next = { at: 'END', by: 'cap' };
+              break;
+            }
             next = hitCap(cap, item.agent);
             break;
           }
           const r = await participantSpeak(item);
+          spokeInQueue = true;
           lastSpoke = item.agent;
           if (!r.ok) {
             next = { at: 'END', by: signal.aborted ? 'abort' : 'error' };
@@ -683,10 +784,24 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
 
       case 'NABY': {
         await nabySpeak(state);
-        state = {
-          at: 'END',
-          by: signal.aborted ? 'abort' : !lastOk ? 'error' : state.reason === 'cap' ? 'cap' : 'answer',
-        };
+        if (signal.aborted || !lastOk || state.reason === 'cap') {
+          // A wrap-up at a limit hands nothing on (its instruction says so).
+          state = { at: 'END', by: signal.aborted ? 'abort' : !lastOk ? 'error' : 'cap' };
+          break;
+        }
+        // R3.10: naby addressed participants at a line start — they answer next.
+        const addressed = addressedBy(lastText);
+        if (addressed.length > 0) {
+          input.log('participant_route', {
+            decision: 'hub-mention',
+            targets: addressed.map((m) => m.agent.name),
+            inputTokens: 0,
+            outputTokens: 0,
+          });
+          state = { at: 'DELEGATE', queue: addressed };
+          break;
+        }
+        state = { at: 'END', by: 'answer' };
         break;
       }
     }

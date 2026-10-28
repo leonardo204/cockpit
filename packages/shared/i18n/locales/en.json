@@ -2455,6 +2455,8 @@
       "notInSession": "@{{name}} is not in this conversation. Add it as a participant.",
       "capSpeeches": "Reached the speech limit ({{limit}}); naby wraps up",
       "capRoundTrips": "Reached the round-trip limit ({{limit}}); naby wraps up",
+      "blockedSpeeches": "Reached the speech limit ({{limit}}) — couldn’t hand this to @{{name}}.",
+      "blockedRoundTrips": "Reached the round-trip limit with @{{name}} ({{limit}}) — couldn’t hand this over.",
       "end": "Round ended",
       "brief": "Brief",
       "tokens": "{{count}} tok"

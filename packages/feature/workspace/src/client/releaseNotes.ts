@@ -85,6 +85,34 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.3 — 2026-10-28
+
+### en
+
+Participants now behave like people in the conversation: when someone calls them, they answer.
+
+**Improved**
+
+- **naby can hand over by calling a participant.** When naby starts a line with @name for a participant in the conversation, that participant answers right after naby finishes, and gets that paragraph as the request. A mention in the middle of a sentence doesn't hand over.
+- **A participant calling @naby always gets an answer.** naby replies, or passes it on to another participant, instead of letting the conversation end.
+
+**Fixed**
+
+- **A blocked hand-off no longer disappears silently.** If the speech limit or the round-trip limit stops naby from handing over, the chat now says so, for example "Reached the speech limit (6) — couldn't hand this to @aside."
+
+### ko
+
+참가자가 대화에 들어온 사람처럼 동작해요. 부르면 대답해요.
+
+**나아진 것**
+
+- **나비가 참가자를 불러서 일을 넘겨요.** 나비가 줄 맨 앞에 대화 참가자를 @이름으로 쓰면, 나비가 말을 마친 뒤 그 참가자가 바로 이어서 답해요. 참가자는 그 문단을 요청으로 받아요. 문장 중간에 이름만 나온 경우는 넘기지 않아요.
+- **참가자가 @naby로 부르면 나비가 꼭 대답해요.** 대화를 그냥 끝내지 않고, 나비가 직접 답하거나 다른 참가자에게 넘겨요.
+
+**고친 것**
+
+- **넘기지 못한 일이 조용히 사라지지 않아요.** 발언 상한이나 왕복 상한 때문에 나비가 넘기지 못하면 "발언 상한(6)에 걸려 @aside에게 넘기지 못했습니다"처럼 대화에 표시돼요.
+
 ## 1.48.2 — 2026-10-28
 
 ### en

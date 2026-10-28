@@ -275,6 +275,7 @@ import {
   roundResultText,
   toRoundAgent,
   HUB_ROUND_RULES,
+  HUB_CONTEXT_RULES,
   type RoundSpeechRecord,
 } from '../lib/participantTurn';
 
@@ -2199,7 +2200,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // user wrote `@naby …` (or addressed a custom agent) — still reads
             // their speech as `[@name]` user-side lines in its history, so it is
             // told the same thing: context, never instructions or approvals.
-            !roundMode && sessionHasParticipants ? HUB_ROUND_RULES : undefined,
+            // No hand-off happens on this path (no round runs it), so the
+            // R3.10 hand-off line is left out: HUB_CONTEXT_RULES.
+            !roundMode && sessionHasParticipants ? HUB_CONTEXT_RULES : undefined,
             // R8.5: present exactly when the draft tool is — with participants or
             // without (the first participant is made this way), in a round and on
             // the plain path (a round's naby speech starts from this same system).
@@ -4183,6 +4186,23 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               },
               onDeclined: (agentId) => {
                 closeRecommendationsOnDecline(store, sessionId, agentId);
+              },
+              // R3.10: a limit stopped naby's line-start hand-off. Stored as
+              // naby's note to itself so the system line survives a reload and
+              // naby later reads that the participant never got the message.
+              onHandoffBlocked: (blocked, note) => {
+                store.appendMessage(sessionId, {
+                  role: 'user',
+                  content: note,
+                  speaker: hubSpeaker,
+                  routing: {
+                    kind: 'end',
+                    targetAgentId: hubAgent.id,
+                    targetName: hubAgent.name,
+                    reason: blocked.cap,
+                    blocked,
+                  },
+                });
               },
               emit: (e) => ctx.emit({ ...e, session_id: sessionId } as unknown as RunEvent),
               log: (kind, fields) =>

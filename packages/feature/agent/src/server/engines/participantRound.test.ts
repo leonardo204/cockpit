@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  blockedHandoffNote,
   capInstruction,
   runParticipantRound,
   userMentionBrief,
@@ -64,6 +65,8 @@ function harness(opts: {
   /** Participant speech text, by name, in order of speech (or one fixed reply). */
   speech?: Record<string, string | string[]>;
   participantOk?: boolean;
+  /** naby's speech text, in order of speech (the last repeats). */
+  nabySpeech?: string[];
   proposal?: ProposalOutcome;
   /** Abort after this many speeches. */
   abortAfterSpeeches?: number;
@@ -111,8 +114,12 @@ function harness(opts: {
     runNabyTurn: async (i) => {
       calls.naby.push(i);
       calls.order.push('naby');
+      const scripted = opts.nabySpeech;
+      const text = scripted && scripted.length > 0
+        ? (scripted[calls.naby.length - 1] ?? scripted[scripted.length - 1]!)
+        : 'naby says hi';
       tick();
-      return { text: 'naby says hi', ok: true };
+      return { text, ok: true };
     },
     runParticipantTurn: async (i) => {
       calls.participant.push(i);
@@ -599,5 +606,210 @@ describe('participantRound — what the routing events carry (MAC-M4, R6.6)', ()
     await runParticipantRound(h.input);
     expect(h.routing().find((x) => x.decision === 'cap')).toMatchObject({ reason: 'roundTrips', limit: 2 });
     expect(h.events.some((e) => e.subtype === 'harness')).toBe(false);
+  });
+});
+
+describe('participantRound — naby addresses a participant at a line start (R3.10)', () => {
+  const answer = '{"action":"answer","reason":"simple"}';
+
+  it('a line-start @name opens that participant\'s turn with the paragraph as its brief', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      routes: [answer],
+      nabySpeech: ['요약은 이렇다.\n\n@번역가, 이 문단을 영어로 옮겨 주세요.\n존댓말은 빼고요.\n\n고마워요.'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby', '번역가']);
+    expect(h.calls.participant[0]).toMatchObject({
+      decision: 'hub-mention',
+      reason: 'hub-mention',
+      brief: '@번역가, 이 문단을 영어로 옮겨 주세요.\n존댓말은 빼고요.',
+      speech: 2,
+    });
+    // naby already spoke with the user's message as its row: no second user row.
+    expect(h.calls.userRows).toBe(0);
+    expect(h.routing().find((x) => x.kind === 'delegate')).toMatchObject({
+      decision: 'hub-mention',
+      targetName: '번역가',
+      targetAgentId: TRANSLATOR.id,
+      tokens: { input: 0, output: 0 },
+    });
+    expect(h.logged('participant_route').map((l) => l.fields.decision)).toEqual(['route', 'hub-mention', 'route']);
+    expect(h.speakers()).toEqual(['naby', '번역가']);
+    expect(r).toMatchObject({ speeches: 2, endedBy: 'end' });
+  });
+
+  it('a mention inside a sentence hands nothing over', async () => {
+    const h = harness({ rows: [active(TRANSLATOR)], routes: [answer], nabySpeech: ['@번역가가 확인한 결과 문제없어요. 나중에 @번역가 에게도 알려 둘게요.'] });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby']);
+    expect(r.endedBy).toBe('answer');
+  });
+
+  it('a name not in the session (registered or not) is ignored', async () => {
+    const h = harness({ rows: [active(TRANSLATOR)], routes: [answer], nabySpeech: ['@critic 이거 봐 주세요\n\n@ghost 너도'] });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.participant).toHaveLength(0);
+    expect(r.endedBy).toBe('answer');
+  });
+
+  it('@naby / @나비 at a line start is naby itself and is ignored', async () => {
+    const h = harness({ rows: [active(TRANSLATOR)], routes: [answer], nabySpeech: ['@naby 메모\n@나비 다시'] });
+    await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby']);
+  });
+
+  it('a mention inside a code block (fenced or inline) is ignored', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      routes: [answer],
+      nabySpeech: ['예시:\n```\n@번역가 run this\n```\n`@번역가` 라고 쓰면 돼요.'],
+    });
+    await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby']);
+  });
+
+  it('two participants addressed → both speak, in order, then one follow-up', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR), active(CRITIC)],
+      routes: [answer],
+      nabySpeech: ['**@critic** 초안을 검토해 주세요.\n\n- @번역가 검토가 끝나면 번역해 주세요.\n\n@critic 한 번 더'],
+    });
+    await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby', 'critic', '번역가']);
+    expect(h.calls.participant.map((p) => p.brief)).toEqual([
+      '**@critic** 초안을 검토해 주세요.',
+      '- @번역가 검토가 끝나면 번역해 주세요.',
+    ]);
+    // One ROUTE (first) + one follow-up after the queue.
+    expect(h.calls.route).toHaveLength(2);
+    expect(h.calls.route[1]).toContain('@번역가 has just answered');
+  });
+
+  it('a limit reached: the participant turn is not opened and naby does not speak again', async () => {
+    // maxSpeechesPerRound 2: naby's speech is the first, so a hand-off would use
+    // the speech naby keeps for a wrap-up.
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      settings: { maxSpeechesPerRound: 2 },
+      routes: [answer],
+      nabySpeech: ['@번역가 옮겨 주세요'],
+    });
+    const blocked: Parameters<NonNullable<RoundInput['onHandoffBlocked']>>[] = [];
+    h.input.onHandoffBlocked = (b, note) => blocked.push([b, note]);
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby']);
+    expect(h.calls.participant).toHaveLength(0);
+    expect(h.logged('participant_cap')[0]!.fields).toMatchObject({ cap: 'speeches', source: 'hub-mention', agentName: '번역가' });
+    // The user is told with a system line (a routing event), not a speech.
+    const want = { by: 'hub-mention', cap: 'speeches', limit: 2, agentId: TRANSLATOR.id, name: '번역가' };
+    expect(h.routing().filter((x) => x.decision === 'cap')).toEqual([
+      { kind: 'end', decision: 'cap', reason: 'speeches', limit: 2, targetAgentId: TRANSLATOR.id, targetName: '번역가', blocked: want },
+    ]);
+    // …and the caller is asked to store it, with naby's note.
+    expect(blocked).toEqual([[want, blockedHandoffNote(want)]]);
+    expect(blocked[0]![1]).toContain('Not handed to @번역가');
+    expect(r).toMatchObject({ speeches: 1, endedBy: 'cap' });
+  });
+
+  it('the round-trip limit for that participant also stops it', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      settings: { maxRoundTrips: 1 },
+      routes: ['{"action":"delegate","target":"번역가","reason":"t"}', '{"action":"answer","reason":"more"}'],
+      nabySpeech: ['@번역가 한 번 더 해 주세요'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby']);
+    expect(h.logged('participant_cap')[0]!.fields).toMatchObject({ cap: 'roundTrips', source: 'hub-mention' });
+    expect(h.routing().find((x) => x.decision === 'cap')).toMatchObject({
+      reason: 'roundTrips',
+      blocked: { cap: 'roundTrips', limit: 1, name: '번역가' },
+    });
+    expect(r.endedBy).toBe('cap');
+  });
+
+  it("the participant's reply goes through the normal follow-up (and may hand back to naby)", async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      routes: [answer, '{"action":"answer","reason":"add"}'],
+      nabySpeech: ['@번역가 옮겨 주세요', '정리하면 이렇다.'],
+      speech: { 번역가: 'Here it is.' },
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['naby', '번역가', 'naby']);
+    expect(h.calls.route[1]).toContain('@번역가 has just answered');
+    expect(h.calls.naby[1]!.handoff?.content).toContain('@번역가');
+    expect(r).toMatchObject({ speeches: 3, endedBy: 'answer' });
+  });
+
+  it("a cap wrap-up speech never hands on, even if it addresses someone", async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR), active(CRITIC)],
+      settings: { maxSpeechesPerRound: 3, maxRoundTrips: 10 },
+      routes: [
+        '{"action":"delegate","target":"번역가","reason":"a"}',
+        '{"action":"delegate","target":"critic","reason":"b"}',
+        '{"action":"delegate","target":"번역가","reason":"c"}',
+      ],
+      nabySpeech: ['@critic 마지막으로 봐 주세요'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'critic', 'naby']);
+    expect(r.endedBy).toBe('cap');
+  });
+});
+
+describe('participantRound — a participant that asks naby is answered (R3.4, 0.6.0)', () => {
+  it('@naby in the reply + router says end → naby still speaks', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      mentions: ['번역가'],
+      speech: { 번역가: '@naby 어떤 말투로 할까요?' },
+      routes: ['{"action":"end","reason":"done"}'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.route[0]).toContain('Do not choose "end"');
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby']);
+    expect(h.calls.naby[0]).toMatchObject({ reason: 'followup' });
+    expect(h.calls.naby[0]!.handoff?.content).toContain('addressed you');
+    expect(r.endedBy).toBe('answer');
+  });
+
+  it('@naby in the reply + router delegates → the delegation still happens', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR), active(CRITIC)],
+      mentions: ['번역가'],
+      speech: { 번역가: '@naby critic이 봐야 할 것 같아요' },
+      routes: ['{"action":"delegate","target":"critic","reason":"review"}'],
+    });
+    await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'critic']);
+  });
+
+  it('no @naby + router says end → the round ends as before', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      mentions: ['번역가'],
+      speech: { 번역가: '번역 끝났어요.' },
+      routes: ['{"action":"end","reason":"done"}'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.route[0]).not.toContain('Do not choose "end"');
+    expect(h.calls.order).toEqual(['user-row', '번역가']);
+    expect(r.endedBy).toBe('end');
+  });
+
+  it('@naby on the last speech before the limit: naby still answers', async () => {
+    const h = harness({
+      rows: [active(TRANSLATOR), active(CRITIC)],
+      settings: { maxSpeechesPerRound: 3, maxRoundTrips: 10 },
+      mentions: ['번역가'],
+      speech: { 번역가: 'a', critic: '@naby 이건 어떻게 하죠?' },
+      routes: ['{"action":"delegate","target":"critic","reason":"b"}', '{"action":"end","reason":"done"}'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'critic', 'naby']);
+    expect(r.speeches).toBe(3);
   });
 });

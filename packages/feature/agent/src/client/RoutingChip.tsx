@@ -62,7 +62,19 @@ export const RoutingChip = memo(function RoutingChip({ routing }: { routing: Cha
   // ---- always-visible system lines -------------------------------------
   if (kind === 'not-in-session' || kind === 'cap') {
     const text =
-      kind === 'cap'
+      kind === 'cap' && routing.blocked
+        ? routing.blocked.cap === 'roundTrips'
+          ? t('participants.route.blockedRoundTrips', {
+              defaultValue: 'Reached the round-trip limit with @{{name}} ({{limit}}) — couldn’t hand this over.',
+              name: routing.blocked.name,
+              limit: routing.blocked.limit,
+            })
+          : t('participants.route.blockedSpeeches', {
+              defaultValue: 'Reached the speech limit ({{limit}}) — couldn’t hand this to @{{name}}.',
+              name: routing.blocked.name,
+              limit: routing.blocked.limit,
+            })
+        : kind === 'cap'
         ? routing.reason === 'roundTrips'
           ? t('participants.route.capRoundTrips', {
               defaultValue: 'Reached the round-trip limit ({{limit}}); naby wraps up',
@@ -140,7 +152,7 @@ export const RoutingChip = memo(function RoutingChip({ routing }: { routing: Cha
   })();
   // A reason worth reading: not the machine codes the round uses as reasons.
   const reason =
-    routing.reason && !['user-mention', 'asked', 'not-in-session', 'speeches', 'roundTrips'].includes(routing.reason)
+    routing.reason && !['user-mention', 'hub-mention', 'asked', 'not-in-session', 'speeches', 'roundTrips'].includes(routing.reason)
       ? routing.reason
       : undefined;
   const tone = CHIP_TONE[kind] ?? 'text-brand bg-accent border-brand/45';

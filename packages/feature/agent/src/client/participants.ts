@@ -168,7 +168,7 @@ export function resolveSpeaker(
 
 /** What a routing marker means, as the chip draws it. */
 export type RoutingChipKind =
-  | 'delegate' // naby handed the turn to a participant (its own decision)
+  | 'delegate' // naby handed the turn to a participant (its routing decision, or its own line-start @name — R3.10)
   | 'user-mention' // the user's `@` chose the participant; naby's check was skipped
   | 'to-naby' // naby taking the turn back (a stored hub hand-off on reload)
   | 'return' // a participant asked naby (`@naby`)
@@ -180,7 +180,7 @@ export type RoutingChipKind =
 
 export function routingChipKind(routing: ChatRouting, hub?: HubInfo | null): RoutingChipKind {
   if (routing.decision === 'not-in-session') return 'not-in-session';
-  if (routing.decision === 'cap') return 'cap';
+  if (routing.decision === 'cap' || routing.blocked) return 'cap';
   if (routing.decision === 'ignored-mention') return 'ignored-mention';
   if (routing.kind === 'return') return 'return';
   if (routing.kind === 'propose') return 'propose';

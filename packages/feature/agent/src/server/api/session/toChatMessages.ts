@@ -36,7 +36,9 @@ export interface ChatRouting {
   targetName?: string;
   reason?: string;
   brief?: string;
-  decision?: 'route' | 'user-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+  decision?: 'route' | 'user-mention' | 'hub-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+  /** A limit stopped naby's line-start hand-off (R3.10); stored on naby's note. */
+  blocked?: { by: 'hub-mention'; cap: 'speeches' | 'roundTrips'; limit: number; agentId: string; name: string };
 }
 
 export interface ChatMessage {

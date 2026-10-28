@@ -204,6 +204,37 @@ describe('RoutingChip visibility (R6.4)', () => {
     expect(render(<RoutingChip routing={{ ...delegate, tokens: { input: 0, output: 0 } }} />, on)).not.toContain('routing-tokens');
   });
 
+  it('R3.10: a blocked line-start hand-off is a system line naming the participant, for both limits', async () => {
+    const speeches = {
+      kind: 'end' as const,
+      decision: 'cap' as const,
+      reason: 'speeches',
+      limit: 6,
+      blocked: { by: 'hub-mention' as const, cap: 'speeches' as const, limit: 6, agentId: 'a2', name: 'aside' },
+    };
+    const trips = {
+      kind: 'end' as const,
+      reason: 'roundTrips',
+      blocked: { by: 'hub-mention' as const, cap: 'roundTrips' as const, limit: 3, agentId: 'a2', name: 'aside' },
+    };
+    // Visible with routing hidden (it is something the user must be told).
+    const a = render(<RoutingChip routing={speeches} />);
+    expect(a).toContain('data-routing-kind="cap"');
+    expect(a).toContain('Reached the speech limit (6) — couldn’t hand this to @aside.');
+    expect(a).not.toContain('naby wraps up');
+    // The reloaded shape: no `decision`, only the stored `blocked`.
+    const b = render(<RoutingChip routing={trips} />);
+    expect(b).toContain('data-routing-kind="cap"');
+    expect(b).toContain('Reached the round-trip limit with @aside (3) — couldn’t hand this over.');
+    await i18n.changeLanguage('ko');
+    try {
+      expect(render(<RoutingChip routing={speeches} />)).toContain('발언 상한(6)에 걸려 @aside에게 넘기지 못했습니다.');
+      expect(render(<RoutingChip routing={trips} />)).toContain('왕복 상한(3)에 걸려 @aside에게 넘기지 못했습니다.');
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
   it('an ignored participant-to-participant mention only shows with routing on', () => {
     const r = { kind: 'end' as const, decision: 'ignored-mention' as const, targetName: 'reviewer' };
     expect(render(<RoutingChip routing={r} />)).toBe('');

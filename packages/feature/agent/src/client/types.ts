@@ -61,11 +61,23 @@ export interface ChatRouting {
   targetName?: string;
   reason?: string;
   brief?: string;
-  decision?: 'route' | 'user-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
+  decision?: 'route' | 'user-mention' | 'hub-mention' | 'cap' | 'ignored-mention' | 'not-in-session';
   /** Live events only (MAC-M4): the routing call's token use behind this step. */
   tokens?: { input: number; output: number };
   /** Live `cap` events only (MAC-M4): the limit the round actually ran under. */
   limit?: number;
+  /** A limit stopped naby's own line-start hand-off (R3.10) — live and on
+   *  reload (stored on naby's note row). */
+  blocked?: ChatRoutingBlocked;
+}
+
+/** Who a line-start hand-off did not reach, and which limit stopped it. */
+export interface ChatRoutingBlocked {
+  by: 'hub-mention';
+  cap: 'speeches' | 'roundTrips';
+  limit: number;
+  agentId: string;
+  name: string;
 }
 
 export interface ChatMessage {

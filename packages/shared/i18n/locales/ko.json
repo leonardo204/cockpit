@@ -2455,6 +2455,8 @@
       "notInSession": "@{{name}} — 이 대화의 참가자가 아니에요. 참가자로 추가하세요.",
       "capSpeeches": "발언 상한({{limit}})에 도달해 나비가 마무리해요",
       "capRoundTrips": "왕복 상한({{limit}})에 도달해 나비가 마무리해요",
+      "blockedSpeeches": "발언 상한({{limit}})에 걸려 @{{name}}에게 넘기지 못했습니다.",
+      "blockedRoundTrips": "왕복 상한({{limit}})에 걸려 @{{name}}에게 넘기지 못했습니다.",
       "end": "라운드 끝",
       "brief": "전달한 요지",
       "tokens": "{{count}} 토큰"
