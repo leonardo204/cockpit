@@ -197,7 +197,7 @@ describe('Chat — the two signals it owns', () => {
     // `isLoading` = this tab sent; `liveRunning` = a turn arrived (Telegram, a
     // scheduled task, the fast-growth kickoff). Both move the conversation on.
     expect(chat).toMatch(/const running = isLoading \|\| liveRunning/);
-    expect(chat).toMatch(/if \(running && !prevRunningRef\.current\) setRunNonce/);
+    expect(chat).toMatch(/if \(running && !prevRunningRef\.current\) \{\s*turnGenRef\.current \+= 1;\s*setRunNonce/);
   });
 
   it('hands the run counter to the check-in banner', () => {

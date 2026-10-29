@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.7 — 2026-10-29
+
+### en
+
+A queued message now shows up the moment it is sent.
+
+**Fixed**
+
+- **Queued messages no longer vanish.** When naby finished and sent your queued message, the message and naby's reply could stay hidden until that reply ended, with "system/status" lines in their place. They now appear right away.
+
+### ko
+
+대기열에 넣은 메시지가 보내지는 즉시 보여요.
+
+**고친 것**
+
+- **대기열 메시지가 사라지지 않아요.** 나비가 답을 마치고 넣어 둔 메시지를 보낼 때, 그 메시지와 나비의 답이 끝날 때까지 안 보이고 "system/status" 줄만 보이던 문제를 고쳤어요. 이제 바로 보여요.
+
 ## 1.48.6 — 2026-10-29
 
 ### en

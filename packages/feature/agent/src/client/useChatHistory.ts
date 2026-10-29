@@ -97,7 +97,12 @@ interface UseChatHistoryReturn {
     // Bypass the incremental throttle — used by explicit user jumps
     // (scheduled-tasks panel / recent / pinned sessions), which must always
     // see the latest disk state even if another incremental fetch just ran.
-    force?: boolean
+    force?: boolean,
+    // Asked when the response arrives: `false` drops it unapplied. The run-end
+    // reconcile uses it so a reply that lands after the NEXT turn has started
+    // (a queued message sent the moment the run ended) cannot erase that
+    // turn's bubbles — that turn's own end reconciles instead.
+    shouldApply?: () => boolean
   ) => Promise<void>;
   // The sessionId of the JSONL file whose contents are currently
   // displayed in `messages`. Differs from the live `sessionId` (which
@@ -150,7 +155,8 @@ export function useChatHistory(
     incremental = false,
     limit?: number,
     beforeTurnIndex?: number,
-    force = false
+    force = false,
+    shouldApply?: () => boolean
   ) => {
     // Direction 2: incremental time throttle — skip if less than N seconds since last fetch.
     // `force` (explicit user jump) bypasses the throttle but still stamps the clock, so the
@@ -166,6 +172,7 @@ export function useChatHistory(
     // Apply one /api/session-by-path payload to local state. Shared by the
     // cache-hit fast path and the network response path.
     const applyPage = (data: SessionPageData, viaIncremental: boolean) => {
+        if (shouldApply && !shouldApply()) return;
         // Save file fingerprint
         if (data.fingerprint) {
           fingerprintRef.current = data.fingerprint;

@@ -554,6 +554,19 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // #10: live session sync.
   const liveSessionId = loadedSessionId || sessionId;
 
+  // WHICH TURN A RUN-END RECONCILE BELONGS TO. Bumped on every rising edge of
+  // "a turn is in flight" (the effect below `running`). A reconcile captures it
+  // when the run ends and is dropped if a newer turn has started by the time
+  // the disk reply arrives: the queue auto-sends the moment a run ends
+  // (chat-message-queue R3), and a late reply would otherwise replace the new
+  // turn's user bubble and live answer with the disk window, hiding both until
+  // that turn ended too.
+  const turnGenRef = useRef(0);
+  const stillSameTurn = useCallback(() => {
+    const gen = turnGenRef.current;
+    return () => turnGenRef.current === gen;
+  }, []);
+
   // ---- multi-agent-chat (MAC-M3): the conversation's participants ----------
   // Read once here and shared through context with the roster, the speaker
   // cards, the routing chips and the `@` palette (ParticipantsContext.tsx).
@@ -656,7 +669,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onComplete: () => {
       // Turn finished → reconcile from disk (replaces temp `live-…` bubbles with canonical
       // real-uuid messages).
-      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true);
+      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true, undefined, undefined, false, stillSameTurn());
       // …and that reconcile does NOT clear the failure notice. Stated as an
       // event rather than left implicit, so the invariant is executable.
       dispatchRunFailure({ type: 'history-reconciled' });
@@ -701,7 +714,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // converges its live bubbles to canonical UUIDs.
   useEffect(() => {
     reconcileFromDiskRef.current = () => {
-      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true);
+      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true, undefined, undefined, false, stillSameTurn());
       // THE LINE THIS WHOLE FIX IS ABOUT. This reconcile is what used to erase
       // the failed turn's error — it rewrites `messages` from disk, and the
       // error is not on disk. The notice lives outside `messages`, and passing
@@ -709,7 +722,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
       // says so in code instead of relying on nobody noticing.
       dispatchRunFailure({ type: 'history-reconciled' });
     };
-  }, [initialCwd, liveSessionId, loadHistoryByCwdAndSessionId, dispatchRunFailure]);
+  }, [initialCwd, liveSessionId, loadHistoryByCwdAndSessionId, dispatchRunFailure, stillSameTurn]);
 
   // Incrementally fetch messages when becoming active (handles external writes like scheduled tasks)
   // With limit to fetch only the last N rounds + fingerprint check + time throttle (inside useChatHistory)
@@ -795,7 +808,10 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   const [runNonce, setRunNonce] = useState(0);
   const prevRunningRef = useRef(false);
   useEffect(() => {
-    if (running && !prevRunningRef.current) setRunNonce((n) => n + 1);
+    if (running && !prevRunningRef.current) {
+      turnGenRef.current += 1;
+      setRunNonce((n) => n + 1);
+    }
     prevRunningRef.current = running;
   }, [running]);
 
@@ -856,7 +872,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
       if (runningNowRef.current) return;
       const { state, action } = settleRunEnd(queueRef.current);
       commitQueue(state);
-      if (action.kind === 'send') void autoSendRef.current(action.content, action.images);
+      if (action.kind === 'send') {
+        // The new turn starts NOW, before React re-renders with it running: a
+        // run-end reconcile still in flight must already count as stale.
+        turnGenRef.current += 1;
+        void autoSendRef.current(action.content, action.images);
+      }
       else if (action.kind === 'restore') restoreToComposer(action);
     }, 0);
     return () => clearTimeout(timer);

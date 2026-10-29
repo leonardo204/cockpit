@@ -110,7 +110,20 @@ describe('Chat — the queue is settled on run end', () => {
 
   it('auto-sends through wrappedHandleSend, via settleRunEnd', () => {
     expect(src).toContain('autoSendRef.current = wrappedHandleSend;');
-    expect(src).toContain("if (action.kind === 'send') void autoSendRef.current(action.content, action.images);");
+    expect(src).toContain("if (action.kind === 'send') {");
+    expect(src).toContain('void autoSendRef.current(action.content, action.images);');
+  });
+
+  it('a run-end reconcile that lands after the next turn started is dropped (queued bubble stays visible)', () => {
+    // The auto-send marks the new turn before it sends…
+    const send = src.slice(src.indexOf("if (action.kind === 'send') {"));
+    expect(send.indexOf('turnGenRef.current += 1;')).toBeLessThan(send.indexOf('autoSendRef.current('));
+    // …and both run-end reconciles carry the same-turn guard.
+    const guarded = src.match(/loadHistoryByCwdAndSessionId\(initialCwd, liveSessionId, true, undefined, undefined, false, stillSameTurn\(\)\)/g) ?? [];
+    expect(guarded).toHaveLength(2);
+    expect(src).not.toMatch(/loadHistoryByCwdAndSessionId\(initialCwd, liveSessionId, true\);/);
+    const hist = read('useChatHistory.ts');
+    expect(hist).toContain('if (shouldApply && !shouldApply()) return;');
     expect(src).toContain("else if (action.kind === 'restore') restoreToComposer(action);");
     expect(src).toContain('const { state, action } = settleRunEnd(queueRef.current);');
   });
