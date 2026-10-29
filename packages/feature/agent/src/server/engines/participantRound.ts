@@ -10,6 +10,10 @@
  * naby may also hand over IN ITS OWN WORDS: a participant it addresses with
  * `@name` at the start of a line speaks next (R3.10). A participant that asks
  * naby (`@naby`) is always answered — `end` is not a choice then (R3.4).
+ * naby always has the LAST word: a round never ends on a participant's speech.
+ * Where it would have — the routing call says `end`, the loop judge or the
+ * backstop stops the round, a participant's turn fails — naby closes it with a
+ * short wrap-up that hands nothing on (R3.11).
  *
  * LIMITS (0.7.0, §8.15). There is no fixed speech or round-trip limit any more:
  * a round may run as long as the work goes on. What bounds it is a LEDGER of the
@@ -76,7 +80,7 @@ export type RoundAgent = {
 export type RoundSpeech = { text: string; ok: boolean; toolCalls?: number; tools?: string[] };
 
 /** Why naby speaks. */
-export type NabySpeechReason = 'answer' | 'followup' | 'cap' | 'declined';
+export type NabySpeechReason = 'answer' | 'followup' | 'cap' | 'declined' | 'wrapup';
 
 export type NabySpeakInput = {
   reason: NabySpeechReason;
@@ -268,6 +272,26 @@ export function capInstruction(cap: RoundCap, limit: number): string {
   );
 }
 
+/**
+ * naby's note to itself for the round's closing speech (R3.11): the round would
+ * otherwise have ended on `after`'s words. `stopped` is why the round stopped
+ * itself, when it did (the same words its system line is stored with).
+ */
+export function wrapupInstruction(after: RoundAgent | undefined, stopped?: string): string {
+  const who = after ? `@${after.name} spoke last` : 'A participant spoke last';
+  const why = stopped
+    ? `${stopped} `
+    : after
+      ? `${who}, and the round is ending. `
+      : 'The round is ending. ';
+  return (
+    why +
+    'Close it for the user in your own words, briefly: where things stand, what is still open, ' +
+    'and what the user can do next. Do not repeat what was already said, and do not hand the ' +
+    'conversation to anyone.'
+  );
+}
+
 /** naby's note to itself when it speaks after a participant. */
 export function followupInstruction(after: RoundAgent | undefined, asked: boolean): string {
   if (!after) return "Answer the user's latest message yourself.";
@@ -300,6 +324,9 @@ type State =
       cap?: { cap: RoundCap; limit: number };
       after?: RoundAgent;
       asked?: boolean;
+      /** A wrap-up (R3.11): its instruction, and how the round is recorded as
+       *  having ended once naby has spoken. */
+      wrapup?: { note: string; endAs: RoundEndReason };
     }
   | { at: 'END'; by: RoundEndReason };
 
@@ -346,6 +373,8 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
   let userRowWritten = false;
   let lastText = '';
   let lastOk = true;
+  /** Who made the round's latest speech — naby must be the last (R3.11). */
+  let lastSpeaker: RoundAgent | undefined;
   const backstop = Math.max(1, settings.backstopSpeeches ?? ROUND_BACKSTOP_SPEECHES);
 
   // THE ROUND LEDGER (§8.15 R11.2): one step per speech, read by the loop judge
@@ -397,9 +426,11 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
 
   /**
    * R11.4: the round stops itself — a loop the judge found, or the backstop.
-   * naby does not speak again; the user gets a system line (the same render path
-   * as 0.6.2's "couldn't hand this over") that is also stored on naby's note row,
-   * so it survives a reload and naby reads it on its next turn.
+   * The user gets a system line (the same render path as 0.6.2's "couldn't hand
+   * this over") that is also stored on naby's note row, so it survives a reload
+   * and naby reads it on its next turn. If a participant spoke last, naby then
+   * closes the round (R3.11) — one speech that hands nothing on, allowed past
+   * the backstop.
    */
   const stopRound = (
     stop: { by: 'loop'; verdict: RoundLoopVerdict } | { by: 'backstop'; target?: RoundAgent },
@@ -425,15 +456,30 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
       ...about,
       blocked,
     });
+    const note =
+      stop.by === 'loop' ? roundStopNote({ by: 'loop', verdict: stop.verdict }) : roundStopNote({ by: 'backstop', limit: backstop });
     try {
-      input.onRoundStopped?.(
-        blocked,
-        stop.by === 'loop' ? roundStopNote({ by: 'loop', verdict: stop.verdict }) : roundStopNote({ by: 'backstop', limit: backstop }),
-      );
+      input.onRoundStopped?.(blocked, note);
     } catch {
       /* bookkeeping only — never the round's problem */
     }
-    return { at: 'END', by: stop.by };
+    return closeOrEnd(stop.by, note);
+  };
+
+  /**
+   * R3.11: the round is over. If a participant made the last speech, naby closes
+   * it first; otherwise (naby already spoke last, nobody spoke, or the user
+   * stopped the run) it simply ends.
+   */
+  const closeOrEnd = (by: RoundEndReason, stopped?: string): State => {
+    if (signal.aborted) return { at: 'END', by: 'abort' };
+    if (!lastSpeaker || lastSpeaker.id === hub.id) return { at: 'END', by };
+    return {
+      at: 'NABY',
+      reason: 'wrapup',
+      after: lastSpeaker,
+      wrapup: { note: wrapupInstruction(lastSpeaker, stopped), endAs: by },
+    };
   };
 
   const hitCap = (cap: { cap: RoundCap; limit: number }, agent?: RoundAgent): State => {
@@ -546,6 +592,7 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     });
     lastText = res.text;
     lastOk = res.ok;
+    lastSpeaker = item.agent;
     // R3.4: a participant may address naby; any other participant it names is
     // IGNORED — the text stays, the hand-off does not happen.
     const others = parseMentions(
@@ -584,7 +631,7 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
 
   /** NABY_SPEAK. Returns the participants naby's speech addressed (R3.10). */
   const nabySpeak = async (state: Extract<State, { at: 'NABY' }>): Promise<DelegateItem[]> => {
-    const note = state.cap ? capInstruction(state.cap.cap, state.cap.limit) : undefined;
+    const note = state.wrapup?.note ?? (state.cap ? capInstruction(state.cap.cap, state.cap.limit) : undefined);
     const progress = roundProgressBlock(ledger.summaryLines());
     let speakInput: NabySpeakInput;
     if (!userRowWritten) {
@@ -600,8 +647,10 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     const res = await input.runNabyTurn(speakInput);
     lastText = res.text;
     lastOk = res.ok;
-    // A wrap-up at a limit hands nothing on (its instruction says so).
-    const addressed = res.ok && state.reason !== 'cap' ? addressedBy(res.text) : [];
+    lastSpeaker = hub;
+    // A wrap-up — at a limit, or closing the round — hands nothing on (its
+    // instruction says so).
+    const addressed = res.ok && state.reason !== 'cap' && state.reason !== 'wrapup' ? addressedBy(res.text) : [];
     recordStep(hub, res, {
       ...(addressed.length > 0
         ? { targets: addressed.map((m) => m.agent), outBriefs: addressed.map((m) => m.brief) }
@@ -684,8 +733,9 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
         }
         if (d.action === 'end') {
           // `end` is only an ending once somebody has spoken; as the first
-          // decision of a round it means naby answers.
-          state = speeches > 0 ? { at: 'END', by: 'end' } : { at: 'NABY', reason: 'answer' };
+          // decision of a round it means naby answers. After a participant, naby
+          // still has the last word (R3.11).
+          state = speeches > 0 ? closeOrEnd('end') : { at: 'NABY', reason: 'answer' };
         } else if (d.action === 'delegate' && d.target) {
           const agent = find(d.target)!;
           state = {
@@ -798,7 +848,11 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
           const r = await participantSpeak(item);
           lastSpoke = item.agent;
           if (!r.ok) {
-            next = { at: 'END', by: signal.aborted ? 'abort' : 'error' };
+            // The participant's turn failed: naby tells the user where that
+            // leaves them (R3.11) — the round is still recorded as an error.
+            // naby is told the turn failed, or it would treat the (empty or
+            // partial) text as a finished answer.
+            next = closeOrEnd('error', `@${item.agent.name}'s turn failed before it finished.`);
             break;
           }
           if (r.asked) asked = true;
@@ -814,11 +868,16 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
       }
 
       case 'NABY': {
-        if (speeches >= backstop) {
+        // The closing speech is the one allowed past the backstop (R3.11).
+        if (!state.wrapup && speeches >= backstop) {
           state = stopRound({ by: 'backstop' });
           break;
         }
         const addressed = await nabySpeak(state);
+        if (state.wrapup) {
+          state = { at: 'END', by: signal.aborted ? 'abort' : lastOk ? state.wrapup.endAs : 'error' };
+          break;
+        }
         if (signal.aborted || !lastOk || state.reason === 'cap') {
           state = { at: 'END', by: signal.aborted ? 'abort' : !lastOk ? 'error' : 'cap' };
           break;

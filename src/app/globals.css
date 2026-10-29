@@ -546,27 +546,8 @@ body {
 .participant-speaking {
   animation: participant-speak 1s ease-in-out infinite;
 }
-@keyframes round-progress-slide {
-  from { left: -35%; }
-  to { left: 100%; }
-}
-.round-progress-bar {
-  position: relative;
-  overflow: hidden;
-}
-.round-progress-bar::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  height: 2px;
-  width: 35%;
-  background: linear-gradient(135deg, hsl(var(--brand)), hsl(var(--brand-2)));
-  animation: round-progress-slide 1.3s linear infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .participant-speaking,
-  .round-progress-bar::after {
+  .participant-speaking {
     animation: none;
   }
 }

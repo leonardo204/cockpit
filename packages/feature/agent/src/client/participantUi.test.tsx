@@ -9,7 +9,6 @@ import { MessageList } from './MessageList';
 import { RoutingChip } from './RoutingChip';
 import { ParticipantProposalCard, ProposalOutcomeLine } from './ToolApprovalPrompt';
 import { MessageBubble } from './MessageBubble';
-import { RoundProgressStrip } from './RoundProgressStrip';
 import { EMPTY_PARTICIPANTS, ParticipantsProvider, type ParticipantsContextValue } from './ParticipantsContext';
 import type { ParticipantInfo } from './participants';
 import type { ChatMessage } from './types';
@@ -423,27 +422,6 @@ describe('MessageBubble speaker card (R6.1)', () => {
     expect(shown).toContain('data-testid="routing-chip"');
     // Not the muted meta pill any more.
     expect(shown).not.toContain('rounded-full px-3 py-1 hover:bg-secondary');
-  });
-});
-
-describe('RoundProgressStrip (R6.5)', () => {
-  it('names the speaker, the next one and the speech count, with one Stop', () => {
-    const html = render(
-      <RoundProgressStrip
-        progress={{ speech: 2, next: { agentId: 'a2', name: 'reviewer' } }}
-        acting={{ name: 'translator', persona: false, participant: true, id: 'a1', avatar: { kind: 'emoji', value: '🌐' }, color: '#0EA5E9' }}
-        speakerName="Translator"
-        next={REVIEWER}
-        onStop={noop}
-      />,
-    );
-    expect(html).toContain('Translator is speaking');
-    expect(html).toContain('@Reviewer');
-    expect(html).toContain('speech 2');
-    // No fixed speech limit any more (§8.15 R11.1).
-    expect(html).not.toContain('speech 2/');
-    expect(html).toContain('data-testid="round-stop"');
-    expect(html).toContain('>Stop</button>');
   });
 });
 

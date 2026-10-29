@@ -2476,11 +2476,6 @@
       "brief": "전달한 요지",
       "tokens": "{{count}} 토큰"
     },
-    "progress": {
-      "speaking": "{{name}} 말하는 중",
-      "next": "다음",
-      "speech": "발언 {{n}}"
-    },
     "palette": {
       "sessionGroup": "이 대화의 참가자",
       "outsideGroup": "등록됨 · 이 대화에는 없음",

@@ -237,58 +237,6 @@ export function relayedMessageIds(messages: readonly ChatMessage[]): Set<string>
 }
 
 // ---------------------------------------------------------------------------
-// The round in flight
-// ---------------------------------------------------------------------------
-
-/** What the "speaking now · next: @b" strip says while a round runs (R6.5). */
-export interface RoundProgress {
-  /** The speech number of the current speaker within the round, 1-based. */
-  speech: number;
-  /** The latest hand-off target that has not started speaking yet. */
-  next?: { agentId?: string; name: string };
-}
-
-/**
- * Derive the round's progress from the live transcript, or `null` when the turn
- * in flight is not a multi-speaker round (no routing marker, no participant
- * bubble since the last user message) — an ordinary turn shows no strip.
- */
-export function roundProgress(messages: readonly ChatMessage[]): RoundProgress | null {
-  let start = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]!.role === 'user') {
-      start = i + 1;
-      break;
-    }
-  }
-  const turn = messages.slice(start);
-  const isRound = turn.some((m) => isRoutingRow(m) || (m.role === 'assistant' && !!m.speaker));
-  if (!isRound) return null;
-  const speeches = turn.filter((m) => m.role === 'assistant').length;
-  let next: RoundProgress['next'];
-  // The last delegate marker AFTER the last assistant bubble that holds speech —
-  // a hand-off announced whose target has not taken the turn yet. A live bubble
-  // already labelled with that target (the `speaker` event follows the hand-off
-  // at once) means it is speaking now, not next.
-  const started = new Set<string>();
-  for (let i = turn.length - 1; i >= 0; i--) {
-    const m = turn[i]!;
-    if (m.role === 'assistant') {
-      if (m.content.trim() || (m.toolCalls?.length ?? 0) > 0) break;
-      if (m.speaker) started.add(m.speaker.agentId);
-      continue;
-    }
-    if (m.routing?.kind === 'delegate' && m.routing.decision !== 'not-in-session') {
-      const name = m.routing.targetName ?? m.routing.targetAgentId;
-      const id = m.routing.targetAgentId;
-      if (name && !(id && started.has(id))) next = { ...(id ? { agentId: id } : {}), name };
-      break;
-    }
-  }
-  return { speech: Math.max(1, speeches), ...(next ? { next } : {}) };
-}
-
-// ---------------------------------------------------------------------------
 // The header roster
 // ---------------------------------------------------------------------------
 

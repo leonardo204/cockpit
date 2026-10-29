@@ -15,7 +15,6 @@ import {
   relayedMessageIds,
   resolveSpeaker,
   rosterLayout,
-  roundProgress,
   routingChipKind,
   routingChipVisible,
   type ParticipantInfo,
@@ -178,41 +177,6 @@ describe('relayedMessageIds (R6.4a)', () => {
   it('matches by handle when the marker has no id', () => {
     const msgs = [marker('r1', { kind: 'delegate', targetName: 'translator' }), said('m1', 'x', { agentId: 'a1', name: 'translator' })];
     expect(relayedMessageIds(msgs).has('m1')).toBe(true);
-  });
-});
-
-describe('roundProgress (R6.5)', () => {
-  it('an ordinary turn has no strip', () => {
-    expect(roundProgress([user('u1'), said('a', 'answer')])).toBeNull();
-  });
-
-  it('a round reports its speech count and the announced next speaker', () => {
-    const msgs = [
-      user('u1'),
-      marker('r1', { kind: 'delegate', targetAgentId: 'a1', targetName: 'translator' }),
-      said('m1', 'done', { agentId: 'a1', name: 'translator' }),
-      marker('r2', { kind: 'delegate', targetAgentId: 'a2', targetName: 'reviewer' }),
-    ];
-    expect(roundProgress(msgs)).toEqual({ speech: 1, next: { agentId: 'a2', name: 'reviewer' } });
-  });
-
-  it('a target that already took the (empty) live bubble is speaking, not next', () => {
-    const msgs = [
-      user('u1'),
-      marker('r1', { kind: 'delegate', targetAgentId: 'a1', targetName: 'translator' }),
-      said('live', '', { agentId: 'a1', name: 'translator' }),
-    ];
-    expect(roundProgress(msgs)).toEqual({ speech: 1 });
-  });
-
-  it('only the turn after the last user message counts', () => {
-    const msgs = [
-      marker('old', { kind: 'delegate', targetAgentId: 'a1' }),
-      said('m0', 'old', { agentId: 'a1', name: 'translator' }),
-      user('u2'),
-      said('live', ''),
-    ];
-    expect(roundProgress(msgs)).toBeNull();
   });
 });
 

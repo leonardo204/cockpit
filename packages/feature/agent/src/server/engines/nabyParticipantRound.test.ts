@@ -133,8 +133,9 @@ describe('naby engine — participant round', () => {
     const { ctx, events } = harness(sessionId, `@${tr.name} 안녕`);
     await spec.runner.run(ctx);
 
-    // D2: no routing call before the participant; one follow-up after it.
-    expect(calls.map((c) => c.kind)).toEqual(['participant', 'route']);
+    // D2: no routing call before the participant; one follow-up after it, then
+    // naby's closing word (R3.11).
+    expect(calls.map((c) => c.kind)).toEqual(['participant', 'route', 'naby']);
     const rows = store.getMessages(sessionId);
     expect(rows[0]).toMatchObject({ role: 'user', content: `@${tr.name} 안녕` });
     expect(rows[0]).not.toHaveProperty('speaker');
@@ -144,6 +145,10 @@ describe('naby engine — participant round', () => {
       routing: { kind: 'delegate', targetAgentId: tr.id, targetName: tr.name, reason: 'user-mention' },
     });
     expect(rows[2]).toMatchObject({ role: 'assistant', content: '안녕하세요!', speaker: { agentId: tr.id, name: tr.name } });
+    // R3.11: naby's wrap-up — a hand-off row to itself, then its own answer.
+    expect(rows[3]).toMatchObject({ role: 'user', speaker: { name: 'naby' }, routing: { kind: 'delegate', reason: 'wrapup' } });
+    expect(rows[4]).toMatchObject({ role: 'assistant', content: 'naby here.' });
+    expect(rows).toHaveLength(5);
 
     expect(events.filter((e) => e.type === 'system' && e.subtype === 'init')).toHaveLength(1);
     const init = events.find((e) => e.subtype === 'init')!;
@@ -181,7 +186,7 @@ describe('naby engine — participant round', () => {
       const spec = createNabySpec({ resolveModel: once(scriptedModel({ participant: 'still here' }, calls) as never) });
       const { ctx, events } = harness(sessionId, `@${tr.name} hi`);
       await spec.runner.run(ctx);
-      expect(calls.map((c) => c.kind)).toEqual(['participant', 'route']);
+      expect(calls.map((c) => c.kind)).toEqual(['participant', 'route', 'naby']);
       const result = events.find((e) => e.type === 'result')!;
       expect(result.is_error).toBe(false);
       expect(String(result.result)).toContain('still here');
@@ -227,11 +232,11 @@ describe('naby engine — participant round', () => {
       ),
     });
     await spec.runner.run(harness(sessionId, '고마워를 영어로').ctx);
-    expect(calls.map((c) => c.kind)).toEqual(['route', 'participant', 'route']);
+    expect(calls.map((c) => c.kind)).toEqual(['route', 'participant', 'route', 'naby']);
     const rows = store.getMessages(sessionId);
     expect(rows[1]).toMatchObject({ role: 'user', content: 'Translate: 고마워', routing: { kind: 'delegate', reason: 'translation' } });
-    // Two routing calls + one speech → three usage rows.
-    expect(store.listUsage(sessionId)).toHaveLength(3);
+    // Two routing calls + the participant's speech + naby's wrap-up → four usage rows.
+    expect(store.listUsage(sessionId)).toHaveLength(4);
   });
 
   it('ROUTE → answer: naby answers itself with an ordinary user row', async () => {
@@ -276,11 +281,12 @@ describe('naby engine — participant round', () => {
     });
     const { ctx, events } = harness(sessionId, 'DNS 신청 좀 챙겨줘');
     await spec.runner.run(ctx);
-    expect(calls.map((c) => c.kind)).toEqual(['route', 'naby', 'participant', 'route']);
+    expect(calls.map((c) => c.kind)).toEqual(['route', 'naby', 'participant', 'route', 'naby']);
     // naby is told how to hand over.
     expect(calls[1]!.system).toContain('address them with @name at the start of a line');
     const rows = store.getMessages(sessionId);
-    expect(rows.map((r) => r.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    // …and naby closes the round with a hand-off row + its wrap-up (R3.11).
+    expect(rows.map((r) => r.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'user', 'assistant']);
     expect(rows[2]).toMatchObject({
       content: `@${tr.name}, DNS 신청은 이 양식으로 해 주세요.`,
       routing: { kind: 'delegate', reason: 'hub-mention', targetAgentId: tr.id },
@@ -404,7 +410,7 @@ describe('naby engine — participant round', () => {
     expect(store.listSessionParticipants(sessionId)).toEqual([
       expect.objectContaining({ agentId: tr.id, status: 'active', addedBy: 'naby' }),
     ]);
-    expect(calls.map((c) => c.kind)).toEqual(['route', 'participant', 'route']);
+    expect(calls.map((c) => c.kind)).toEqual(['route', 'participant', 'route', 'naby']);
   });
 
   it('PROPOSE denied: declined in the roster, naby answers', async () => {

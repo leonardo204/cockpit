@@ -106,7 +106,6 @@ describe('Chat — the queue is settled on run end', () => {
     const cards = src.indexOf('<QueuedMessages');
     expect(cards).toBeGreaterThan(-1);
     expect(cards).toBeLessThan(src.indexOf('<ChatInput'));
-    expect(src.indexOf('<RoundProgressStrip')).toBeLessThan(cards);
   });
 
   it('auto-sends through wrappedHandleSend, via settleRunEnd', () => {
@@ -116,12 +115,11 @@ describe('Chat — the queue is settled on run end', () => {
     expect(src).toContain('const { state, action } = settleRunEnd(queueRef.current);');
   });
 
-  it('every stop marks the queue stopped (ESC, transcript, round strip, popup handle)', () => {
+  it('every stop marks the queue stopped (ESC, transcript, popup handle)', () => {
     // The stream's raw stop is called in exactly one place: the wrapper.
     expect(src.match(/\bhandleStop\(\)/g)).toHaveLength(1);
     expect(src).toContain('commitQueue(markStopped(queueRef.current));');
     expect(src).toContain('onStopHandle(handleStopRun);');
-    expect(src).toContain('onStop={progress ? undefined : handleStopRun}');
     expect(src).toContain('onStop={handleStopRun}');
     expect(src).toMatch(/e\.key === 'Escape'[\s\S]{0,80}handleStopRun\(\)/);
   });

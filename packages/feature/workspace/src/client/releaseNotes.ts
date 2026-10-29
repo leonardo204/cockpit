@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.6 — 2026-10-29
+
+### en
+
+naby now always has the last word in a conversation with participants.
+
+**Improved**
+
+- **naby closes every round.** When a participant spoke last — it finished, a repeat was detected, or its turn failed — naby adds a short wrap-up: where things stand, what is still open, and what you can do next. The wrap-up never hands the turn to anyone.
+- **A cleaner composer.** The "… is speaking · speech n" strip above the input is gone. The thinking bubble already shows who is working, for how long, and the Stop button.
+
+### ko
+
+참가자가 있는 대화도 이제 항상 나비가 마무리해요.
+
+**나아진 것**
+
+- **대화의 마지막은 나비가 정리해요.** 참가자가 마지막으로 말한 채 끝나면(답을 마쳤거나, 반복이 감지됐거나, 참가자 응답이 실패한 경우) 나비가 지금 어디까지 했는지, 남은 일, 다음에 할 일을 짧게 정리해요. 이 정리 발언은 다른 참가자에게 일을 넘기지 않아요.
+- **입력창 위가 깔끔해졌어요.** "○○ 말하는 중 · 발언 n" 줄을 없앴어요. 누가 얼마나 일하는지와 중단 버튼은 생각 중 말풍선에서 볼 수 있어요.
+
 ## 1.48.5 — 2026-10-29
 
 ### en

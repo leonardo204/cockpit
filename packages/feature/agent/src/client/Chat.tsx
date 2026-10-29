@@ -61,8 +61,6 @@ import { attachQuotedContext } from './selectionChatOps';
 import { useTranslation } from 'react-i18next';
 import { ParticipantsProvider, useParticipantsState } from './ParticipantsContext';
 import { ParticipantRoster, ShowRoutingToggle, type SpeakingId } from './ParticipantRoster';
-import { RoundProgressStrip } from './RoundProgressStrip';
-import { roundProgress } from './participants';
 
 /** How long after a turn ends the roster reads once more for a recommendation
  *  naby's background sweep may have written (§8.13). */
@@ -583,13 +581,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
       : actingAgent?.persona
         ? 'naby'
         : null;
-  // "speaking now · next: @b" (R6.5) — only while a round with participants runs.
-  const progress = useMemo(() => (roundRunning ? roundProgress(messages) : null), [roundRunning, messages]);
-  const progressNext = useMemo(
-    () =>
-      progress?.next ? participantsState.lookup(progress.next.agentId ?? '', progress.next.name) : undefined,
-    [progress, participantsState],
-  );
   // The loading bubble shows a participant's avatar beside its name.
   const thinkingAvatar = useMemo(
     () =>
@@ -1192,7 +1183,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             // started) while this tab is not the originator.
             viewerRun={liveRunning && !isLoading}
             // A round's strip (below) carries the one Stop for the whole round.
-            onStop={progress ? undefined : handleStopRun}
+            onStop={handleStopRun}
             // The user just acted → the transcript goes to the bottom and
             // follows the answer from there, wherever they had scrolled to.
             sendNonce={sendNonce}
@@ -1231,17 +1222,6 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
           sessionId={sessionId ?? undefined}
           cwd={initialCwd}
         />
-
-        {/* R6.5: who is speaking, who is next, and the round's one Stop. */}
-        {progress ? (
-          <RoundProgressStrip
-            progress={progress}
-            acting={actingAgent}
-            speakerName={thinkingName}
-            {...(progressNext ? { next: progressNext } : {})}
-            onStop={handleStopRun}
-          />
-        ) : null}
 
         {/* What waits for this turn to end (specs/chat-message-queue.md R2). */}
         <QueuedMessages items={queuedItems} onEdit={handleEditQueued} onDelete={handleDeleteQueued} />

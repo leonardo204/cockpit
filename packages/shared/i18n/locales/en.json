@@ -2476,11 +2476,6 @@
       "brief": "Brief",
       "tokens": "{{count}} tok"
     },
-    "progress": {
-      "speaking": "{{name}} is speaking",
-      "next": "next",
-      "speech": "speech {{n}}"
-    },
     "palette": {
       "sessionGroup": "In this conversation",
       "outsideGroup": "Registered · not in this conversation",
