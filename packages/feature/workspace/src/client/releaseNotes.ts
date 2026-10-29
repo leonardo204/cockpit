@@ -85,6 +85,28 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.5 — 2026-10-29
+
+### en
+
+You can send your next question while naby is still thinking.
+
+**New**
+
+- **Queue messages while naby is thinking.** Press Enter during a reply and the message waits in a "Sending next" card above the composer, then goes out by itself when naby finishes. Several queued messages are sent together as one.
+  - Each card has Edit (back into the composer) and Delete.
+  - If you stop the reply or it ends with an error, nothing is sent; the queued text comes back into the composer so you can check it first.
+
+### ko
+
+나비가 생각하는 중에도 다음 질문을 미리 넣어 둘 수 있어요.
+
+**새로 생긴 것**
+
+- **생각하는 중에 보낸 메시지는 대기열에 들어가요.** 나비가 답하는 중에 Enter를 누르면 입력칸 위에 "보낼 예정" 카드로 기다렸다가, 나비가 답을 마치면 자동으로 보내져요. 여러 개를 넣으면 하나로 합쳐 한 번에 보내요.
+  - 카드마다 수정(입력칸으로 되돌리기)과 삭제 버튼이 있어요.
+  - 답을 중단하거나 오류로 끝나면 보내지 않고, 넣어 둔 내용을 입력칸으로 되돌려요. 확인한 뒤 직접 보내면 돼요.
+
 ## 1.48.4 — 2026-10-29
 
 ### en

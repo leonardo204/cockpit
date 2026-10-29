@@ -11,6 +11,7 @@ import { BrowserRuntime } from '@cockpit/effect-runtime';
 import { loadSlashCommands } from './effect/agentClient';
 import { isHarnessChangedMessage } from './harnessSignal';
 import { composerHeight, type ComposerViewport } from './composerHeight';
+import { appendToDraft } from './messageQueue';
 import {
   FILE_REF_MIME,
   setActiveFileRefInserter,
@@ -144,9 +145,26 @@ interface CommandInfo {
   };
 }
 
+/** One hand-back into the composer. A new object (new `nonce`) per hand-back. */
+export interface ComposerRestore {
+  nonce: number;
+  content: string;
+  images?: ImageInfo[];
+}
+
 interface ChatInputProps {
   onSend: (message: string, images?: ImageInfo[]) => void;
   disabled?: boolean;
+  /** A turn is in flight for this session (here or in another tab). The
+   *  composer stays usable: Enter / the send button hand the message to
+   *  `onQueue` instead of `onSend`, so it waits for the run to end
+   *  (specs/chat-message-queue.md). Without `onQueue` the send is ignored. */
+  running?: boolean;
+  onQueue?: (message: string, images?: ImageInfo[]) => void;
+  /** Text (and images) handed BACK to the composer — a queued card's edit
+   *  button, or a queue returned after a stop or an error. Appended after the
+   *  current draft with a blank line; applied once per `nonce`. */
+  restoreDraft?: ComposerRestore | null;
   cwd?: string;
   /** Only the active tab's input registers as the file-reference insertion
    *  target, so a modifier-click in the file browser never lands in a hidden
@@ -204,7 +222,7 @@ const GROWTH_GLYPH: Record<'egg' | 'larva' | 'pupa' | 'butterfly', string> = {
   butterfly: '🦋',
 };
 
-export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActive = true, engine: _engine, history = EMPTY_COMPOSER_HISTORY, onShowUserMessages, onOpenNote, onCreateScheduledTask, composerViewport, compactPlaceholder }: ChatInputProps) {
+export const ChatInput = memo(function ChatInput({ onSend, disabled, running, onQueue, restoreDraft, cwd, isActive = true, engine: _engine, history = EMPTY_COMPOSER_HISTORY, onShowUserMessages, onOpenNote, onCreateScheduledTask, composerViewport, compactPlaceholder }: ChatInputProps) {
   const { t } = useTranslation();
   // multi-agent-chat R6.3: the `@` palette puts this conversation's participants
   // first and greys registered ones that are not in it.
@@ -265,6 +283,26 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
       }
     });
   }, []);
+
+  // A HAND-BACK FROM THE QUEUE (edit, or a stopped / failed run). Appended,
+  // never replacing: whatever the user is typing right now stays first.
+  const appliedRestoreRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!restoreDraft || appliedRestoreRef.current === restoreDraft.nonce) return;
+    appliedRestoreRef.current = restoreDraft.nonce;
+    const next = appendToDraft(inputRef.current, restoreDraft.content);
+    const restoredImages = restoreDraft.images;
+    if (restoredImages && restoredImages.length > 0) setImages((prev) => [...prev, ...restoredImages]);
+    if (next === inputRef.current) return;
+    // Focus only the visible tab: a background tab whose run was stopped must
+    // not pull the caret away from the conversation the user is in.
+    if (isActive) {
+      replaceDraft(next);
+    } else {
+      setInput(next);
+      setCaret(next.length);
+    }
+  }, [restoreDraft, replaceDraft, isActive]);
 
   // Register as the file-reference target only while this tab is active, so a
   // modifier-click in the file browser inserts into the visible input, never a
@@ -585,18 +623,21 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
     const trimmed = input.trim();
     const hasContent = trimmed || images.length > 0;
     if (!hasContent || disabled) return;
+    // A run is in flight: park the message instead of sending (one run per
+    // session — a concurrent POST would 409). No queue wired → keep the draft.
+    if (running && !onQueue) return;
 
     // Slash/at commands (/qa, @new-branch, multi-line) are resolved server-side
     // by resolveCommandPrompt — send the raw text so the displayed message stays
     // readable and a single resolver handles builtins + sequential multi-command.
-    onSend(trimmed, images.length > 0 ? images : undefined);
+    (running ? onQueue! : onSend)(trimmed, images.length > 0 ? images : undefined);
     setInput('');
     setImages([]);
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-  }, [input, images, disabled, onSend]);
+  }, [input, images, disabled, running, onQueue, onSend]);
 
   const handleSelectCommand = useCallback((command: PaletteEntry) => {
     // P3-M12a: THE BLOCK THAT USED TO BE HERE IS GONE. Until M12 a non-butterfly
@@ -1119,7 +1160,7 @@ export const ChatInput = memo(function ChatInput({ onSend, disabled, cwd, isActi
             // box for a session's worth of instructions. So the popup asks a
             // shorter question. See composerHeight.ts.
             placeholder={
-              disabled
+              disabled || running
                 ? t(compactPlaceholder ? 'chat.placeholderDisabledCompact' : 'chat.placeholderDisabled')
                 : t(compactPlaceholder ? 'chat.placeholderCompact' : 'chat.placeholder')
             }

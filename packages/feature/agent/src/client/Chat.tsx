@@ -28,7 +28,21 @@ import { contextGauge } from './contextGauge';
 // see that module's header for why this is a singleton and when it refetches.
 import { useSubscriptionUsage } from './subscriptionUsage';
 import { ConnectionStatusBar } from './ConnectionStatusBar';
-import { ChatInput } from './ChatInput';
+import { ChatInput, type ComposerRestore } from './ChatInput';
+import { QueuedMessages } from './QueuedMessages';
+import {
+  EMPTY_MESSAGE_QUEUE,
+  clearRunOutcome,
+  enqueueMessage,
+  markErrored,
+  markStopped,
+  removeQueued,
+  settleRunEnd,
+  takeQueued,
+  type MergedMessage,
+  type MessageQueueState,
+  type QueuedMessage,
+} from './messageQueue';
 import type { ComposerViewport } from './composerHeight';
 import { buildComposerHistory, sameComposerHistory } from './composerHistory';
 import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo, ModelRoute } from './types';
@@ -306,14 +320,32 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     model: '',
     sessionId: null,
   });
+  // THE "SEND NEXT" QUEUE (specs/chat-message-queue.md). Messages written while
+  // a turn is in flight wait here and are settled when the run ends — sent as
+  // one merged message, or handed back to the composer after a stop or an
+  // error. The authoritative state is the ref (settling must read and clear it
+  // synchronously, so two end signals can never both send); `queuedItems` is
+  // its render mirror. Rules: messageQueue.ts.
+  const queueRef = useRef<MessageQueueState>(EMPTY_MESSAGE_QUEUE);
+  const [queuedItems, setQueuedItems] = useState<readonly QueuedMessage[]>(EMPTY_MESSAGE_QUEUE.items);
+  const commitQueue = useCallback((next: MessageQueueState) => {
+    const prev = queueRef.current;
+    if (next === prev) return;
+    queueRef.current = next;
+    if (next.items !== prev.items) setQueuedItems(next.items);
+  }, []);
   // `null` is the SEND edge (useChatStream reports it at the start of every
   // send, the one place every send path passes through); text is a failure.
   const handleRunError = useCallback(
     (message: string | null) => {
       if (message === null) {
+        // A new turn: whatever stopped or failed before no longer applies.
+        commitQueue(clearRunOutcome(queueRef.current));
         dispatchRunFailure({ type: 'send' });
         return;
       }
+      // A failed turn never auto-sends what was queued behind it.
+      commitQueue(markErrored(queueRef.current));
       const ctx = failureContextRef.current;
       dispatchRunFailure({
         type: 'run-failed',
@@ -324,7 +356,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
         at: Date.now(),
       });
     },
-    [dispatchRunFailure],
+    [dispatchRunFailure, commitQueue],
   );
   const dismissRunFailure = useCallback(() => dispatchRunFailure({ type: 'dismiss' }), [dispatchRunFailure]);
 
@@ -776,6 +808,69 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     prevRunningRef.current = running;
   }, [running]);
 
+  // ---- the "send next" queue: hand-backs, stop, and the run-end settle ----
+  // Text going back into the composer (a card's edit, or a queue returned
+  // after a stop / error). A fresh object per hand-back; ChatInput applies
+  // each nonce once.
+  const [composerRestore, setComposerRestore] = useState<ComposerRestore | null>(null);
+  const restoreNonceRef = useRef(0);
+  const restoreToComposer = useCallback((m: MergedMessage) => {
+    restoreNonceRef.current += 1;
+    setComposerRestore({ nonce: restoreNonceRef.current, content: m.content, ...(m.images ? { images: m.images } : {}) });
+  }, []);
+  const handleQueueMessage = useCallback(
+    (content: string, images?: ImageInfo[]) => commitQueue(enqueueMessage(queueRef.current, content, images)),
+    [commitQueue],
+  );
+  const handleEditQueued = useCallback(
+    (id: string) => {
+      const { state, item } = takeQueued(queueRef.current, id);
+      if (!item) return;
+      commitQueue(state);
+      restoreToComposer(item);
+    },
+    [commitQueue, restoreToComposer],
+  );
+  const handleDeleteQueued = useCallback(
+    (id: string) => commitQueue(removeQueued(queueRef.current, id)),
+    [commitQueue],
+  );
+  // EVERY STOP IN THIS CHAT GOES THROUGH HERE, so a stopped run hands its
+  // queue back instead of firing it (R4). Same signature and promise as the
+  // stream's own stop — the popup awaits it before deleting its session.
+  const handleStopRun = useCallback(() => {
+    commitQueue(markStopped(queueRef.current));
+    return handleStop();
+  }, [commitQueue, handleStop]);
+  // The auto-send path is the composer's own: wrappedHandleSend, so a queued
+  // "/plan …" is consumed as the command it is. Through a ref so the settle
+  // effect below does not re-arm whenever that callback's identity moves.
+  const autoSendRef = useRef(wrappedHandleSend);
+  autoSendRef.current = wrappedHandleSend;
+  const runningNowRef = useRef(running);
+  runningNowRef.current = running;
+  // THE RUN ENDED (falling edge of "a turn is in flight", whichever side —
+  // this tab's stream or another tab's run seen via run-idle / run-ended).
+  // Deferred one tick: the originator's stream end hands over to the live
+  // viewer, which may briefly report the same run as still running. If a run
+  // is in flight again by then, this edge is dropped and the next one settles.
+  // settleRunEnd empties the queue it acts on, so a second end signal finds
+  // nothing to send.
+  const prevQueueRunningRef = useRef(false);
+  useEffect(() => {
+    const was = prevQueueRunningRef.current;
+    prevQueueRunningRef.current = running;
+    if (!was || running) return;
+    const timer = setTimeout(() => {
+      if (runningNowRef.current) return;
+      const { state, action } = settleRunEnd(queueRef.current);
+      commitQueue(state);
+      if (action.kind === 'send') void autoSendRef.current(action.content, action.images);
+      else if (action.kind === 'restore') restoreToComposer(action);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [running, commitQueue, restoreToComposer]);
+
   // Notify parent when sessionId changes
   useEffect(() => {
     if (sessionId) {
@@ -852,9 +947,9 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // unmounting to end it — see ChatProps.onStopHandle.
   useEffect(() => {
     if (!onStopHandle) return;
-    onStopHandle(handleStop);
+    onStopHandle(handleStopRun);
     return () => onStopHandle(null);
-  }, [onStopHandle, handleStop]);
+  }, [onStopHandle, handleStopRun]);
 
   // Update handleSendRef for ChatContext to call
   useEffect(() => {
@@ -868,13 +963,13 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isHovered && (isLoading || liveRunning)) {
-        handleStop();
+        handleStopRun();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isHovered, isLoading, liveRunning, handleStop]);
+  }, [isHovered, isLoading, liveRunning, handleStopRun]);
 
   // NO FORK HANDLER — see the note in MessageBubble.tsx. Upstream forked a session
   // by copying the Claude Code CLI transcript file, which naby has no equivalent of:
@@ -1097,7 +1192,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             // started) while this tab is not the originator.
             viewerRun={liveRunning && !isLoading}
             // A round's strip (below) carries the one Stop for the whole round.
-            onStop={progress ? undefined : handleStop}
+            onStop={progress ? undefined : handleStopRun}
             // The user just acted → the transcript goes to the bottom and
             // follows the answer from there, wherever they had scrolled to.
             sendNonce={sendNonce}
@@ -1144,16 +1239,22 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             acting={actingAgent}
             speakerName={thinkingName}
             {...(progressNext ? { next: progressNext } : {})}
-            onStop={handleStop}
+            onStop={handleStopRun}
           />
         ) : null}
+
+        {/* What waits for this turn to end (specs/chat-message-queue.md R2). */}
+        <QueuedMessages items={queuedItems} onEdit={handleEditQueued} onDelete={handleDeleteQueued} />
 
         {/* Input */}
         <ChatInput
           onSend={wrappedHandleSend}
-          // #10: disable while THIS tab streams, or while the session is running elsewhere
-          // (viewer) — one active run per session; a concurrent send would 409.
-          disabled={isLoading || liveRunning}
+          // #10: while THIS tab streams, or the session runs elsewhere (viewer),
+          // a send is QUEUED instead — one active run per session; a concurrent
+          // POST would 409. The queue is settled when the run ends.
+          running={running}
+          onQueue={handleQueueMessage}
+          restoreDraft={composerRestore}
           cwd={initialCwd}
           isActive={isActive}
           engine={engine}

@@ -623,7 +623,10 @@ describe('selection popup — closing', () => {
 
   it('the chat hands its stop function up — the run is detached server-side', () => {
     const chat = read('Chat.tsx');
-    expect(chat).toMatch(/onStopHandle\(handleStop\)/);
+    // `handleStopRun` wraps the stream's stop (it also marks the message queue
+    // stopped — chat-message-queue R4) and returns the same promise.
+    expect(chat).toMatch(/onStopHandle\(handleStopRun\)/);
+    expect(chat).toMatch(/const handleStopRun = useCallback\(\(\) => \{[\s\S]{0,120}return handleStop\(\);/);
     expect(chat).toMatch(/return \(\) => onStopHandle\(null\)/);
   });
 });
