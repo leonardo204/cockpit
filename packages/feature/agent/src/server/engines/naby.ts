@@ -91,6 +91,8 @@ import {
   normalizeToolName,
   parseAgentAddress,
   phase1HarnessFloor,
+  readOnlyCause,
+  readOnlyTurnNotice,
   BUILTIN_PERSONA_ID,
   realPolicy,
   resolvePolicyEffect,
@@ -108,6 +110,7 @@ import {
   orgTurnListsSkills,
   Outbox,
   preflightEngine,
+  NO_ENGINE_DEV_HINT,
   parseStyleFingerprint,
   readLearningEnabled,
   renderStyleFingerprintLine,
@@ -180,6 +183,13 @@ import type { DispatchParams, EngineSpec, RunCtx, RunEvent } from './types';
 import { ensureCockpitImport } from './cockpitImport';
 import { registerApproval, unregisterApproval } from '../lib/approvalRegistry';
 import { shellSystemNote } from '../lib/shellNote';
+import {
+  agentToolRefsReason,
+  approvalTimeoutReason,
+  orgHookDenyReason,
+  participantUnreachableReason,
+  PARTICIPANT_DRAFT_BLOCKED_REASON,
+} from '../lib/refusalReasons';
 import {
   approvalReasonsForTelegram,
   escalateApproval,
@@ -739,7 +749,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         ...toSelectOptions(readSettings(getStore())),
       });
       if (!result.ok) {
-        return { ok: false as const, status: result.status, error: result.error };
+        // The developer's override never reaches the chat (select.ts
+        // `noEngineMessage`); it is said here, in the server log.
+        if (result.code === 'NO_ENGINE_AVAILABLE') console.log(`[engine:naby] preflight: ${NO_ENGINE_DEV_HINT}`);
+        return { ok: false as const, status: result.status, error: result.error, code: result.code };
       }
       // Logged rather than returned: `preflight`'s success shape carries no
       // message field, and inventing one would be a change to the shell's
@@ -1010,7 +1023,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           if (!selection.ok) {
             // preflight normally catches this; belt-and-braces for the
             // scheduled-task path, which may call run() directly.
-            ctx.emit({ type: 'error', error: selection.message });
+            ctx.emit({ type: 'error', error: selection.message, code: selection.code });
             ctx.emit({
               type: 'result',
               subtype: 'error_during_execution',
@@ -1400,6 +1413,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const allowChanges =
           (getStore().getSetting('gate.allowChanges') ?? 'true') !== 'false';
         const planMode = ctx.params.permissionMode === 'plan';
+        // Which of the two made this turn read-only, if either — named in the
+        // gate's refusal and in the system prompt so naby can tell the user what
+        // to switch back (gate.ts `ReadOnlyCause`).
+        const readOnly = readOnlyCause({ planMode, allowChanges });
 
         // THIS TURN'S SUBAGENT ROSTER, gathered ONCE (specs/subagent-delegation
         // §4.1-§4.2). Three things must agree about who is available: the
@@ -2176,6 +2193,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // agreed, and it must never be able to talk the turn out of a rule that
             // follows it.
             handoffInstruction(sessionRef?.handoff),
+            // ---- A READ-ONLY TURN SAYS WHY (gate.ts `readOnlyTurnNotice`). Policy,
+            // like the delegation block below: naby must know before it tries a
+            // write which switch is holding it back, so it can name that switch
+            // instead of reporting a refusal it cannot explain.
+            readOnly ? readOnlyTurnNotice(readOnly) : undefined,
             // ---- WHEN TO HAND WORK TO A SUBAGENT (subagent-delegation §4.2)
             //
             // POLICY, AND THEREFORE HERE — after the handoff, which is context and
@@ -2320,7 +2342,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         const baseline =
           allowChanges && !planMode
             ? () => ({ behavior: 'allow' as const })
-            : phase1HarnessFloor(runtimeToolNames);
+            : phase1HarnessFloor(runtimeToolNames, readOnly ? { cause: readOnly } : {});
         const policyRules = gatherPolicyRules(getStore(), projectCwd);
         // Phase 2 (M2): an 'ask' rule SUSPENDS the turn here on a promise, emits an
         // `approval_request` RunEvent for the UI, and resumes when the user resolves
@@ -2408,7 +2430,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             const onAbort = () =>
               settle({ behavior: 'deny', reason: 'turn was stopped before approval' });
             const timer = setTimeout(
-              () => settle({ behavior: 'deny', reason: 'approval request timed out' }),
+              () => settle({ behavior: 'deny', reason: approvalTimeoutReason(call.toolName, APPROVAL_TTL_MS / 60_000) }),
               APPROVAL_TTL_MS,
             );
             if (ctx.signal.aborted) return onAbort();
@@ -2613,7 +2635,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           if (!orgHooks.enabled) return undefined;
           const hook = await orgHooks.preToolUse(call);
           if (hook?.behavior === 'deny') {
-            const reason = `org harness hook (${hook.label ?? hook.script}): ${hook.reason ?? 'denied'}`;
+            const reason = orgHookDenyReason(hook.label ?? hook.script, hook.reason);
             console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (${reason})`);
             if (observe) observeForGrowth(call, false, reason);
             return { behavior: 'deny', reason };
@@ -2674,7 +2696,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             }
             if (resolvePolicyEffect(policyRules, PARTICIPANT_DRAFT_TOOL) === 'deny') {
               console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (policy rule)`);
-              return { behavior: 'deny', reason: 'a policy rule blocks drafting participants', refusal: 'capability' };
+              return { behavior: 'deny', reason: PARTICIPANT_DRAFT_BLOCKED_REASON, refusal: 'capability' };
             }
             const hooked = await orgHookGate(call, false);
             hookOpinions.delete(call.toolCallId);
@@ -2691,7 +2713,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             console.log(
               `[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (agent @${routedAgent?.name} toolRefs)`,
             );
-            const reason = `agent @${routedAgent?.name} is limited to its allowed tools`;
+            const reason = agentToolRefsReason(call.toolName, routedAgent?.name ?? 'agent', agentAllowedTools);
             // A CAPABILITY refusal (checkin-contracts §2): this agent was never
             // given the tool, and the toolset it sees is not narrowed to its
             // `toolRefs`. Same trap as the stage contract below — a tripwire here
@@ -3312,7 +3334,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   if (ev.decision === 'deny') {
                     emitToolResult(
                       ev.toolCallId,
-                      `Denied by policy gate: ${ev.reason ?? 'no reason given'}`,
+                      `Not run: ${ev.reason ?? 'no reason given'}`,
                       true,
                     );
                   }
@@ -3438,7 +3460,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
 
                 case 'error': {
                   errorMessage = ev.message;
-                  ctx.emit({ type: 'error', error: ev.message, session_id: sessionId });
+                  // The engine's stable code rides along so the chat can show
+                  // localized, actionable copy (client runErrorCopy); `error`
+                  // stays the raw text, the fallback and the log's record.
+                  ctx.emit({
+                    type: 'error',
+                    error: ev.message,
+                    ...(ev.code ? { code: ev.code } : {}),
+                    session_id: sessionId,
+                  });
                   break;
                 }
 
@@ -3957,7 +3987,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 if (ex) pExecutors[t.name] = ex;
               }
               const planOnly = profile.guardrails.permissionMode === 'plan' || planMode;
-              const floor = phase1HarnessFloor(runtimeToolNames);
+              // The refusal names whichever switch made this speech read-only:
+              // the chat's plan mode wins (the user can lift it from the chat
+              // header); otherwise it is the participant's own permission mode,
+              // which lives in its editor, so the reason names the participant.
+              const floor = phase1HarnessFloor(
+                runtimeToolNames,
+                planMode ? { cause: 'plan-mode' } : { cause: 'participant-plan', participant: agent.name },
+              );
               // THE PARTICIPANT GATE, minus the stage contract and minus growth:
               //
               //   naby's own tools          → refused (capability)
@@ -4000,9 +4037,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   );
                   return {
                     behavior: 'deny',
-                    reason: outside
-                      ? `${call.toolName} is outside participant @${agent.name}'s permission level, and nobody can be asked on this turn`
-                      : `participant @${agent.name} asks before every tool use, and nobody can be asked on this turn`,
+                    reason: participantUnreachableReason(call.toolName, agent.name, outside),
                     refusal: 'capability',
                   };
                 }
@@ -4322,8 +4357,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           const aborted = ctx.signal.aborted;
           const message =
             errorMessage ?? (aborted ? 'Run stopped by user.' : 'Run ended without a result.');
+          // The English text stays as it is (the transcript, Telegram and the
+          // spikes read it); the code is what the chat translates at render —
+          // only when the status line IS the message, never over a real error.
+          const endCode = errorMessage ? undefined : aborted ? 'run_stopped' : 'run_no_result';
           if (aborted && !errorMessage) {
-            ctx.emit({ type: 'error', error: message, session_id: sessionId });
+            ctx.emit({ type: 'error', error: message, code: 'run_stopped', session_id: sessionId });
           }
           ctx.emit({
             type: 'result',
@@ -4334,6 +4373,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // say, so the transcript is not just "stopped". Falls back to the
             // status line when there is nothing (the pre-M3c case).
             result: sawResult && assistantText ? `${assistantText}\n\n${message}` : message,
+            ...(endCode ? { code: endCode } : {}),
             usage: toSdkUsage(sawResult ? accUsage : usage),
             total_cost_usd: accCostUsd,
             // A stopped or failed run still filled the window with whatever it

@@ -5,6 +5,7 @@ import { useRef } from 'react';
 import { useWebSocket } from '@cockpit/shared-ui';
 import type { ChatMessage, ChatEngine } from './types';
 import { applyStreamEvent, type StreamEvent } from './applyStreamEvent';
+import { localizeRunEvent } from './runErrorCopy';
 import { runSignalFor } from './runSignal';
 
 // #10 viewer hook: tail /ws/session-stream for `sessionId` and render live through the
@@ -51,7 +52,10 @@ export function useLiveStream(
     return id;
   };
 
-  const apply = (ev: StreamEvent) => {
+  const apply = (rawEv: StreamEvent) => {
+    // Same localization as useChatStream: a coded error reads the same to a
+    // viewer as to the tab that sent it (runErrorCopy.ts).
+    const ev = localizeRunEvent(rawEv);
     // Phase 2 (M2): a viewed/resumed turn's tool-approval prompt. Re-dispatch as a
     // DOM event for <ToolApprovalPrompt>, mirroring useChatStream.
     // Phase 3 (P3-M5): the same for a paused CHECK-IN, read by <CheckinPrompt>.

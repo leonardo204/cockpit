@@ -42,7 +42,12 @@ export interface DispatchParams {
  *  streams it through /ws/session-stream; the scheduler polls isRunActive/getRunSnapshot. */
 export type DispatchOutcome =
   | { ok: true; runKey: string; sessionId: string | null }
-  | { ok: false; status: number; error: string; code?: 'cwd_missing' };
+  // `code` is stable and machine-readable: the chat client maps it to localized,
+  // actionable copy (useChatStream → runErrorCopy) and falls back to `error`
+  // for a code it does not know. `cwd_missing` / `session_busy` come from the
+  // orchestrator; the rest are an engine preflight's own (e.g. the runtime's
+  // `NO_ENGINE_AVAILABLE`).
+  | { ok: false; status: number; error: string; code?: string };
 
 /** One event fanned out to the run registry. Must carry a discriminating `type`. */
 export type RunEvent = { type: string; [key: string]: unknown };
@@ -84,6 +89,6 @@ export interface EngineSpec {
   persistsOwnTranscript?: boolean;
   /** Sync pre-check BEFORE startRun (e.g. deepseek apiKey). ok:false short-circuits with no
    *  registry side-effects. May mutate params (e.g. resolve model). */
-  preflight?(params: DispatchParams): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
+  preflight?(params: DispatchParams): Promise<{ ok: true } | { ok: false; status: number; error: string; code?: string }>;
   runner: EngineRunner;
 }

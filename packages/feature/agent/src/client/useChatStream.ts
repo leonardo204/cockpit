@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { applyStreamEvent, withAssistantText, type StreamEvent } from './applyStreamEvent';
+import { localizeRunEvent, runErrorCopy } from './runErrorCopy';
 import { actingAgentFromInit, actingAgentFromSpeaker, type ActingAgent } from './actingAgent';
 import type {
   ChatMessage,
@@ -298,7 +299,10 @@ export function useChatStream(
   }, [endRun]);
 
   // SSE event handling
-  const handleStreamEvent = useCallback((event: Record<string, unknown>, messageId: string) => {
+  const handleStreamEvent = useCallback((rawEvent: Record<string, unknown>, messageId: string) => {
+    // A coded error / status line becomes the user's language here, once, so the
+    // bubble and the failure notice below say the same thing (runErrorCopy.ts).
+    const event = localizeRunEvent(rawEvent);
     const eventType = event.type as string;
 
     // Phase 2 (M2): a paused turn's tool-approval prompt. Re-dispatch as a DOM
@@ -786,7 +790,7 @@ export function useChatStream(
         });
 
         if (!response.ok) {
-          const failed = (await response.json().catch(() => ({}))) as { code?: string };
+          const failed = (await response.json().catch(() => ({}))) as { code?: string; error?: string };
           if (failed.code === 'cwd_missing') {
             throw new Error(
               i18n.t('chat.projectFolderMissing', {
@@ -795,7 +799,13 @@ export function useChatStream(
               })
             );
           }
-          throw new Error(i18n.t('chat.requestFailed', { defaultValue: 'Request failed' }));
+          // A coded refusal (no engine, a session already answering, …) gets
+          // its actionable copy; an uncoded one shows the server's own reason.
+          // "Request failed" only when the server said nothing at all.
+          const said = typeof failed.error === 'string' ? failed.error : '';
+          throw new Error(
+            runErrorCopy(failed.code, said) || i18n.t('chat.requestFailed', { defaultValue: 'Request failed' })
+          );
         }
 
         const startBody = (await response.json().catch(() => ({}))) as { runKey?: string };

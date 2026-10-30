@@ -93,7 +93,7 @@ describe('orchestrator dispatch contract', () => {
     const first = await dispatchChat(spec(blockingRun), { prompt: 'x', runId });
     expect(first.ok).toBe(true);
     const second = await dispatchChat(spec(blockingRun), { prompt: 'x', runId });
-    expect(second).toEqual({ ok: false, status: 409, error: 'run already active' });
+    expect(second).toEqual({ ok: false, status: 409, error: 'run already active', code: 'session_busy' });
     if (first.ok) requestStop(first.runKey); // cleanup
   });
 
@@ -102,7 +102,7 @@ describe('orchestrator dispatch contract', () => {
     const first = await dispatchChat(spec(blockingRun), { prompt: 'x', sessionId });
     expect(first.ok).toBe(true);
     const second = await dispatchChat(spec(blockingRun), { prompt: 'x', sessionId });
-    expect(second).toEqual({ ok: false, status: 409, error: 'session is already running' });
+    expect(second).toEqual({ ok: false, status: 409, error: 'session is already running', code: 'session_busy' });
     if (first.ok) requestStop(first.runKey);
   });
 
@@ -229,7 +229,7 @@ describe('orchestrator: the session is marked as expecting a turn', () => {
     const seen: Array<{ message: unknown }> = [];
     const off = addRunListener(sessionId, (ev) => seen.push(ev));
     const second = await dispatchChat(spec(async () => {}), { prompt: 'y', sessionId });
-    expect(second).toEqual({ ok: false, status: 409, error: 'session is already running' });
+    expect(second).toEqual({ ok: false, status: 409, error: 'session is already running', code: 'session_busy' });
     expect(isRunActive(sessionId)).toBe(true);
     expect(seen).toHaveLength(0);
     requestStop(sessionId);

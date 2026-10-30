@@ -85,6 +85,30 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.8 — 2026-10-30
+
+### en
+
+When something is blocked or fails, naby and the app now say why and what to change.
+
+**Improved**
+
+- **Read-only turns name the switch.** If "Plan mode" is checked or "Allow changes" is off, naby knows it from the start and tells you which one to change instead of trying and failing.
+- **Clearer refusals for naby.** A blocked tool now says what blocked it and where to change it: a rule in Settings → Permissions, an approval nobody answered, a participant set to read-only, a path outside the project folder, a company harness rule, or a confirmed memory.
+- **Errors you can act on.** "Request failed" and raw English errors are replaced with what happened and what to do: no AI set up, Claude sign-in expired, usage limit reached, API key rejected, the reply stopped midway.
+- The "Allow changes" off state now reads just "read-only".
+
+### ko
+
+무언가 막히거나 실패하면, 나비와 앱이 이유와 바꿀 곳을 알려 줘요.
+
+**나아진 것**
+
+- **읽기 전용인 이유를 알려 줘요.** "플랜 모드"가 체크돼 있거나 "변경 허용"이 꺼져 있으면, 나비가 처음부터 알고 어떤 스위치를 바꾸면 되는지 안내해요. 고치려다 막히고 이유를 모르는 일이 없어요.
+- **나비가 받는 거절 이유가 분명해졌어요.** 설정 → 권한의 규칙, 아무도 답하지 않은 승인 요청, 읽기 전용으로 설정된 참가자, 프로젝트 폴더 밖 경로, 회사 하네스 규칙, 확정된 기억처럼 무엇이 막았고 어디서 바꾸는지 알려 줘요.
+- **오류에 할 일이 같이 나와요.** "요청 실패"나 영어 원문 대신, AI가 설정되지 않음, Claude 로그인 만료, 사용 한도 도달, API 키 거부, 응답이 중간에 끊김처럼 무슨 일인지와 할 일을 보여 줘요.
+- "변경 허용"을 끈 상태 표시가 "읽기 전용"으로 바뀌었어요.
+
 ## 1.48.7 — 2026-10-29
 
 ### en

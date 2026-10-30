@@ -20,6 +20,11 @@
  * would ever tell the user. The first line is the headline, and the whole
  * message sits underneath in a bounded, scrollable block so a paragraph-long
  * provider error cannot push the composer off the screen.
+ *
+ * A CODED failure is the exception (runErrorCopy.ts): when the server knows what
+ * went wrong — a sign-in expired, no engine is set up, the turn was stopped —
+ * the message arrives already as localized copy naming what to do, with the
+ * provider's own words kept under it where they add something.
  */
 
 import { useEffect, useState } from 'react';
@@ -122,7 +127,7 @@ export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) 
 
       <p className="mt-1 text-[0.72rem] leading-4 text-muted-foreground">
         {t('chat.runFailedHint', {
-          defaultValue: 'This is what the provider replied, unedited. Your next message clears it.',
+          defaultValue: 'Details shows the full message. Your next message clears it.',
         })}
       </p>
     </div>

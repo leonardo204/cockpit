@@ -83,10 +83,10 @@ describe('stage contract — the refusal', () => {
     stageRefusalReason({ toolName, stage, contract: stageContract(stage) });
 
   it('a larva may not write a file or run a command', () => {
-    expect(refuse('larva', 'write_file')).toContain('Blocked by the stage contract');
+    expect(refuse('larva', 'write_file')).toContain("Not allowed at this agent's growth stage");
     expect(refuse('larva', 'write_file')).toContain('larva');
-    expect(refuse('larva', 'run_command')).toContain('Blocked by the stage contract');
-    expect(refuse('larva', 'Bash')).toContain('Blocked by the stage contract');
+    expect(refuse('larva', 'run_command')).toContain("Not allowed at this agent's growth stage");
+    expect(refuse('larva', 'Bash')).toContain("Not allowed at this agent's growth stage");
   });
 
   it('a larva MAY read, search and use the tools that only propose', () => {
@@ -117,7 +117,7 @@ describe('stage contract — the refusal', () => {
     // gate and the meter cannot disagree about what "consequential" means.
     expect(
       stageRefusalReason({ toolName: 'mcp__vendor__do_thing', stage: 'larva', contract }),
-    ).toContain('Blocked by the stage contract');
+    ).toContain("Not allowed at this agent's growth stage");
     expect(
       stageRefusalReason({
         toolName: 'mcp__vendor__look',
@@ -135,7 +135,7 @@ describe('stage contract — the refusal', () => {
         contract,
         signals: { readOnlyHint: true, policyForcesConsequential: true },
       }),
-    ).toContain('Blocked by the stage contract');
+    ).toContain("Not allowed at this agent's growth stage");
   });
 
   it('the refusal tells the model what to do instead, not just that it failed', () => {

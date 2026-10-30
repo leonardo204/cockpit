@@ -74,6 +74,8 @@ export interface StreamEvent {
   event?: { type?: string; delta?: { type?: string; text?: string } };
   result?: unknown;
   error?: string; // {type:'error'} events emitted by engines / the orchestrator's failure path
+  /** `error` / `result`: a stable code the client maps to localized copy (runErrorCopy.ts). */
+  code?: string;
   // system/task_notification fields (SDKTaskNotificationMessage) — a background task reporting back.
   task_id?: string;
   status?: 'completed' | 'failed' | 'stopped';

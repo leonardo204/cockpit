@@ -279,7 +279,7 @@ describe('a PreToolUse hook that asks (§3.5)', () => {
         },
       },
     );
-    expect(events.some((e) => e.type === 'user' && JSON.stringify(e).includes('m3-never') && !JSON.stringify(e).includes('Denied'))).toBe(false);
+    expect(events.some((e) => e.type === 'user' && JSON.stringify(e).includes('m3-never') && !JSON.stringify(e).includes('Not run:'))).toBe(false);
     const result = events.find((e) => e.type === 'result') as { subtype?: string } | undefined;
     expect(result?.subtype).toBe('success');
   });
@@ -336,7 +336,7 @@ describe('a hook ask and a policy ask on the same call (§7.10)', () => {
     await orgHooksIdle(8000);
     cleanupRules();
     const ran = (marker: string) =>
-      events.some((e) => e.type === 'user' && JSON.stringify(e).includes(marker) && !JSON.stringify(e).includes('Denied'));
+      events.some((e) => e.type === 'user' && JSON.stringify(e).includes(marker) && !JSON.stringify(e).includes('Not run:'));
     return { approvals, events, ran };
   }
 

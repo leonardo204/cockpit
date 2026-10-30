@@ -40,7 +40,7 @@ export async function dispatchChat(
 
   // #10: one active run per session — a second concurrent write would corrupt the jsonl.
   if (sessionId && isRunActive(sessionId)) {
-    return { ok: false, status: 409, error: 'session is already running' };
+    return { ok: false, status: 409, error: 'session is already running', code: 'session_busy' };
   }
 
   // Resolve slash commands (builtins /qa, /fx, … AND Naby-owned commands) by
@@ -120,7 +120,7 @@ export async function dispatchChat(
     // the race is this one: releaseRun stays silent while a run is live under the
     // key, so the winner's turn is never ended early.
     if (sessionId) releaseRun(sessionId);
-    return { ok: false, status: 409, error: 'run already active' };
+    return { ok: false, status: 409, error: 'run already active', code: 'session_busy' };
   }
   setRunAbort(currentKey, () => {
     isClosed = true;

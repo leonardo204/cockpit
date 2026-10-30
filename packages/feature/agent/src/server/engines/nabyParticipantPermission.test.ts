@@ -251,7 +251,7 @@ describe('participant permission — inside the level runs, outside asks (2026-1
     const { requests, rows } = await speak(p, sendCall, { params: { source: 'telegram' } });
     expect(requests).toHaveLength(0);
     expect(rows[0]?.output.isError).toBe(true);
-    expect(JSON.stringify(rows[0]?.output)).toContain('outside participant');
+    expect(JSON.stringify(rows[0]?.output)).toContain('outside what @perm7 may do');
   });
 });
 
@@ -268,7 +268,7 @@ describe('participant permission — "ask me every time" and the user’s own ru
     const p = participant({ permission: { level: 'read', approval: 'always' } });
     const { requests, rows } = await speak(p, echoCall, { params: { source: 'telegram' } });
     expect(requests).toHaveLength(0);
-    expect(JSON.stringify(rows[0]?.output)).toContain('asks before every tool use');
+    expect(JSON.stringify(rows[0]?.output)).toContain('set to ask before every tool it uses');
   });
 
   it('a policy deny beats everything: in level, out of level, switch on — refused, nobody asked', async () => {

@@ -98,11 +98,11 @@ export function AllowChangesToggle() {
         on
           ? t('chat.allowChangesHintOn', {
               defaultValue:
-                'Allow changes is ON: the agent can edit files and run commands. Every action is still logged. Uncheck for read-only (observe).',
+                'Allow changes is ON: the agent can edit files and run commands. Every action is still logged. Uncheck for read-only.',
             })
           : t('chat.allowChangesHintOff', {
               defaultValue:
-                'Read-only (observe): the agent can inspect but cannot edit files or run commands. Check to allow full access.',
+                'Read-only: the agent can inspect but cannot edit files or run commands. Check to allow full access.',
             })
       }
     >
@@ -125,7 +125,7 @@ export function AllowChangesToggle() {
       <span className="text-muted-foreground" data-testid="allow-changes-state">
         {on
           ? t('chat.allowChangesOn', { defaultValue: 'full access' })
-          : t('chat.allowChangesOff', { defaultValue: 'read-only · observe' })}
+          : t('chat.allowChangesOff', { defaultValue: 'read-only' })}
       </span>
     </label>
   );

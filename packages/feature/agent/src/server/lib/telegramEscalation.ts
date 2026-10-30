@@ -45,6 +45,7 @@ import { logActivity } from '../../../../../../../dist/naby-runtime.mjs';
 import type { GateDecision, Store } from '../../../../../../../dist/naby-runtime.mjs';
 import { resolveApproval } from './approvalRegistry';
 import { resolveCheckin } from './checkinRegistry';
+import { userDeclinedReason } from './refusalReasons';
 import {
   answerCallbackQuery,
   buildApprovalKeyboard,
@@ -433,7 +434,7 @@ export function pickTextReplyTarget<T extends { escalatedAt: number }>(
 export function telegramDecision(decision: 'allow' | 'deny'): GateDecision {
   return decision === 'allow'
     ? { behavior: 'allow' }
-    : { behavior: 'deny', reason: 'you denied this tool call from Telegram' };
+    : { behavior: 'deny', reason: userDeclinedReason('telegram') };
 }
 
 // -- the shared state (globalThis-pinned, see header) -------------------------

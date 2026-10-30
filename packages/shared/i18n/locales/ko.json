@@ -685,7 +685,7 @@
     "runFailedDetails": "자세히",
     "runFailedHide": "접기",
     "runFailedDismiss": "닫기",
-    "runFailedHint": "프로바이더가 보낸 원문 그대로입니다. 다음 메시지를 보내면 사라집니다.",
+    "runFailedHint": "자세히에서 전체 내용을 볼 수 있습니다. 다음 메시지를 보내면 사라집니다.",
     "placeholder": "메시지를 입력하고 Enter로 전송 (Shift+Enter 줄바꿈, 이미지 붙여넣기 가능; 줄을 /(메인 세션) 또는 @(서브에이전트)로 시작하면 명령, 여러 개 가능 — 문장 중간의 /이름은 그 스킬을 이번 턴에 불러온다)",
     "placeholderDisabled": "생각하는 중입니다. 지금 보내면 끝난 뒤 이어서 보냅니다 (ESC로 중단)",
     "placeholderCompact": "메시지를 입력하고 Enter로 전송 (Shift+Enter 줄바꿈)",
@@ -742,9 +742,9 @@
     "planModeHint": "플랜 모드: 편집 없이 계획을 만드는 읽기 전용 탐색입니다. 체크를 해제하고 다시 보내면 실제로 구현합니다.",
     "allowChanges": "변경 허용",
     "allowChangesOn": "전체 접근",
-    "allowChangesOff": "읽기 전용 · 관찰",
-    "allowChangesHintOn": "변경 허용이 켜져 있습니다: 에이전트가 파일을 편집하고 명령을 실행할 수 있습니다. 모든 동작은 여전히 기록됩니다. 체크를 해제하면 읽기 전용(관찰)이 됩니다.",
-    "allowChangesHintOff": "읽기 전용(관찰): 에이전트가 확인만 할 수 있고 파일 편집이나 명령 실행은 할 수 없습니다. 체크하면 전체 접근을 허용합니다.",
+    "allowChangesOff": "읽기 전용",
+    "allowChangesHintOn": "변경 허용이 켜져 있습니다: 에이전트가 파일을 편집하고 명령을 실행할 수 있습니다. 모든 동작은 여전히 기록됩니다. 체크를 해제하면 읽기 전용이 됩니다.",
+    "allowChangesHintOff": "읽기 전용: 에이전트가 확인만 할 수 있고 파일 편집이나 명령 실행은 할 수 없습니다. 체크하면 전체 접근을 허용합니다.",
     "planTitle": "계획 (검토 대기 중)",
     "approvePlan": "승인 후 실행",
     "planApproveHint": "여기서는 승인 대화상자가 없습니다 — 클릭하면 플랜 모드를 종료하고 실행합니다",
@@ -758,7 +758,23 @@
       "minutes": "{{minutes}}분 {{seconds}}초",
       "hours": "{{hours}}시간 {{minutes}}분"
     },
-    "turnFinishedAt": "{{time}}에 완료"
+    "turnFinishedAt": "{{time}}에 완료",
+    "runError": {
+      "sessionBusy": "이 탭에서 아직 답하는 중입니다. 끝난 뒤 다시 보내거나, 먼저 '중단'을 누르세요.",
+      "noEngine": "나비가 답할 AI가 아직 없습니다. 설정 → AI 프로바이더에서 프로바이더를 고르고 API 키를 붙여넣은 뒤 저장하세요. Claude 구독으로 쓰려면 이 컴퓨터에 Claude Code를 설치하고 로그인하세요.",
+      "devEngineUnavailable": "이 컴퓨터에서 Claude 구독 모델을 불러오지 못했습니다. 설정 → AI 프로바이더에서 API 키가 있는 프로바이더를 고르거나, 나비를 다시 설치하세요.",
+      "credentialUnavailable": "AI 프로바이더 키를 쓸 수 없습니다. 설정 → AI 프로바이더에서 키를 확인하고 저장하세요.",
+      "claudeSignIn": "Claude 로그인이 만료되었습니다. 채팅 위의 Claude 칩에서 '로그인'을 누른 뒤 다시 보내 주세요.",
+      "claudeRateLimit": "Claude 플랜 사용 한도에 도달했습니다. 시간이 지나면 다시 쓸 수 있습니다. 지금 이어서 하려면 설정 → AI 프로바이더에서 다른 프로바이더를 고르세요.",
+      "billing": "계정의 결제 문제로 AI 프로바이더가 요청을 거절했습니다. 계정의 플랜이나 결제 상태를 확인한 뒤 다시 보내 주세요.",
+      "apiKeyRejected": "AI 프로바이더가 API 키를 거부했습니다. 설정 → AI 프로바이더에서 올바른 키를 붙여넣고 저장하세요.",
+      "providerRateLimit": "AI 프로바이더가 지금 요청을 제한하고 있습니다. 잠시 뒤 다시 보내거나, 설정 → AI 프로바이더에서 다른 프로바이더를 고르세요.",
+      "engineThrew": "AI 응답 중 오류: {{raw}}",
+      "maxSteps": "도구를 {{count}}번 연달아 쓰고 멈췄습니다. 이어서 하려면 '계속'이라고 보내 주세요.",
+      "internal": "내부 오류로 이 도구를 실행하지 않았습니다. 다시 보내 주세요.",
+      "runStopped": "중단했습니다.",
+      "runNoResult": "응답이 끝나지 않고 멈췄습니다. 다시 보내 주세요."
+    }
   },
   "claudeAccount": {
     "signedIn": "Claude: 로그인됨",

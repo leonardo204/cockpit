@@ -685,7 +685,7 @@
     "runFailedDetails": "Details",
     "runFailedHide": "Hide details",
     "runFailedDismiss": "Dismiss",
-    "runFailedHint": "This is what the provider replied, unedited. Your next message clears it.",
+    "runFailedHint": "Details shows the full message. Your next message clears it.",
     "placeholder": "Type a message, Enter to send (Shift+Enter for new line, paste images; start a line with / (main session) or @ (subagent) to run commands, multiple allowed — a /name mid-sentence brings that skill into this turn)",
     "placeholderDisabled": "Thinking. Send now and it goes out right after this turn (ESC to stop)",
     "placeholderCompact": "Type a message, Enter to send (Shift+Enter for a new line)",
@@ -742,9 +742,9 @@
     "planModeHint": "Plan mode: read-only exploration that produces a plan without editing. Uncheck and resend to implement.",
     "allowChanges": "Allow changes",
     "allowChangesOn": "full access",
-    "allowChangesOff": "read-only · observe",
-    "allowChangesHintOn": "Allow changes is ON: the agent can edit files and run commands. Every action is still logged. Uncheck for read-only (observe).",
-    "allowChangesHintOff": "Read-only (observe): the agent can inspect but cannot edit files or run commands. Check to allow full access.",
+    "allowChangesOff": "read-only",
+    "allowChangesHintOn": "Allow changes is ON: the agent can edit files and run commands. Every action is still logged. Uncheck for read-only.",
+    "allowChangesHintOff": "Read-only: the agent can inspect but cannot edit files or run commands. Check to allow full access.",
     "planTitle": "Plan (awaiting your review)",
     "approvePlan": "Approve & run",
     "planApproveHint": "No approval dialog here — click to exit plan mode and execute",
@@ -758,7 +758,23 @@
       "minutes": "{{minutes}}m {{seconds}}s",
       "hours": "{{hours}}h {{minutes}}m"
     },
-    "turnFinishedAt": "Finished at {{time}}"
+    "turnFinishedAt": "Finished at {{time}}",
+    "runError": {
+      "sessionBusy": "naby is still answering in this tab. Send again when it finishes, or press Stop first.",
+      "noEngine": "naby has no AI to answer with yet. Open Settings → AI provider, pick a provider, paste its API key and press Save. To use your Claude subscription instead, install Claude Code and sign in to it on this computer.",
+      "devEngineUnavailable": "The Claude subscription option could not be loaded on this computer. Pick a provider you have an API key for in Settings → AI provider, or reinstall naby to restore it.",
+      "credentialUnavailable": "The AI provider key could not be used. Check the key in Settings → AI provider and press Save.",
+      "claudeSignIn": "Your Claude sign-in has expired. Click the Claude chip above the chat, choose Log in, then send again.",
+      "claudeRateLimit": "Your Claude plan’s usage limit is reached. It resets later; to keep going now, choose another provider in Settings → AI provider.",
+      "billing": "The AI provider refused the request because of a billing problem on the account. Check the account’s plan or payment, then send again.",
+      "apiKeyRejected": "The AI provider rejected the API key. Paste a valid key in Settings → AI provider and press Save.",
+      "providerRateLimit": "The AI provider is limiting requests right now. Wait a little and send again, or choose another provider in Settings → AI provider.",
+      "engineThrew": "Error while the AI was answering: {{raw}}",
+      "maxSteps": "Stopped after using tools {{count}} times in a row. To carry on, send “continue”.",
+      "internal": "naby did not run this tool because of an internal error. Please send again.",
+      "runStopped": "You stopped this turn.",
+      "runNoResult": "The answer stopped before it finished. Please send again."
+    }
   },
   "claudeAccount": {
     "signedIn": "Claude: signed in",

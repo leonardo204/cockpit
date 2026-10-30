@@ -112,11 +112,14 @@ describe('Chat — the failure is held outside the message array', () => {
 });
 
 describe('useChatStream — every failing path reports, and a send clears', () => {
-  it('reports the in-stream error event verbatim', () => {
+  it('reports the in-stream error event — the raw text unless a code localizes it', () => {
     const branch = stream.slice(stream.indexOf("if (eventType === 'error')"));
     expect(branch.indexOf('onRunErrorRef.current?.(errText)')).toBeGreaterThan(-1);
-    // The raw provider text, not a rewritten one.
     expect(branch).toMatch(/const errText = \(event\.error as string\) \|\|/);
+    // `event` is the localized one: a coded error (runErrorCopy.ts) becomes
+    // actionable copy, an uncoded one stays the provider's own words.
+    expect(stream).toMatch(/const event = localizeRunEvent\(rawEvent\);/);
+    expect(live).toMatch(/const ev = localizeRunEvent\(rawEv\);/);
   });
 
   it('reports a POST that never started a run, and the dead-socket watchdog', () => {

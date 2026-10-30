@@ -116,6 +116,7 @@ import { getStore } from '../engines/naby';
 import { anyRunActive } from '../sessionRunHub';
 import { approvalMayRemember, resolveApproval, type ApprovalExtras } from '../lib/approvalRegistry';
 import { resolveCheckin } from '../lib/checkinRegistry';
+import { userDeclinedReason } from '../lib/refusalReasons';
 import { growthReport, type GrowthReport } from '../lib/growthRead';
 import { safeLearningReport, type LearningReport } from '../lib/learningRead';
 import {
@@ -2120,7 +2121,7 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       const gateDecision =
         body.decision === 'allow'
           ? ({ behavior: 'allow' } as const)
-          : ({ behavior: 'deny', reason: 'you denied this tool call' } as const);
+          : ({ behavior: 'deny', reason: userDeclinedReason('app') } as const);
       // Asked BEFORE resolving: the registry forgets the entry on resolve.
       const pattern = typeof body.toolPattern === 'string' ? body.toolPattern.trim() : '';
       const mayRemember = approvalMayRemember(body.approvalId, pattern);
