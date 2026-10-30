@@ -65,8 +65,9 @@ interface TabContextMenuProps {
   /** session-context-management §2.2: compress this conversation into a handoff and
    *  open a new tab carrying it. */
   onContinueInNewTab: (tabId: string) => void;
-  /** Clear context (`/clear`): this tab starts over as a blank chat in place; the
-   *  old conversation stays in the session history. */
+  /** Clear context (`/clear`): opens the §2.2c choice — keep a summary or clear
+   *  everything — after which this tab starts over in place; the old
+   *  conversation stays in the session history either way. */
   onClearContext: (tabId: string) => void;
 }
 
@@ -222,10 +223,12 @@ export function TabContextMenu({
       {/* CLEAR CONTEXT — Claude Code's `/clear`. Beside "continue in a new tab"
           because it is the other way to get a fresh context: that one carries a
           summary into a new tab, this one starts the same tab over with nothing.
-          The old conversation is not deleted; it stays in the session history. */}
+          The old conversation is not deleted; it stays in the session history.
+          §2.2c: the click opens a choice (keep a summary / clear everything), so
+          it is also disabled while a summary is being written for this tab. */}
       <button
         role="menuitem"
-        disabled={!state.hasSession || state.isBusy === true}
+        disabled={!state.hasSession || state.isBusy === true || state.isContinuing === true}
         className={`${item} disabled:opacity-40 disabled:cursor-not-allowed`}
         data-testid="tab-menu-clear"
         onClick={() => {

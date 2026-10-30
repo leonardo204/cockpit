@@ -39,9 +39,30 @@ async function pushSidebarSnapshot(): Promise<void> {
   }
 }
 
+/**
+ * The project whose session tree a rename changed, or null. A rename is a POST
+ * carrying `title` (empty = back to the automatic title); mark-read carries
+ * none. The recent-sessions snapshot above does not reach the project tree in
+ * the sidebar, which refetches a branch only on `project-state-changed` — so a
+ * renamed tab kept its old name there until something else touched the project.
+ */
+async function renamedCwd(req: Request): Promise<string | null> {
+  try {
+    const body = (await req.clone().json()) as { cwd?: unknown; title?: unknown }
+    return typeof body.title === "string" && typeof body.cwd === "string" && body.cwd ? body.cwd : null
+  } catch {
+    return null
+  }
+}
+
 export async function POST(req: Request): Promise<Response> {
+  const cwd = await renamedCwd(req)
   const res = await featurePost(req)
   await pushSidebarSnapshot()
+  if (cwd && res.ok) {
+    // Nothing closed — the tree just refetches the branch and picks up the name.
+    broadcastToGlobalState({ type: "project-state-changed", cwd, closedSessionIds: [] })
+  }
   return res
 }
 

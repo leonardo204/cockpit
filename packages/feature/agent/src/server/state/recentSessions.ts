@@ -22,8 +22,8 @@
 import { getStore, storeDbPath } from '../engines/naby';
 import type { RuntimeMessage, SessionRef } from '../../../../../../../dist/naby-runtime.mjs';
 import {
-  deriveTitle,
   engineFromProvider,
+  sessionDisplayTitle,
   sampleMessages,
   userTexts,
 } from '../api/sessions/nabyBrowse';
@@ -56,7 +56,7 @@ export const statusKey = (sessionId: string) => `session.status.${sessionId}`;
 
 /** A user-supplied rename. Shared with the pinned-sessions route so a rename is
  *  one source of truth rather than per-view. */
-export const customTitleKey = (sessionId: string) => `session.customTitle.${sessionId}`;
+export { customTitleKey } from '../api/sessions/nabyBrowse';
 
 /** The file backing every recent view — what a change watcher must watch. */
 export function recentSessionsSourcePath(): string {
@@ -123,8 +123,7 @@ export function buildRecentSessions(
 
   return selected.map((ref): RecentSession => {
     const texts = userTexts(store.getMessages(ref.sessionId));
-    const custom = store.getSetting(customTitleKey(ref.sessionId));
-    const title = custom && custom.trim() ? custom : deriveTitle(ref, texts);
+    const title = sessionDisplayTitle(ref, texts, store);
     const { firstMessages, lastMessages } = sampleMessages(texts);
     // Deliberately NOT falling back to `ref.status`. That column is the session
     // LIFECYCLE ('active' | 'ended'); this field is the run/read state the views

@@ -21,6 +21,7 @@ import { useTabState } from './useTabState';
 import { TabManagerTopBar } from './TabManagerTopBar';
 import { TabBar } from './TabBar';
 import { TabContextMenu, type TabContextMenuState } from './TabContextMenu';
+import { ClearContextDialog } from './ClearContextDialog';
 import { useNoLearnSessions } from './useNoLearnSessions';
 import { orderTabs, planDrop, pinRankOf } from './tabOrder';
 import { isChatTab, isDiffTab, isMarkdownTab } from './tabKinds';
@@ -138,7 +139,16 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
 
   // The words travel from here, like every other name this client sends: the server
   // has no locale.
-  const handleContinueInNewTab = useCallback(async (tabId: string) => {
+  //
+  // `where` is the one thing §2.2c changes. 'new-tab' is §2.2 as it always was;
+  // 'in-place' is "keep a summary and clear": the same request, but the minted
+  // session takes over THIS tab's seat (clearTab with a carry) instead of opening
+  // a new tab. Same spinner, same refusal of a repeat, same failure rule — a
+  // failed request leaves the tab exactly as it was.
+  const handleContinueInNewTab = useCallback(async (
+    tabId: string,
+    where: 'new-tab' | 'in-place' = 'new-tab',
+  ) => {
     const tab = tabs.find((t) => t.id === tabId);
     // Per SESSION, like pinning and the temporary flag: a blank tab has no
     // conversation to hand off. The menu item is disabled in that state, and this
@@ -148,6 +158,14 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     continuingRef.current.add(tabId);
     publishContinuing();
     const cwd = tab.cwd || initialCwd || '';
+    const title = t('tabBar.continuedTitle', {
+      title: tab.title || new Date().toLocaleDateString(),
+      defaultValue: 'Continued — {{title}}',
+    });
+    const failMsg =
+      where === 'in-place'
+        ? t('tabBar.clearSummaryFailed', { defaultValue: 'Could not summarize this conversation' })
+        : t('tabBar.continueFailed', { defaultValue: 'Could not continue in a new tab' });
     try {
       const res = await fetch('/api/naby', {
         method: 'POST',
@@ -156,10 +174,7 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
           action: 'session.continueInNewTab',
           sessionId: tab.sessionId,
           ...(cwd ? { cwd } : {}),
-          title: t('tabBar.continuedTitle', {
-            title: tab.title || new Date().toLocaleDateString(),
-            defaultValue: 'Continued — {{title}}',
-          }),
+          title,
         }),
       });
       const json = (await res.json().catch(() => null)) as
@@ -169,11 +184,17 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
         // SAY SO. A refused request used to end in the same silence a slow one
         // did, which left the two indistinguishable — and the spinner this now
         // clears would otherwise have promised a tab that is never coming.
-        toast(
-          t('tabBar.continueFailed', { defaultValue: 'Could not continue in a new tab' }),
-          'error',
-        );
+        toast(failMsg, 'error');
         return;
+      }
+      const openIn = json.cwd ?? cwd;
+      // IN PLACE — the seat takes the new session. Only when it belongs to the
+      // same project: a session linked elsewhere cannot live in this project's
+      // tab strip, so it falls back to the OpenProject path below. And when the
+      // tab went away (or started a turn) during the wait, the session is still
+      // opened that way, not lost.
+      if (where === 'in-place' && (!json.cwd || json.cwd === tab.cwd)) {
+        if (clearTab(tabId, { sessionId: json.sessionId, title })) return;
       }
       // The existing "open this project at this session" path — the one the
       // fast-growth button and the session-list rows already publish.
@@ -181,16 +202,12 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       // The server's cwd wins when this tab has none: it answers with the project
       // the new session was linked to (the SOURCE session's, when the request
       // carried none), which is the only way a cwd-less tab can navigate at all.
-      const openIn = json.cwd ?? cwd;
       if (openIn) publishTopic(Topics.OpenProject, { cwd: openIn, sessionId: json.sessionId });
     } catch {
       // A failed continue leaves the user exactly where they were, which is the
       // conversation they can still use. Nothing to undo — but it is said out
       // loud, because the spinner made a promise this branch cannot keep.
-      toast(
-        t('tabBar.continueFailed', { defaultValue: 'Could not continue in a new tab' }),
-        'error',
-      );
+      toast(failMsg, 'error');
     } finally {
       // EVERY exit clears the mark, including the ones above that `return`. A
       // spinner that never stops is worse than no spinner at all: it says the
@@ -198,7 +215,24 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
       continuingRef.current.delete(tabId);
       publishContinuing();
     }
-  }, [tabs, initialCwd, t, publishContinuing]);
+  }, [tabs, initialCwd, t, publishContinuing, clearTab]);
+
+  // ── Clear context: ask first (session-context-management §2.2c) ──────────
+  // The menu item opens a choice instead of clearing on the click. The dialog
+  // is keyed by the tab it was opened for; the tab id it acts on is captured
+  // here, not re-read, so a choice always lands on the tab it was asked about.
+  const [clearChoiceTabId, setClearChoiceTabId] = useState<string | null>(null);
+  const cancelClearChoice = useCallback(() => setClearChoiceTabId(null), []);
+  const handleClearKeepSummary = useCallback(() => {
+    const tabId = clearChoiceTabId;
+    setClearChoiceTabId(null);
+    if (tabId) void handleContinueInNewTab(tabId, 'in-place');
+  }, [clearChoiceTabId, handleContinueInNewTab]);
+  const handleClearAll = useCallback(() => {
+    const tabId = clearChoiceTabId;
+    setClearChoiceTabId(null);
+    if (tabId) clearTab(tabId);
+  }, [clearChoiceTabId, clearTab]);
 
   const handleTogglePin = useCallback((tabId: string) => {
     const tab = tabs.find(t => t.id === tabId);
@@ -737,7 +771,14 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
                   onRename={setRenamingTabId}
                   onToggleNoLearn={handleToggleNoLearn}
                   onContinueInNewTab={handleContinueInNewTab}
-                  onClearContext={clearTab}
+                  onClearContext={setClearChoiceTabId}
+                />
+              )}
+              {clearChoiceTabId && (
+                <ClearContextDialog
+                  onKeepSummary={handleClearKeepSummary}
+                  onClearAll={handleClearAll}
+                  onCancel={cancelClearChoice}
                 />
               )}
               {/* ── WHERE `sendMessage` GOES WHILE A DOCUMENT TAB IS ACTIVE ──

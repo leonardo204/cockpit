@@ -2064,7 +2064,13 @@
     "clearContext": "컨텍스트 지우기",
     "continuing": "핸드오프 요약을 쓰는 중…",
     "continueFailed": "새 탭에서 이어가지 못했습니다",
-    "continuedTitle": "이어서 — {{title}}"
+    "continuedTitle": "이어서 — {{title}}",
+    "clearDialogTitle": "컨텍스트를 지울까요?",
+    "clearDialogBody": "요약을 남기면 결정·진행 중인 일·열린 질문을 정리해 새 대화에 이어 줍니다(몇 초 걸립니다). 모두 지우면 빈 대화로 시작합니다. 이전 대화는 두 경우 모두 세션 기록에 남습니다.",
+    "clearKeepSummary": "요약 남기고 지우기",
+    "clearAll": "모두 지우기",
+    "clearCancel": "취소",
+    "clearSummaryFailed": "대화를 요약하지 못했습니다"
   },
   "tabManagerTopBar": {
     "copyPageUrl": "페이지 URL 복사",

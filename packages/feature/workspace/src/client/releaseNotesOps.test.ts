@@ -398,6 +398,7 @@ describe('the shipped changelog', () => {
   it('parses, so the feature is demonstrable rather than empty on arrival', () => {
     expect(notes.length).toBeGreaterThanOrEqual(5);
     expect(notes.map((n) => n.version)).toEqual([
+      '1.48.9',
       '1.48.8',
       '1.48.7',
       '1.48.6',

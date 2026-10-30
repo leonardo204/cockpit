@@ -12,7 +12,7 @@ import {
 import { generateTitle } from '../sessionTitle';
 import { getStore } from '../engines/naby';
 import type { RuntimeMessage } from '../engines/naby';
-import { deriveTitle, userTexts } from './sessions/nabyBrowse';
+import { sessionDisplayTitle, userTexts } from './sessions/nabyBrowse';
 // ONE MAPPER, NOT TWO. This route used to carry its own copy of
 // RuntimeMessage → ChatMessage, and the copy had fallen behind the original:
 // it never folded a tool-call-only row into the bubble it continues (so a
@@ -416,7 +416,7 @@ export const POST = handler((req) =>
     // beforeTurnIndex).
     const allMessages = toChatMessages(runtimeMessages);
     const { messages, totalTurns, hasMore } = paginateTurns(allMessages, limit, beforeTurnIndex);
-    const title = deriveTitle(session, userTexts(runtimeMessages));
+    const title = sessionDisplayTitle(session, userTexts(runtimeMessages));
     const usage = lastUsage(store, sessionId);
     return ok({
       messages,

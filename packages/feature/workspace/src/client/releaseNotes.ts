@@ -85,6 +85,32 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.9 — 2026-10-30
+
+### en
+
+Clearing a tab can now keep the gist, and renamed tabs show their new name everywhere.
+
+**New**
+
+- **Clear context asks first.** Right-click a tab → Clear context now offers "Keep a summary and clear" (the default) or "Clear all". Keeping a summary carries the decisions, work in progress and open questions into a fresh conversation in the same tab, like "Continue in a new tab" without the new tab.
+
+**Fixed**
+
+- **Renamed tabs update the sidebar.** A tab's new name now shows in the project list in the sidebar right away, not only in Recent sessions.
+
+### ko
+
+탭을 지울 때 요점을 남길 수 있고, 바꾼 탭 이름이 사이드바에도 바로 보여요.
+
+**새로 생긴 것**
+
+- **컨텍스트 지우기 전에 물어봐요.** 탭 우클릭 → 컨텍스트 지우기를 누르면 "요약 남기고 지우기"(기본)와 "모두 지우기" 중에서 고를 수 있어요. 요약을 남기면 결정, 진행 중인 일, 열린 질문을 정리해 같은 탭의 새 대화로 이어 줘요. "새 탭에서 이어가기"와 같지만 새 탭을 열지 않아요.
+
+**고친 것**
+
+- **바꾼 탭 이름이 사이드바에 반영돼요.** 탭 이름을 바꾸면 최근 세션뿐 아니라 사이드바의 프로젝트 목록에도 바로 보여요.
+
 ## 1.48.8 — 2026-10-30
 
 ### en

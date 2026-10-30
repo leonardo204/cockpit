@@ -76,6 +76,23 @@ export function userTexts(messages: RuntimeMessage[]): string[] {
  * both recent views, the pinned list), so they cannot print different names for
  * the same session.
  */
+/** A user-supplied rename (`session.customTitle.<id>`), written by the tab's
+ *  "Rename" and read by every list. Lives beside `deriveTitle` so each surface
+ *  resolves a name the same way — the sidebar's project tree used to skip it
+ *  and kept showing the old name after a rename. */
+export const customTitleKey = (sessionId: string) => `session.customTitle.${sessionId}`;
+
+/** The name a session shows: the user's rename when there is one, else
+ *  `deriveTitle`. */
+export function sessionDisplayTitle(
+  ref: SessionRef,
+  texts: string[],
+  store: { getSetting(key: string): string | undefined | null } = getStore(),
+): string {
+  const custom = store.getSetting(customTitleKey(ref.sessionId));
+  return custom && custom.trim() ? custom : deriveTitle(ref, texts);
+}
+
 export function deriveTitle(ref: SessionRef, texts: string[]): string {
   if (ref.title && ref.title.trim()) return ref.title;
   const first = texts[0];
@@ -117,7 +134,7 @@ export interface NabySessionInfo {
 export function buildSessionInfo(ref: SessionRef): NabySessionInfo {
   const messages = getStore().getMessages(ref.sessionId);
   const texts = userTexts(messages);
-  const title = deriveTitle(ref, texts);
+  const title = sessionDisplayTitle(ref, texts);
   const { firstMessages, lastMessages } = sampleMessages(texts);
   return {
     path: ref.sessionId,

@@ -492,9 +492,14 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
   // place. The old session leaves the open-tab union exactly as a close would —
   // the queue below is the only removal path — and stays in history. Rule in
   // ./clearTab.
-  const clearTab = useCallback((tabId: string) => {
-    const out = clearTabInPlace(tabsRef.current, tabId, Date.now());
-    if (!out) return;
+  //
+  // With `carry` (§2.2c "keep a summary and clear") the seat takes over an
+  // already-minted continuation session instead of starting blank. Returns
+  // whether the tab was replaced, so a caller holding a fresh session can still
+  // open it some other way when the tab went away during the wait.
+  const clearTab = useCallback((tabId: string, carry?: { sessionId: string; title: string }): boolean => {
+    const out = clearTabInPlace(tabsRef.current, tabId, Date.now(), carry);
+    if (!out) return false;
     pendingClosedRef.current.add(out.closedSessionId);
     setTabs(out.tabs);
     setUnreadTabs((u) => {
@@ -504,6 +509,7 @@ export function useTabState({ initialCwd, initialSessionId, activeView }: UseTab
       return next;
     });
     if (activeTabIdRef.current === tabId) setActiveTabId(out.newTabId);
+    return true;
   }, []);
 
   // Handle sidebar session click - add new tab (appended to end)

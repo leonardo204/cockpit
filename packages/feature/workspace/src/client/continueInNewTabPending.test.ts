@@ -50,7 +50,11 @@ describe('continue in a new tab — the wait is visible', () => {
   it('says so out loud when the continue fails', () => {
     const fn = handler();
     // Both failure paths — a refused reply and a thrown request — reach the user.
-    expect(fn.match(/tabBar\.continueFailed/g)?.length).toBe(2);
+    // The words depend on where the result was headed (§2.2c in-place clear says
+    // "could not summarize"), so they are chosen once and toasted on both paths.
+    expect(fn).toContain("t('tabBar.continueFailed'");
+    expect(fn).toContain("t('tabBar.clearSummaryFailed'");
+    expect(fn.match(/toast\(failMsg, 'error'\)/g)?.length).toBe(2);
   });
 
   it('the tab carries a spinner while the handoff is written', () => {

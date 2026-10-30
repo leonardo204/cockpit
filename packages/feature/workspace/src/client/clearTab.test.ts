@@ -39,6 +39,47 @@ describe('clear context (/clear) on a tab', () => {
   it('the menu item is disabled while a turn is running, like /clear mid-turn', () => {
     const menu = readFileSync(join(__dirname, 'TabContextMenu.tsx'), 'utf8');
     expect(menu).toContain('data-testid="tab-menu-clear"');
-    expect(menu).toMatch(/disabled=\{!state\.hasSession \|\| state\.isBusy === true\}/);
+    expect(menu).toMatch(
+      /disabled=\{!state\.hasSession \|\| state\.isBusy === true \|\| state\.isContinuing === true\}/,
+    );
+  });
+});
+
+describe('keep a summary and clear (§2.2c) — the seat takes a carried session', () => {
+  const carry = { sessionId: 's-new', title: 'Continued — Second' };
+
+  it('replaces the tab in place on a new id, holding the continued session and its title', () => {
+    const out = clearTabInPlace(tabs, 'tab-2', 2_000, carry);
+    expect(out).not.toBeNull();
+    expect(out!.tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2000', 'tab-3', 'tab-4']);
+    const seat = out!.tabs[1]!;
+    expect(seat.sessionId).toBe('s-new');
+    expect(seat.title).toBe('Continued — Second');
+    expect(seat.cwd).toBe('/p');
+    expect(seat.planMode).toBe(true);
+    // The continued title is derived, not a user rename — it is not locked.
+    expect(seat.titleLocked).toBeUndefined();
+    expect(out!.newTabId).toBe('tab-2000');
+  });
+
+  it('closes the old session through the same path as a plain clear', () => {
+    expect(clearTabInPlace(tabs, 'tab-1', 1, carry)?.closedSessionId).toBe('s-1');
+  });
+
+  it('refuses the same tabs a plain clear refuses', () => {
+    expect(clearTabInPlace(tabs, 'tab-3', 1, carry)).toBeNull();
+    expect(clearTabInPlace(tabs, 'tab-4', 1, carry)).toBeNull();
+    expect(clearTabInPlace(tabs, 'nope', 1, carry)).toBeNull();
+  });
+
+  it('refuses a tab that started a turn while the summary was written', () => {
+    const busy: TabInfo[] = [{ id: 'tab-1', cwd: '/p', sessionId: 's-1', title: 'First', isLoading: true }];
+    expect(clearTabInPlace(busy, 'tab-1', 1, carry)).toBeNull();
+  });
+
+  it('does not touch the input array (pure)', () => {
+    const before = JSON.stringify(tabs);
+    clearTabInPlace(tabs, 'tab-2', 3, carry);
+    expect(JSON.stringify(tabs)).toBe(before);
   });
 });

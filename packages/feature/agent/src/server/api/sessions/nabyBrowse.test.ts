@@ -1,12 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SESSION_NAME_ANIMALS, defaultSessionName } from '@cockpit/shared-utils';
-import { deriveTitle, userTexts } from './nabyBrowse';
+import { buildSessionInfo, deriveTitle, sessionDisplayTitle, userTexts } from './nabyBrowse';
 import { buildRecentSessions, customTitleKey } from '../../state/recentSessions';
 import type { RecentSessionsStore } from '../../state/recentSessions';
 import { sessionTitle } from '../../lib/telegramChat';
 import type { RuntimeMessage, SessionRef } from '../../../../../../../../dist/naby-runtime.mjs';
+
+// `buildSessionInfo` reads `getStore()` itself (no store parameter). A test can
+// swap in a fake for one case; everything else gets the real (temp-DB) store.
+const storeOverride = vi.hoisted(() => ({ current: undefined as unknown }));
+vi.mock('../../engines/naby', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../engines/naby')>();
+  return {
+    ...actual,
+    getStore: () => (storeOverride.current ?? actual.getStore()) as ReturnType<typeof actual.getStore>,
+  };
+});
 
 /**
  * THE THREE STAGES OF A SESSION'S NAME.
@@ -118,6 +129,38 @@ describe('stage 3 — the name the user gave', () => {
       fakeStore([ref], {}, { [customTitleKey('a')]: '내가 붙인 이름' }),
     );
     expect(rows[0]!.title).toBe('내가 붙인 이름');
+  });
+
+  it('a rename outranks the conversation in the per-project list (the sidebar tree)', () => {
+    // buildSessionInfo feeds the project's session list, which is what the
+    // sidebar tree renders. It used to call deriveTitle directly and kept
+    // showing the conversation-derived name after a rename.
+    const ref = session({ sessionId: 'a' });
+    storeOverride.current = fakeStore([ref], { a: [userMsg('첫 질문')] }, { [customTitleKey('a')]: '내가 붙인 이름' });
+    try {
+      const info = buildSessionInfo(ref);
+      expect(info.title).toBe('내가 붙인 이름');
+      // Search matches the name the user sees.
+      expect(info.searchText.startsWith('내가 붙인 이름')).toBe(true);
+    } finally {
+      storeOverride.current = undefined;
+    }
+  });
+
+  it('without a rename the per-project list still names the session by its conversation', () => {
+    const ref = session({ sessionId: 'a' });
+    storeOverride.current = fakeStore([ref], { a: [userMsg('첫 질문')] });
+    try {
+      expect(buildSessionInfo(ref).title).toBe(deriveTitle(ref, ['첫 질문']));
+    } finally {
+      storeOverride.current = undefined;
+    }
+  });
+
+  it('sessionDisplayTitle ignores a whitespace-only rename', () => {
+    const ref = session({ sessionId: 'a' });
+    const store = fakeStore([ref], {}, { [customTitleKey('a')]: '   ' });
+    expect(sessionDisplayTitle(ref, ['첫 질문'], store)).toBe(deriveTitle(ref, ['첫 질문']));
   });
 
   it('whitespace is not a name, so it still falls through to the default', () => {

@@ -2064,7 +2064,13 @@
     "clearContext": "Clear context",
     "continuing": "Writing the handoff…",
     "continueFailed": "Could not continue in a new tab",
-    "continuedTitle": "Continued — {{title}}"
+    "continuedTitle": "Continued — {{title}}",
+    "clearDialogTitle": "Clear context?",
+    "clearDialogBody": "Keeping a summary carries the decisions, work in progress and open questions into a fresh conversation (takes a few seconds). Clearing everything starts a blank conversation. Either way, the previous conversation stays in the session history.",
+    "clearKeepSummary": "Keep a summary and clear",
+    "clearAll": "Clear everything",
+    "clearCancel": "Cancel",
+    "clearSummaryFailed": "Could not summarize this conversation"
   },
   "tabManagerTopBar": {
     "copyPageUrl": "Copy page URL",
