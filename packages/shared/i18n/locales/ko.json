@@ -172,7 +172,11 @@
     "viewChangelog": "변경 내역 보기",
     "upgradeCommandCopied": "`cockpit update` 복사됨",
     "projectNotes": "프로젝트 노트",
-    "closeProject": "프로젝트 닫기"
+    "closeProject": "프로젝트 닫기",
+    "projectMenu": "프로젝트 메뉴",
+    "renameProject": "이름 변경",
+    "resetProjectName": "원래 이름으로",
+    "projectNamePlaceholder": "프로젝트 이름 (비우면 폴더 이름)"
   },
   "mobile": {
     "useDesktop": "데스크톱",

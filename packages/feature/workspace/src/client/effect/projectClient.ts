@@ -74,6 +74,17 @@ export const saveProjectGroups = (
   groups: ReadonlyArray<ProjectGroup>
 ): Effect.Effect<void, AppError> => savePref({ groups }, "project groups")
 
+/**
+ * Persist ONE project's display name (specs/project-groups.md §8.2). Same
+ * one-field rule again: the body is `{ rename }` and nothing else. An empty
+ * title clears the rename and the server puts the folder name back.
+ */
+export const saveProjectTitle = (
+  cwd: string,
+  title: string
+): Effect.Effect<void, AppError> =>
+  savePref({ rename: { cwd, title } }, "project name")
+
 /** One-field POST. See the note above about absent fields being left alone. */
 const savePref = (
   body: Record<string, unknown>,

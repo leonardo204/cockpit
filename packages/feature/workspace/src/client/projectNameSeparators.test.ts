@@ -10,7 +10,8 @@ import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 const FEATURE = join(__dirname, '..', '..', '..');
 const FILES = [
-  'workspace/src/client/ProjectSidebar.tsx',
+  // The sidebar names its rows through projectTitle.ts (rename or folder name).
+  'workspace/src/client/projectTitle.ts',
   'workspace/src/client/EmptyState.tsx',
   'workspace/src/client/sessionDoneNotify.ts',
   'agent/src/client/ScheduledTasksPanel.tsx',
@@ -31,6 +32,12 @@ describe('project names from cwds', () => {
   it.each(FILES)('%s derives project names through projectNameFromCwd', (file) => {
     const src = readFileSync(join(FEATURE, file), 'utf8');
     expect(src).toContain('projectNameFromCwd(');
+    expect(src).not.toMatch(/cwd\??\.split\('\/'\)/);
+  });
+
+  it('the sidebar takes row names from projectTitle.ts', () => {
+    const src = readFileSync(join(FEATURE, 'workspace/src/client/ProjectSidebar.tsx'), 'utf8');
+    expect(src).toContain('name={projectDisplayName(project)}');
     expect(src).not.toMatch(/cwd\??\.split\('\/'\)/);
   });
 });

@@ -172,7 +172,11 @@
     "viewChangelog": "View changelog",
     "upgradeCommandCopied": "Copied `cockpit update`",
     "projectNotes": "Project Notes",
-    "closeProject": "Close project"
+    "closeProject": "Close project",
+    "projectMenu": "Project options",
+    "renameProject": "Rename",
+    "resetProjectName": "Use folder name",
+    "projectNamePlaceholder": "Project name (empty for folder name)"
   },
   "mobile": {
     "useDesktop": "Desktop",

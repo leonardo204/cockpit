@@ -189,3 +189,76 @@ describe('/api/projects — sidebar project groups (project-groups §3)', () => 
     expect((await getGroups())?.map((x) => x.id)).toEqual(['g_b', 'g_a']);
   });
 });
+
+describe('/api/projects — project rename (project-groups §8)', () => {
+  type Row = { cwd: string; title?: string };
+  const titleOf = (cwd: string) =>
+    (store.listProjects() as Row[]).find((p) => p.cwd === cwd)?.title;
+  const getProjects = async () => {
+    const res = await route.GET(new Request('http://127.0.0.1/api/projects'));
+    return ((await res.json()) as { projects: Row[] }).projects;
+  };
+  const LIST = [{ cwd: '/work/alpha' }, { cwd: '/work/beta' }, { cwd: '/work/gamma' }];
+
+  beforeAll(async () => {
+    await post({ projects: LIST });
+  });
+
+  it('a rename changes only that row', async () => {
+    await post({ rename: { cwd: '/work/alpha', title: '  Client dashboard  ' } });
+    expect(titleOf('/work/alpha')).toBe('Client dashboard');
+    expect(titleOf('/work/beta')).toBe('beta');
+    expect(titleOf('/work/gamma')).toBe('gamma');
+  });
+
+  it('a list save keeps the rename; a new row gets its folder name', async () => {
+    // Reorder, and open a new project — the two saves that used to erase it.
+    await post({ projects: [{ cwd: '/work/gamma' }, ...LIST.slice(0, 2), { cwd: '/work/delta/' }] });
+    expect(titleOf('/work/alpha')).toBe('Client dashboard');
+    expect(titleOf('/work/delta/')).toBe('delta');
+
+    // A title smuggled into the list is ignored: renames travel in `rename`.
+    await post({ projects: [{ cwd: '/work/alpha', title: 'Sneaky' }, { cwd: '/work/beta' }, { cwd: '/work/gamma' }] });
+    expect(titleOf('/work/alpha')).toBe('Client dashboard');
+  });
+
+  it('GET carries only real renames', async () => {
+    const projects = await getProjects();
+    expect(projects.find((p) => p.cwd === '/work/alpha')?.title).toBe('Client dashboard');
+    // beta's stored title is its folder name — that is not a rename.
+    expect(projects.find((p) => p.cwd === '/work/beta')).not.toHaveProperty('title');
+    expect(projects.find((p) => p.cwd === '/work/gamma')).not.toHaveProperty('title');
+  });
+
+  it('an empty title, or the folder name, puts the folder name back', async () => {
+    await post({ rename: { cwd: '/work/alpha', title: '   ' } });
+    expect(titleOf('/work/alpha')).toBe('alpha');
+    expect((await getProjects()).find((p) => p.cwd === '/work/alpha')).not.toHaveProperty('title');
+
+    await post({ rename: { cwd: '/work/beta', title: 'Renamed' } });
+    await post({ rename: { cwd: '/work/beta', title: ' beta ' } });
+    expect(titleOf('/work/beta')).toBe('beta');
+    expect((await getProjects()).find((p) => p.cwd === '/work/beta')).not.toHaveProperty('title');
+  });
+
+  it('caps the name at 80 characters', async () => {
+    await post({ rename: { cwd: '/work/gamma', title: 'x'.repeat(200) } });
+    expect(titleOf('/work/gamma')).toBe('x'.repeat(80));
+  });
+
+  it('an unknown cwd is ignored, never created', async () => {
+    const before = store.listProjects().map((p) => p.cwd).sort();
+    await post({ rename: { cwd: '/work/nowhere', title: 'Ghost' } });
+    expect(store.listProjects().map((p) => p.cwd).sort()).toEqual(before);
+  });
+
+  it('a rename leaves the list, groups and prefs alone', async () => {
+    const groups = store.getSetting('sidebar.projectGroups');
+    const collapsed = store.getSetting('ui.collapsed');
+    const order = store.listProjects().map((p) => p.cwd);
+    await post({ rename: { cwd: '/work/beta', title: 'Personal' } });
+    expect(store.listProjects().map((p) => p.cwd)).toEqual(order);
+    expect(store.getSetting('sidebar.projectGroups')).toBe(groups);
+    expect(store.getSetting('ui.collapsed')).toBe(collapsed);
+  });
+});

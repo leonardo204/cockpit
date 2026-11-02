@@ -4,8 +4,8 @@
  * RE-BACKED ONTO THE NABY STORE (Phase C, part 1). The project list is now owned
  * by `app.db` (the Naby store), not `~/.cockpit/projects.json`. The WIRE CONTRACT
  * is unchanged — the client still reads/writes `ProjectsData { projects, activeIndex,
- * collapsed }` with `ProjectInfo { cwd, sessionId?, lastOpenedAt? }` — only the
- * backing store moved, so the running UI cannot tell the difference.
+ * collapsed }` with `ProjectInfo { cwd, sessionId?, lastOpenedAt?, title? }` — only
+ * the backing store moved, so the running UI cannot tell the difference.
  *
  * WHERE EACH FIELD LIVES NOW:
  *   - `projects[]`  → the store's `projects` table (keyed by cwd, MRU order).
@@ -13,6 +13,9 @@
  *     drives it (a save carries the value it wants), so MRU semantics are intact.
  *   - `activeIndex` / `collapsed` → app-wide UI prefs, stored in Naby settings
  *     (`ui.activeIndex`, `ui.collapsed`) rather than smuggled into projects.json.
+ *   - `ProjectInfo.title?` is the user's rename (specs/project-groups.md §8),
+ *     the row's `title` when it is not just the folder name. Written only by
+ *     the one-field `rename` POST; a list save never touches an existing title.
  *   - `ProjectInfo.sessionId?` is a vestigial optional the store does not model;
  *     it is simply not echoed back (its absence is contract-valid) and ignored on
  *     write. The client keeps working because the field was always optional.
@@ -21,12 +24,13 @@
  * - No bare try/catch — store failures are wrapped as FSError so `handler` maps
  *   them to 503 exactly as the file-backed version did.
  */
-import { basename } from "node:path"
 import { Effect } from "effect"
 import { handler, ok, parseJsonRaw } from "@cockpit/effect-runtime/server"
 import { FSError } from "@cockpit/effect-core"
 import type { ProjectsData } from "@cockpit/feature-workspace/server"
 import {
+  customProjectTitle,
+  folderNameOf,
   normalizeGroups,
   parseStoredGroups,
   serializeGroups,
@@ -65,10 +69,17 @@ export const GET = handler(() =>
   Effect.try({
     try: (): ProjectsData => {
       const store = getStore()
-      const projects = store.listProjects().map((p) => ({
-        cwd: p.cwd,
-        lastOpenedAt: p.lastOpenedAt,
-      }))
+      const projects = store.listProjects().map((p) => {
+        // Only a real rename goes on the wire: every row created by a list save
+        // carries the folder name as its title, and echoing that back would
+        // make every project look renamed.
+        const title = customProjectTitle(p.cwd, p.title)
+        return {
+          cwd: p.cwd,
+          lastOpenedAt: p.lastOpenedAt,
+          ...(title === undefined ? {} : { title }),
+        }
+      })
       const rawIndex = Number.parseInt(store.getSetting(ACTIVE_INDEX_KEY) ?? "0", 10)
       const activeIndex = Number.isFinite(rawIndex) && rawIndex >= 0 ? rawIndex : 0
       const collapsed = store.getSetting(COLLAPSED_KEY) === "true"
@@ -127,25 +138,45 @@ export const POST = handler((req) =>
             incoming.map((p) => p.cwd).filter((c): c is string => !!c)
           )
 
+          const existingCwds = new Set(store.listProjects().map((p) => p.cwd))
+
           // Drop projects the client no longer lists. removeProject CASCADEs the
           // project's sessions (and their messages/memory/usage) — this unifies
           // the old delete-purge: removing a project from recents discards its
           // session history, same product decision as before, now atomic in-store.
-          for (const existing of store.listProjects()) {
-            if (!incomingCwds.has(existing.cwd)) store.removeProject(existing.cwd)
+          for (const cwd of existingCwds) {
+            if (!incomingCwds.has(cwd)) store.removeProject(cwd)
           }
 
-          // Upsert each incoming project. Title defaults to the cwd basename (the
-          // wire format carries no title — display name is derived from cwd). The
-          // client still owns lastOpenedAt, so persist it when present rather than
+          // Upsert each incoming project. A NEW row gets the folder name as its
+          // title; an existing row keeps whatever title it has. This used to
+          // write the folder name on every save, which would erase a rename the
+          // next time the list was reordered or a project opened
+          // (specs/project-groups.md §8.2). A `title` on the incoming entry is
+          // ignored either way — renames travel only in `rename`. The client
+          // still owns lastOpenedAt, so persist it when present rather than
           // bumping to now — that keeps MRU ordering client-driven as before.
           for (const p of incoming) {
             if (!p.cwd) continue
             store.upsertProject(p.cwd, {
-              title: basename(p.cwd) || p.cwd,
+              ...(existingCwds.has(p.cwd) ? {} : { title: folderNameOf(p.cwd) }),
               ...(typeof p.lastOpenedAt === "number"
                 ? { lastOpenedAt: p.lastOpenedAt }
                 : {}),
+            })
+          }
+        }
+
+        // Rename one project. A cwd the store does not know is ignored rather
+        // than created — a rename must never add a project. An empty title or
+        // the folder name puts the folder name back (R8.3).
+        const rename = body?.rename
+        if (rename && typeof rename.cwd === "string" && rename.cwd) {
+          const known = store.listProjects().some((p) => p.cwd === rename.cwd)
+          if (known) {
+            const raw = typeof rename.title === "string" ? rename.title : ""
+            store.upsertProject(rename.cwd, {
+              title: customProjectTitle(rename.cwd, raw) ?? folderNameOf(rename.cwd),
             })
           }
         }

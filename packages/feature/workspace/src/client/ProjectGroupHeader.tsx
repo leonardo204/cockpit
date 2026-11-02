@@ -47,14 +47,20 @@ export type GroupHeaderDropHint =
 interface GroupNameInputProps {
   initial: string;
   placeholder: string;
-  /** Called once with the typed name. An empty name means "cancel". */
+  /** Called once with the typed name. An empty name means "cancel" — unless
+   *  `allowEmpty`, where it is committed as '' (a project rename uses that to
+   *  mean "back to the folder name"). */
   onCommit: (name: string) => void;
   onCancel: () => void;
   testId?: string;
+  /** Defaults to the group-name limit. */
+  maxLength?: number;
+  allowEmpty?: boolean;
 }
 
 /**
- * Enter commits, Escape cancels, an empty name cancels. Leaving the field
+ * Enter commits, Escape cancels, an empty name cancels (or commits '' with
+ * `allowEmpty`). Leaving the field
  * commits what was typed — clicking away should not throw a name away. The
  * `done` ref keeps Enter-then-blur from committing twice.
  */
@@ -64,6 +70,8 @@ export const GroupNameInput = memo(function GroupNameInput({
   onCommit,
   onCancel,
   testId,
+  maxLength = PROJECT_GROUP_NAME_MAX,
+  allowEmpty = false,
 }: GroupNameInputProps) {
   const [value, setValue] = useState(initial);
   const done = useRef(false);
@@ -78,7 +86,7 @@ export const GroupNameInput = memo(function GroupNameInput({
     if (done.current) return;
     done.current = true;
     const name = value.trim();
-    if (commit && name) onCommit(name);
+    if (commit && (name || allowEmpty)) onCommit(name);
     else onCancel();
   };
 
@@ -88,7 +96,7 @@ export const GroupNameInput = memo(function GroupNameInput({
       data-testid={testId}
       className="flex-1 min-w-0 px-1.5 py-0.5 text-sm bg-background text-foreground border border-brand rounded outline-none"
       value={value}
-      maxLength={PROJECT_GROUP_NAME_MAX}
+      maxLength={maxLength}
       placeholder={placeholder}
       aria-label={placeholder}
       onChange={(e) => setValue(e.target.value)}

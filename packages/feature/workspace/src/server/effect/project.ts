@@ -22,14 +22,21 @@ export interface ProjectInfo {
    *
    * This file is the app's record of "projects I have opened" — the home
    * screen's recents list reads it, ordered most-recent-first. It is written
-   * whenever a project is opened or switched to, and it is the ONLY thing this
-   * change adds to the wire format: the display name stays derived from `cwd`
-   * at render time so it cannot go stale against the folder it names.
+   * whenever a project is opened or switched to. The display name is derived
+   * from `cwd` at render time so it cannot go stale against the folder it
+   * names — unless the user renamed the project (`title` below).
    *
    * Optional because entries written before this field existed must keep
    * loading; they simply sort last.
    */
   readonly lastOpenedAt?: number
+  /**
+   * The name the user gave this project in the sidebar (specs/project-groups.md
+   * §8). Present on a GET only when it is non-empty and differs from the folder
+   * name, so an install that never renamed anything sees the old wire format.
+   * Ignored on a list POST — a rename goes through `ProjectsData.rename`.
+   */
+  readonly title?: string
 }
 
 export interface ProjectsData {
@@ -52,4 +59,9 @@ export interface ProjectsData {
    * "leave the stored groups alone", like every other field here.
    */
   readonly groups?: ReadonlyArray<ProjectGroup>
+  /**
+   * POST only: rename one project (specs/project-groups.md §8.2). An empty
+   * title, or the folder name, clears the rename; an unknown cwd is a no-op.
+   */
+  readonly rename?: { readonly cwd: string; readonly title: string }
 }

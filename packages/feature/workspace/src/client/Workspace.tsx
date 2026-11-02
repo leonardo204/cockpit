@@ -33,8 +33,10 @@ import {
   saveProjects as saveProjectsEffect,
   saveSidebarWidth as saveSidebarWidthEffect,
   saveProjectGroups as saveProjectGroupsEffect,
+  saveProjectTitle as saveProjectTitleEffect,
 } from './effect/projectClient';
 import type { ProjectGroup } from './projectGroups';
+import { customProjectTitle, withProjectTitle } from './projectTitle';
 
 interface ProjectsData {
   projects: ProjectInfo[];
@@ -251,6 +253,27 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       }
     },
     []
+  );
+
+  // A rename is saved on its own as well (`{ rename }`, specs/project-groups.md
+  // §8.2) — the list saves above never write a title, so they cannot undo it.
+  // The row shows the new name before the save lands; a failed save is logged,
+  // like the groups.
+  const handleRenameProject = useCallback(
+    async (cwd: string, title: string) => {
+      const next = withProjectTitle(projects, cwd, title);
+      if (next === projects) return;
+      setProjects(next);
+      const { Effect } = await import('effect');
+      const { BrowserRuntime } = await import('@cockpit/effect-runtime');
+      const exit = await BrowserRuntime.runPromise(
+        saveProjectTitleEffect(cwd, customProjectTitle(cwd, title) ?? '').pipe(Effect.either)
+      );
+      if (exit._tag === 'Left') {
+        console.error('Failed to save project name:', exit.left);
+      }
+    },
+    [projects]
   );
 
   // Live width during the drag; persisted once at the end. Persisting on every
@@ -761,6 +784,7 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
         onReorderProjects={handleReorderProjects}
         groups={projectGroups}
         onChangeGroups={handleChangeProjectGroups}
+        onRenameProject={handleRenameProject}
         onToggleCollapse={handleToggleCollapse}
         // The sidebar's "Open Project" now goes straight to the folder picker,
         // matching the home screen. It used to open the session browser — a

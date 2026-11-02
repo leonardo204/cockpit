@@ -1,10 +1,22 @@
 'use client';
 
-import { useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type Ref,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import { GroupNameInput } from './ProjectGroupHeader';
+import { PROJECT_TITLE_MAX } from './projectTitle';
 
 interface ProjectItemProps {
   index: number;
+  /** The display name: the user's rename, else the folder name. */
   name: string;
   cwd: string;
   isActive: boolean;
@@ -14,6 +26,184 @@ interface ProjectItemProps {
   onClick: () => void;
   onRemove: () => void;
   onOpenNote?: () => void;
+  /** The project carries a rename — offers "Use folder name" in the menu. */
+  renamed?: boolean;
+  /** The name is swapped for an input (specs/project-groups.md §8, R8.2). */
+  editing?: boolean;
+  /** Without it the row offers no rename at all (no double-click, no menu). */
+  onStartRename?: () => void;
+  /** The trimmed name; '' means "back to the folder name". */
+  onCommitRename?: (title: string) => void;
+  onCancelRename?: () => void;
+  onResetName?: () => void;
+}
+
+// ─────────────────────────────────────────────────────────
+// Right-click menu
+// ─────────────────────────────────────────────────────────
+
+/** The markup alone — rendered by tests without a DOM. */
+export function ProjectItemMenuView({
+  ref,
+  style,
+  renamed,
+  onRename,
+  onResetName,
+  onOpenNote,
+  onClose,
+  onKeyDown,
+}: {
+  ref?: Ref<HTMLDivElement>;
+  style?: CSSProperties;
+  renamed: boolean;
+  onRename: () => void;
+  onResetName: () => void;
+  onOpenNote?: () => void;
+  onClose: () => void;
+  onKeyDown?: (e: ReactKeyboardEvent) => void;
+}) {
+  const { t } = useTranslation();
+  const item =
+    'w-full flex items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-accent focus:bg-accent focus:outline-none transition-colors';
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      aria-label={t('workspace.projectMenu')}
+      data-testid="project-item-menu"
+      className="fixed z-[80] min-w-40 py-1 bg-popover border border-border rounded-md shadow-lg"
+      style={style}
+      onKeyDown={onKeyDown}
+      // Portaled, but React events still bubble up the COMPONENT tree — to the
+      // row, whose onClick selects the project. "Close project" must not also
+      // select it, and a right-click here must not reopen the menu.
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        tabIndex={-1}
+        data-testid="project-item-rename"
+        className={`${item} text-foreground`}
+        onClick={onRename}
+      >
+        {t('workspace.renameProject')}
+      </button>
+      {renamed && (
+        <button
+          type="button"
+          role="menuitem"
+          tabIndex={-1}
+          data-testid="project-item-reset-name"
+          className={`${item} text-foreground`}
+          onClick={onResetName}
+        >
+          {t('workspace.resetProjectName')}
+        </button>
+      )}
+      {onOpenNote && (
+        <button
+          type="button"
+          role="menuitem"
+          tabIndex={-1}
+          data-testid="project-item-notes"
+          className={`${item} text-foreground`}
+          onClick={onOpenNote}
+        >
+          {t('workspace.projectNotes')}
+        </button>
+      )}
+      <button
+        type="button"
+        role="menuitem"
+        tabIndex={-1}
+        data-testid="project-item-close"
+        className={`${item} text-destructive`}
+        onClick={onClose}
+      >
+        {t('workspace.closeProject')}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The live menu, opened at the pointer. PORTALED to <body> with fixed
+ * coordinates for the same reason as the group menu: the project list scrolls
+ * and would clip it, and the sidebar root must not clip at all.
+ */
+function ProjectItemMenu({
+  at,
+  onDismiss,
+  ...items
+}: {
+  at: { x: number; y: number };
+  onDismiss: () => void;
+  renamed: boolean;
+  onRename: () => void;
+  onResetName: () => void;
+  onOpenNote?: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const menu = ref.current;
+    if (!menu) return;
+    const w = menu.offsetWidth;
+    const h = menu.offsetHeight;
+    const left = Math.min(Math.max(8, at.x), window.innerWidth - w - 8);
+    const top = at.y + h > window.innerHeight - 8 ? at.y - h : at.y;
+    setPos({ left, top: Math.max(8, top) });
+  }, [at]);
+
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (ref.current?.contains(e.target as Node)) return;
+      onDismiss();
+    };
+    const onBlur = () => onDismiss();
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [onDismiss]);
+
+  const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.key === 'Escape' || e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      onDismiss();
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const list = Array.from(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+    const cur = list.indexOf(document.activeElement as HTMLElement);
+    const next = e.key === 'ArrowDown' ? (cur + 1) % list.length : (cur - 1 + list.length) % list.length;
+    list[next]?.focus();
+  };
+
+  return createPortal(
+    <ProjectItemMenuView
+      ref={ref}
+      style={pos ?? { left: -9999, top: -9999 }}
+      onKeyDown={onKeyDown}
+      {...items}
+    />,
+    document.body,
+  );
 }
 
 // Numbered SVG icon component
@@ -53,9 +243,19 @@ export function ProjectItem({
   onClick,
   onRemove,
   onOpenNote,
+  renamed = false,
+  editing = false,
+  onStartRename,
+  onCommitRename,
+  onCancelRename,
+  onResetName,
 }: ProjectItemProps) {
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  // The menu is an expanded-row affordance: on the 48px rail there is nowhere
+  // to put the rename field it would open.
+  const canRename = !!onStartRename && !collapsed;
   // Tooltip text: collapsed rows are icon-only, so show the project name;
   // expanded rows already show the name, so show the full cwd path.
   const tooltipText = collapsed ? name : cwd;
@@ -72,6 +272,12 @@ export function ProjectItem({
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      onContextMenu={(e) => {
+        if (!canRename || editing) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setMenuAt({ x: e.clientX, y: e.clientY });
+      }}
       data-tooltip={tooltipText}
     >
       <div className="relative flex-shrink-0">
@@ -88,7 +294,29 @@ export function ProjectItem({
 
       {!collapsed && (
         <>
-          <span className={`flex-1 truncate text-sm ${isActive ? 'text-brand' : ''}`}>{name}</span>
+          {editing ? (
+            <GroupNameInput
+              initial={name}
+              placeholder={t('workspace.projectNamePlaceholder')}
+              maxLength={PROJECT_TITLE_MAX}
+              allowEmpty
+              onCommit={(next) => onCommitRename?.(next)}
+              onCancel={() => onCancelRename?.()}
+              testId="sidebar-project-name-input"
+            />
+          ) : (
+            <span
+              data-testid="sidebar-project-name"
+              className={`flex-1 truncate text-sm ${isActive ? 'text-brand' : ''}`}
+              onDoubleClick={(e) => {
+                if (!canRename) return;
+                e.stopPropagation();
+                onStartRename?.();
+              }}
+            >
+              {name}
+            </span>
+          )}
 
           {/* Status indicator: active (brand color), loading dot moved to top-right of number */}
           {!isLoading && isActive ? (
@@ -98,7 +326,7 @@ export function ProjectItem({
       )}
 
       {/* Action buttons - shown on hover in expanded state */}
-      {isHovered && !collapsed && (
+      {isHovered && !collapsed && !editing && (
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
           {/* Note button */}
           {onOpenNote && (
@@ -129,6 +357,34 @@ export function ProjectItem({
             </svg>
           </button>
         </div>
+      )}
+
+      {menuAt && typeof document !== 'undefined' && (
+        <ProjectItemMenu
+          at={menuAt}
+          onDismiss={() => setMenuAt(null)}
+          renamed={renamed}
+          onRename={() => {
+            setMenuAt(null);
+            onStartRename?.();
+          }}
+          onResetName={() => {
+            setMenuAt(null);
+            onResetName?.();
+          }}
+          onOpenNote={
+            onOpenNote
+              ? () => {
+                  setMenuAt(null);
+                  onOpenNote();
+                }
+              : undefined
+          }
+          onClose={() => {
+            setMenuAt(null);
+            onRemove();
+          }}
+        />
       )}
     </div>
   );

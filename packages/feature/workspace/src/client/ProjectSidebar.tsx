@@ -31,6 +31,7 @@ import {
   type ProjectGroup,
 } from './projectGroups';
 import { ProjectSessionRow } from './ProjectSessionRow';
+import { customProjectTitle, projectDisplayName } from './projectTitle';
 import { GlobalSessionMonitor, GlobalSession } from '@cockpit/feature-agent';
 import { PinnedSessionsPanel } from '@cockpit/feature-agent';
 import { ScheduledTasksPanel } from '@cockpit/feature-agent';
@@ -53,7 +54,6 @@ import {
   withoutSession,
   type ProjectSessionTree,
 } from './projectSessionTree';
-import { projectNameFromCwd } from '@cockpit/shared-utils';
 
 export interface ProjectInfo {
   cwd: string;
@@ -61,6 +61,9 @@ export interface ProjectInfo {
   /** Epoch ms of the last open in this app. Persisted via /api/projects; the
    *  home screen orders its recents list by it. See server/effect/project.ts. */
   lastOpenedAt?: number;
+  /** The user's name for the project (specs/project-groups.md §8). Absent when
+   *  it was never renamed — the sidebar then shows the folder name. */
+  title?: string;
 }
 
 /** Width bounds for the resizable sidebar, in px. The minimum is the point below
@@ -92,6 +95,9 @@ interface ProjectSidebarProps {
   groups?: ReadonlyArray<ProjectGroup>;
   /** Persist a changed group set. Called only when something actually changed. */
   onChangeGroups?: (groups: ReadonlyArray<ProjectGroup>) => void;
+  /** Rename one project; '' means "back to the folder name". Absent → the rows
+   *  offer no rename. */
+  onRenameProject?: (cwd: string, title: string) => void;
   onToggleCollapse: () => void;
   /** "Open Project". Given the click so the quick folder menu can open under
    *  the button and hand focus back to it. */
@@ -113,10 +119,6 @@ function halfOf(e: ReactDragEvent): 'before' | 'after' {
   return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
 }
 
-// Extract project name from cwd (either separator: Windows cwds use `\`)
-function getProjectName(cwd: string): string {
-  return projectNameFromCwd(cwd) || cwd;
-}
 
 export function ProjectSidebar({
   projects,
@@ -130,6 +132,7 @@ export function ProjectSidebar({
   onReorderProjects,
   groups = EMPTY_GROUPS,
   onChangeGroups,
+  onRenameProject,
   onToggleCollapse,
   onOpenSessionBrowser,
   onBrowseAllSessions,
@@ -303,6 +306,8 @@ export function ProjectSidebar({
   const [dropZone, setDropZone] = useState<string | null>(null);
   const [menuGroupId, setMenuGroupId] = useState<string | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  /** The project whose name is being edited (R8.2). */
+  const [editingProjectCwd, setEditingProjectCwd] = useState<string | null>(null);
 
   const model = useMemo(() => buildSidebarModel(projects, groups), [projects, groups]);
   const hasGroups = groups.length > 0;
@@ -450,15 +455,23 @@ export function ProjectSidebar({
     clearDrag();
   }, [applyGroups, applyProjectDrop, clearDrag]);
 
+  const commitProjectName = (cwd: string, title: string) => {
+    setEditingProjectCwd(null);
+    onRenameProject?.(cwd, title);
+  };
+
   const renderProjectRow = (project: ProjectInfo, index: number, inGroup: boolean) => {
     const branch = projectStateAt(sessionTree, project.cwd);
+    const editingName = editingProjectCwd === project.cwd;
     // The collapsed rail is an icon strip 48px wide — a session title has
     // nowhere to go there, so the whole tree folds away with it.
     const showBranch = !collapsed && branch.isExpanded;
     return (
       <div
         key={project.cwd}
-        draggable
+        // Not while the name is being edited: a drag from inside the input
+        // would select text AND move the row.
+        draggable={!editingName}
         onDragStart={(e) => handleDragStart(index, e)}
         onDragOver={(e) => handleDragOver(e, index)}
         onDrop={() => handleDrop(index)}
@@ -496,7 +509,7 @@ export function ProjectSidebar({
           <div className="flex-1 min-w-0">
             <ProjectItem
               index={index}
-              name={getProjectName(project.cwd)}
+              name={projectDisplayName(project)}
               cwd={project.cwd}
               isActive={index === activeIndex}
               collapsed={collapsed}
@@ -505,6 +518,12 @@ export function ProjectSidebar({
               onClick={() => onSelectProject(index)}
               onRemove={() => onRemoveProject(index)}
               onOpenNote={() => onOpenNote(project.cwd)}
+              renamed={customProjectTitle(project.cwd, project.title) !== undefined}
+              editing={editingName}
+              onStartRename={onRenameProject ? () => setEditingProjectCwd(project.cwd) : undefined}
+              onCommitRename={(title) => commitProjectName(project.cwd, title)}
+              onCancelRename={() => setEditingProjectCwd(null)}
+              onResetName={() => onRenameProject?.(project.cwd, '')}
             />
           </div>
         </div>

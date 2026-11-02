@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.10 — 2026-11-02
+
+### en
+
+You can now give a project its own name in the sidebar.
+
+**New**
+
+- **Rename a project.** Double-click a project's name in the sidebar, or right-click it → Rename. Only the name naby shows changes; the folder on disk stays as it is, and hovering still shows the full path. Clear the name, or choose "Use folder name", to go back. Telegram messages use the new name too.
+
+### ko
+
+사이드바에서 프로젝트 이름을 원하는 대로 바꿀 수 있어요.
+
+**새로 생긴 것**
+
+- **프로젝트 이름 바꾸기.** 사이드바에서 프로젝트 이름을 더블클릭하거나, 우클릭 → 이름 변경을 누르세요. naby에 보이는 이름만 바뀌고 디스크의 폴더 이름은 그대로예요. 마우스를 올리면 전체 경로도 계속 보여요. 이름을 비우거나 "원래 이름으로"를 고르면 폴더 이름으로 돌아가요. 텔레그램 알림에도 바꾼 이름이 나와요.
+
 ## 1.48.9 — 2026-10-30
 
 ### en
