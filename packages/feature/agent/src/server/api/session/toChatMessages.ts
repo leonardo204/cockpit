@@ -68,6 +68,9 @@ export interface ChatMessage {
     /** `cross-session`: the OTHER session's title (the sender on a request, the
      *  target on a reply / failure). */
     peer?: string;
+    /** `cross-session`: the other session's project, only when it is another
+     *  one (cross-project-context R10). */
+    peerProject?: string;
   };
   timestamp?: string;
   /** HOW LONG THE TURN TOOK, as the engine measured it (ms). Assistant bubbles
@@ -200,6 +203,7 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
             status: m.crossSession.role,
             detail: m.content,
             peer: m.crossSession.fromTitle,
+            ...(m.crossSession.fromProject ? { peerProject: m.crossSession.fromProject } : {}),
           },
         });
         return;

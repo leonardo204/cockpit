@@ -14,22 +14,22 @@
  * order of the `groups` array is the order the group headers show in.
  */
 
-export interface ProjectGroup {
-  readonly id: string;
-  readonly name: string;
-  readonly collapsed: boolean;
-  /** Members. A cwd is in at most one group. Order carries no meaning. */
-  readonly cwds: ReadonlyArray<string>;
-}
-
-/** Longest group name kept; longer ones are cut, not rejected. */
-export const PROJECT_GROUP_NAME_MAX = 60;
-
-/** Trim and cut a name to the stored limit. '' means "not a valid name". */
-export function cleanGroupName(name: unknown): string {
-  if (typeof name !== 'string') return '';
-  return name.trim().slice(0, PROJECT_GROUP_NAME_MAX).trim();
-}
+// The stored shape and its normalizer live in shared-utils so feature-agent
+// (cross-project-context R2) reads groups through the SAME rules; re-exported
+// here so every existing import keeps working.
+import {
+  cleanGroupName,
+  type ProjectGroup,
+} from '@cockpit/shared-utils';
+export {
+  cleanGroupName,
+  normalizeGroups,
+  parseStoredGroups,
+  PROJECT_GROUP_NAME_MAX,
+  PROJECT_GROUPS_SETTING_KEY,
+  serializeGroups,
+  type ProjectGroup,
+} from '@cockpit/shared-utils';
 
 /** A short random id (`g_` + 8 base36 chars), unique enough for one user's groups. */
 export function newGroupId(existing: ReadonlyArray<ProjectGroup> = []): string {
@@ -40,71 +40,6 @@ export function newGroupId(existing: ReadonlyArray<ProjectGroup> = []): string {
   }
 }
 
-/**
- * Coerce anything into a valid group list. Never throws.
- *
- * - Accepts the stored envelope `{ groups: [...] }` or a bare array.
- * - Drops entries that are not objects, have no id (or a duplicate one), or
- *   whose name is empty after trimming. Names are cut to 60 chars.
- * - With `knownCwds`, drops members that are not in the project list — a
- *   removed project leaves its group with it.
- * - A cwd listed by two groups stays only in the first.
- */
-export function normalizeGroups(
-  raw: unknown,
-  knownCwds?: ReadonlyArray<string>,
-): ProjectGroup[] {
-  const list: unknown =
-    raw && typeof raw === 'object' && !Array.isArray(raw)
-      ? (raw as { groups?: unknown }).groups
-      : raw;
-  if (!Array.isArray(list)) return [];
-  const known = knownCwds ? new Set(knownCwds) : null;
-  const seenIds = new Set<string>();
-  const claimed = new Set<string>();
-  const out: ProjectGroup[] = [];
-  for (const entry of list) {
-    if (!entry || typeof entry !== 'object') continue;
-    const e = entry as Record<string, unknown>;
-    const id = typeof e.id === 'string' ? e.id.trim() : '';
-    if (!id || seenIds.has(id)) continue;
-    const name = cleanGroupName(e.name);
-    if (!name) continue;
-    const cwds: string[] = [];
-    if (Array.isArray(e.cwds)) {
-      for (const c of e.cwds) {
-        if (typeof c !== 'string' || !c) continue;
-        if (claimed.has(c)) continue;
-        if (known && !known.has(c)) continue;
-        claimed.add(c);
-        cwds.push(c);
-      }
-    }
-    seenIds.add(id);
-    out.push({ id, name, collapsed: e.collapsed === true, cwds });
-  }
-  return out;
-}
-
-/** Read the stored settings value. Broken JSON reads as "no groups". */
-export function parseStoredGroups(
-  raw: string | undefined | null,
-  knownCwds?: ReadonlyArray<string>,
-): ProjectGroup[] {
-  if (!raw) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  return normalizeGroups(parsed, knownCwds);
-}
-
-/** The stored settings value (`sidebar.projectGroups`). */
-export function serializeGroups(groups: ReadonlyArray<ProjectGroup>): string {
-  return JSON.stringify({ groups });
-}
 
 // ─────────────────────────────────────────────────────────
 // Edits. Each returns the SAME array when nothing changed, so a caller can

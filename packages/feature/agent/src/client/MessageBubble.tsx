@@ -837,18 +837,39 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
     // is the English prompt naby got, so the pill names the other session and
     // the direction, and the original is in the modal.
     const crossTitle = ev?.peer || t('chat.crossSession.untitled', { defaultValue: 'untitled' });
+    // Another project's tab names its project too (cross-project-context R10);
+    // within one project the pill reads as it always did.
+    const crossProject = ev?.peerProject;
     const pillText =
       ev?.kind === 'job-report'
         ? t('chat.jobReportNotice', { defaultValue: 'A background job finished' })
         : ev?.kind === 'cross-session'
-          ? ev.status === 'request'
-            ? t('chat.crossSession.request', { defaultValue: 'Request from session ‹{{title}}›', title: crossTitle })
-            : ev.status === 'failure'
-              ? t('chat.crossSession.failure', {
-                  defaultValue: 'The request to session ‹{{title}}› failed',
+          ? crossProject
+            ? ev.status === 'request'
+              ? t('chat.crossSession.requestProject', {
+                  defaultValue: 'Request from session ‹{{title}}› of project ‹{{project}}›',
                   title: crossTitle,
+                  project: crossProject,
                 })
-              : t('chat.crossSession.reply', { defaultValue: 'Answer from session ‹{{title}}›', title: crossTitle })
+              : ev.status === 'failure'
+                ? t('chat.crossSession.failureProject', {
+                    defaultValue: 'The request to session ‹{{title}}› of project ‹{{project}}› failed',
+                    title: crossTitle,
+                    project: crossProject,
+                  })
+                : t('chat.crossSession.replyProject', {
+                    defaultValue: 'Answer from session ‹{{title}}› of project ‹{{project}}›',
+                    title: crossTitle,
+                    project: crossProject,
+                  })
+            : ev.status === 'request'
+              ? t('chat.crossSession.request', { defaultValue: 'Request from session ‹{{title}}›', title: crossTitle })
+              : ev.status === 'failure'
+                ? t('chat.crossSession.failure', {
+                    defaultValue: 'The request to session ‹{{title}}› failed',
+                    title: crossTitle,
+                  })
+                : t('chat.crossSession.reply', { defaultValue: 'Answer from session ‹{{title}}›', title: crossTitle })
           : message.content;
     // Full text for the detail modal — the raw <task-notification> block, or the
     // message content itself (image annotation / compact-summary notice).

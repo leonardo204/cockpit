@@ -27,3 +27,7 @@ export * from './projectFolder';
 export * from './platform';
 export * from './paths';
 export * from './ollamaEnv';
+// The stored project-group shape and its one normalizer — the sidebar, the
+// projects route and naby's cross-project tools read the same rules. See
+// projectGroups.ts.
+export * from './projectGroups';

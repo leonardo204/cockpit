@@ -33,6 +33,7 @@ import {
   folderNameOf,
   normalizeGroups,
   parseStoredGroups,
+  PROJECT_GROUPS_SETTING_KEY,
   serializeGroups,
 } from "@cockpit/feature-workspace/server"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
@@ -45,7 +46,7 @@ const COLLAPSED_KEY = "ui.collapsed"
 const SIDEBAR_WIDTH_KEY = "ui.sidebarWidth"
 const FILES_WIDTH_KEY = "ui.filesWidth"
 /** Sidebar project groups, JSON `{ groups: [...] }` (specs/project-groups.md §3). */
-const PROJECT_GROUPS_KEY = "sidebar.projectGroups"
+const PROJECT_GROUPS_KEY = PROJECT_GROUPS_SETTING_KEY
 
 /** Kept in step with the panels' own MIN/MAX constants. Clamped here too,
  *  because a stored width is read straight into a layout and a bad one from any

@@ -172,6 +172,11 @@ import {
   // shape check for a turn another session started.
   CROSS_SESSION_TOOL_NAMES,
   isCrossSessionMeta,
+  // cross-project-context R16: the other-project tools, excluded where the
+  // cross-session ones are.
+  CROSS_PROJECT_TOOL_NAMES,
+  // cross-project-context R26: the group awareness paragraph.
+  groupAwarenessParagraph,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
 // Re-exported so the session-browsing routes (Phase C-2) can type the store
@@ -263,6 +268,13 @@ import { fastGrowthInstruction } from '../lib/fastGrowth';
 import { handoffInstruction } from '../lib/sessionHandoff';
 import { JOB_REPORT_SOURCE, makeJobSink } from '../lib/backgroundJobReport';
 import { makeCrossSessionTools, readCrossSessionEnabled, type CrossSessionDeps } from '../lib/crossSession';
+import {
+  makeCrossProjectGuard,
+  makeCrossProjectTools,
+  readCrossProjectEnabled,
+  readProjectGroups,
+} from '../lib/crossProject';
+import { projectDisplayNames } from '../lib/projectDisplayName';
 import { isRunActive as hubIsRunActive } from '../sessionRunHub';
 import { namedHarnessRows } from '../../shared/slashTokens';
 import {
@@ -326,6 +338,11 @@ const DEFAULT_ORG_ID = 'default';
 /** How long a tool-approval prompt waits for the user before auto-denying, so a
  *  turn can never hang forever on an unanswered prompt (Phase 2 M2). */
 const APPROVAL_TTL_MS = 10 * 60 * 1000;
+
+/** Tools only naby's own turn may hold: messaging other sessions
+ *  (cross-session-messaging §3.1) and looking into other projects
+ *  (cross-project-context R16). A delegated run never gets them. */
+const NABY_TURN_ONLY_TOOLS: readonly string[] = [...CROSS_SESSION_TOOL_NAMES, ...CROSS_PROJECT_TOOL_NAMES];
 
 /**
  * Per-turn hard cap on injected skill instructions (M3). Over-budget candidates are
@@ -1487,12 +1504,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     // refuses it for a subagent call anyway).
                     // Nor does it message other sessions (cross-session-messaging
                     // §3.1): handing work to another tab is naby's, on its own turn.
+                    // Nor does it look into other projects (cross-project-context
+                    // R16): the access card needs naby's own turn in front of it.
                     toolSchemas: toolSchemas.filter(
-                      (t) => t.name !== PARTICIPANT_DRAFT_TOOL && !CROSS_SESSION_TOOL_NAMES.includes(t.name),
+                      (t) => t.name !== PARTICIPANT_DRAFT_TOOL && !NABY_TURN_ONLY_TOOLS.includes(t.name),
                     ),
                     executors: Object.fromEntries(
                       Object.entries(executors).filter(
-                        ([name]) => name !== PARTICIPANT_DRAFT_TOOL && !CROSS_SESSION_TOOL_NAMES.includes(name),
+                        ([name]) => name !== PARTICIPANT_DRAFT_TOOL && !NABY_TURN_ONLY_TOOLS.includes(name),
                       ),
                     ),
                     signal: ctx.signal,
@@ -1689,6 +1708,29 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // has let the call through, so neither a policy rule nor the allow-all
         // baseline can answer for it (the gate special-case below).
         const nabyOwnsTurn = !routedAgent || routedAgent.kind === 'persona';
+        // Telegram follows naby's own escalation, like a proposal (D12): a card
+        // naby raises itself — a participant draft, a project
+        // access (cross-project-context R20) — is naby's decision whatever turn
+        // it is in. Read when a card is actually raised (`escalateToTelegram` is
+        // bound below).
+        const selfRaisedEscalate = {
+          enabled: () => {
+            if (escalateToTelegram) return true;
+            const e = readPersonaAutonomy(store).escalation;
+            return e === 'telegram' || e === 'both';
+          },
+          send: (input: { approvalId: string; toolName: string; input: unknown }) =>
+            void escalateApproval({
+              store,
+              approvalId: input.approvalId,
+              toolName: input.toolName,
+              input: input.input,
+              now: Date.now(),
+              ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
+            }),
+          finish: (input: { approvalId: string; decision: 'allow' | 'deny'; reason?: string }) =>
+            void finishEscalation({ store, ...input }),
+        };
         const draftTool =
           nabyOwnsTurn && roundEligible
             ? makeParticipantDraftTool({
@@ -1699,26 +1741,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 ttlMs: APPROVAL_TTL_MS,
                 log: (kind, payload) => logActivity(kind, payload),
                 ...(growthSubject ? { hubAgentId: growthSubject.id } : {}),
-                // Telegram follows naby's own escalation, like a proposal (D12):
-                // drafting is naby's decision whatever turn it is in. Read when a
-                // draft is actually made (`escalateToTelegram` is bound below).
-                escalate: {
-                  enabled: () => {
-                    if (escalateToTelegram) return true;
-                    const e = readPersonaAutonomy(store).escalation;
-                    return e === 'telegram' || e === 'both';
-                  },
-                  send: (input) =>
-                    void escalateApproval({
-                      store,
-                      approvalId: input.approvalId,
-                      toolName: input.toolName,
-                      input: input.input,
-                      now: Date.now(),
-                      ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
-                    }),
-                  finish: (input) => void finishEscalation({ store, ...input }),
-                },
+                escalate: selfRaisedEscalate,
               })
             : undefined;
 
@@ -1732,6 +1755,56 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // participant never gets them (participantTurn's exclusion list), a
         // delegated run has them filtered out, and the gate refuses a subagent.
         const crossSessionTurn = isCrossSessionMeta(ctx.params.crossSession) ? ctx.params.crossSession : undefined;
+
+        // OTHER PROJECTS (cross-project-context). One guard per turn holds the
+        // single access decision (R5) and raises the access card itself,
+        // after the gate let the call through — the draft tool's pattern, so no
+        // policy rule or allow-all baseline answers for it (R17). Offered on
+        // exactly the cross-session turns (R16: naby's own, typed in the app or
+        // on Telegram; never a turn another session started, a scheduled task,
+        // a job report, a participant, a delegated run or a subagent), with a
+        // project, and with `sessions.crossProject.enabled` on (R6). The guard
+        // also widens the cross-session tools (R7, R8) when those are on.
+        const crossProjectGuard =
+          nabyOwnsTurn && roundEligible && !crossSessionTurn && projectCwd && readCrossProjectEnabled(store)
+            ? makeCrossProjectGuard({
+                store,
+                sessionId,
+                cwd: projectCwd,
+                emit: (event) => ctx.emit(event as RunEvent),
+                signal: ctx.signal,
+                ttlMs: APPROVAL_TTL_MS,
+                escalate: selfRaisedEscalate,
+              })
+            : undefined;
+        const crossProjectTools =
+          crossProjectGuard && projectCwd
+            ? makeCrossProjectTools({
+                store,
+                sessionId,
+                cwd: projectCwd,
+                guard: crossProjectGuard,
+              })
+            : undefined;
+
+        // R2 + R26: naby is TOLD which projects share this one's sidebar group —
+        // names and cwds, never content — on exactly the turns the guard exists
+        // for (R16's exclusions and the R6 switch are already in its condition).
+        // Built here, in the shared system prompt, so both engines get the same
+        // text; sorted by name inside the builder so the prompt cache holds.
+        const crossProjectGroupNote = (() => {
+          if (!crossProjectGuard || !projectCwd) return undefined;
+          try {
+            return groupAwarenessParagraph({
+              groups: readProjectGroups(store),
+              cwd: projectCwd,
+              nameOf: projectDisplayNames(store),
+            });
+          } catch {
+            return undefined;
+          }
+        })();
+
         const crossSessionTools =
           nabyOwnsTurn && roundEligible && !crossSessionTurn && projectCwd && readCrossSessionEnabled(store)
             ? makeCrossSessionTools({
@@ -1740,6 +1813,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 cwd: projectCwd,
                 isRunActive: hubIsRunActive,
                 ...(deps.crossSessionDelivery ? { deliveryDeps: deps.crossSessionDelivery } : {}),
+                ...(crossProjectGuard ? { crossProject: { store, guard: crossProjectGuard } } : {}),
               })
             : undefined;
 
@@ -1747,6 +1821,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ...builtin.toolSchemas,
           ...(draftTool ? [draftTool.schema] : []),
           ...(crossSessionTools?.schemas ?? []),
+          ...(crossProjectTools?.schemas ?? []),
           ...(workspace?.toolSchemas ?? []),
           ...(orgLoad ? [orgLoad.schema] : []),
           ...(mcp?.toolSchemas ?? []),
@@ -1755,6 +1830,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ...builtin.executors,
           ...(draftTool ? { [draftTool.schema.name]: draftTool.executor } : {}),
           ...(crossSessionTools?.executors ?? {}),
+          ...(crossProjectTools?.executors ?? {}),
           ...(workspace?.executors ?? {}),
           ...(orgLoad ? { [orgLoad.schema.name]: orgLoad.executor } : {}),
           ...(mcp?.executors ?? {}),
@@ -2239,6 +2315,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // without (the first participant is made this way), in a round and on
             // the plain path (a round's naby speech starts from this same system).
             draftTool ? PARTICIPANT_DRAFT_RULE : undefined,
+            // cross-project-context R26: which projects share this one's group.
+            // Context, not policy; present exactly when the cross-project tools are.
+            crossProjectGroupNote,
             stageLimited
               ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
               : undefined,
@@ -2669,6 +2748,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             return {
               behavior: 'deny',
               reason: 'only naby can message other sessions, on its own turn',
+              refusal: 'capability',
+            };
+          }
+          // ---- other projects are naby's too (cross-project-context R16) -----
+          // Same second barrier. Otherwise the two reads take the ordinary gate
+          // below as observations (R15): a policy rule can still block them,
+          // and the read-only floor lets them through (they are in this turn's
+          // runtime tool names and none of them writes or runs anything). The
+          // access card is raised by the guard inside the executor.
+          if (call.subagent && CROSS_PROJECT_TOOL_NAMES.includes(normalizeToolName(call.toolName))) {
+            console.log(`[engine:naby] gate: ${call.toolName} (${call.toolCallId}) → deny (naby turns only)`);
+            return {
+              behavior: 'deny',
+              reason: 'only naby can look into other projects, on its own turn',
               refusal: 'capability',
             };
           }

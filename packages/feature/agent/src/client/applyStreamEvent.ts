@@ -69,7 +69,7 @@ export interface StreamEvent {
   _ts?: number; // server clock at startRun — time boundary for disk-copy dedup
   /** On a `_human` event: the turn was started by another session
    *  (cross-session-messaging §3.3) — drawn as a notice pill, not a user bubble. */
-  _crossSession?: { requestId?: string; fromSessionId?: string; fromTitle?: string; role?: string };
+  _crossSession?: { requestId?: string; fromSessionId?: string; fromTitle?: string; role?: string; fromProject?: string };
   message?: { model?: string; role?: string; content?: unknown };
   event?: { type?: string; delta?: { type?: string; text?: string } };
   result?: unknown;

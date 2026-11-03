@@ -139,6 +139,9 @@ export function useLiveStream(
                 status: cross.role,
                 detail: text,
                 ...(typeof cross.fromTitle === 'string' ? { peer: cross.fromTitle } : {}),
+                ...(typeof cross.fromProject === 'string' && cross.fromProject
+                  ? { peerProject: cross.fromProject }
+                  : {}),
               },
             } as ChatMessage,
           ];

@@ -24,6 +24,9 @@ import type { GateDecision } from '../../../../../../../dist/naby-runtime.mjs';
 export type ApprovalExtras = {
   edits?: { name?: string; displayName?: string; description?: string; avatar?: string; color?: string };
   addToSession?: boolean;
+  /** cross-project-context R3/R18: the access card's "always allow" — an allow
+   *  that also stores the directed project pair. Read only by that card's guard. */
+  always?: boolean;
 };
 
 type Pending = {
@@ -72,12 +75,17 @@ export const PARTICIPANT_UPDATE_TOOL = 'participant.update';
 /** The draft tool itself, as a policy pattern a hand-made request could name. */
 export const PARTICIPANT_DRAFT_TOOL_NAME = 'naby_participant_draft';
 
+/** naby reaching into another project (cross-project-context R17). Its
+ *  "always allow" is the card's own directed pair (R18) — never a policy rule. */
+export const CROSS_PROJECT_ACCESS_TOOL = 'cross_project.access';
+
 /** Approval kinds whose "remember" never becomes a policy rule. */
 const NEVER_REMEMBERED: ReadonlySet<string> = new Set([
   PARTICIPANT_ADD_TOOL,
   PARTICIPANT_CREATE_TOOL,
   PARTICIPANT_UPDATE_TOOL,
   PARTICIPANT_DRAFT_TOOL_NAME,
+  CROSS_PROJECT_ACCESS_TOOL,
 ]);
 
 /** Whether an approval kind is one of naby's participant drafts. */

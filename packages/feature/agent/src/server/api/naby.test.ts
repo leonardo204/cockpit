@@ -995,6 +995,75 @@ describe('POST /api/naby — memory.learningEnabled (P3-M10 §3)', () => {
   });
 });
 
+describe('POST /api/naby — crossProject (cross-project-context R6)', () => {
+  afterEach(async () => {
+    await runNabyAction({ action: 'crossProject.set', enabled: true });
+  });
+
+  it('reads ON by default, round-trips off, and refuses a non-boolean', async () => {
+    const first = await runNabyAction({ action: 'crossProject.get' });
+    expect(first).toMatchObject({ ok: true, crossProjectEnabled: true });
+    const off = await runNabyAction({ action: 'crossProject.set', enabled: false });
+    expect(off).toMatchObject({ ok: true, crossProjectEnabled: false });
+    expect(getStore().getSetting('sessions.crossProject.enabled')).toBe('false');
+    // @ts-expect-error — what arrives off the wire.
+    const bad = await runNabyAction({ action: 'crossProject.set', enabled: 'true' });
+    expect(bad.ok).toBe(false);
+    expect(getStore().getSetting('sessions.crossProject.enabled')).toBe('false');
+  });
+  it('lists the permanent approvals and removes one (R18a)', async () => {
+    const { addCrossProjectApprovalPair } = await import('../lib/crossProject');
+    const store = getStore();
+    const root = mkdtempSync(join(tmpdir(), 'naby-xp-api-'));
+    const from = join(root, 'proposal');
+    const to = join(root, 'server');
+    store.upsertProject(from);
+    store.upsertProject(to);
+    try {
+      addCrossProjectApprovalPair(store, from, to, 7);
+      addCrossProjectApprovalPair(store, from, '/gone/x', 8);
+      const got = await runNabyAction({ action: 'crossProject.get' });
+      expect(got.ok && got.crossProjectApprovals).toEqual([
+        { from, to, fromName: 'proposal', toName: 'server', fromListed: true, toListed: true, at: 7 },
+        { from, to: '/gone/x', fromName: 'proposal', toName: 'x', fromListed: true, toListed: false, at: 8 },
+      ]);
+      const removed = await runNabyAction({ action: 'crossProject.removeApproval', from, to });
+      expect(removed).toMatchObject({ ok: true, removed: true });
+      expect(removed.ok && removed.crossProjectApprovals?.map((r) => r.to)).toEqual(['/gone/x']);
+      const again = await runNabyAction({ action: 'crossProject.removeApproval', from, to });
+      expect(again).toMatchObject({ ok: true, removed: false });
+      // @ts-expect-error — what arrives off the wire.
+      const bad = await runNabyAction({ action: 'crossProject.removeApproval', from });
+      expect(bad.ok).toBe(false);
+    } finally {
+      store.setSetting('sessions.crossProject.approvals', '');
+      store.removeProject(from);
+      store.removeProject(to);
+    }
+  });
+
+  it('approval.resolve carries "always" to the access card and writes no policy rule', async () => {
+    const { registerApproval, CROSS_PROJECT_ACCESS_TOOL } = await import('../lib/approvalRegistry');
+    const store = getStore();
+    const before = store.listPolicyRules('user', DEFAULT_USER_ID).length;
+    const seen: unknown[] = [];
+    registerApproval('xp-always-1', (d, extras) => seen.push([d.behavior, extras?.always]), Date.now(), {
+      toolName: CROSS_PROJECT_ACCESS_TOOL,
+    });
+    const res = await runNabyAction({
+      action: 'approval.resolve',
+      approvalId: 'xp-always-1',
+      decision: 'allow',
+      always: true,
+      remember: true,
+      toolPattern: CROSS_PROJECT_ACCESS_TOOL,
+    });
+    expect(res).toMatchObject({ ok: true, resolved: true });
+    expect(seen).toEqual([['allow', true]]);
+    expect(store.listPolicyRules('user', DEFAULT_USER_ID).length).toBe(before);
+  });
+});
+
 describe('POST /api/naby — session.noLearn (P3-M10 §3)', () => {
   it('marks a session, lists it, and clears it', async () => {
     const store = getStore();

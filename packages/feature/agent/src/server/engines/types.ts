@@ -34,7 +34,14 @@ export interface DispatchParams {
    * orchestrator puts it on the live `_human` event so the tab draws the notice
    * pill at once rather than after a reload.
    */
-  crossSession?: { requestId: string; fromSessionId: string; fromTitle: string; role: 'request' | 'reply' | 'failure' };
+  crossSession?: {
+    requestId: string;
+    fromSessionId: string;
+    fromTitle: string;
+    role: 'request' | 'reply' | 'failure';
+    /** The other session's project, when it is another one (cross-project-context R10). */
+    fromProject?: string;
+  };
 }
 
 /** Dispatch result. The run is detached (fire-and-forget); on success the caller gets the

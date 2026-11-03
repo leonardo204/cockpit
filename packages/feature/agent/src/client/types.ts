@@ -126,12 +126,14 @@ export interface ChatMessage {
    *  moved to the assistant side either. */
   /** `cross-session` is a turn another session started (cross-session-messaging
    *  §3.3): `status` is the direction (`request` | `reply` | `failure`) and
-   *  `peer` the other session's title. */
+   *  `peer` the other session's title; `peerProject` its project, only when it
+   *  is another one (cross-project-context R10). */
   systemEvent?: {
     kind: 'task-notification' | 'meta' | 'job-report' | 'cross-session';
     status?: string;
     detail?: string;
     peer?: string;
+    peerProject?: string;
   };
   // The RUNS this turn launched, as the backend reported their lifecycle:
   // delegated subagents (`Task`) and background shell jobs (`Bash` with

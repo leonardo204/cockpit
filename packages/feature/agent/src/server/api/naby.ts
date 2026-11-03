@@ -183,6 +183,13 @@ import {
 } from '../lib/participants';
 import { readCrossSessionEnabled, writeCrossSessionEnabled } from '../lib/crossSession';
 import {
+  listCrossProjectApprovals,
+  readCrossProjectEnabled,
+  removeCrossProjectApprovalPair,
+  writeCrossProjectEnabled,
+  type CrossProjectApprovalRow,
+} from '../lib/crossProject';
+import {
   closeRecommendation,
   pendingRecommendationViews,
   type RecommendationView,
@@ -783,6 +790,9 @@ export type NabyAction =
        *  Read only by a draft (`participant.create` / `participant.update`). */
       edits?: { name?: unknown; displayName?: unknown; description?: unknown; avatar?: unknown; color?: unknown };
       addToSession?: boolean;
+      /** cross-project-context R3: the access card's "always allow". Read only
+       *  by that card (`cross_project.access`). */
+      always?: boolean;
     }
   // Phase 3 (P3-M1) — the naby agent layer (built-in persona + custom agents),
   // addressed by `@`. `agent.put` upserts (omit `id` to create a custom agent,
@@ -952,6 +962,12 @@ export type NabyAction =
   // cross-session-messaging R10: naby may hand work to another tab (default ON).
   | { action: 'crossSession.get' }
   | { action: 'crossSession.set'; enabled: boolean }
+  // cross-project-context R6: naby may look into other projects (default ON).
+  // `get` also returns the permanent "always allow" pairs (R18a), and
+  // `removeApproval` deletes one — the next access asks again.
+  | { action: 'crossProject.get' }
+  | { action: 'crossProject.set'; enabled: boolean }
+  | { action: 'crossProject.removeApproval'; from: string; to: string }
   // P3-M13c (§3.3): READ-ONLY. The style fingerprint is counted from the user's
   // own messages by the reflection sweep and has no setter at all — there is
   // nothing here for a person to configure, only something for them to SEE. It
@@ -1128,6 +1144,9 @@ export type NabyActionResult =
        *  Injection is unaffected either way — see memory-hygiene §3. */
       learningEnabled?: boolean;
       crossSessionEnabled?: boolean;
+      crossProjectEnabled?: boolean;
+      /** `crossProject.get` / `removeApproval` (cross-project-context R18a). */
+      crossProjectApprovals?: CrossProjectApprovalRow[];
       /** `style.get` (P3-M13c): the counted writing profile, or null when there
        *  is not one yet. */
       style?: StyleFingerprint | null;
@@ -1382,7 +1401,7 @@ function resolvePolicyScope(
 /** The draft-card extras of an `approval.resolve` body (multi-agent-chat
  *  §8.12): only the five editable fields, only as strings, and a boolean
  *  `addToSession`. Undefined when the body carries neither. */
-function approvalExtrasFrom(body: { edits?: unknown; addToSession?: unknown }): ApprovalExtras | undefined {
+function approvalExtrasFrom(body: { edits?: unknown; addToSession?: unknown; always?: unknown }): ApprovalExtras | undefined {
   const out: ApprovalExtras = {};
   if (body.edits && typeof body.edits === 'object' && !Array.isArray(body.edits)) {
     const e = body.edits as Record<string, unknown>;
@@ -1393,6 +1412,7 @@ function approvalExtrasFrom(body: { edits?: unknown; addToSession?: unknown }): 
     if (Object.keys(edits).length > 0) out.edits = edits;
   }
   if (typeof body.addToSession === 'boolean') out.addToSession = body.addToSession;
+  if (body.always === true) out.always = true;
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
@@ -1470,6 +1490,30 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       }
       writeCrossSessionEnabled(store, body.enabled);
       return { ok: true, crossSessionEnabled: body.enabled };
+    }
+
+    case 'crossProject.get':
+      return {
+        ok: true,
+        crossProjectEnabled: readCrossProjectEnabled(store),
+        crossProjectApprovals: listCrossProjectApprovals(store),
+      };
+
+    case 'crossProject.removeApproval': {
+      if (typeof body.from !== 'string' || !body.from || typeof body.to !== 'string' || !body.to) {
+        return { ok: false, error: 'from and to are required' };
+      }
+      const removed = removeCrossProjectApprovalPair(store, body.from, body.to);
+      return { ok: true, removed, crossProjectApprovals: listCrossProjectApprovals(store) };
+    }
+
+    case 'crossProject.set': {
+      // Strictly boolean, like `crossSession.set`.
+      if (typeof body.enabled !== 'boolean') {
+        return { ok: false, error: 'enabled must be a boolean' };
+      }
+      writeCrossProjectEnabled(store, body.enabled);
+      return { ok: true, crossProjectEnabled: body.enabled };
     }
 
     case 'session.noLearn.list':

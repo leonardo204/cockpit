@@ -85,6 +85,30 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.12 — 2026-11-03
+
+### en
+
+naby can now look at other projects in your sidebar — with your approval each time, or once for good.
+
+**New**
+
+- **Context from other projects.** In a project's chat, naby can read another project's files and git history (read-only) or ask that project's open tab a question. Projects in the same sidebar group are known to naby by name, so it can reach for them when your question needs it.
+- **You approve every access.** The first time naby wants another project's content, a card asks: Allow once, Always allow, or Decline. Always allow is remembered per project pair and direction.
+- **Manage permanent approvals in Settings.** Under "Look into other projects", the pairs you've always allowed are listed, and you can remove any of them. You can also turn the whole feature off there.
+- **Nothing is written to another project.** Its content is labelled with where it came from and stays in the current chat; project memories stay separate.
+
+### ko
+
+나비가 사이드바의 다른 프로젝트를 참고할 수 있어요. 매번 승인하거나, 한 번 영구로 허용하면 돼요.
+
+**새로 생긴 것**
+
+- **다른 프로젝트 컨텍스트.** 프로젝트 대화에서 나비가 다른 프로젝트의 파일과 git 기록을 읽기 전용으로 보거나, 그 프로젝트의 열린 탭에 물어볼 수 있어요. 같은 사이드바 그룹의 프로젝트는 나비가 이름을 알고 있어서, 질문에 필요하면 먼저 찾아봐요.
+- **접근할 때마다 승인.** 나비가 다른 프로젝트의 내용을 가져오려 하면 카드가 떠요. 이번만 허용, 항상 허용, 거절 중에서 고르면 돼요. 항상 허용은 프로젝트 쌍과 방향별로 기억해요.
+- **설정에서 영구 허용 관리.** "다른 프로젝트 보기" 아래에 항상 허용한 프로젝트 쌍이 나오고, 하나씩 지울 수 있어요. 기능 전체를 끌 수도 있어요.
+- **다른 프로젝트에는 쓰지 않아요.** 가져온 내용에는 출처 프로젝트가 붙고 지금 대화 안에서만 쓰여요. 프로젝트 기억도 섞이지 않아요.
+
 ## 1.48.11 — 2026-11-03
 
 ### en

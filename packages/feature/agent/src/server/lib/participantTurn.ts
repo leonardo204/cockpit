@@ -48,6 +48,9 @@ export const PARTICIPANT_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
   // Messaging other sessions (cross-session-messaging §3.1) is naby's too.
   'naby_list_sessions',
   'naby_send_to_session',
+  // So is looking into other projects (cross-project-context R16).
+  'naby_list_projects',
+  'naby_read_project',
   'Task',
   'Agent',
 ]);

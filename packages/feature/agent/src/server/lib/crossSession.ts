@@ -32,21 +32,32 @@ import {
   buildCrossSessionReplyPrompt,
   buildCrossSessionRequestPrompt,
   isUserAuthored,
+  LIST_SESSIONS_CROSS_PROJECT_TOOL_SCHEMA,
   LIST_SESSIONS_TOOL_SCHEMA,
   logActivity,
+  parseListSessionsInput,
   parseSendToSessionInput,
+  SEND_TO_SESSION_CROSS_PROJECT_TOOL_SCHEMA,
   SEND_TO_SESSION_TOOL_SCHEMA,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import type {
   CrossSessionFailureReason,
   CrossSessionMeta,
   Executor,
+  ListSessionsScope,
   SessionRef,
   Store,
   ToolOutput,
   ToolSchema,
 } from '../../../../../../../dist/naby-runtime.mjs';
 import { extractRunAnswer } from './telegramChat';
+import {
+  crossProjectAccess,
+  readProjectGroups,
+  type CrossProjectGuard,
+  type CrossProjectStore,
+} from './crossProject';
+import { projectDisplayNames } from './projectDisplayName';
 
 /** The `source` stamped on both legs' runs (activity log, `roundEligible`). */
 export const CROSS_SESSION_SOURCE = 'cross-session';
@@ -130,7 +141,15 @@ export type PendingCrossSession = {
   fromTitle: string;
   targetSessionId: string;
   targetTitle: string;
+  /** The SENDER's project — the reply and the failure go back into it. */
   cwd: string;
+  /** The target's project, when it is another one (cross-project-context R9):
+   *  the request runs there. Absent = `cwd`. */
+  targetCwd?: string;
+  /** Project names, set only when the two sessions are in different projects:
+   *  the sender's for B's header and pill, the target's for A's (R9, R10). */
+  fromProject?: string;
+  targetProject?: string;
   request: string;
   context?: string;
   expectReply: boolean;
@@ -177,6 +196,13 @@ export type CrossSessionListEntry = {
   title: string;
   lastUserMessage?: string;
   running: boolean;
+  /** cross-project-context R7: the tab's project, on every line when the
+   *  cross-project list is in use. */
+  project?: string;
+  cwd?: string;
+  /** A tab of another project not permanently allowed — same group included
+   *  (cross-project-context 0.2.0): a send asks the user first. */
+  needsApproval?: boolean;
 };
 
 /** R1: the OTHER sessions of this project (open tabs == project sessions). */
@@ -185,9 +211,19 @@ export function listOtherSessions(
   hub: Pick<CrossSessionHub, 'isRunActive'>,
   self: { sessionId: string; cwd: string },
 ): CrossSessionListEntry[] {
+  return sessionsOf(store, hub, self.cwd, self.sessionId);
+}
+
+/** The open tabs of one project, minus `selfId`, as list rows. */
+function sessionsOf(
+  store: CrossSessionStore,
+  hub: Pick<CrossSessionHub, 'isRunActive'>,
+  cwd: string,
+  selfId: string,
+): CrossSessionListEntry[] {
   return store
-    .listSessionsByProject(self.cwd)
-    .filter((s) => s.sessionId !== self.sessionId)
+    .listSessionsByProject(cwd)
+    .filter((s) => s.sessionId !== selfId)
     .map((s) => {
       let last: string | undefined;
       try {
@@ -209,6 +245,45 @@ export function listOtherSessions(
         running: hub.isRunActive(s.sessionId),
       };
     });
+}
+
+/**
+ * cross-project-context R7: the open tabs within `scope`. `project` is R1's
+ * list; `group` adds the tabs of this project's sidebar group; `all` adds every
+ * other project's. Listing needs no approval (titles are not content); a tab of
+ * a project not permanently approved — same group included — is marked
+ * `needsApproval`, and one this session declined is left out. Every row names
+ * its project.
+ */
+export function listSessionsInScope(
+  store: CrossSessionStore,
+  projectStore: CrossProjectStore,
+  hub: Pick<CrossSessionHub, 'isRunActive'>,
+  self: { sessionId: string; cwd: string },
+  scope: ListSessionsScope,
+): CrossSessionListEntry[] {
+  const nameOf = projectDisplayNames(projectStore);
+  const tag = (rows: CrossSessionListEntry[], cwd: string, needsApproval = false) =>
+    rows.map((r) => ({ ...r, project: nameOf(cwd) || cwd, cwd, ...(needsApproval ? { needsApproval: true } : {}) }));
+  const out = tag(sessionsOf(store, hub, self.cwd, self.sessionId), self.cwd);
+  if (scope === 'project') return out;
+  let cwds: string[] = [];
+  if (scope === 'group') {
+    const mine = readProjectGroups(projectStore).find((g) => g.cwds.includes(self.cwd));
+    cwds = mine ? mine.cwds.filter((c) => c !== self.cwd) : [];
+  } else {
+    try {
+      cwds = projectStore.listProjects().map((p) => p.cwd).filter((c) => c !== self.cwd);
+    } catch {
+      cwds = [];
+    }
+  }
+  for (const cwd of cwds) {
+    const v = crossProjectAccess(projectStore, self.cwd, cwd, self.sessionId);
+    if (v === 'denied' || v === 'unknown-project' || v === 'same-project') continue;
+    out.push(...tag(sessionsOf(store, hub, cwd, self.sessionId), cwd, v === 'needs-approval'));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +380,7 @@ export async function deliverCrossSession(
               fromSessionId: req.targetSessionId,
               fromTitle: req.targetTitle,
               role,
+              ...(req.targetProject ? { fromProject: req.targetProject } : {}),
             },
           });
         } catch (e) {
@@ -338,6 +414,7 @@ export async function deliverCrossSession(
         request: req.request,
         reason,
         ...(detail ? { detail } : {}),
+        ...(req.targetProject ? { targetProject: req.targetProject } : {}),
       }),
       'failure',
     );
@@ -360,13 +437,16 @@ export async function deliverCrossSession(
           request: req.request,
           ...(req.context ? { context: req.context } : {}),
           expectReply: req.expectReply,
+          ...(req.fromProject ? { fromProject: req.fromProject } : {}),
         }),
-        cwd: req.cwd,
+        // B works in ITS project (cross-project-context R9).
+        cwd: req.targetCwd ?? req.cwd,
         crossSession: {
           requestId: req.requestId,
           fromSessionId: req.fromSessionId,
           fromTitle: req.fromTitle,
           role: 'request',
+          ...(req.fromProject ? { fromProject: req.fromProject } : {}),
         },
       },
       targetAlive,
@@ -408,6 +488,7 @@ export async function deliverCrossSession(
         targetTitle: req.targetTitle,
         request: req.request,
         answer: text || '(the other session finished without a text answer)',
+        ...(req.targetProject ? { targetProject: req.targetProject } : {}),
       }),
       'reply',
     );
@@ -483,6 +564,10 @@ export interface CrossSessionToolDeps {
   log?: (kind: 'cross_session_message', payload: Record<string, unknown>) => void;
   /** Tests: observe the detached delivery. */
   onDelivery?: (p: Promise<CrossSessionOutcome>) => void;
+  /** cross-project-context R7, R8: present when the setting is on. The list
+   *  takes a `scope`, and a send to another project's tab passes the one
+   *  access decision (asking the user when needed) instead of R6's refusal. */
+  crossProject?: { store: CrossProjectStore; guard: CrossProjectGuard };
 }
 
 const refuse = (content: string): ToolOutput => ({ content, isError: true });
@@ -496,35 +581,58 @@ export function makeCrossSessionTools(deps: CrossSessionToolDeps): {
   const newId = deps.newId ?? (() => `xs-${randomUUID().slice(0, 8)}`);
   const now = deps.now ?? (() => Date.now());
 
-  const list: Executor = async () => {
-    const rows = listOtherSessions(deps.store, { isRunActive: deps.isRunActive }, {
-      sessionId: deps.sessionId,
-      cwd: deps.cwd,
-    });
+  const list: Executor = async (raw) => {
+    const self = { sessionId: deps.sessionId, cwd: deps.cwd };
+    const hub = { isRunActive: deps.isRunActive };
+    const scope = deps.crossProject ? parseListSessionsInput(raw).scope : 'project';
+    const rows = deps.crossProject
+      ? listSessionsInScope(deps.store, deps.crossProject.store, hub, self, scope)
+      : listOtherSessions(deps.store, hub, self);
+    const where = scope === 'project' ? 'in this project' : scope === 'group' ? "in this project's group" : 'in any project';
     if (rows.length === 0) {
-      return { content: 'No other session is open in this project.', data: { sessions: [] } };
+      return { content: `No other session is open ${where}.`, data: { sessions: [] } };
     }
     const lines = rows.map(
       (r) =>
-        `- ${r.sessionId} — "${r.title}"${r.running ? ' (running a turn now)' : ''}` +
+        `- ${r.sessionId} — "${r.title}"${r.project ? ` [project "${r.project}" — ${r.cwd}]` : ''}` +
+        `${r.running ? ' (running a turn now)' : ''}${r.needsApproval ? ' (needsApproval: the user is asked before a request goes there)' : ''}` +
         (r.lastUserMessage ? `\n  last user message: ${r.lastUserMessage}` : ''),
     );
-    return { content: `Other sessions in this project:\n${lines.join('\n')}`, data: { sessions: rows } };
+    return { content: `Other sessions ${where}:\n${lines.join('\n')}`, data: { sessions: rows } };
   };
 
-  const send: Executor = async (raw) => {
+  const send: Executor = async (raw, ctx) => {
     const parsed = parseSendToSessionInput(raw);
     if (!parsed.ok) return refuse(`Not sent: ${parsed.error}.`);
     const input = parsed.input;
     if (input.sessionId === deps.sessionId) return refuse('Not sent: that is this session — pick another one.');
     const target = deps.store.getSession(input.sessionId);
     if (!target) return refuse(`Not sent: no session ${input.sessionId} exists. Call naby_list_sessions for the ids.`);
-    // R6: the same project only.
-    if (target.cwd !== deps.cwd) return refuse('Not sent: that session belongs to another project.');
     if (pendingCountFrom(deps.sessionId) >= CROSS_SESSION_MAX_PENDING) {
       return refuse(
         `Not sent: this session already has ${CROSS_SESSION_MAX_PENDING} requests waiting for an answer. Wait for one to come back.`,
       );
+    }
+    // R6 — the same project only — unless cross-project is on, in which case the
+    // one access decision answers (cross-project-context R8): a permanently
+    // approved project goes; any other — same group included — asks first.
+    const targetCwd = target.cwd ?? '';
+    const otherProject = targetCwd !== deps.cwd;
+    let projectNames: { from: string; target: string } | undefined;
+    if (otherProject) {
+      if (!deps.crossProject) return refuse('Not sent: that session belongs to another project.');
+      const nameOf = projectDisplayNames(deps.crossProject.store);
+      projectNames = { from: nameOf(deps.cwd) || deps.cwd, target: nameOf(targetCwd) || targetCwd || 'no project' };
+      const access = await deps.crossProject.guard.check(
+        { cwd: targetCwd, name: projectNames.target },
+        { feature: 'send', op: 'send', toolCallId: ctx.toolCall.toolCallId, sessionTitle: sessionLabel(target) },
+      );
+      if (!access.ok) return refuse(access.content);
+      // The card may have waited minutes: the cap and the tab are checked again.
+      if (!deps.store.getSession(target.sessionId)) return refuse('Not sent: that session was closed while waiting for the user.');
+      if (pendingCountFrom(deps.sessionId) >= CROSS_SESSION_MAX_PENDING) {
+        return refuse(`Not sent: this session already has ${CROSS_SESSION_MAX_PENDING} requests waiting for an answer.`);
+      }
     }
     const self = deps.store.getSession(deps.sessionId);
     const req: PendingCrossSession = {
@@ -534,6 +642,9 @@ export function makeCrossSessionTools(deps: CrossSessionToolDeps): {
       targetSessionId: target.sessionId,
       targetTitle: sessionLabel(target),
       cwd: deps.cwd,
+      ...(projectNames
+        ? { targetCwd, fromProject: projectNames.from, targetProject: projectNames.target }
+        : {}),
       request: input.request,
       ...(input.context ? { context: input.context } : {}),
       expectReply: input.expectReply,
@@ -548,6 +659,7 @@ export function makeCrossSessionTools(deps: CrossSessionToolDeps): {
       expectReply: req.expectReply,
       requestChars: req.request.length,
       contextChars: req.context?.length ?? 0,
+      ...(req.targetCwd ? { targetCwd: req.targetCwd } : {}),
     });
     const delivery = (async () => {
       try {
@@ -563,7 +675,7 @@ export function makeCrossSessionTools(deps: CrossSessionToolDeps): {
     deps.onDelivery?.(delivery);
     return {
       content: [
-        `Sent to "${req.targetTitle}" (request ${req.requestId}). It runs there now, in its own tab.`,
+        `Sent to "${req.targetTitle}"${req.targetProject ? ` of project "${req.targetProject}"` : ''} (request ${req.requestId}). It runs there now, in its own tab.`,
         req.expectReply
           ? 'Its answer will arrive in this session as a new message — do not wait or poll for it. Tell the user it was sent and end your turn.'
           : 'No answer will come back here.',
@@ -573,7 +685,9 @@ export function makeCrossSessionTools(deps: CrossSessionToolDeps): {
   };
 
   return {
-    schemas: [LIST_SESSIONS_TOOL_SCHEMA, SEND_TO_SESSION_TOOL_SCHEMA],
+    schemas: deps.crossProject
+      ? [LIST_SESSIONS_CROSS_PROJECT_TOOL_SCHEMA, SEND_TO_SESSION_CROSS_PROJECT_TOOL_SCHEMA]
+      : [LIST_SESSIONS_TOOL_SCHEMA, SEND_TO_SESSION_TOOL_SCHEMA],
     executors: {
       [LIST_SESSIONS_TOOL_SCHEMA.name]: list,
       [SEND_TO_SESSION_TOOL_SCHEMA.name]: send,

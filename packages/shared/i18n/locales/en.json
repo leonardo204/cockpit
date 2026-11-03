@@ -345,6 +345,16 @@
       "hint": "When you ask, naby sends a request to another tab of the same project, and that tab’s answer comes back here.",
       "failed": "Could not save: {{error}}"
     },
+    "crossProject": {
+      "toggle": "Look into other projects",
+      "hint": "naby knows which projects share this one’s sidebar group. Before it reads another project or asks its tabs — in the group or not — it asks you first. It only reads — it never changes another project.",
+      "failed": "Could not save: {{error}}",
+      "approvalsTitle": "Always allowed",
+      "approvalsEmpty": "No project is always allowed yet.",
+      "approvalRemove": "Remove",
+      "approvalRemoveLabel": "Remove always-allow ‹{{from}}› → ‹{{to}}›",
+      "approvalMissing": "Not in the sidebar any more"
+    },
     "title": "Naby",
     "description": "naby, and anything you imported — address one in the composer with @name.",
     "subagentHint": "For a specialist role, add a harness subagent under Harness.",
@@ -644,7 +654,10 @@
       "request": "Request from session ‹{{title}}›",
       "reply": "Answer from session ‹{{title}}›",
       "failure": "The request to session ‹{{title}}› failed",
-      "untitled": "untitled"
+      "untitled": "untitled",
+      "requestProject": "Request from session ‹{{title}}› of project ‹{{project}}›",
+      "replyProject": "Answer from session ‹{{title}}› of project ‹{{project}}›",
+      "failureProject": "The request to session ‹{{title}}› of project ‹{{project}}› failed"
     },
     "apiRetryBusy": "The server is busy, so this is being sent again — this is not your usage limit.",
     "apiRetryTransient": "That request did not go through. Trying again.",
@@ -2220,6 +2233,19 @@
     ]
   },
   "toolApproval": {
+    "crossProject": {
+      "title": "naby wants to look into another project",
+      "read": "naby wants to read the contents of another project, {{project}} ({{cwd}}).",
+      "send": "naby wants to send a request to the tab ‹{{title}}› of another project, {{project}} ({{cwd}}).",
+      "groupNote": "This project is in a different group from the current one.",
+      "groupNoteSame": "It is a project in the same group, ‹{{group}}›.",
+      "allowOnce": "Allow once",
+      "allowAlways": "Always allow",
+      "deny": "Decline",
+      "allowed": "✓ Allowed once · naby will ask again next time",
+      "allowedAlways": "✓ Always allowed · naby won’t ask about {{project}} again (remove it in Settings)",
+      "denied": "✕ Declined · naby won’t ask about {{project}} again in this conversation"
+    },
     "title": "Allow the agent to run this tool?",
     "allowOnce": "Allow once",
     "denyOnce": "Deny once",

@@ -27,6 +27,8 @@ import {
   type ParticipantProposal,
 } from './participants';
 import { ParticipantDraftCard } from './ParticipantDraftCard';
+import { CrossProjectApprovalCard } from './CrossProjectApprovalCard';
+import { crossProjectFromApproval, type CrossProjectAccessCard } from './crossProjectApproval';
 import {
   draftFromApproval,
   draftResolveBody,
@@ -55,6 +57,9 @@ type Pending = ApprovalAsker & {
   proposal?: ParticipantProposal;
   /** multi-agent-chat §8.12 (R8.3): naby's participant draft — the draft card. */
   draft?: DraftCardData;
+  /** cross-project-context R17: naby reaching into another project — the
+   *  access card (allow once / always allow / decline). */
+  crossProject?: CrossProjectAccessCard;
   /** §8.9: a participant's own tool call names the participant. */
   speakerName?: string;
 };
@@ -66,6 +71,10 @@ type ProposalOutcome = {
   decision: 'allow' | 'deny';
   /** A draft's line reads differently from a proposal's (§8.12). */
   draft?: 'create' | 'update';
+  /** So does a project access answer (cross-project-context R17). */
+  crossProject?: true;
+  /** A project access answered "always allow" (R18). */
+  always?: true;
 };
 
 /** How long the answered-proposal line stays before it folds away. */
@@ -176,7 +185,22 @@ export const ProposalOutcomeLine = memo(function ProposalOutcomeLine({
       data-decision={outcome.decision}
     >
       <span className="flex-1">
-        {outcome.draft
+        {outcome.crossProject
+          ? ok
+            ? outcome.always
+              ? t('toolApproval.crossProject.allowedAlways', {
+                  defaultValue: '✓ Always allowed · naby won’t ask about {{project}} again (remove it in Settings)',
+                  project: outcome.displayName,
+                })
+              : t('toolApproval.crossProject.allowed', {
+                  defaultValue: '✓ Allowed once · naby will ask again next time',
+                  project: outcome.displayName,
+                })
+            : t('toolApproval.crossProject.denied', {
+                defaultValue: '✕ Declined · naby won’t ask about {{project}} again in this conversation',
+                project: outcome.displayName,
+              })
+          : outcome.draft
           ? ok
             ? t(outcome.draft === 'create' ? 'participants.draft.created' : 'participants.draft.updated', {
                 defaultValue: outcome.draft === 'create' ? '✓ Approved · creating {{name}}' : '✓ Approved · updating {{name}}',
@@ -250,6 +274,7 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
       if (sessionId && typeof d.session_id === 'string' && d.session_id !== sessionId) return;
       const proposal = proposalFromApproval(d, lookupRef.current) ?? undefined;
       const draft = proposal ? undefined : (draftFromApproval(d) ?? undefined);
+      const crossProject = proposal || draft ? undefined : (crossProjectFromApproval(d) ?? undefined);
       const speakerName = approvalSpeakerName(d);
       const item: Pending = {
         approvalId: d.approvalId,
@@ -257,10 +282,10 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         inputPreview: previewInput(d.input),
         // A proposal's / draft's `reason`/`source` are naby's, not an org hook's:
         // they are drawn by their own card and must not reach the hook-copy rules.
-        ...(proposal ? { proposal } : draft ? { draft } : approvalAskerFrom(d)),
-        ...(speakerName && !proposal && !draft ? { speakerName } : {}),
+        ...(proposal ? { proposal } : draft ? { draft } : crossProject ? { crossProject } : approvalAskerFrom(d)),
+        ...(speakerName && !proposal && !draft && !crossProject ? { speakerName } : {}),
       };
-      if (proposal || draft) setOutcome(null);
+      if (proposal || draft || crossProject) setOutcome(null);
       setQueue((q) => (q.some((p) => p.approvalId === item.approvalId) ? q : [...q, item]));
     };
     const onResolved = (e: Event) => {
@@ -277,6 +302,15 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
           displayName: pending.draft.draft.displayName,
           decision: d.decision,
           draft: pending.draft.action,
+        });
+      }
+      if (pending?.crossProject && (d.decision === 'allow' || d.decision === 'deny')) {
+        setOutcome({
+          approvalId: pending.approvalId,
+          displayName: pending.crossProject.project,
+          decision: d.decision,
+          crossProject: true,
+          ...(d.always === true ? { always: true as const } : {}),
         });
       }
       setQueue((q) => q.filter((p) => p.approvalId !== d.approvalId));
@@ -299,7 +333,7 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
   }, [outcome]);
 
   const act = useCallback(
-    async (decision: 'allow' | 'deny', remember: boolean) => {
+    async (decision: 'allow' | 'deny', remember: boolean, always = false) => {
       if (!current) return;
       setBusy(true);
       // Optimistically drop the prompt; the paused turn resumes on the server.
@@ -307,11 +341,27 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
       if (current.proposal) {
         setOutcome({ approvalId: current.approvalId, displayName: current.proposal.displayName, decision });
       }
-      // `remember` is never offered for a proposal (it is not a policy rule).
-      const rememberOpts = remember && !current.proposal
+      if (current.crossProject) {
+        setOutcome({
+          approvalId: current.approvalId,
+          displayName: current.crossProject.project,
+          decision,
+          crossProject: true,
+          ...(always && decision === 'allow' ? { always: true as const } : {}),
+        });
+      }
+      // `remember` is never offered for a proposal or a project access (neither
+      // is a policy rule). A project access's "always allow" is its own extra
+      // (`always`), stored by the card's guard as a project pair (R18).
+      const rememberOpts = remember && !current.proposal && !current.crossProject
         ? { remember: true, scope: cwd ? 'project' : 'user', scopeKey: cwd, toolPattern: current.toolName }
         : {};
-      await postResolve({ approvalId: current.approvalId, decision, ...rememberOpts });
+      await postResolve({
+        approvalId: current.approvalId,
+        decision,
+        ...rememberOpts,
+        ...(always && decision === 'allow' && current.crossProject ? { always: true } : {}),
+      });
       setBusy(false);
     },
     [current, cwd],
@@ -347,6 +397,19 @@ export function ToolApprovalPrompt({ sessionId, cwd }: { sessionId?: string; cwd
         busy={busy}
         more={queue.length - 1}
         onAnswer={(choice, form) => void answerDraft(choice, form)}
+      />
+    );
+  }
+
+  if (current.crossProject) {
+    return (
+      <CrossProjectApprovalCard
+        card={current.crossProject}
+        busy={busy}
+        more={queue.length - 1}
+        onAllowOnce={() => void act('allow', false)}
+        onAllowAlways={() => void act('allow', false, true)}
+        onDeny={() => void act('deny', false)}
       />
     );
   }
