@@ -85,6 +85,42 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.11 — 2026-11-03
+
+### en
+
+Settings opens with Cmd+, and an expired Claude sign-in now tells you exactly how to sign back in.
+
+**New**
+
+- **Cmd+, opens Settings.** On macOS it's under the naby menu as Settings…; on Windows and Linux, Ctrl+, does the same. It works wherever you are in the app.
+
+**Improved**
+
+- **Expired Claude sign-in, step by step.** When a turn fails because your Claude sign-in expired, the notice lists what to do: open the Claude chip, log out, log in again in the browser, then press Send again. The Claude chip glows so you can find it, and inside its menu the item to press next is outlined. Each step gets a check mark as you finish it.
+
+**Fixed**
+
+- "OAuth session expired" errors are now recognised as an expired sign-in instead of showing raw English, and the error no longer appears as naby's reply.
+- The failure notice no longer points to "Details" when there is no Details button.
+
+### ko
+
+Cmd+,로 설정을 열 수 있고, Claude 로그인이 만료되면 다시 로그인하는 방법을 차례로 알려 줘요.
+
+**새로 생긴 것**
+
+- **Cmd+,로 설정 열기.** macOS에서는 naby 메뉴의 Settings…에 있고, Windows와 Linux에서는 Ctrl+,로 열려요. 앱 어디에 있든 동작해요.
+
+**나아진 것**
+
+- **Claude 로그인 만료 안내.** Claude 로그인이 만료돼 답하지 못하면, 알림에 할 일을 순서대로 보여 줘요. Claude 칩을 누르고, 로그아웃하고, 브라우저에서 다시 로그인한 뒤, 다시 보내기를 누르면 돼요. 찾기 쉽게 Claude 칩이 반짝이고, 칩 메뉴에서는 지금 눌러야 할 항목에 테두리가 생겨요. 단계를 마칠 때마다 체크 표시가 붙어요.
+
+**고친 것**
+
+- "OAuth session expired" 오류를 로그인 만료로 알아봐요. 영어 원문이 그대로 나오거나 나비의 답처럼 말풍선에 남지 않아요.
+- "자세히" 버튼이 없을 때 "자세히에서 볼 수 있다"는 안내가 나오지 않아요.
+
 ## 1.48.10 — 2026-11-02
 
 ### en

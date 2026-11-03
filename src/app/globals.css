@@ -552,6 +552,33 @@ body {
   }
 }
 
+/* claude-relogin-guide R3a: while the expired-sign-in guide is up, the Claude
+   chip's trigger pulses a brand ring (~1.5s). A box-shadow, so nothing moves
+   or resizes. `-flash` is the one-off brighter blink when the guide's "Claude
+   chip" words are hovered. Reduced motion → the ring holds still. */
+@keyframes claude-chip-guide {
+  0%, 100% { box-shadow: 0 0 0 2px hsl(var(--brand) / 0.85); }
+  50% { box-shadow: 0 0 0 4px hsl(var(--brand) / 0.15); }
+}
+@keyframes claude-chip-guide-flash {
+  0% { box-shadow: 0 0 0 2px hsl(var(--brand)); }
+  40% { box-shadow: 0 0 0 5px hsl(var(--brand) / 0.9); }
+  100% { box-shadow: 0 0 0 2px hsl(var(--brand) / 0.4); }
+}
+.claude-chip-guide {
+  animation: claude-chip-guide 1.5s ease-in-out infinite;
+}
+.claude-chip-guide-flash {
+  animation: claude-chip-guide-flash 0.7s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .claude-chip-guide,
+  .claude-chip-guide-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px hsl(var(--brand));
+  }
+}
+
 @keyframes slideInLeft {
   from {
     transform: translateX(-100%);

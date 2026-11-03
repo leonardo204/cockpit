@@ -21,7 +21,13 @@ import { ToolApprovalPrompt } from './ToolApprovalPrompt';
 import { CheckinPrompt } from './CheckinPrompt';
 import { ContextLimitBanner } from './ContextLimitBanner';
 import { RunFailureNotice } from './RunFailureNotice';
-import { runFailureReducer, type RunFailure, type RunFailureEvent } from './runFailure';
+import {
+  lastResendableUserMessage,
+  runFailureReducer,
+  type RunFailure,
+  type RunFailureEvent,
+  type RunFailureInfo,
+} from './runFailure';
 import { contextGauge } from './contextGauge';
 // The account's plan windows. A SHARED store rather than per-tab state: every
 // chat tab stays mounted, and the reading belongs to the account, not the tab —
@@ -49,6 +55,7 @@ import type { ChatMessage, TokenUsage, ImageInfo, ChatEngine, ToolCallInfo, Mode
 // In-package siblings (chat-only)
 import { ProjectSessionsModal } from './ProjectSessionsModal';
 import { ClaudeLoginStatus } from './ClaudeLoginStatus';
+import { createReloginGuide } from './claudeLoginFlow';
 import { ChatgptLoginStatus } from './ChatgptLoginStatus';
 import { EngineSwitcher } from './EngineSwitcher';
 import { ModelSwitcher } from './ModelSwitcher';
@@ -313,11 +320,27 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // WHO was asked, read at failure time. A ref, not deps: this is a snapshot for
   // one report, and threading engine/model/session through useChatStream's
   // callbacks would churn a stable useCallback on every streamed chunk.
-  const failureContextRef = useRef<{ engine: string; model: string; sessionId: string | null }>({
+  const failureContextRef = useRef<{
+    engine: string;
+    model: string;
+    /** The newest user message on screen — the question the failing turn was
+     *  answering, kept so the re-login card can resend it (claude-relogin R5). */
+    lastUserMessage: ChatMessage | null;
+    sessionId: string | null;
+  }>({
     engine: '',
     model: '',
+    lastUserMessage: null,
     sessionId: null,
   });
+  // The failed turn's user message, snapshotted at failure time: the reconcile
+  // that follows may rewrite `messages`, and "the last user message" read later
+  // could be an older question.
+  const failedTurnMessageRef = useRef<ChatMessage | null>(null);
+  // The expired-sign-in guide's link to THIS conversation's Claude chip — the
+  // card reports its step, the chip pulses and outlines what to press
+  // (claude-relogin R3a). One per Chat, so another tab's chip stays still.
+  const [reloginGuide] = useState(createReloginGuide);
   // THE "SEND NEXT" QUEUE (specs/chat-message-queue.md). Messages written while
   // a turn is in flight wait here and are settled when the run ends — sent as
   // one merged message, or handed back to the composer after a stop or an
@@ -335,7 +358,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // `null` is the SEND edge (useChatStream reports it at the start of every
   // send, the one place every send path passes through); text is a failure.
   const handleRunError = useCallback(
-    (message: string | null) => {
+    (message: string | null, info?: RunFailureInfo) => {
       if (message === null) {
         // A new turn: whatever stopped or failed before no longer applies.
         commitQueue(clearRunOutcome(queueRef.current));
@@ -345,11 +368,14 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
       // A failed turn never auto-sends what was queued behind it.
       commitQueue(markErrored(queueRef.current));
       const ctx = failureContextRef.current;
+      failedTurnMessageRef.current = ctx.lastUserMessage;
       dispatchRunFailure({
         type: 'run-failed',
         message,
         ...(ctx.engine ? { engine: ctx.engine } : {}),
         ...(ctx.model ? { model: ctx.model } : {}),
+        ...(info?.code ? { code: info.code } : {}),
+        ...(info?.detail ? { detail: info.detail } : {}),
         sessionId: ctx.sessionId,
         at: Date.now(),
       });
@@ -628,6 +654,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     // would point the user at the wrong settings page.
     engine: engineBrand,
     model: liveModel || selectedModelRef.current || '',
+    lastUserMessage: lastResendableUserMessage(messages),
     sessionId: liveSessionId ?? null,
   };
   // Another session is on screen now → the previous one's failure is not about
@@ -708,6 +735,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     }));
     wrappedHandleSend(message.content, images);
   }, [isLoading, liveRunning, wrappedHandleSend]);
+  // "Send again" on the re-login card: the failed turn's own message, through
+  // the same resend path as the bubble's button (claude-relogin R5).
+  const resendFailedTurn = useCallback(() => {
+    const failed = failedTurnMessageRef.current;
+    if (failed) handleResendMessage(failed);
+  }, [handleResendMessage]);
 
   // Keep the originator's reconcile-on-run-end closure current (same disk reload the viewer's
   // onComplete uses). Injected into useChatStream via reconcileFromDiskRef so a finished run
@@ -1137,7 +1170,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             {accountChip === 'chatgpt' ? (
               <ChatgptLoginStatus />
             ) : accountChip === 'claude' ? (
-              <ClaudeLoginStatus />
+              <ClaudeLoginStatus guide={reloginGuide} />
             ) : null}
             {/* Plan mode: read-only exploration → produces a plan without editing.
                 Plan-only — uncheck and resend to actually implement. */}
@@ -1224,7 +1257,12 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
             persisted. It carries the provider's own words (a quota reply says
             which model, which limit and for how long), and the next send
             clears it. */}
-        <RunFailureNotice failure={runFailure} onDismiss={dismissRunFailure} />
+        <RunFailureNotice
+          failure={runFailure}
+          onDismiss={dismissRunFailure}
+          onResend={failedTurnMessageRef.current ? resendFailedTurn : undefined}
+          reloginGuide={reloginGuide}
+        />
 
         {/* Token Usage Display */}
         {tokenUsage && (

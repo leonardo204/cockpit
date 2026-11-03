@@ -44,10 +44,35 @@ export interface RunFailure {
   readonly engine?: string;
   /** The model that was asked, when known — a resolved label or the picked slug. */
   readonly model?: string;
+  /** The stable `code` the server put on the error (src/engines/error-codes.ts),
+   *  when it sent one. The notice branches on it: `authentication_failed` gets
+   *  the re-login card instead of the plain report. */
+  readonly code?: string;
+  /** The engine's own words when `message` is localized copy that replaced them
+   *  — kept so the re-login card can fold the original under "Details". */
+  readonly detail?: string;
   /** The session this failure belongs to. Moving to another one clears it. */
   readonly sessionId: string | null;
   /** When it was observed (epoch ms). Display + React key. */
   readonly at: number;
+}
+
+/** What an error event carries besides its (possibly localized) text. */
+export interface RunFailureInfo {
+  readonly code?: string;
+  readonly detail?: string;
+}
+
+/**
+ * The code and the ORIGINAL text of an error event, read off the event as it
+ * arrived — before `localizeRunEvent` replaced the text with copy. Empty for an
+ * uncoded event: its text already is the engine's own.
+ */
+export function runFailureInfo(raw: { code?: unknown; error?: unknown }): RunFailureInfo {
+  const code = typeof raw.code === 'string' && raw.code ? raw.code : undefined;
+  if (!code) return {};
+  const detail = typeof raw.error === 'string' ? raw.error.trim() : '';
+  return { code, ...(detail ? { detail } : {}) };
 }
 
 export type RunFailureEvent =
@@ -57,6 +82,8 @@ export type RunFailureEvent =
       readonly message: string;
       readonly engine?: string;
       readonly model?: string;
+      readonly code?: string;
+      readonly detail?: string;
       readonly sessionId: string | null;
       readonly at: number;
     }
@@ -87,6 +114,8 @@ export function runFailureReducer(state: RunFailure | null, ev: RunFailureEvent)
         message,
         ...(ev.engine ? { engine: ev.engine } : {}),
         ...(ev.model ? { model: ev.model } : {}),
+        ...(ev.code ? { code: ev.code } : {}),
+        ...(ev.detail ? { detail: ev.detail } : {}),
         sessionId: ev.sessionId,
         at: ev.at,
       };
@@ -151,4 +180,20 @@ export function runFailureOrigin(failure: Pick<RunFailure, 'engine' | 'model'>):
   // and "Gemini · Gemini 2.5 Pro" reads like a bug rather than like detail.
   if (parts.length === 2 && parts[1]!.toLowerCase().startsWith(parts[0]!.toLowerCase())) return parts[1]!;
   return parts.join(' · ');
+}
+
+/**
+ * The message "send again" would resend after a failed turn: the newest user
+ * message with text. Generic over the message shape so this file stays free of
+ * the chat's types; null when the transcript has none (the card then asks the
+ * user to send it themselves).
+ */
+export function lastResendableUserMessage<M extends { role: string; content?: unknown }>(
+  messages: readonly M[],
+): M | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === 'user' && typeof m.content === 'string' && m.content.trim()) return m;
+  }
+  return null;
 }

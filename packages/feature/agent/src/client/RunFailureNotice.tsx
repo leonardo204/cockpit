@@ -25,20 +25,36 @@
  * went wrong — a sign-in expired, no engine is set up, the turn was stopped —
  * the message arrives already as localized copy naming what to do, with the
  * provider's own words kept under it where they add something.
+ *
+ * An EXPIRED CLAUDE SIGN-IN goes one step further: copy alone still left the
+ * user to work out log out → log in on the chip, so the notice draws the
+ * re-login guide (ClaudeReloginCard) — the steps in order, ticked off as the
+ * chip's status moves, ending in "send again" (specs/claude-relogin-guide.md
+ * §1.2). The user does the logging out and in; naby does not.
  */
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ClaudeReloginCard } from './ClaudeReloginCard';
 import { runFailureHeadline, runFailureOrigin, type RunFailure } from './runFailure';
+import type { ReloginGuide } from './claudeLoginFlow';
 
 interface RunFailureNoticeProps {
   /** The last run's failure, or null when the last run did not fail. */
   failure: RunFailure | null;
   /** The user closed it. Clearing is the host's (Chat's) reducer call. */
   onDismiss: () => void;
+  /** Resend the failed turn's message — offered by the re-login card once the
+   *  sign-in is back. Absent when there is no message to resend. */
+  onResend?: () => void;
+  /** The conversation's chip highlight, handed to the re-login guide (R3a). */
+  reloginGuide?: ReloginGuide;
 }
 
-export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) {
+/** The code whose failure the re-login card answers (src/engines/error-codes.ts). */
+export const CLAUDE_SIGN_IN_FAILURE_CODE = 'authentication_failed';
+
+export function RunFailureNotice({ failure, onDismiss, onResend, reloginGuide }: RunFailureNoticeProps) {
   const { t } = useTranslation();
   // Open by default: the detail is the reason this exists, and a user who has
   // just watched a turn do nothing should not have to find a disclosure
@@ -55,9 +71,10 @@ export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) 
   const origin = runFailureOrigin(failure);
   const message = failure.message;
   const headline = runFailureHeadline(message);
+  const relogin = failure.code === CLAUDE_SIGN_IN_FAILURE_CODE;
   // Only offer the toggle when there is something the headline is not already
-  // showing in full.
-  const hasDetail = message.trim() !== headline;
+  // showing in full. The re-login card folds its own detail — the SDK's words.
+  const hasDetail = relogin ? !!failure.detail?.trim() : message.trim() !== headline;
 
   return (
     <div
@@ -79,14 +96,20 @@ export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) 
               </span>
             )}
           </div>
-          <p
-            className="mt-0.5 break-words text-[0.786rem] leading-5 text-foreground/90"
-            data-testid="run-failure-headline"
-          >
-            {headline}
-          </p>
+          {relogin ? (
+            // Keyed on the failure: a NEW expired-sign-in report starts the steps
+            // over rather than showing the previous report's ticks.
+            <ClaudeReloginCard key={failure.at} detail={failure.detail} onResend={onResend} guide={reloginGuide} />
+          ) : (
+            <p
+              className="mt-0.5 break-words text-[0.786rem] leading-5 text-foreground/90"
+              data-testid="run-failure-headline"
+            >
+              {headline}
+            </p>
+          )}
         </div>
-        {hasDetail && (
+        {hasDetail && !relogin && (
           // `self-start`, like the dismiss button: a flex child with no `self-*`
           // stretches to the tallest item in the row (CLAUDE.md, UI Layout), and
           // the text column beside these is two lines tall.
@@ -113,7 +136,7 @@ export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) 
         </button>
       </div>
 
-      {expanded && hasDetail && (
+      {expanded && hasDetail && !relogin && (
         // The provider's own words, unedited and selectable. Bounded to ~10rem
         // and scrolled from here, so a long error scrolls inside its own box
         // instead of pushing the composer off screen.
@@ -125,10 +148,15 @@ export function RunFailureNotice({ failure, onDismiss }: RunFailureNoticeProps) 
         </pre>
       )}
 
-      <p className="mt-1 text-[0.72rem] leading-4 text-muted-foreground">
-        {t('chat.runFailedHint', {
-          defaultValue: 'Details shows the full message. Your next message clears it.',
-        })}
+      {/* "Details shows the full message" only where there IS a Details — a
+          one-line failure has no toggle, and pointing at one sent the user
+          looking for a button that is not there (R9). */}
+      <p className="mt-1 text-[0.72rem] leading-4 text-muted-foreground" data-testid="run-failure-hint">
+        {hasDetail
+          ? t('chat.runFailedHintDetails', {
+              defaultValue: 'Details shows the full message. Your next message clears it.',
+            })
+          : t('chat.runFailedHint', { defaultValue: 'Your next message clears it.' })}
       </p>
     </div>
   );

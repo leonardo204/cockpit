@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { applyStreamEvent, withAssistantText, type StreamEvent } from './applyStreamEvent';
 import { localizeRunEvent, runErrorCopy } from './runErrorCopy';
+import { runFailureInfo, type RunFailureInfo } from './runFailure';
 import { actingAgentFromInit, actingAgentFromSpeaker, type ActingAgent } from './actingAgent';
 import type {
   ChatMessage,
@@ -91,7 +92,7 @@ interface UseChatStreamOptions {
    * START of every send — every send path goes through handleSend, so that is
    * the one place "a new question supersedes the failed one" can be stated once.
    */
-  onRunError?: (message: string | null) => void;
+  onRunError?: (message: string | null, info?: RunFailureInfo) => void;
   /**
    * The model the user picked in the bottom-bar ModelSwitcher for the active
    * engine, read fresh at send time. Returns '' (or undefined) when no override
@@ -467,7 +468,7 @@ export function useChatStream(
       // in-turn rendering and is correct while the turn is on screen, but it
       // cannot survive `onRunComplete → reconcile` — the error is not on disk
       // and re-syncing to disk removes it. This report is the copy that lasts.
-      onRunErrorRef.current?.(errText);
+      onRunErrorRef.current?.(errText, runFailureInfo(rawEvent));
       // Flush any buffered text first so the error appears after streamed content.
       if (streamFlushTimerRef.current) {
         clearTimeout(streamFlushTimerRef.current);

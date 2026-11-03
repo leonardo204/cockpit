@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { localizeRunEvent, runErrorCopy } from './runErrorCopy';
+import { localizeRunEvent, runErrorCopy, runErrorText } from './runErrorCopy';
 
 const locale = (lang: 'en' | 'ko') =>
   JSON.parse(readFileSync(join(__dirname, `../../../../shared/i18n/locales/${lang}.json`), 'utf8')) as Record<
@@ -56,7 +56,17 @@ describe('runErrorCopy', () => {
 
   it('names the real control', () => {
     expect(runErrorCopy('NO_ENGINE_AVAILABLE', 'x', ko)).toContain('설정 → AI 프로바이더');
-    expect(runErrorCopy('authentication_failed', 'assistant error: authentication_failed', ko)).toContain('Claude 칩');
+    // The copy names the chip route; the guide card under it spells out the steps…
+    expect(runErrorCopy('authentication_failed', 'assistant error: authentication_failed', ko)).toBe(
+      'Claude 로그인이 만료되었습니다. Claude 칩에서 로그아웃한 뒤 다시 로그인해 주세요.',
+    );
+    expect(runErrorCopy('authentication_failed', 'x', en)).toContain('Claude chip');
+    // …and a text-only surface, which cannot draw the card, gets the full route.
+    expect(runErrorText('authentication_failed', 'x', ko)).toContain('Claude 칩');
+    expect(runErrorText('authentication_failed', 'x', ko)).toContain("'로그아웃'");
+    expect(runErrorText('authentication_failed', 'x', en)).toContain('Log out, then Log in');
+    // Every other code reads the same on both surfaces.
+    expect(runErrorText('rate_limit', 'x', ko)).toBe(runErrorCopy('rate_limit', 'x', ko));
     expect(runErrorCopy('session_busy', 'session is already running', ko)).toContain("'중단'");
     expect(runErrorCopy('session_busy', 'session is already running', en)).toContain('Stop');
   });

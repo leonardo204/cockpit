@@ -6,6 +6,7 @@ import { useWebSocket } from '@cockpit/shared-ui';
 import type { ChatMessage, ChatEngine } from './types';
 import { applyStreamEvent, type StreamEvent } from './applyStreamEvent';
 import { localizeRunEvent } from './runErrorCopy';
+import { runFailureInfo, type RunFailureInfo } from './runFailure';
 import { runSignalFor } from './runSignal';
 
 // #10 viewer hook: tail /ws/session-stream for `sessionId` and render live through the
@@ -35,7 +36,7 @@ export function useLiveStream(
      *  same reason the originator reports it (useChatStream.onRunError): this
      *  hook's `onComplete` reconciles from disk, and an error is not on disk, so
      *  the bubble copy applyStreamEvent draws is erased seconds later. */
-    onRunError?: (message: string) => void;
+    onRunError?: (message: string, info?: RunFailureInfo) => void;
   }
 ): void {
   const curAssistantId = useRef<string | null>(null);
@@ -168,7 +169,7 @@ export function useLiveStream(
     // A failed turn, viewed rather than sent. Reported up AND still rendered into
     // the bubble below (no `return`): the bubble copy is the in-turn rendering,
     // the report is the copy that outlives the reconcile.
-    if (ev.type === 'error' && ev.error) opts?.onRunError?.(ev.error);
+    if (ev.type === 'error' && ev.error) opts?.onRunError?.(ev.error, runFailureInfo(rawEv));
     // A result ends the active turn — after it, an incoming task_notification is a background one.
     if (ev.type === 'result') turnActive.current = false;
     // content events need a current bubble (init normally comes first; be safe)

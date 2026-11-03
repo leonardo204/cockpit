@@ -28,6 +28,11 @@
  *     until the sign-in lands, showing a "waiting for browser sign-in…" state.
  *     A copy of the exact command is offered as a fallback for a headless box.
  *
+ * WHAT IT READS IS PUBLISHED (claudeLoginFlow.ts) for the guide card a failed
+ * turn shows, which ticks its log out → log in steps off as this chip's own
+ * re-reads move the status. The chip is the one reader of the sign-in; the card
+ * never asks on its own.
+ *
  * IT NEVER BLOCKS ANYTHING. Sending stays enabled while signed out: an app that
  * refuses to send because its status probe is wrong is worse than one that lets
  * the send fail with a clear error. This is advice, not a gate.
@@ -37,74 +42,45 @@
  * and a status word, never token material.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-
-type ClaudeAccount = {
-  /** The signed-in account's email, from `claude auth status`. */
-  email: string | null;
-  /** The organisation name, when reported. */
-  orgName: string | null;
-  subscriptionType: string | null;
-  rateLimitTier: string | null;
-};
-
-type ClaudeLogin = {
-  status: 'signed-in' | 'signed-out' | 'unknown' | string;
-  summary: string;
-  remedy: string | null;
-  cliFound: boolean;
-  checkedAt: number;
-  /** False when the dev engine is not part of this build (packaged app): the
-   *  sign-in is then irrelevant and showing it would describe a capability the
-   *  app does not have. */
-  relevant: boolean;
-  /** Who is signed in. Carries the real email from `claude auth status`. */
-  account?: ClaudeAccount | null;
-};
-
-/** One Claude subscription naby keeps, as `/api/naby` describes it. An OPAQUE id
- *  and identity labels — never a path (claude-multi-account §5.6). `emailHint` is
- *  the identity read straight from the account's own file, so a row shows WHO it
- *  is before a `verify` has confirmed it and written `email` back. */
-type ClaudeAccountRow = {
-  id: string;
-  email: string | null;
-  emailHint: string | null;
-  orgName: string | null;
-  subscriptionType: string | null;
-  status: 'signed-in' | 'signed-out' | 'unknown' | string;
-};
-
-/** The account block that rides along on every `/api/naby` GET. Absent from an
- *  older server, which reads as "one account" and hides the switcher. */
-type ClaudeAccountsBlock = {
-  /** False when this computer cannot keep sign-ins apart (§5.3) — the switcher
-   *  then does not appear, exactly as the settings card hides its section. */
-  supported: boolean;
-  /** null = "this computer's own sign-in", i.e. single-account behaviour. */
-  activeId: string | null;
-  accounts: ClaudeAccountRow[];
-  /** The machine's own sign-in identity, read from its file so the default row
-   *  can name WHO it is rather than only "this computer". */
-  machineDefault: { email: string | null; orgName: string | null; subscriptionType: string | null } | null;
-};
+import {
+  LOGIN_COMMAND,
+  RELOGIN_GUIDE_IDLE,
+  chipHighlight,
+  claudeLogout,
+  fetchClaudeLoginState,
+  pollClaudeSignIn,
+  publishClaudeLoginStatus,
+  startClaudeLogin,
+  verifyClaudeAccount,
+  type ClaudeAccountsBlock,
+  type ClaudeLogin,
+  type ReloginGuide,
+} from './claudeLoginFlow';
 
 /** Deliberately unhurried background poll: this covers only "the token expired
  *  while the user sat here", which takes hours. Focus + the login poll catch a
  *  fresh sign-in far sooner. */
 const POLL_MS = 60_000;
 
-/** The interactive login poll: after launching the browser flow, re-check status
- *  every this-often, giving up after `LOGIN_POLL_MAX` tries (~60s total). */
-const LOGIN_POLL_MS = 2_000;
-const LOGIN_POLL_MAX = 30;
+/** How long the one-off "here I am" flash lasts — matches its keyframe. */
+const FLASH_MS = 700;
 
-/** The exact command a signed-out user runs, and the copy-paste fallback for a
- *  headless machine. One string so the button and the hint cannot drift apart. */
-const LOGIN_COMMAND = 'claude auth login';
+const noGuideSubscribe = () => () => {};
+const noGuideSnapshot = () => RELOGIN_GUIDE_IDLE;
 
-export function ClaudeLoginStatus() {
+/** The outline on the menu item the re-login guide says to press next (R3a). */
+const GUIDE_OUTLINE = 'ring-2 ring-brand';
+
+interface ClaudeLoginStatusProps {
+  /** This conversation's re-login guide (specs/claude-relogin-guide.md R3a).
+   *  While its card is up the chip pulses, and the item to press next is
+   *  outlined. Absent → the chip is exactly as it always was. */
+  guide?: ReloginGuide;
+}
+
+export function ClaudeLoginStatus({ guide }: ClaudeLoginStatusProps = {}) {
   const { t } = useTranslation();
   const [login, setLogin] = useState<ClaudeLogin | null>(null);
   // The account list, from the same GET. Drives the switcher; null on an older
@@ -135,28 +111,49 @@ export function ClaudeLoginStatus() {
     accountsRef.current = accounts;
   }, [accounts]);
 
+  // — R3a: the re-login guide's highlight. Read, never written: the card under
+  // the failed turn decides whether it is up and which step the user is on.
+  const guideState = useSyncExternalStore(
+    guide?.subscribe ?? noGuideSubscribe,
+    guide?.get ?? noGuideSnapshot,
+    guide?.get ?? noGuideSnapshot,
+  );
+  const highlight = chipHighlight(guideState, open);
+  // Step 1's "Claude chip" was clicked → open the menu. An edge, so the value
+  // the chip mounted with is not a request.
+  const openSeenRef = useRef(guideState.openRequest);
+  useEffect(() => {
+    if (guideState.openRequest === openSeenRef.current) return;
+    openSeenRef.current = guideState.openRequest;
+    setOpen(true);
+  }, [guideState.openRequest]);
+  // …hovered → flash the ring once.
+  const [flashing, setFlashing] = useState(false);
+  const flashSeenRef = useRef(guideState.flashRequest);
+  useEffect(() => {
+    if (guideState.flashRequest === flashSeenRef.current) return;
+    flashSeenRef.current = guideState.flashRequest;
+    setFlashing(true);
+    const id = setTimeout(() => setFlashing(false), FLASH_MS);
+    return () => clearTimeout(id);
+  }, [guideState.flashRequest]);
+
   // Returns the freshly-fetched login so callers (the login poll) can inspect it
   // without waiting for React state to settle.
   const load = useCallback(async (force = false): Promise<ClaudeLogin | null> => {
-    try {
-      const res = await fetch(`/api/naby${force ? '?recheckLogin=1' : ''}`);
-      if (!res.ok) return null;
-      const data = (await res.json()) as {
-        claudeLogin?: ClaudeLogin;
-        claudeAccounts?: ClaudeAccountsBlock;
-      };
-      // An older server (or a build without the runtime) simply omits the
-      // field; rendering nothing is the correct degradation.
-      if (aliveRef.current && data.claudeLogin) setLogin(data.claudeLogin);
-      // The account block rides on the same poll (a settings read, no process),
-      // so the switcher stays current at no extra cost.
-      if (aliveRef.current) setAccounts(data.claudeAccounts ?? null);
-      return data.claudeLogin ?? null;
-    } catch {
-      // A failed poll keeps the last known answer. The send path surfaces any
-      // real failure with a far better message than a status dot could.
-      return null;
-    }
+    const data = await fetchClaudeLoginState(force);
+    // A failed poll keeps the last known answer. The send path surfaces any
+    // real failure with a far better message than a status dot could.
+    if (!data) return null;
+    // An older server (or a build without the runtime) simply omits the
+    // field; rendering nothing is the correct degradation.
+    if (aliveRef.current && data.login) setLogin(data.login);
+    // …and the guide card under a failed turn follows the same reading.
+    if (data.login) publishClaudeLoginStatus(data.login.status);
+    // The account block rides on the same poll (a settings read, no process),
+    // so the switcher stays current at no extra cost.
+    if (aliveRef.current) setAccounts(data.accounts);
+    return data.login;
   }, []);
 
   useEffect(() => {
@@ -209,17 +206,11 @@ export function ClaudeLoginStatus() {
   const logout = useCallback(async () => {
     setBusy(true);
     try {
-      const res = await fetch('/api/naby', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'claude.logout' }),
-      });
       // The runtime reset its cache on logout, so a forced re-check reflects the
-      // new (signed-out) truth rather than a stale 10s "signed in".
-      if (res.ok) await load(true);
-    } catch {
-      // Leave the menu open on failure so the user can retry; the next re-check
-      // or focus still corrects the displayed state.
+      // new (signed-out) truth rather than a stale 10s "signed in". On failure
+      // the menu stays open so the user can retry; the next re-check or focus
+      // still corrects the displayed state.
+      if (await claudeLogout()) await load(true);
     } finally {
       if (aliveRef.current) setBusy(false);
     }
@@ -234,39 +225,23 @@ export function ClaudeLoginStatus() {
     setLoggingIn(true);
     loginPollRef.current = true;
     try {
-      const res = await fetch('/api/naby', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'claude.login' }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as {
-          error?: string;
-          errorHeadline?: string;
-          installHelp?: { docsUrl?: string } | null;
-        } | null;
+      const started = await startClaudeLogin();
+      if (!started.ok) {
         if (aliveRef.current) {
           // The command is shown for copy-paste, so a spawn failure (headless /
           // no CLI) is recoverable by the user.
-          //
-          // PREFER THE HEADLINE. "Claude Code is not installed" arrives as a
-          // four-sentence paragraph — the right length for the settings card
-          // that shows the install commands, and a wall of text in this
-          // popover's small amber span. The server sends the first sentence
-          // beside it for exactly this spot, and the docs link carries the rest.
-          setLoginError(body?.errorHeadline ?? body?.error ?? 'Could not start sign-in.');
-          setLoginDocsUrl(body?.installHelp?.docsUrl ?? null);
+          setLoginError(started.error ?? 'Could not start sign-in.');
+          setLoginDocsUrl(started.docsUrl);
           setLoggingIn(false);
         }
         loginPollRef.current = false;
         return;
       }
       // Poll `claude auth status` until the OAuth callback completes.
-      for (let i = 0; i < LOGIN_POLL_MAX && loginPollRef.current && aliveRef.current; i++) {
-        const st = await load(true);
-        if (st?.status === 'signed-in') break;
-        await new Promise((r) => setTimeout(r, LOGIN_POLL_MS));
-      }
+      await pollClaudeSignIn(
+        async () => (await load(true))?.status === 'signed-in',
+        () => loginPollRef.current && aliveRef.current,
+      );
     } catch {
       if (aliveRef.current) setLoginError('Could not start sign-in.');
     } finally {
@@ -348,19 +323,14 @@ export function ClaudeLoginStatus() {
       const accountId = body.accountId;
       await load(true);
       // Poll that account's own namespace until the OAuth callback completes.
-      for (let i = 0; i < LOGIN_POLL_MAX && loginPollRef.current && aliveRef.current; i++) {
-        await fetch('/api/naby', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'claude-account.verify', accountId }),
-        }).catch(() => undefined);
-        const fresh = await load(true);
-        void fresh;
-        if (aliveRef.current && accountsRef.current?.accounts.find((a) => a.id === accountId)?.status === 'signed-in') {
-          break;
-        }
-        await new Promise((r) => setTimeout(r, LOGIN_POLL_MS));
-      }
+      await pollClaudeSignIn(
+        async () => {
+          await verifyClaudeAccount(accountId);
+          await load(true);
+          return accountsRef.current?.accounts.find((a) => a.id === accountId)?.status === 'signed-in';
+        },
+        () => loginPollRef.current && aliveRef.current,
+      );
     } catch {
       if (aliveRef.current) setLoginError(t('claudeAccount.login'));
     } finally {
@@ -421,7 +391,12 @@ export function ClaudeLoginStatus() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded hover:bg-accent px-1 py-0.5"
+        // The ring is a box-shadow (globals.css): it draws outside the box, so
+        // the chip neither moves nor resizes while it pulses.
+        className={`flex items-center gap-1.5 rounded hover:bg-accent px-1 py-0.5${
+          highlight.ring ? ' claude-chip-guide' : ''
+        }${flashing ? ' claude-chip-guide-flash' : ''}`}
+        data-guide={highlight.ring ? 'pulse' : undefined}
         data-testid="claude-account-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -457,7 +432,9 @@ export function ClaudeLoginStatus() {
             type="button"
             onClick={() => void doLogin()}
             disabled={loggingIn}
-            className="underline hover:text-foreground disabled:opacity-50"
+            className={`underline hover:text-foreground disabled:opacity-50 rounded${
+              highlight.login ? ` px-1 ${GUIDE_OUTLINE}` : ''
+            }`}
             data-testid="claude-login-inline"
           >
             {loggingIn
@@ -595,7 +572,9 @@ export function ClaudeLoginStatus() {
               onClick={() => void logout()}
               disabled={busy}
               data-testid="claude-account-logout"
-              className="text-left px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50"
+              className={`text-left px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50${
+                highlight.logout ? ` ${GUIDE_OUTLINE}` : ''
+              }`}
             >
               {busy
                 ? t('claudeAccount.loggingOut', { defaultValue: 'Signing out…' })
@@ -609,7 +588,9 @@ export function ClaudeLoginStatus() {
                 onClick={() => void doLogin()}
                 disabled={loggingIn}
                 data-testid="claude-account-login"
-                className="text-left px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50"
+                className={`text-left px-2 py-1 rounded border border-border hover:bg-accent disabled:opacity-50${
+                  highlight.login ? ` ${GUIDE_OUTLINE}` : ''
+                }`}
               >
                 {loggingIn
                   ? t('claudeAccount.waitingForBrowser', {

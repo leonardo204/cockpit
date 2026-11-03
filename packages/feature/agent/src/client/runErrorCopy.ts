@@ -57,7 +57,9 @@ export function runErrorCopy(code: string | undefined, raw: string, t: Translate
     case 'CREDENTIAL_UNAVAILABLE':
       return k('credentialUnavailable', 'The AI provider key could not be used. Check the key in Settings → AI provider and press Save.');
     case 'authentication_failed':
-      return k('claudeSignIn', 'Your Claude sign-in has expired. Click the Claude chip above the chat, choose Log in, then send again.');
+      // The failure notice draws the step-by-step guide under this
+      // (ClaudeReloginCard); a surface that cannot draw it gets runErrorText.
+      return k('claudeSignIn', 'Your Claude sign-in has expired. Log out on the Claude chip, then log in again.');
     case 'rate_limit':
       return k(
         'claudeRateLimit',
@@ -99,6 +101,23 @@ export function runErrorCopy(code: string | undefined, raw: string, t: Translate
     default:
       return raw;
   }
+}
+
+/**
+ * The same copy for a surface that carries TEXT ONLY — a Telegram reply, a
+ * notification — where the re-login card cannot be drawn, so "press the button
+ * below" would point at nothing. Names the route through the Claude chip
+ * instead (specs/claude-relogin-guide.md §1.4). Every other code reads the same
+ * as runErrorCopy.
+ */
+export function runErrorText(code: string | undefined, raw: string, t: Translate = defaultT): string {
+  if (code === 'authentication_failed') {
+    return t('chat.runError.claudeSignInText', {
+      defaultValue:
+        'Your Claude sign-in has expired. In naby, click the Claude chip above the chat, choose Log out, then Log in, and send again.',
+    });
+  }
+  return runErrorCopy(code, raw, t);
 }
 
 /**

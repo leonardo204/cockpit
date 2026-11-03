@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  lastResendableUserMessage,
+  runFailureInfo,
   runFailureReducer,
   runFailureHeadline,
   runFailureOrigin,
@@ -182,5 +184,37 @@ describe('runFailureOrigin — which provider and model was asked', () => {
     expect(runFailureOrigin({ model: 'gpt-5.6-sol' })).toBe('gpt-5.6-sol');
     expect(runFailureOrigin({})).toBe('');
     expect(runFailureOrigin({ engine: '  ', model: '' })).toBe('');
+  });
+});
+
+describe('the code and the original text ride with the failure (claude-relogin-guide)', () => {
+  it('records code and detail when given, and omits them when not', () => {
+    const coded = run([failed({ message: 'copy', code: 'authentication_failed', detail: 'Failed to authenticate' })]);
+    expect(coded?.code).toBe('authentication_failed');
+    expect(coded?.detail).toBe('Failed to authenticate');
+    const plain = run([failed()]);
+    expect(plain).not.toHaveProperty('code');
+    expect(plain).not.toHaveProperty('detail');
+  });
+
+  it('runFailureInfo reads the RAW event: code + original text, nothing for an uncoded one', () => {
+    expect(runFailureInfo({ code: 'authentication_failed', error: ' Failed to authenticate ' })).toEqual({
+      code: 'authentication_failed',
+      detail: 'Failed to authenticate',
+    });
+    expect(runFailureInfo({ error: 'socket hang up' })).toEqual({});
+    expect(runFailureInfo({ code: 'rate_limit' })).toEqual({ code: 'rate_limit' });
+  });
+
+  it('lastResendableUserMessage picks the newest user message with text', () => {
+    const msgs = [
+      { id: 'u1', role: 'user', content: 'first' },
+      { id: 'a1', role: 'assistant', content: 'answer' },
+      { id: 'u2', role: 'user', content: 'second' },
+      { id: 'u3', role: 'user', content: '   ' },
+      { id: 'a2', role: 'assistant', content: '' },
+    ];
+    expect(lastResendableUserMessage(msgs)?.id).toBe('u2');
+    expect(lastResendableUserMessage([{ role: 'assistant', content: 'x' }])).toBeNull();
   });
 });

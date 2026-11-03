@@ -67,7 +67,7 @@ describe('Chat — the failure is held outside the message array', () => {
   it('NEVER puts it into `messages` — that is what the reconcile erases', () => {
     expect(chat).not.toMatch(/setMessages\([^)]*runFailure/);
     // …and the notice is not fed the transcript either.
-    expect(chat).toMatch(/<RunFailureNotice failure=\{runFailure\} onDismiss=\{dismissRunFailure\} \/>/);
+    expect(chat).toMatch(/<RunFailureNotice\s+failure=\{runFailure\}\s+onDismiss=\{dismissRunFailure\}/);
     expect(chat).not.toMatch(/<RunFailureNotice[^/]*messages=/);
   });
 
@@ -114,7 +114,9 @@ describe('Chat — the failure is held outside the message array', () => {
 describe('useChatStream — every failing path reports, and a send clears', () => {
   it('reports the in-stream error event — the raw text unless a code localizes it', () => {
     const branch = stream.slice(stream.indexOf("if (eventType === 'error')"));
-    expect(branch.indexOf('onRunErrorRef.current?.(errText)')).toBeGreaterThan(-1);
+    // The code and the ORIGINAL text ride along, read off the event as it
+    // arrived (the re-login card keys on the code and folds the original).
+    expect(branch.indexOf('onRunErrorRef.current?.(errText, runFailureInfo(rawEvent))')).toBeGreaterThan(-1);
     expect(branch).toMatch(/const errText = \(event\.error as string\) \|\|/);
     // `event` is the localized one: a coded error (runErrorCopy.ts) becomes
     // actionable copy, an uncoded one stays the provider's own words.
@@ -145,7 +147,9 @@ describe('useChatStream — every failing path reports, and a send clears', () =
 
 describe('useLiveStream — a watched run that fails reports the same way', () => {
   it('reports the error and still lets the reducer draw the in-turn copy', () => {
-    expect(live).toMatch(/if \(ev\.type === 'error' && ev\.error\) opts\?\.onRunError\?\.\(ev\.error\);/);
+    expect(live).toMatch(
+      /if \(ev\.type === 'error' && ev\.error\) opts\?\.onRunError\?\.\(ev\.error, runFailureInfo\(rawEv\)\);/,
+    );
     // No `return` in that branch: applyStreamEvent below still gets the event.
     const at = live.indexOf("if (ev.type === 'error' && ev.error)");
     const line = live.slice(at, live.indexOf('\n', at));
@@ -193,6 +197,7 @@ describe('UI copy goes through i18n in both languages', () => {
     'runFailedHide',
     'runFailedDismiss',
     'runFailedHint',
+    'runFailedHintDetails',
   ];
 
   it('has every key in en and ko', () => {
@@ -211,5 +216,41 @@ describe('UI copy goes through i18n in both languages', () => {
     for (const key of keys) {
       expect(notice, `chat.${key} not read through t()`).toMatch(new RegExp(`t\\('chat\\.${key}'`));
     }
+  });
+});
+
+describe('the expired Claude sign-in — re-login card and "send again" (claude-relogin-guide)', () => {
+  it('the notice draws the re-login card for authentication_failed, keyed on the failure', () => {
+    expect(notice).toContain("export const CLAUDE_SIGN_IN_FAILURE_CODE = 'authentication_failed';");
+    expect(notice).toContain('const relogin = failure.code === CLAUDE_SIGN_IN_FAILURE_CODE;');
+    expect(notice).toMatch(/<ClaudeReloginCard key=\{failure\.at\} detail=\{failure\.detail\} onResend=\{onResend\} guide=\{reloginGuide\} \/>/);
+  });
+
+  it('records the code and the original text with the failure', () => {
+    expect(chat).toMatch(/\(message: string \| null, info\?: RunFailureInfo\) => \{/);
+    expect(chat).toContain('...(info?.code ? { code: info.code } : {}),');
+    expect(chat).toContain('...(info?.detail ? { detail: info.detail } : {}),');
+  });
+
+  it('snapshots the failed turn\'s user message AT FAILURE TIME, before the reconcile', () => {
+    expect(chat).toContain('lastUserMessage: lastResendableUserMessage(messages),');
+    const handler = chat.slice(chat.indexOf('const handleRunError = useCallback('));
+    const snap = handler.indexOf('failedTurnMessageRef.current = ctx.lastUserMessage;');
+    const dispatch = handler.indexOf("type: 'run-failed'");
+    expect(snap).toBeGreaterThan(-1);
+    expect(dispatch).toBeGreaterThan(snap);
+  });
+
+  it('"send again" goes through the existing handleResendMessage, and only when there is a message', () => {
+    expect(chat).toMatch(
+      /const resendFailedTurn = useCallback\(\(\) => \{\s*const failed = failedTurnMessageRef\.current;\s*if \(failed\) handleResendMessage\(failed\);\s*\}, \[handleResendMessage\]\);/,
+    );
+    expect(chat).toContain('onResend={failedTurnMessageRef.current ? resendFailedTurn : undefined}');
+  });
+
+  it('"Details" is promised by the hint only when there is a Details (R9)', () => {
+    expect(notice).toMatch(/\{hasDetail\s*\? t\('chat\.runFailedHintDetails'[\s\S]*?: t\('chat\.runFailedHint'/);
+    expect(ko.chat?.runFailedHint).toBe('다음 메시지를 보내면 사라집니다.');
+    expect(ko.chat?.runFailedHintDetails).toBe('자세히에서 전체 내용을 볼 수 있습니다. 다음 메시지를 보내면 사라집니다.');
   });
 });

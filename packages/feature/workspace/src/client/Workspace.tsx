@@ -490,6 +490,16 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
     return () => window.removeEventListener('message', handleMessage);
   }, [projects, activeIndex, collapsed, updateUrl, saveProjects, openSettings]);
 
+  // Cmd/Ctrl+, opens Settings. The key is a menu accelerator in the Electron
+  // main process (electron/menu-template.ts), so it fires even when focus is
+  // inside a project iframe; the menu only asks, and the modal is opened here.
+  useEffect(() => {
+    const bridge = (window as unknown as {
+      naby?: { appMenu?: { onOpenSettings?: (fn: () => void) => () => void } };
+    }).naby?.appMenu;
+    return bridge?.onOpenSettings?.(() => openSettings());
+  }, [openSettings]);
+
   // Parent-window keyboard safety net.
   // iframes don't bubble keydown to the parent window, so the per-panel
   // listeners inside TabManager / FileBrowserModal don't run when focus is in
