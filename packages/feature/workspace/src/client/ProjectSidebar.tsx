@@ -24,6 +24,7 @@ import {
   deleteGroup,
   moveProject,
   normalizeGroups,
+  projectNumbers,
   renameGroup,
   reorderGroups,
   toggleGroupCollapsed,
@@ -289,6 +290,9 @@ export function ProjectSidebar({
   const loadingCwds = new Set(
     sessions.filter(s => s.status === 'loading').map(s => s.cwd)
   );
+  const loadingSessionIds = new Set(
+    sessions.filter(s => s.status === 'loading').map(s => s.sessionId)
+  );
   const unreadCwds = new Set(
     sessions.filter(s => s.status === 'unread').map(s => s.cwd)
   );
@@ -310,6 +314,10 @@ export function ProjectSidebar({
   const [editingProjectCwd, setEditingProjectCwd] = useState<string | null>(null);
 
   const model = useMemo(() => buildSidebarModel(projects, groups), [projects, groups]);
+  // The number each row shows: 1.. per section, collapse or not (project-groups
+  // §9). The SAME function naby's tools resolve "3번" with, so screen and
+  // server never disagree. `index` stays the global position (R34).
+  const numbers = useMemo(() => projectNumbers(projects, groups), [projects, groups]);
   const hasGroups = groups.length > 0;
 
   // Ref indirection for the memo'd group headers: their callbacks keep one
@@ -509,6 +517,7 @@ export function ProjectSidebar({
           <div className="flex-1 min-w-0">
             <ProjectItem
               index={index}
+              number={numbers.get(project.cwd)?.number ?? index + 1}
               name={projectDisplayName(project)}
               cwd={project.cwd}
               isActive={index === activeIndex}
@@ -554,6 +563,7 @@ export function ProjectSidebar({
                   sessionId={sessionId}
                   title={session.title}
                   isActive={index === activeIndex && project.sessionId === sessionId}
+                  isRunning={loadingSessionIds.has(sessionId)}
                   onSelect={handleSelectSession}
                   onDelete={handleDeleteSession}
                 />

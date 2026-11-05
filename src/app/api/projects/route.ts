@@ -32,9 +32,13 @@ import {
   customProjectTitle,
   folderNameOf,
   normalizeGroups,
+  orderProjects,
   parseStoredGroups,
+  parseStoredProjectOrder,
   PROJECT_GROUPS_SETTING_KEY,
+  PROJECT_ORDER_SETTING_KEY,
   serializeGroups,
+  serializeProjectOrder,
 } from "@cockpit/feature-workspace/server"
 import { getStore } from "@cockpit/feature-agent/server/engines/naby"
 
@@ -70,7 +74,14 @@ export const GET = handler(() =>
   Effect.try({
     try: (): ProjectsData => {
       const store = getStore()
-      const projects = store.listProjects().map((p) => {
+      // The order the sidebar last saved (specs/project-groups.md §9): the
+      // table's own most-recent-first order drifts as projects are opened and
+      // turns run, and naby resolves "3번" against this same stored order.
+      const ordered = orderProjects(
+        store.listProjects(),
+        parseStoredProjectOrder(store.getSetting(PROJECT_ORDER_SETTING_KEY))
+      )
+      const projects = ordered.map((p) => {
         // Only a real rename goes on the wire: every row created by a list save
         // carries the folder name as its title, and echoing that back would
         // make every project look renamed.
@@ -166,6 +177,14 @@ export const POST = handler((req) =>
                 : {}),
             })
           }
+
+          // The order the screen holds, as sent (project-groups §9 R33). The
+          // table cannot carry it — its order is the last-opened stamp — and the
+          // sidebar numbers naby resolves are counted in THIS order.
+          store.setSetting(
+            PROJECT_ORDER_SETTING_KEY,
+            serializeProjectOrder(incoming.map((p) => p.cwd).filter((c): c is string => !!c))
+          )
         }
 
         // Rename one project. A cwd the store does not know is ignored rather

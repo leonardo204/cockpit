@@ -34,7 +34,16 @@
 // the runtime's (`src/runtime/cross-project.ts`).
 
 import { execFile } from 'node:child_process';
-import { parseStoredGroups, PROJECT_GROUPS_SETTING_KEY } from '@cockpit/shared-utils';
+import {
+  orderProjects,
+  parseStoredGroups,
+  parseStoredProjectOrder,
+  projectNumbers,
+  PROJECT_GROUPS_SETTING_KEY,
+  PROJECT_ORDER_SETTING_KEY,
+  type ProjectGroup,
+  type ProjectNumber,
+} from '@cockpit/shared-utils';
 import {
   addCrossProjectApproval,
   buildGitArgs,
@@ -67,6 +76,7 @@ import type {
   CrossProjectGroup,
   CrossProjectRelation,
   Executor,
+  ProjectRefCandidate,
   GateDecision,
   ReadProjectInput,
   Store,
@@ -213,10 +223,11 @@ const basenameOf = (cwd: string): string => cwd.replace(/\/+$/, '').split('/').p
 // The decision (R1–R5)
 // ---------------------------------------------------------------------------
 
-/** The sidebar groups, through the sidebar's own normalizer (project-groups §3):
- *  members not in the project list dropped, a duplicated cwd kept in the first
- *  group, broken JSON read as no groups. */
-export function readProjectGroups(store: Pick<Store, 'getSetting' | 'listProjects'>): CrossProjectGroup[] {
+/** The stored sidebar groups (ids and collapse flags included), through the
+ *  sidebar's own normalizer (project-groups §3): members not in the project
+ *  list dropped, a duplicated cwd kept in the first group, broken JSON read as
+ *  no groups. */
+function readStoredGroups(store: Pick<Store, 'getSetting' | 'listProjects'>): ProjectGroup[] {
   let known: string[] | undefined;
   try {
     known = store.listProjects().map((p) => p.cwd);
@@ -224,6 +235,66 @@ export function readProjectGroups(store: Pick<Store, 'getSetting' | 'listProject
     known = undefined;
   }
   return parseStoredGroups(store.getSetting(PROJECT_GROUPS_SETTING_KEY), known);
+}
+
+/** The sidebar groups as the decision needs them. */
+export function readProjectGroups(store: Pick<Store, 'getSetting' | 'listProjects'>): CrossProjectGroup[] {
+  return readStoredGroups(store);
+}
+
+/**
+ * The project list in the sidebar's order: the order the last list save
+ * recorded (`sidebar.projectOrder`), projects added since appended. NOT the
+ * table's own order — that is the last-opened stamp, which moves whenever a
+ * project is opened or a turn runs, while the rows on screen stay put.
+ */
+export function readSidebarProjects<P extends { cwd: string }>(
+  store: Pick<Store, 'getSetting'> & { listProjects(): P[] },
+): ReadonlyArray<P> {
+  let rows: P[] = [];
+  try {
+    rows = store.listProjects();
+  } catch {
+    rows = [];
+  }
+  return orderProjects(rows, parseStoredProjectOrder(store.getSetting(PROJECT_ORDER_SETTING_KEY)));
+}
+
+/**
+ * The sidebar numbers (project-groups §9), by cwd — through the ONE
+ * `projectNumbers` the sidebar draws with (R33), over the sidebar's own order.
+ */
+export function readProjectNumbers(store: Pick<Store, 'getSetting' | 'listProjects'>): Map<string, ProjectNumber> {
+  return projectNumbers(readSidebarProjects(store), readStoredGroups(store));
+}
+
+/** Every listed project as `resolveProjectRef` takes it: display name, sidebar
+ *  number and section (R7a, R7b) — this project included, so a bare "3" can be
+ *  read in its section. */
+export function projectRefCandidates(store: CrossProjectStore): ProjectRefCandidate[] {
+  let rows: { cwd: string }[] = [];
+  try {
+    rows = store.listProjects();
+  } catch {
+    rows = [];
+  }
+  const nameOf = projectDisplayNames(store);
+  const numbers = readProjectNumbers(store);
+  return rows.map((p) => {
+    const n = numbers.get(p.cwd);
+    return {
+      cwd: p.cwd,
+      name: nameOf(p.cwd) || p.cwd,
+      ...(n ? { number: n.number, section: n.groupName } : {}),
+    };
+  });
+}
+
+/** R7e: how a project is labelled by number — "RMS 3" in a group, "3" in the
+ *  ungrouped area; undefined when it has no number. */
+export function projectNumberLabel(n: ProjectNumber | undefined): string | undefined {
+  if (!n) return undefined;
+  return n.groupName ? `${n.groupName} ${n.number}` : String(n.number);
 }
 
 /** R5 — the relation (for listing and wording) and the access (the only thing
@@ -276,33 +347,40 @@ export type CrossProjectEntry = {
   cwd: string;
   name: string;
   group?: string;
+  /** The sidebar number inside its section (project-groups §9). */
+  number?: number;
   relation: CrossProjectRelation;
   access: CrossProjectAccess;
 };
 
-/** Every project of the sidebar list but this one, with its access state. */
+/** Every project of the sidebar list but this one, with its access state, in
+ *  the sidebar's display order (groups in order, then the ungrouped area). */
 export function listCrossProjects(store: CrossProjectStore, fromCwd: string, sessionId: string): CrossProjectEntry[] {
-  let rows: { cwd: string }[] = [];
-  try {
-    rows = store.listProjects();
-  } catch {
-    rows = [];
-  }
+  const rows = readSidebarProjects(store);
   const nameOf = projectDisplayNames(store);
-  const groups = readProjectGroups(store);
+  const groups = readStoredGroups(store);
+  const numbers = projectNumbers(rows, groups);
+  const sectionRank = (cwd: string): number => {
+    const gid = numbers.get(cwd)?.groupId ?? null;
+    const i = gid === null ? -1 : groups.findIndex((g) => g.id === gid);
+    return i < 0 ? groups.length : i;
+  };
   return rows
     .filter((p) => p.cwd !== fromCwd)
     .map((p) => {
       const group = groupOfProject(groups, p.cwd);
       const standing = crossProjectStanding(store, fromCwd, p.cwd, sessionId);
+      const n = numbers.get(p.cwd);
       return {
         cwd: p.cwd,
         name: nameOf(p.cwd) || p.cwd,
         ...(group ? { group: group.name } : {}),
+        ...(n ? { number: n.number } : {}),
         relation: standing.relation,
         access: standing.access,
       };
-    });
+    })
+    .sort((a, b) => sectionRank(a.cwd) - sectionRank(b.cwd) || (a.number ?? 0) - (b.number ?? 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +396,9 @@ export type CrossProjectRequest = {
   toolCallId: string;
   /** `send`: the target tab's title, named on the card. */
   sessionTitle?: string;
+  /** `send` with no open tab there: a new conversation will be opened in the
+   *  target project for the request (R7d) — the card says so. */
+  newSession?: boolean;
 };
 
 export type CrossProjectCheck =
@@ -362,8 +443,14 @@ export type CrossProjectApprovalInput = {
   cwd: string;
   kind: 'read' | 'send';
   sessionTitle?: string;
+  /** R7d: the request opens a new conversation there. */
+  newSession?: true;
   relation: 'same-group' | 'other-group';
   group?: string;
+  /** R7e: the target's sidebar number, and its section's group name (absent in
+   *  the ungrouped area) — the card shows "RMS 3번 ‹DT_RMS›". */
+  number?: number;
+  section?: string;
 };
 
 /** What a refused call tells the model. */
@@ -469,11 +556,19 @@ export function makeCrossProjectGuard(deps: CrossProjectGuardDeps): CrossProject
       if (!pending) {
         approvalId = `${deps.sessionId}:${CROSS_PROJECT_ACCESS_TOOL}:${request.toolCallId}`;
         const id = approvalId;
+        let numbered: ProjectNumber | undefined;
+        try {
+          numbered = readProjectNumbers(deps.store).get(target.cwd);
+        } catch {
+          numbered = undefined;
+        }
         pending = ask(id, {
           project: target.name,
           cwd: target.cwd,
           kind: request.feature,
-          ...(request.sessionTitle ? { sessionTitle: request.sessionTitle } : {}),
+          ...(request.sessionTitle && !request.newSession ? { sessionTitle: request.sessionTitle } : {}),
+          ...(request.feature === 'send' && request.newSession ? { newSession: true as const } : {}),
+          ...(numbered ? { number: numbered.number, ...(numbered.groupName ? { section: numbered.groupName } : {}) } : {}),
           relation: standing.relation === 'same-group' ? 'same-group' : 'other-group',
           ...(standing.group ? { group: standing.group } : {}),
         }).then((answer) => {
@@ -637,28 +732,29 @@ export function makeCrossProjectTools(deps: CrossProjectToolDeps): {
   const list: Executor = async () => {
     const rows = listCrossProjects(deps.store, deps.cwd, deps.sessionId);
     if (rows.length === 0) return { content: 'There is no other project in the sidebar list.', data: { projects: [] } };
+    const numbers = readProjectNumbers(deps.store);
+    const label = (cwd: string, group: string | undefined) => {
+      const n = numbers.get(cwd);
+      return n ? `${group ? `group "${group}"` : 'no group'} #${n.number}` : group ? `group "${group}"` : 'no group';
+    };
+    const self = numbers.get(deps.cwd);
     const lines = rows.map(
-      (r) =>
-        `- "${r.name}" — ${r.cwd}${r.group ? ` (group "${r.group}")` : ' (no group)'} — relation: ${r.relation} — access: ${r.access}`,
+      (r) => `- [${label(r.cwd, r.group)}] "${r.name}" — ${r.cwd} — relation: ${r.relation} — access: ${r.access}`,
     );
-    return { content: `Other projects:\n${lines.join('\n')}`, data: { projects: rows } };
+    const head = self
+      ? `This project is ${self.groupName ? `group "${self.groupName}"` : 'in no group'} #${self.number}. ` +
+        'Sidebar numbers restart at 1 in each group (the ungrouped area counts on its own); pass "3" for a number in this project\'s section, or "<group> 3" for another.'
+      : 'Sidebar numbers restart at 1 in each group (the ungrouped area counts on its own).';
+    return { content: `${head}\nOther projects:\n${lines.join('\n')}`, data: { projects: rows } };
   };
 
   const read: Executor = async (raw, ctx) => {
     const parsed = parseReadProjectInput(raw);
     if (!parsed.ok) return refuse(`Not read: ${parsed.error}.`);
     const input = parsed.input;
-    let projects: { cwd: string }[] = [];
-    try {
-      projects = deps.store.listProjects();
-    } catch {
-      projects = [];
-    }
-    const nameOf = projectDisplayNames(deps.store);
-    const ref = resolveProjectRef(
-      projects.map((p) => ({ cwd: p.cwd, name: nameOf(p.cwd) || p.cwd })),
-      input.project,
-    );
+    // A cwd, a name or a sidebar number (R7a, R7b) — resolved here, with the
+    // sidebar's own numbers; the model never counts.
+    const ref = resolveProjectRef(projectRefCandidates(deps.store), input.project, { selfCwd: deps.cwd });
     if (!ref.ok) return refuse(`Not read: ${ref.error}.`);
     const target = { cwd: ref.cwd, name: ref.name };
     const access = await deps.guard.check(target, { feature: 'read', op: input.op, toolCallId: ctx.toolCall.toolCallId });

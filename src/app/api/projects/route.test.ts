@@ -262,3 +262,28 @@ describe('/api/projects — project rename (project-groups §8)', () => {
     expect(store.getSetting('ui.collapsed')).toBe(collapsed);
   });
 });
+
+describe('the sidebar order is the order the list save sent (project-groups §9)', () => {
+  const getProjects = async () => {
+    const res = await route.GET(new Request('http://127.0.0.1/api/projects'));
+    const json = (await res.json()) as { data?: { projects: { cwd: string }[] }; projects?: { cwd: string }[] };
+    return (json.data ?? json).projects!.map((p) => p.cwd);
+  };
+
+  it('GET returns the saved order even when the last-opened stamps disagree', async () => {
+    await post({
+      projects: [
+        { cwd: '/order/c', lastOpenedAt: 1 },
+        { cwd: '/order/a', lastOpenedAt: 3 },
+        { cwd: '/order/b', lastOpenedAt: 2 },
+      ],
+    });
+    expect(JSON.parse(store.getSetting('sidebar.projectOrder')!)).toEqual(['/order/c', '/order/a', '/order/b']);
+    expect(await getProjects()).toEqual(['/order/c', '/order/a', '/order/b']);
+  });
+
+  it('a save without `projects` leaves the order alone', async () => {
+    await post({ sidebarWidth: 250 });
+    expect(await getProjects()).toEqual(['/order/c', '/order/a', '/order/b']);
+  });
+});

@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { NabyAvatar } from '@cockpit/shared-ui';
 import {
   crossProjectGroupNoteKey,
+  crossProjectLabelKey,
   crossProjectQuestionKey,
   QUESTION_SLOTS,
   splitQuestion,
@@ -41,15 +42,18 @@ export const CrossProjectApprovalCard = memo(function CrossProjectApprovalCard({
   const { t } = useTranslation();
   const q = crossProjectQuestionKey(card);
   const note = crossProjectGroupNoteKey(card);
+  const label = crossProjectLabelKey(card);
   const parts = splitQuestion(
     t(q.key, { defaultValue: q.defaultValue, ...QUESTION_SLOTS, title: card.sessionTitle ?? '' }),
     card,
+    label ? t(label.key, { defaultValue: label.defaultValue, ...label.params }) : undefined,
   );
   return (
     <div
       className="mx-4 mb-2 rounded-xl border-[1.5px] border-brand/40 bg-card p-3.5 shadow-card"
       data-testid="cross-project-approval"
       data-kind={card.kind}
+      data-new-session={card.newSession ? 'true' : undefined}
       data-relation={card.relation}
     >
       <div className="inline-flex items-center gap-1.5 rounded-sm bg-accent py-0.5 pl-1 pr-2 text-xs font-semibold text-accent-foreground">

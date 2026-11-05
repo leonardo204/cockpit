@@ -273,6 +273,7 @@ import {
   makeCrossProjectTools,
   readCrossProjectEnabled,
   readProjectGroups,
+  readProjectNumbers,
 } from '../lib/crossProject';
 import { projectDisplayNames } from '../lib/projectDisplayName';
 import { isRunActive as hubIsRunActive } from '../sessionRunHub';
@@ -1791,14 +1792,18 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // names and cwds, never content — on exactly the turns the guard exists
         // for (R16's exclusions and the R6 switch are already in its condition).
         // Built here, in the shared system prompt, so both engines get the same
-        // text; sorted by name inside the builder so the prompt cache holds.
+        // text; listed in sidebar-number order (§3a) with the numbers from the
+        // sidebar's own `projectNumbers`, so the text changes only when the
+        // user reorders the sidebar and the prompt cache holds.
         const crossProjectGroupNote = (() => {
           if (!crossProjectGuard || !projectCwd) return undefined;
           try {
+            const numbers = readProjectNumbers(store);
             return groupAwarenessParagraph({
               groups: readProjectGroups(store),
               cwd: projectCwd,
               nameOf: projectDisplayNames(store),
+              numberOf: (cwd) => numbers.get(cwd)?.number,
             });
           } catch {
             return undefined;

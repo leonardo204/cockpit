@@ -23,6 +23,13 @@ export interface CrossProjectAccessCard {
   kind: 'read' | 'send';
   /** `send`: the target tab's title. */
   sessionTitle?: string;
+  /** `send` with no open tab there: a new conversation is opened for the
+   *  request (cross-project-context R7d). */
+  newSession?: boolean;
+  /** R7e: the sidebar number, and its section's group name (absent in the
+   *  ungrouped area) — "RMS 3번 ‹DT_RMS›". */
+  number?: number;
+  section?: string;
   /** Which group line the card shows (R17): the shared group, or "another group". */
   relation: 'same-group' | 'other-group';
   /** `same-group`: the group's name. */
@@ -42,11 +49,17 @@ export function crossProjectFromApproval(d: Record<string, unknown>): CrossProje
   const sessionTitle = typeof input.sessionTitle === 'string' && input.sessionTitle.trim() ? input.sessionTitle.trim() : undefined;
   const group = typeof input.group === 'string' && input.group.trim() ? input.group.trim() : undefined;
   const relation = input.relation === 'same-group' && group ? 'same-group' : 'other-group';
+  const newSession = kind === 'send' && input.newSession === true;
+  const number =
+    typeof input.number === 'number' && Number.isInteger(input.number) && input.number > 0 ? input.number : undefined;
+  const section = typeof input.section === 'string' && input.section.trim() ? input.section.trim() : undefined;
   return {
     project,
     cwd,
     kind,
-    ...(kind === 'send' && sessionTitle ? { sessionTitle } : {}),
+    ...(kind === 'send' && sessionTitle && !newSession ? { sessionTitle } : {}),
+    ...(newSession ? { newSession: true } : {}),
+    ...(number !== undefined ? { number, ...(section ? { section } : {}) } : {}),
     relation,
     ...(relation === 'same-group' ? { group } : {}),
   };
@@ -76,6 +89,12 @@ export function crossProjectQuestionKey(card: CrossProjectAccessCard): {
   key: string;
   defaultValue: string;
 } {
+  if (card.kind === 'send' && card.newSession) {
+    return {
+      key: 'toolApproval.crossProject.sendNew',
+      defaultValue: 'naby wants to open a new conversation in another project, {{project}} ({{cwd}}), and send it a request.',
+    };
+  }
   return card.kind === 'send'
     ? {
         key: 'toolApproval.crossProject.send',
@@ -84,6 +103,28 @@ export function crossProjectQuestionKey(card: CrossProjectAccessCard): {
     : {
         key: 'toolApproval.crossProject.read',
         defaultValue: 'naby wants to read the contents of another project, {{project}} ({{cwd}}).',
+      };
+}
+
+/** R7e: the i18n key of the project's label when it has a sidebar number —
+ *  "RMS 3번 ‹DT_RMS›", or "3번 ‹DT_RMS›" in the ungrouped area. Null: the
+ *  plain "‹DT_RMS›". */
+export function crossProjectLabelKey(card: CrossProjectAccessCard): {
+  key: string;
+  defaultValue: string;
+  params: Record<string, string | number>;
+} | null {
+  if (card.number === undefined) return null;
+  return card.section
+    ? {
+        key: 'toolApproval.crossProject.projectNumbered',
+        defaultValue: '{{section}} #{{number}} ‹{{project}}›',
+        params: { section: card.section, number: card.number, project: card.project },
+      }
+    : {
+        key: 'toolApproval.crossProject.projectNumberedNoGroup',
+        defaultValue: '#{{number}} ‹{{project}}›',
+        params: { number: card.number, project: card.project },
       };
 }
 
@@ -98,12 +139,13 @@ const SLOT_CWD = '\u0001C\u0001';
 export const QUESTION_SLOTS = { project: SLOT_PROJECT, cwd: SLOT_CWD } as const;
 
 /** Split a translated question (made with QUESTION_SLOTS) into runs. The name is
- *  wrapped in ‹› as everywhere else naby names a thing. */
-export function splitQuestion(translated: string, card: CrossProjectAccessCard): QuestionPart[] {
+ *  wrapped in ‹› as everywhere else naby names a thing; `projectLabel` (the
+ *  numbered label, R7e) replaces it whole when given. */
+export function splitQuestion(translated: string, card: CrossProjectAccessCard, projectLabel?: string): QuestionPart[] {
   const out: QuestionPart[] = [];
   for (const piece of translated.split(/(\u0001[PC]\u0001)/)) {
     if (!piece) continue;
-    if (piece === SLOT_PROJECT) out.push({ kind: 'project', text: `‹${card.project}›` });
+    if (piece === SLOT_PROJECT) out.push({ kind: 'project', text: projectLabel || `‹${card.project}›` });
     else if (piece === SLOT_CWD) out.push({ kind: 'cwd', text: card.cwd });
     else out.push({ kind: 'text', text: piece });
   }

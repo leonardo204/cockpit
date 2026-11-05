@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.13 — 2026-11-05
+
+### en
+
+Ask another project by its sidebar number — "tell 3 to do this" — and naby finds the right tab, or opens a new chat there.
+
+**New**
+
+- **Call projects by number.** Say "3" to mean number 3 in your current group, or "RMS 3" for another group. naby resolves the number from the sidebar as you see it, and the approval card shows the number and name so you can check.
+- **No open tab? naby opens a chat.** If the project has no open tab, naby starts a new chat in that project (after your approval) and sends the request there. It appears in that project's session list with a running dot, and the answer comes back to you. If the project has several tabs, naby asks which one.
+
+**Improved**
+
+- **Sidebar numbers start at 1 in each group.** Numbers used to jump (3, 5, 7) inside a group; now each group, and the ungrouped area, counts from 1.
+- **Your sidebar order survives a restart.** The order you drag projects into is kept when the app reopens.
+
+### ko
+
+사이드바 번호로 다른 프로젝트에 일을 시킬 수 있어요. "3번한테 이거 해 달라고 해 줘"라고 하면 나비가 맞는 탭을 찾거나 새 대화를 열어요.
+
+**새로 생긴 것**
+
+- **번호로 프로젝트 부르기.** "3번"은 지금 그룹의 3번이고, 다른 그룹은 "RMS 3번"처럼 말하면 돼요. 번호는 화면에 보이는 사이드바 그대로 풀고, 승인 카드에 번호와 이름이 같이 나와서 맞는지 확인할 수 있어요.
+- **열린 탭이 없으면 새 대화를 열어요.** 그 프로젝트에 열린 탭이 없으면, 승인을 받은 뒤 나비가 그 프로젝트에 새 대화를 열고 요청을 보내요. 새 대화는 그 프로젝트 세션 목록에 진행 표시와 함께 나타나고, 답은 지금 대화로 돌아와요. 탭이 여러 개면 어느 탭인지 물어봐요.
+
+**나아진 것**
+
+- **사이드바 번호가 그룹마다 1부터 시작해요.** 그룹 안에서 3, 5, 7처럼 건너뛰던 번호가 그룹마다, 그리고 그룹 없는 영역도 1부터 차례로 매겨져요.
+- **사이드바 순서가 다시 켜도 남아요.** 끌어서 정한 프로젝트 순서를 앱을 다시 열어도 그대로 보여 줘요.
+
 ## 1.48.12 — 2026-11-03
 
 ### en

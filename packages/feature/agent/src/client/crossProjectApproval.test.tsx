@@ -155,6 +155,64 @@ describe('CrossProjectApprovalCard (R17)', () => {
     }
   });
 
+  it('R7d, R7e (ko): the new-conversation copy and the numbered project label', async () => {
+    await i18n.changeLanguage('ko');
+    try {
+      const fresh = render(
+        <CrossProjectApprovalCard
+          card={{ project: 'server', cwd: '/p/server', kind: 'send', newSession: true, relation: 'same-group', group: 'RMS', number: 1, section: 'RMS' }}
+          busy={false}
+          more={0}
+          onAllowOnce={noop}
+          onAllowAlways={noop}
+          onDeny={noop}
+        />,
+      );
+      expect(fresh).toMatch(
+        /<span>나비가 다른 프로젝트 <\/span><b>RMS 1번 ‹server›<\/b><span>\(<\/span><code[^>]*>\/p\/server<\/code><span>\)에 새 대화를 열어 요청을 보내려 합니다\.<\/span>/,
+      );
+      expect(fresh).toContain('data-new-session="true"');
+      const tab = render(
+        <CrossProjectApprovalCard
+          card={{ project: 'DT_RMS', cwd: '/p/dt', kind: 'send', sessionTitle: 'API', relation: 'same-group', group: 'RMS', number: 3, section: 'RMS' }}
+          busy={false}
+          more={0}
+          onAllowOnce={noop}
+          onAllowAlways={noop}
+          onDeny={noop}
+        />,
+      );
+      expect(tab).toContain('<b>RMS 3번 ‹DT_RMS›</b>');
+      expect(tab).toContain('의 탭 ‹API›에 요청을 보내려 합니다.');
+      const loose = render(
+        <CrossProjectApprovalCard card={{ project: 'loose', cwd: '/p/loose', kind: 'read', relation: 'other-group', number: 2 }} busy={false} more={0} onAllowOnce={noop} onAllowAlways={noop} onDeny={noop} />,
+      );
+      expect(loose).toContain('<b>2번 ‹loose›</b>');
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
+  it('R7d, R7e (en) and the reader: newSession drops the tab title, a bad number is ignored', () => {
+    const html = render(
+      <CrossProjectApprovalCard
+        card={{ project: 'server', cwd: '/p/server', kind: 'send', newSession: true, relation: 'other-group', number: 1, section: 'Web' }}
+        busy={false}
+        more={0}
+        onAllowOnce={noop}
+        onAllowAlways={noop}
+        onDeny={noop}
+      />,
+    );
+    expect(html).toContain('open a new conversation in another project, ');
+    expect(html).toContain('<b>Web #1 ‹server›</b>');
+    const card = crossProjectFromApproval({
+      source: 'cross_project',
+      input: { project: 'server', cwd: '/p/server', kind: 'send', sessionTitle: 'X', newSession: true, number: 0, section: 'Web' },
+    })!;
+    expect(card).toEqual({ project: 'server', cwd: '/p/server', kind: 'send', newSession: true, relation: 'other-group' });
+  });
+
   it('the answered line tells allow once from always allow', () => {
     const once = render(
       <ProposalOutcomeLine

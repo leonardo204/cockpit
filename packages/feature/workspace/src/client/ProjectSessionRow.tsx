@@ -19,6 +19,9 @@ interface ProjectSessionRowProps {
   title: string;
   /** Marks the session currently open in this project's active tab. */
   isActive?: boolean;
+  /** A turn is running in this session right now — also one naby started
+   *  there without opening a tab (cross-project-context R7d). */
+  isRunning?: boolean;
   onSelect: (cwd: string, sessionId: string) => void;
   onDelete: (cwd: string, sessionId: string) => void;
 }
@@ -28,6 +31,7 @@ export const ProjectSessionRow = memo(function ProjectSessionRow({
   sessionId,
   title,
   isActive = false,
+  isRunning = false,
   onSelect,
   onDelete,
 }: ProjectSessionRowProps) {
@@ -48,6 +52,12 @@ export const ProjectSessionRow = memo(function ProjectSessionRow({
       title={label}
     >
       <span className="flex-1 truncate text-xs">{label}</span>
+      {isRunning && (
+        <span
+          data-testid="sidebar-session-running"
+          className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-orange-9 animate-pulse"
+        />
+      )}
       {/* Hover-revealed delete. Same affordance as the tab bar's close ×, and
           the same consequence: this session is deleted, not merely hidden. No
           confirmation, because closing the tab does exactly this already. */}

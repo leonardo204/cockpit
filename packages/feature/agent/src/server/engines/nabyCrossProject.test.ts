@@ -28,6 +28,7 @@ const READ_PROJECT = 'naby_read_project';
 const LIST_SESSIONS = 'naby_list_sessions';
 const SEND = 'naby_send_to_session';
 const GROUPS_KEY = 'sidebar.projectGroups';
+const ORDER_KEY = 'sidebar.projectOrder';
 
 type Tool = { name: string; inputSchema?: { properties?: Record<string, unknown> } };
 type Call = { tools: Tool[]; system: string };
@@ -141,6 +142,7 @@ afterEach(() => {
   store.setSetting(CROSS_PROJECT_ENABLED_KEY, '');
   store.setSetting(CROSS_SESSION_ENABLED_KEY, '');
   store.setSetting(GROUPS_KEY, '');
+  store.setSetting(ORDER_KEY, '');
   store.setSetting('sessions.crossProject.approvals', '');
   // The store is shared across this file: a second "server" would make the
   // name ambiguous (correctly) for the next test.
@@ -316,6 +318,87 @@ describe('a request to another project’s tab (R7–R10)', () => {
     expect(dispatched[1]!.prompt).toContain('of project "server"');
   });
 
+  it('R7d: "2번" with no tab there opens a session in that project, runs the request through the engine and answers back', async () => {
+    const store = getStore();
+    store.setSetting(ORDER_KEY, JSON.stringify([proposal, server, other]));
+    const a = store.createSession('', 'Plan', proposal).sessionId;
+    expect(store.listSessionsByProject(server)).toEqual([]);
+    // The sidebar's global-state viewers, as `src/lib/globalStateBroadcast.ts` pins them.
+    const pushed: string[] = [];
+    const g = globalThis as unknown as { __cockpitGlobalStateClients?: Set<unknown> };
+    const before = g.__cockpitGlobalStateClients;
+    g.__cockpitGlobalStateClients = new Set([{ readyState: 1, send: (d: string) => pushed.push(d) }]);
+    try {
+      // B's turn runs through the real engine adapter with its own scripted model.
+      const bCalls: Call[] = [];
+      const bSpec = createNabySpec({ resolveModel: () => scriptedModel([{ text: 'the API moved to /v2' }], bCalls) as never });
+      const snaps = new Map<string, RunEvent[]>();
+      const legs: { sessionId: string; cwd?: string; role: string; prompt: string }[] = [];
+      let done!: () => void;
+      const finished = new Promise<void>((r) => (done = r));
+      const delivery = async (): Promise<CrossSessionDeps> => ({
+        store,
+        retryDelayMs: 0,
+        pollMs: 0,
+        log: () => {},
+        hub: {
+          isRunActive: () => false,
+          getRunSnapshot: (k) => ({ events: snaps.get(k) ?? [] }),
+          requestStop: () => true,
+        },
+        dispatch: async (input) => {
+          legs.push({ sessionId: input.sessionId, cwd: input.cwd, role: input.crossSession.role, prompt: input.prompt });
+          if (input.crossSession.role === 'reply') {
+            done();
+            return { ok: true, runKey: input.sessionId };
+          }
+          const h = harness(input.sessionId, input.prompt, input.cwd ?? '', {
+            source: 'cross-session',
+            crossSession: input.crossSession,
+          });
+          await bSpec.runner.run(h.ctx);
+          snaps.set(input.sessionId, h.events);
+          return { ok: true, runKey: input.sessionId };
+        },
+      });
+      const calls: Call[] = [];
+      const spec = createNabySpec({
+        resolveModel: () =>
+          scriptedModel(
+            [{ tool: { id: 'p1', name: SEND, input: { project: '2', request: 'What changed in the API?\nList routes.' } } }, { text: 'sent' }],
+            calls,
+          ) as never,
+        crossSessionDelivery: delivery,
+      });
+      const { ctx, events } = harness(a, '2번한테 물어봐 줘', proposal);
+      const run = spec.runner.run(ctx);
+      const card = await answerCard(events, 1, 'allow');
+      await run;
+      expect(card).toMatchObject({ input: { kind: 'send', newSession: true, project: 'server', number: 2, section: 'RMS' } });
+      await finished;
+
+      const opened = store.listSessionsByProject(server);
+      expect(opened).toHaveLength(1);
+      const b = opened[0]!;
+      expect(b.title).toBe('What changed in the API?');
+      expect(toolResults(events)).toContain('Opened a new conversation');
+      expect(pushed.map((d) => JSON.parse(d))).toContainEqual({ type: 'project-state-changed', cwd: server, closedSessionIds: [] });
+      expect(legs.map((l) => [l.sessionId, l.cwd, l.role])).toEqual([
+        [b.sessionId, server, 'request'],
+        [a, proposal, 'reply'],
+      ]);
+      // B ran as a request turn: the first message is the request, with its pill.
+      const chat = toChatMessages(store.getMessages(b.sessionId) as RuntimeMessage[]);
+      expect(chat[0]).toMatchObject({ systemEvent: { kind: 'cross-session', status: 'request', peerProject: 'proposal' } });
+      // …and got no cross-project tools of its own (R16).
+      expect(names(bCalls[0]!)).not.toContain(SEND);
+      expect(legs[1]!.prompt).toContain('the API moved to /v2');
+      expect(legs[1]!.prompt).toContain('of project "server"');
+    } finally {
+      g.__cockpitGlobalStateClients = before;
+    }
+  });
+
   it('the received request row names the sender project on its pill (R10)', async () => {
     const store = getStore();
     const b = store.createSession('', 'API', server).sessionId;
@@ -350,23 +433,31 @@ describe('a request to another project’s tab (R7–R10)', () => {
 });
 
 describe('the group awareness paragraph (R2, R26)', () => {
-  const PARA = 'This project is in the sidebar group ‹RMS› with: ';
+  const PARA = 'This project is in the sidebar group ‹RMS›, numbered as in the sidebar: ';
 
-  it('naby’s main turn in a grouped project carries it — names and cwds, sorted, no content', async () => {
+  it('naby’s main turn in a grouped project carries it — names and cwds in sidebar-number order, no content (§3a)', async () => {
     const store = getStore();
-    // A third member, named so that it sorts BEFORE "server".
+    // A third member, named so that it sorts BEFORE "server" by name — but the
+    // sidebar order the list save recorded puts it last. The turn itself
+    // touches its project's last-opened stamp; the numbers must not follow it.
     store.setSetting(
       GROUPS_KEY,
       JSON.stringify({ groups: [{ id: 'g_rms', name: 'RMS', collapsed: false, cwds: [proposal, server, other] }] }),
     );
+    store.setSetting(ORDER_KEY, JSON.stringify([server, proposal, other]));
     const { sessionId } = store.createSession('', 'A', proposal);
     const calls: Call[] = [];
     const spec = createNabySpec({ resolveModel: () => scriptedModel([{ text: 'hi' }], calls) as never });
     await spec.runner.run(harness(sessionId, 'hello', proposal).ctx);
     const sys = calls[0]!.system;
-    expect(sys).toContain(`${PARA}‹other› (${other}), ‹server› (${server}).`);
+    expect(sys).toContain(`${PARA}1 ‹server› (${server}), 2 ‹proposal› (this project), 3 ‹other› (${other}).`);
+    expect(sys).toContain('"N번" (number N) means that number in this group');
     expect(sys).toContain('the user is asked to approve unless they already allowed it permanently. Do not guess their contents.');
     expect(sys).not.toContain(`‹proposal› (${proposal})`);
+    // Reordering the sidebar reorders the paragraph (R32: computed, not stored).
+    store.setSetting(ORDER_KEY, JSON.stringify([other, server, proposal]));
+    await spec.runner.run(harness(sessionId, 'again', proposal).ctx);
+    expect(calls[1]!.system).toContain(`${PARA}1 ‹other› (${other}), 2 ‹server› (${server}), 3 ‹proposal› (this project).`);
     expect(sys).not.toContain('/v2/items');
     expect(sys).not.toContain('other notes');
   });

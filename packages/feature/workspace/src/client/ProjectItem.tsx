@@ -15,7 +15,11 @@ import { GroupNameInput } from './ProjectGroupHeader';
 import { PROJECT_TITLE_MAX } from './projectTitle';
 
 interface ProjectItemProps {
+  /** Position in the global `projects` array (select / remove / drag). */
   index: number;
+  /** The number the row shows — restarts at 1 in each sidebar section
+   *  (specs/project-groups.md §9 R30, R34). Absent: `index + 1`. */
+  number?: number;
   /** The display name: the user's rename, else the folder name. */
   name: string;
   cwd: string;
@@ -234,6 +238,7 @@ function NumberIcon({ number, isActive }: { number: number; isActive: boolean })
 
 export function ProjectItem({
   index,
+  number,
   name,
   cwd,
   isActive,
@@ -281,7 +286,7 @@ export function ProjectItem({
       data-tooltip={tooltipText}
     >
       <div className="relative flex-shrink-0">
-        <NumberIcon number={index + 1} isActive={isActive} />
+        <NumberIcon number={number ?? index + 1} isActive={isActive} />
         {/* Unread red dot - top-right of number icon (hidden while loading to avoid overlap) */}
         {hasUnread && !isActive && !isLoading && (
           <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-destructive" />

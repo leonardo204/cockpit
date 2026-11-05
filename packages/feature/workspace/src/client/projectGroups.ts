@@ -22,13 +22,23 @@ import {
   type ProjectGroup,
 } from '@cockpit/shared-utils';
 export {
+  buildSidebarModel,
   cleanGroupName,
   normalizeGroups,
+  orderProjects,
   parseStoredGroups,
+  parseStoredProjectOrder,
   PROJECT_GROUP_NAME_MAX,
+  PROJECT_ORDER_SETTING_KEY,
+  serializeProjectOrder,
   PROJECT_GROUPS_SETTING_KEY,
+  projectNumbers,
   serializeGroups,
   type ProjectGroup,
+  type ProjectNumber,
+  type SidebarGroupSection,
+  type SidebarModel,
+  type SidebarProjectEntry,
 } from '@cockpit/shared-utils';
 
 /** A short random id (`g_` + 8 base36 chars), unique enough for one user's groups. */
@@ -206,46 +216,6 @@ export function moveProject<P extends { cwd: string }>(
 }
 
 // ─────────────────────────────────────────────────────────
-// What the sidebar renders.
+// What the sidebar renders — the model and its numbers live in shared-utils
+// (project-groups §9 R33) and are re-exported at the top of this file.
 // ─────────────────────────────────────────────────────────
-
-export interface SidebarProjectEntry<P> {
-  readonly project: P;
-  /** Index into the ORIGINAL `projects` array — what activeIndex and every
-   *  select/remove/reorder callback speak. */
-  readonly index: number;
-}
-
-export interface SidebarGroupSection<P> {
-  readonly group: ProjectGroup;
-  /** Members present in `projects`, in global project order. */
-  readonly items: ReadonlyArray<SidebarProjectEntry<P>>;
-}
-
-export interface SidebarModel<P> {
-  readonly groups: ReadonlyArray<SidebarGroupSection<P>>;
-  readonly ungrouped: ReadonlyArray<SidebarProjectEntry<P>>;
-}
-
-/**
- * Split the project list into group sections (in group order) and the
- * ungrouped rest. Members that are not in `projects` are ignored, so a stale
- * client copy of the groups can never render a ghost row.
- */
-export function buildSidebarModel<P extends { cwd: string }>(
-  projects: ReadonlyArray<P>,
-  groups: ReadonlyArray<ProjectGroup>,
-): SidebarModel<P> {
-  const owner = new Map<string, string>();
-  for (const g of groups) for (const c of g.cwds) if (!owner.has(c)) owner.set(c, g.id);
-  const byGroup = new Map<string, SidebarProjectEntry<P>[]>(groups.map((g) => [g.id, []]));
-  const ungrouped: SidebarProjectEntry<P>[] = [];
-  projects.forEach((project, index) => {
-    const gid = owner.get(project.cwd);
-    (gid ? byGroup.get(gid)! : ungrouped).push({ project, index });
-  });
-  return {
-    groups: groups.map((group) => ({ group, items: byGroup.get(group.id)! })),
-    ungrouped,
-  };
-}
