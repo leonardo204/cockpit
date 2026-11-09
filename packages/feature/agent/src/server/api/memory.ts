@@ -681,7 +681,7 @@ export function summarizeMemory(
       key: n.newKey,
       value: n.newValue,
       oldValue: n.oldValue,
-      ...summaryFields(n.newId, n.oldId),
+      ...summaryFields(store.getMemoryById(n.oldId)?.supersededBy, n.oldId),
       at: n.at,
     });
   }
