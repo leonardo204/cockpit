@@ -60,6 +60,7 @@ import { activateSupersession } from '../lib/reflection';
 // questions and "recently learned" all live with the review that produces them.
 import {
   answerMemoryQuestion,
+  settleOpenMemoryQuestions,
   cancelLearnedMemory,
   memoryReviewStatus,
   noteQuestionAutoShown,
@@ -442,6 +443,8 @@ export interface MemoryRecentRow {
   key: string;
   value: string;
   oldValue?: string;
+  summary?: string;
+  oldSummary?: string;
   at: number;
   /** One of the waiting proposals the migration put through review (R33). */
   migrated?: boolean;
@@ -619,7 +622,10 @@ export function summarizeMemory(
   const reviewStore = reviewStoreOf(store);
   let questions: MemoryQuestionView[] = [];
   try {
-    questions = reviewStore ? openMemoryQuestions(reviewStore) : [];
+    if (reviewStore) {
+      settleOpenMemoryQuestions(reviewStore);
+      questions = openMemoryQuestions(reviewStore);
+    }
   } catch {
     questions = [];
   }
@@ -641,6 +647,11 @@ export function summarizeMemory(
       isGlobalStyle: isGlobalStyleMemoryKey(item.key),
     }));
 
+  const summaryFields = (newId: string | undefined, oldId: string | undefined) => {
+    const summary = newId ? store.getMemoryById(newId)?.summary : undefined;
+    const oldSummary = oldId ? store.getMemoryById(oldId)?.summary : undefined;
+    return { ...(summary ? { summary } : {}), ...(oldSummary ? { oldSummary } : {}) };
+  };
   const recent: MemoryRecentRow[] = [];
   const covered = new Set<string>();
   if (reviewStore) {
@@ -653,6 +664,7 @@ export function summarizeMemory(
         key: r.key,
         value: r.value,
         ...(r.oldValue !== undefined ? { oldValue: r.oldValue } : {}),
+        ...summaryFields(r.memoryId, r.otherId),
         at: r.at,
         ...(r.migrated ? { migrated: true } : {}),
       });
@@ -669,6 +681,7 @@ export function summarizeMemory(
       key: n.newKey,
       value: n.newValue,
       oldValue: n.oldValue,
+      ...summaryFields(n.newId, n.oldId),
       at: n.at,
     });
   }
@@ -894,6 +907,7 @@ export function runMemoryAction(
         }
       }
       const lastAutoShownAt = readLastAutoShownAt(store);
+      settleOpenMemoryQuestions(review);
       return {
         ok: true,
         questions: openMemoryQuestions(review),

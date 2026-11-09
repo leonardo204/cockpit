@@ -24,7 +24,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
-import { memoryChipView, type MemoryReviewState, type MemoryWrite } from './pendingMemory';
+import { memoryChipShouldPoll, memoryChipView, type MemoryReviewState, type MemoryWrite } from './pendingMemory';
 
 /** How often a pending chip asks, and for how long at most (~3 minutes). */
 const POLL_MS = 2_500;
@@ -70,15 +70,14 @@ export const MemoryWriteChip = memo(function MemoryWriteChip({ write }: { write:
       const latest = await refresh();
       if (cancelled) return;
       polls.current += 1;
-      const stillPending = (latest?.state ?? (write.review === 'pending' ? 'pending' : '')) === 'pending';
-      if (stillPending && polls.current < POLL_MAX) timer = setTimeout(() => void tick(), POLL_MS);
+      if (memoryChipShouldPoll(write, latest) && polls.current < POLL_MAX) timer = setTimeout(() => void tick(), POLL_MS);
     };
     void tick();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [refresh, write.review]);
+  }, [refresh, write.review, write.value, write.holdReason]);
 
   const cancel = useCallback(async () => {
     if (busy) return;
@@ -116,6 +115,13 @@ export const MemoryWriteChip = memo(function MemoryWriteChip({ write }: { write:
   if (view.kind === 'held') {
     return (
       <div className={chipClass} data-testid="memory-chip">
+        {(view.summary || write.value) && (
+          // R47: the short line when there is one. The tool card above holds the
+          // full text; the tooltip saves opening it.
+          <span className="min-w-0 max-w-full break-words line-clamp-3" title={write.value} data-testid="memory-chip-summary">
+            {view.summary ?? write.value}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => void confirm()}
@@ -151,7 +157,7 @@ export const MemoryWriteChip = memo(function MemoryWriteChip({ write }: { write:
       )}
       {view.kind === 'applied' && (
         <>
-          <span className="min-w-0 break-words">
+          <span className="min-w-0 break-words line-clamp-3">
             {t('chat.memoryChip.applied', { defaultValue: 'Remembered: {{value}}', value: view.value })}
           </span>
           <span aria-hidden>·</span>
@@ -161,7 +167,7 @@ export const MemoryWriteChip = memo(function MemoryWriteChip({ write }: { write:
       {view.kind === 'known' && <span>{t('chat.memoryChip.known', { defaultValue: 'Already knew that' })}</span>}
       {view.kind === 'changed' && (
         <>
-          <span className="min-w-0 break-words">
+          <span className="min-w-0 break-words line-clamp-3">
             {t('chat.memoryChip.changed', {
               defaultValue: 'Changed what I remember: {{old}} → {{new}}',
               old: view.oldValue,

@@ -121,6 +121,7 @@ import {
 } from '../../../../../../../dist/naby-runtime.mjs';
 import {
   readAutoApplySetting,
+  runMemorySummaries,
   runMemoryTidy,
   runTurnMemoryReview,
   type MemoryReviewer,
@@ -580,6 +581,7 @@ export async function runReflectionSweep(
   if (autoApply && opts.reviewer && supportsMemoryReview(store)) {
     result.review = await runTurnMemoryReview(store, opts.reviewer, { now });
     result.tidy = await runMemoryTidy(store, opts.reviewer, { now });
+    await runMemorySummaries(store, opts.reviewer);
   }
 
   // THE STYLE FINGERPRINT IS NO LONGER LEARNED, and the removal is the point

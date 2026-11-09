@@ -58,7 +58,7 @@ describe('the chip (memory-auto-apply §3)', () => {
 
   it('asks the server what became of the memory, and stops asking once settled', () => {
     expect(CHIP).toContain("action: 'reviewStatus', ids: [write.id]");
-    expect(CHIP).toMatch(/stillPending && polls\.current < POLL_MAX/);
+    expect(CHIP).toMatch(/memoryChipShouldPoll\(write, latest\) && polls\.current < POLL_MAX/);
   });
 
   it('undoes through the memory route (R10)', () => {

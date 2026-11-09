@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.15 — 2026-11-09
+
+### en
+
+Conflicting memories no longer pile up as questions, and long memories are now easy to read.
+
+**Changed**
+
+- **The newer memory wins.** When two memories disagree, naby keeps the newer one without asking. Questions already waiting are settled the same way. Anything replaced stays in Settings → Memory, where you can undo it.
+
+**Improved**
+
+- **Long memories are summarized.** A memory over three lines shows as one short line in the chat and in Settings → Memory. "Show original" opens the full text in Needs your check and the memory browser.
+
+Memories from web pages or other outside content still wait for your confirmation, and they are not summarized.
+
+### ko
+
+기억 상충이 질문으로 쌓이지 않고, 긴 기억도 읽기 쉬워졌어요.
+
+**달라진 것**
+
+- **새 기억이 옛 기억을 덮어요.** 기억 둘이 어긋나면 묻지 않고 새 기억을 남겨요. 기다리던 질문도 같은 규칙으로 정리돼요. 밀려난 기억은 설정 → 기억에 남아 있어서 되돌릴 수 있어요.
+
+**나아진 것**
+
+- **긴 기억은 요약해서 보여 줘요.** 3줄이 넘는 기억은 채팅과 설정 → 기억에서 한 줄 요약으로 보여요. "확인이 필요한 것"과 기억 탐색에서는 "원문 보기"로 전체를 볼 수 있어요.
+
+웹 페이지 같은 외부 내용에서 배운 기억은 지금처럼 확인을 받고, 요약하지 않아요.
+
 ## 1.48.14 — 2026-11-09
 
 ### en

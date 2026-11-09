@@ -1682,6 +1682,8 @@
     "autoApplyLabel": "배운 것을 바로 쓰기",
     "autoApplyHint": "끄면 나비가 배운 것을 내가 확인한 뒤에만 씁니다. 웹 페이지 같은 외부 내용에서 배운 것은 켜져 있어도 항상 확인을 받습니다.",
     "evidenceQuote": "근거: '{{quote}}'",
+    "showOriginal": "원문 보기",
+    "hideOriginal": "원문 접기",
     "evidenceToggle": "근거",
     "basisStated": "직접 말함",
     "basisInferred": "나비가 추론함"

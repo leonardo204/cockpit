@@ -124,12 +124,28 @@ export function memoryWriteOf(toolName: string, resultData: unknown): MemoryWrit
 /** The server's answer for one memory (`/api/memory` `reviewStatus`). */
 export type MemoryReviewState =
   | { state: 'pending' }
-  | { state: 'held'; reason?: string }
-  | { state: 'applied'; value: string; undone?: boolean }
+  | { state: 'held'; reason?: string; summary?: string }
+  | { state: 'applied'; value: string; summary?: string; undone?: boolean }
   | { state: 'known'; value: string }
-  | { state: 'changed'; value: string; oldValue: string; undone?: boolean }
+  | { state: 'changed'; value: string; oldValue: string; summary?: string; oldSummary?: string; undone?: boolean }
   | { state: 'question' }
   | { state: 'gone' };
+
+/** Taller than three lines (runtime MEMORY_SUMMARY_MIN_*; a client bundle
+ *  cannot import the runtime). */
+export function memoryNeedsSummary(value: string): boolean {
+  return value.length > 120 || value.split('\n').length > 3;
+}
+
+/** Keep asking the server? While the review is out, or while a long memory still
+ *  waits for its summary. Outside content is never summarized. */
+export function memoryChipShouldPoll(write: MemoryWrite, latest: MemoryReviewState | undefined): boolean {
+  const state = latest?.state ?? (write.review === 'pending' ? 'pending' : '');
+  if (state === 'pending') return true;
+  if (state !== 'held' && state !== 'applied' && state !== 'changed') return false;
+  const text = (latest && 'value' in latest ? latest.value : undefined) ?? write.value ?? '';
+  return !(latest as { summary?: string } | undefined)?.summary && write.holdReason !== 'external' && memoryNeedsSummary(text);
+}
 
 /** What the chip draws. */
 export type MemoryChipView =
@@ -137,7 +153,7 @@ export type MemoryChipView =
   | { kind: 'applied'; value: string; canCancel: true }
   | { kind: 'known'; value: string }
   | { kind: 'changed'; value: string; oldValue: string; canCancel: true }
-  | { kind: 'held'; reason?: string; canConfirm: true }
+  | { kind: 'held'; reason?: string; summary?: string; canConfirm: true }
   | { kind: 'question' }
   | { kind: 'undone' }
   | { kind: 'none' };
@@ -160,16 +176,26 @@ export function memoryChipView(write: MemoryWrite, status: MemoryReviewState | u
     case 'pending':
       return { kind: 'pending', canCancel: true };
     case 'applied':
-      return status.undone ? { kind: 'undone' } : { kind: 'applied', value: status.value || write.value || write.key, canCancel: true };
+      return status.undone ? { kind: 'undone' } : { kind: 'applied', value: status.summary || status.value || write.value || write.key, canCancel: true };
     case 'known':
       return { kind: 'known', value: status.value };
     case 'changed':
       return status.undone
         ? { kind: 'undone' }
-        : { kind: 'changed', value: status.value, oldValue: status.oldValue, canCancel: true };
+        : {
+            kind: 'changed',
+            value: status.summary ?? status.value,
+            oldValue: status.oldSummary ?? status.oldValue,
+            canCancel: true,
+          };
     case 'held': {
       const reason = status.reason ?? write.holdReason;
-      return { kind: 'held', ...(reason ? { reason } : {}), canConfirm: true };
+      return {
+        kind: 'held',
+        ...(reason ? { reason } : {}),
+        ...(status.summary ? { summary: status.summary } : {}),
+        canConfirm: true,
+      };
     }
     case 'question':
       return { kind: 'question' };

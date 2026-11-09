@@ -16,7 +16,7 @@
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-type UsedMemory = { id: string; key: string; value: string };
+type UsedMemory = { id: string; key: string; value: string; summary?: string };
 
 export const MemoryUsedLine = memo(function MemoryUsedLine({ ids }: { ids: readonly string[] }) {
   const { t } = useTranslation();
@@ -60,8 +60,8 @@ export const MemoryUsedLine = memo(function MemoryUsedLine({ ids }: { ids: reado
             <li>{t('chat.memoryUsedGone', { defaultValue: 'These memories have since been removed.' })}</li>
           ) : (
             items.map((m) => (
-              <li key={m.id} className="break-words">
-                {m.value}
+              <li key={m.id} className="break-words line-clamp-3" title={m.value}>
+                {m.summary ?? m.value}
               </li>
             ))
           )}

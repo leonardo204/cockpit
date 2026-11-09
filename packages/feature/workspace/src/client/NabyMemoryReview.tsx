@@ -61,6 +61,7 @@ import { BootstrapCard } from './BootstrapCard';
 import { MemoryBrowserModal, STYLE_KEY_PREFIX, type MemoryFilters } from './MemoryBrowserModal';
 import { SettingsDetails } from './SettingsDetails';
 import { MemoryChoiceCard } from './MemoryChoiceCard';
+import { MemoryText } from './MemoryText';
 
 // ---------------------------------------------------------------------------
 // Wire helpers.
@@ -126,6 +127,8 @@ export type RecentRow = {
   key: string;
   value: string;
   oldValue?: string;
+  summary?: string;
+  oldSummary?: string;
   at: number;
   migrated?: boolean;
 };
@@ -292,7 +295,7 @@ const ProposalRow = memo(function ProposalRow({
           <div className="text-xs font-medium text-foreground break-words">{item.key}</div>
           {/* CLAMPED to two lines. The card must not grow with the length of
               whatever the model wrote; the browser shows the whole thing. */}
-          <div className="text-sm text-foreground/90 break-words line-clamp-2">{item.value}</div>
+          <MemoryText value={item.value} {...(item.summary ? { summary: item.summary } : {})} className="text-sm text-foreground/90" />
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {manualOnly ? (
@@ -428,8 +431,8 @@ const RecentLearnedRow = memo(function RecentLearnedRow({
   const { t } = useTranslation();
   return (
     <div className="flex items-start justify-between gap-2 py-1" data-testid="memory-recent-row">
-      <div className="text-xs text-foreground/90 break-words line-clamp-2 min-w-0">
-        {t(recentRowKey(row.kind), { value: row.value, old: row.oldValue ?? '' })}
+      <div className="text-xs text-foreground/90 break-words line-clamp-3 min-w-0">
+        {t(recentRowKey(row.kind), { value: row.summary ?? row.value, old: row.oldSummary ?? row.oldValue ?? '' })}
       </div>
       <button
         onClick={() => onUndo(row)}

@@ -41,6 +41,7 @@ import type {
   MemoryType,
   TrustTier,
 } from '../../../../../../dist/naby-runtime.mjs';
+import { MemoryText } from './MemoryText';
 
 // ---------------------------------------------------------------------------
 // Wire types + helpers (same shape/style as NabyMemoryReview's).
@@ -257,9 +258,7 @@ const BrowserRow = memo(function BrowserRow({
               className="mt-1 w-full text-sm rounded border border-border bg-background p-2 text-foreground"
             />
           ) : (
-            <div className="text-sm text-foreground/90 break-words whitespace-pre-wrap">
-              {item.value}
-            </div>
+            <MemoryText value={item.value} {...(item.summary ? { summary: item.summary } : {})} className="text-sm text-foreground/90" />
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">

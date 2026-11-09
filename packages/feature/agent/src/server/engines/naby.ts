@@ -1727,15 +1727,6 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   upgradeProvenance: (id, patch) => {
                     store.patchMemoryProvenance(id, patch);
                   },
-                  // R24 case 3: the refusal stands; the candidate becomes a
-                  // question for the user instead of disappearing.
-                  onOverwriteRefused: (existing, candidate) => {
-                    try {
-                      store.putMemoryQuestion({ kind: 'overwrite', aId: existing.id, candidate });
-                    } catch (e) {
-                      console.log(`[engine:naby] memory question not saved: ${e instanceof Error ? e.message : String(e)}`);
-                    }
-                  },
                 },
               }
             : undefined,

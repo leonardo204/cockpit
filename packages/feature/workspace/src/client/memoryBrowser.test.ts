@@ -443,7 +443,7 @@ describe('the settings card is fixed size, whatever the memory grows to', () => 
 
   it('renders only the pending proposals inline, clamped', () => {
     expect(CARD).toContain('proposals.map');
-    expect(CARD).toContain('line-clamp-2');
+    expect(CARD).toContain('<MemoryText');
     // The confirmed rows are NOT rendered here at all.
     expect(CARD).not.toMatch(/items\.map\(/);
   });

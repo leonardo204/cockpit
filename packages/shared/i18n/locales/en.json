@@ -1682,6 +1682,8 @@
     "autoApplyLabel": "Use what naby learns right away",
     "autoApplyHint": "Turn it off and naby uses what it learned only after you confirm it. Anything learned from outside content, such as a web page, always waits for you even when this is on.",
     "evidenceQuote": "Your words: \"{{quote}}\"",
+    "showOriginal": "Show original",
+    "hideOriginal": "Hide original",
     "evidenceToggle": "Evidence",
     "basisStated": "You said it",
     "basisInferred": "naby inferred it"

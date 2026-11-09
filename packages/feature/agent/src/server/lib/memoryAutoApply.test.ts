@@ -20,6 +20,8 @@ import {
   MEMORY_AUTO_APPLY_MIGRATED_KEY,
   noteQuestionCollapsed,
   openMemoryQuestions,
+  runMemorySummaries,
+  settleOpenMemoryQuestions,
   recentLearned,
   resolveSessionReviewBackend,
   runMemoryTidy,
@@ -231,7 +233,7 @@ describe('the turn review (memory-auto-apply §2a)', () => {
     expect(store.getMemoryById(row.id)).toBeUndefined();
   });
 
-  it('R18/R21: an inference contradicting a user-tier memory becomes a question, and stays unused', async () => {
+  it('R18/R21: an inference contradicting a user-tier memory replaces it without asking', async () => {
     const store = freshStore();
     const old = confirmed(store, 'tone', 'Answer politely.', 'user');
     const row = write(store, {
@@ -244,14 +246,11 @@ describe('the turn review (memory-auto-apply §2a)', () => {
       store,
       scriptedReviewer([{ newValue: row.value, existingValue: old.value, relation: 'contradicts', supported: 'yes' }]),
     );
-    expect(store.getMemoryById(row.id)?.status).toBe('proposed');
-    expect(store.getMemoryById(old.id)?.supersededAt).toBeUndefined();
-    const qs = openMemoryQuestions(store);
-    expect(qs).toHaveLength(1);
-    expect(qs[0]).toMatchObject({ kind: 'conflict', a: { id: old.id }, b: { id: row.id } });
-    // R27a: while unanswered, what was in use stays in use; the candidate is not.
-    expect(injected(store)).toContain(old.value);
-    expect(injected(store)).not.toContain(row.value);
+    expect(store.getMemoryById(row.id)?.status).toBe('confirmed');
+    expect(store.getMemoryById(old.id)?.supersededAt).toBeDefined();
+    expect(openMemoryQuestions(store)).toEqual([]);
+    expect(injected(store)).toContain(row.value);
+    expect(injected(store)).not.toContain(old.value);
   });
 
   it('memory.autoApply off: nothing is reviewed', async () => {
@@ -418,14 +417,29 @@ describe('the tidy pass (memory-auto-apply §4)', () => {
     expect(store.listUnreviewedMemory(10)).toHaveLength(2);
   });
 
-  it('two user-tier memories that contradict become a question (R18)', async () => {
+  it('two user-tier memories that contradict: the newer stays, no question (R18)', async () => {
     const store = freshStore();
     const a = confirmed(store, 'home', 'Lives in Lisbon.', 'user');
     const b = confirmed(store, 'home-2', 'Lives in Porto.', 'user');
     await runMemoryTidy(store, scriptedReviewer([{ newValue: a.value, existingValue: b.value, relation: 'contradicts' }]));
-    expect(store.getMemoryById(a.id)?.supersededAt).toBeUndefined();
-    expect(store.getMemoryById(b.id)?.supersededAt).toBeUndefined();
-    expect(openMemoryQuestions(store)).toHaveLength(1);
+    const retired = [a, b].filter((m) => store.getMemoryById(m.id)?.supersededAt !== undefined);
+    expect(retired).toHaveLength(1);
+    expect(openMemoryQuestions(store)).toEqual([]);
+  });
+
+  it('settles questions left open by earlier versions: the newer stays and it can be undone (R18)', () => {
+    const store = freshStore();
+    const a = confirmed(store, 'home', 'Lives in Lisbon.', 'user');
+    const b = write(store, {
+      key: 'home-2',
+      value: 'Lives in Porto.',
+      provenance: { source: 'artifact', sessionId: SESSION, basisKind: 'inferred' },
+    });
+    const conflict = store.putMemoryQuestion({ kind: 'conflict', aId: a.id, bId: b.id });
+    expect(settleOpenMemoryQuestions(store)).toBe(1);
+    expect(store.getMemoryQuestion(conflict.id)?.status).toBe('closed');
+    expect([a, b].filter((m) => store.getMemoryById(m.id)?.supersededAt !== undefined)).toHaveLength(1);
+    expect(openMemoryQuestions(store)).toEqual([]);
   });
 });
 
@@ -612,5 +626,56 @@ describe('reflection proposals are reviewed in the sweep that made them (R21, R3
       now: now + REFLECTION_IDLE_MS + 1,
     });
     expect(store.listPendingReviewMemory().map((m) => m.key)).toEqual(['c']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5a — summaries for what is asked of the user
+// ---------------------------------------------------------------------------
+
+describe('summaries (memory-auto-apply R45-R48)', () => {
+  const LONG = 'The user prefers that every weekly report starts with the three open risks, then the decisions that were made, then the owners, then whatever is still waiting on someone else.';
+  const held = (store: ReturnType<typeof freshStore>, key: string, value: string, source: 'artifact' | 'external') =>
+    write(store, { key, value, scope: 'project', provenance: { source, sessionId: SESSION } } as Parameters<typeof write>[1]);
+  const summarizer = (text: string, calls: string[] = []): MemoryReviewer => ({
+    label: 'test-model',
+    async call(prompt) {
+      calls.push(prompt.user);
+      return JSON.stringify({ summaries: [{ memory: 'M1', summary: text }] });
+    },
+  });
+
+  it('writes a line for a long held memory and shows it on the chip status', async () => {
+    const store = freshStore();
+    const row = held(store, 'report', LONG, 'artifact');
+    expect(await runMemorySummaries(store, summarizer('주간 보고는 위험 3개부터'))).toBe(1);
+    expect(store.getMemoryById(row.id)?.summary).toBe('주간 보고는 위험 3개부터');
+    expect(memoryReviewStatus(store, [row.id])[0]).toMatchObject({ state: 'held', summary: '주간 보고는 위험 3개부터' });
+  });
+
+  it('a value over three lines by line breaks counts; a confirmed memory counts too (R46)', async () => {
+    const store = freshStore();
+    const row = confirmed(store, 'steps', 'one\ntwo\nthree\nfour', 'user');
+    expect(await runMemorySummaries(store, summarizer('네 단계'))).toBe(1);
+    expect(store.getMemoryById(row.id)?.summary).toBe('네 단계');
+  });
+
+  it('makes no call for short values or outside content (R46)', async () => {
+    const store = freshStore();
+    held(store, 'short', 'Short note.', 'artifact');
+    held(store, 'web', LONG, 'external');
+    const calls: string[] = [];
+    expect(await runMemorySummaries(store, summarizer('x', calls))).toBe(0);
+    expect(calls).toEqual([]);
+  });
+
+  it('a changed value drops its summary; a failed call leaves the row alone (R48)', async () => {
+    const store = freshStore();
+    const row = held(store, 'report', LONG, 'artifact');
+    expect(await runMemorySummaries(store, failingReviewer)).toBe(0);
+    expect(store.getMemoryById(row.id)?.summary).toBeUndefined();
+    await runMemorySummaries(store, summarizer('요약'));
+    store.updateMemoryValue(row.id, `${LONG} Then the budget section comes last, always.`);
+    expect(store.getMemoryById(row.id)?.summary).toBeUndefined();
   });
 });

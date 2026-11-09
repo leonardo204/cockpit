@@ -26,6 +26,11 @@ import {
   AiSdkEngine,
   apiKeyCredential,
   buildMemoryReviewPrompt,
+  buildMemorySummaryPrompt,
+  MEMORY_SUMMARY_BATCH_CAP,
+  MEMORY_SUMMARY_MIN_CHARS,
+  MEMORY_SUMMARY_MIN_LINE_BREAKS,
+  parseMemorySummaryAnswer,
   ClaudeAgentSdkEngine,
   decideReviewOutcome,
   decideTidyOperation,
@@ -301,6 +306,8 @@ export type MemoryReviewStore = Pick<
   | 'listPendingReviewMemory'
   | 'settleMemoryReview'
   | 'markMemoryReviewed'
+  | 'listMemoryToSummarize'
+  | 'setMemorySummary'
   | 'listUnreviewedMemory'
   | 'reviseMemoryValue'
   | 'patchMemoryProvenance'
@@ -535,12 +542,6 @@ function applyReviewOutcome(
       result.superseded += 1;
       return { ...base, kind: 'changed', memoryId: item.id, otherId: outcome.target.id, oldValue: outcome.target.value };
     }
-
-    case 'question':
-      store.settleMemoryReview(item.id, { status: 'proposed', at: now });
-      store.putMemoryQuestion({ kind: 'conflict', aId: outcome.target.id, bId: item.id, createdAt: now });
-      result.questions += 1;
-      return { ...base, kind: 'question', memoryId: item.id, otherId: outcome.target.id, oldValue: outcome.target.value };
   }
   return undefined;
 }
@@ -655,10 +656,7 @@ export async function runMemoryTidy(
       });
       if (a.supersededAt !== undefined || b.supersededAt !== undefined) continue;
       const op = decideTidyOperation(a, b, relation);
-      if (op.op === 'question') {
-        store.putMemoryQuestion({ kind: 'conflict', aId: b.id, bId: a.id, createdAt: now });
-        result.questions += 1;
-      } else if (op.op === 'supersede') {
+      if (op.op === 'supersede') {
         if (!store.supersedeMemory(op.retire.id, op.keep.id, now, op.reason)) continue;
         if (op.reason === 'tidy-equivalent') store.absorbMemoryEvidence(op.retire.id, op.keep.id);
         if (op.reason === 'tidy-equivalent') result.equivalent += 1;
@@ -694,6 +692,46 @@ export async function runMemoryTidy(
 }
 
 // ---------------------------------------------------------------------------
+// Summaries for long memories (R45-R48)
+// ---------------------------------------------------------------------------
+
+/**
+ * Write the short line for values taller than three lines. No call when nothing needs
+ * one; without a model or a readable answer the row keeps showing its own text
+ * and the next pass tries again. Returns how many were written. Never throws.
+ */
+export async function runMemorySummaries(
+  store: MemoryReviewStore,
+  reviewer: MemoryReviewer | undefined,
+): Promise<number> {
+  if (!reviewer) return 0;
+  try {
+    const items = store.listMemoryToSummarize(
+      MEMORY_SUMMARY_BATCH_CAP,
+      MEMORY_SUMMARY_MIN_CHARS,
+      MEMORY_SUMMARY_MIN_LINE_BREAKS,
+    );
+    if (items.length === 0) return 0;
+    const prompt = buildMemorySummaryPrompt(items);
+    const answer = parseMemorySummaryAnswer(await reviewer.call(prompt), prompt);
+    let written = 0;
+    for (const item of items) {
+      const summary = answer?.get(item.id);
+      // Re-read: a summary of words the row no longer says must not land.
+      if (summary && store.getMemoryById(item.id)?.value === item.value) {
+        store.setMemorySummary(item.id, summary);
+        written += 1;
+      }
+    }
+    logActivity('memory_review', { kind: 'summary', asked: items.length, written, model: reviewer.label });
+    return written;
+  } catch (e) {
+    console.warn(`[memory-review] summaries not made: ${e instanceof Error ? e.message : String(e)}`);
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fire-and-forget (R37)
 // ---------------------------------------------------------------------------
 
@@ -711,7 +749,11 @@ export function kickMemoryReview(
   reviewer: () => Promise<MemoryReviewer | undefined>,
   opts: { sessionId?: string } = {},
 ): void {
-  const job = async (): Promise<unknown> => runTurnMemoryReview(store, await reviewer(), opts);
+  const job = async (): Promise<unknown> => {
+    const resolved = await reviewer();
+    await runTurnMemoryReview(store, resolved, opts);
+    return runMemorySummaries(store, resolved);
+  };
   if (reviewInFlight) {
     reviewAgain = job;
     return;
@@ -745,16 +787,20 @@ export async function settleMemoryReviews(): Promise<void> {
 
 export type MemoryReviewStatus =
   | { id: string; state: 'pending' }
-  | { id: string; state: 'held'; reason?: string }
-  | { id: string; state: 'applied'; value: string; undone?: boolean }
+  | { id: string; state: 'held'; reason?: string; summary?: string }
+  | { id: string; state: 'applied'; value: string; summary?: string; undone?: boolean }
   | { id: string; state: 'known'; value: string }
-  | { id: string; state: 'changed'; value: string; oldValue: string; undone?: boolean }
+  | { id: string; state: 'changed'; value: string; oldValue: string; summary?: string; oldSummary?: string; undone?: boolean }
   | { id: string; state: 'question' }
   | { id: string; state: 'gone' };
 
 /** The state of each memory a `naby_remember` call wrote, for its chip. */
 export function memoryReviewStatus(store: MemoryReviewStore, ids: readonly string[]): MemoryReviewStatus[] {
   const receipts = new Map(readReceipts(store).map((r) => [r.id, r]));
+  const summaryOf = (key: 'summary' | 'oldSummary', memoryId: string | undefined) => {
+    const summary = memoryId ? store.getMemoryById(memoryId)?.summary : undefined;
+    return summary ? { [key]: summary } : {};
+  };
   return ids.slice(0, 50).map((id): MemoryReviewStatus => {
     const receipt = receipts.get(id);
     if (receipt) {
@@ -768,14 +814,25 @@ export function memoryReviewStatus(store: MemoryReviewStore, ids: readonly strin
             state: 'changed',
             value: receipt.value,
             oldValue: receipt.oldValue ?? '',
+            ...summaryOf('summary', receipt.memoryId),
+            // A refinement rewrote the old row in place, so its old words have no row.
+            ...(receipt.kind === 'changed' ? summaryOf('oldSummary', receipt.otherId) : {}),
             ...(receipt.undone ? { undone: true } : {}),
           };
-        case 'held':
-          return { id, state: 'held', reason: 'unsupported' };
+        case 'held': {
+          const summary = store.getMemoryById(id)?.summary;
+          return { id, state: 'held', reason: 'unsupported', ...(summary ? { summary } : {}) };
+        }
         case 'question':
           return { id, state: 'question' };
         case 'applied':
-          return { id, state: 'applied', value: receipt.value, ...(receipt.undone ? { undone: true } : {}) };
+          return {
+            id,
+            state: 'applied',
+            value: receipt.value,
+            ...summaryOf('summary', receipt.memoryId),
+            ...(receipt.undone ? { undone: true } : {}),
+          };
         default:
           break;
       }
@@ -783,8 +840,8 @@ export function memoryReviewStatus(store: MemoryReviewStore, ids: readonly strin
     const row = store.getMemoryById(id);
     if (!row) return { id, state: 'gone' };
     if (row.reviewState === 'pending') return { id, state: 'pending' };
-    if (row.status === 'proposed') return { id, state: 'held' };
-    return { id, state: 'applied', value: row.value };
+    if (row.status === 'proposed') return { id, state: 'held', ...(row.summary ? { summary: row.summary } : {}) };
+    return { id, state: 'applied', value: row.value, ...(row.summary ? { summary: row.summary } : {}) };
   });
 }
 
@@ -905,6 +962,43 @@ export function openMemoryQuestions(store: MemoryReviewStore): MemoryQuestionVie
     });
   }
   return out;
+}
+
+/**
+ * Settle the questions older versions left open (R18): for a conflict the newer
+ * memory stays, the same rule the review now applies, shown as a tidy receipt so
+ * it can be undone. A refused overwrite never reached review, so its candidate
+ * is dropped rather than applied. Returns how many were settled.
+ */
+export function settleOpenMemoryQuestions(store: MemoryReviewStore, now: number = Date.now()): number {
+  const receipts: MemoryReceipt[] = [];
+  let settled = 0;
+  for (const q of store.listMemoryQuestions({ status: 'open' })) {
+    const a = store.getMemoryById(q.aId);
+    const b = q.bId ? store.getMemoryById(q.bId) : undefined;
+    if (q.kind === 'conflict' && a && b && a.supersededAt === undefined && b.supersededAt === undefined) {
+      const op = decideTidyOperation(a, b, 'contradicts');
+      if (op.op === 'supersede') {
+        if (op.keep.status === 'proposed') store.settleMemoryReview(op.keep.id, { status: 'confirmed', at: now });
+        if (store.supersedeMemory(op.retire.id, op.keep.id, now, op.reason)) {
+          receipts.push({
+            id: op.retire.id,
+            kind: op.reason,
+            memoryId: op.keep.id,
+            key: op.keep.key,
+            value: op.keep.value,
+            otherId: op.retire.id,
+            oldValue: op.retire.value,
+            at: now,
+          });
+        }
+      }
+    }
+    store.updateMemoryQuestion(q.id, { status: 'closed' });
+    settled += 1;
+  }
+  addReceipts(store, receipts, now);
+  return settled;
 }
 
 /** Make a memory the user's own choice: confirmed, on the `user` tier (R26). */
