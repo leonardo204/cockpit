@@ -19,11 +19,13 @@ const MODEL_PRICING: Record<string, { label: string; input: number; output: numb
   'claude-opus-5':              { label: 'Opus 5',     input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#ea580c' },
   'claude-opus-4-8':            { label: 'Opus 4.8',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
   'claude-opus-4-7':            { label: 'Opus 4.7',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
+  'claude-sonnet-5-5':          { label: 'Sonnet 5.5', input: 2,  output: 10, cacheRead: 0.10, cacheWrite: 2.50, color: '#2563eb' },
   'claude-sonnet-5':            { label: 'Sonnet 5',   input: 2,  output: 10, cacheRead: 0.20, cacheWrite: 2.50, color: '#2563eb' },
   'claude-opus-4-6':            { label: 'Opus 4.6',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#f97316' },
   'claude-opus-4-5-20251101':   { label: 'Opus 4.5',   input: 5,  output: 25, cacheRead: 0.50, cacheWrite: 6.25, color: '#fb923c' },
   'claude-sonnet-4-6':          { label: 'Sonnet 4.6',  input: 3,  output: 15, cacheRead: 0.30, cacheWrite: 3.75, color: '#3b82f6' },
   'claude-sonnet-4-5-20250929': { label: 'Sonnet 4.5',  input: 3,  output: 15, cacheRead: 0.30, cacheWrite: 3.75, color: '#60a5fa' },
+  'claude-haiku-5-5':          { label: 'Haiku 5.5',   input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125, color: '#22c55e' },
   'claude-haiku-4-5-20251001':  { label: 'Haiku 4.5',   input: 1,  output: 5,  cacheRead: 0.10, cacheWrite: 1.25, color: '#22c55e' },
 };
 

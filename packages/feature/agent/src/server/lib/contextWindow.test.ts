@@ -575,3 +575,11 @@ describe('contextWindowForCatalogValue', () => {
     expect(contextWindowForCatalogValue('dev-claude', 'default', undefined)).toBeUndefined();
   });
 });
+
+describe('SDK 0.3.319 models', () => {
+  it('sizes Sonnet 5.5 and Haiku 5.5 at their 1M default, and leaves Sonnet 5 at 200k', () => {
+    expect(contextWindowFor('dev-claude', 'claude-sonnet-5-5')).toBe(1_000_000);
+    expect(contextWindowFor('dev-claude', 'claude-haiku-5-5')).toBe(1_000_000);
+    expect(contextWindowFor('dev-claude', 'claude-sonnet-5')).toBe(200_000);
+  });
+});

@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.17 — 2026-11-09
+
+### en
+
+naby now supports Claude Sonnet 5.5 and Haiku 5.5.
+
+**Improved**
+
+- **New Claude models.** The Claude Agent SDK is updated, so the Sonnet and Haiku options can use Sonnet 5.5 and Haiku 5.5. Token stats and context sizes know both models.
+
+### ko
+
+나비가 Claude Sonnet 5.5와 Haiku 5.5를 지원해요.
+
+**나아진 것**
+
+- **새 Claude 모델을 쓸 수 있어요.** Claude Agent SDK를 업데이트해서 Sonnet과 Haiku 선택지에서 Sonnet 5.5와 Haiku 5.5를 쓸 수 있어요. 토큰 통계와 컨텍스트 크기도 두 모델에 맞췄어요.
+
 ## 1.48.16 — 2026-11-09
 
 ### en
