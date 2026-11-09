@@ -470,6 +470,60 @@ const LEARNING_CHANNEL_KEYS = [
   'memoryReview.channelStyle',
 ] as const;
 
+/**
+ * "Recently learned" (R29), opened on request. naby did these on its own and they
+ * need no attention, so they do not take up the settings page. Above Settings for
+ * the reason MemoryBrowserModal is.
+ */
+function RecentLearnedModal({
+  rows,
+  migratedCount,
+  busy,
+  onUndo,
+  onClose,
+}: {
+  rows: RecentRow[];
+  migratedCount: number;
+  busy: boolean;
+  onUndo: (row: RecentRow) => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center" data-testid="memory-recent">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-card rounded-lg shadow-xl w-[min(86vw,800px)] max-h-[85vh] mx-4 flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <h2 className="text-sm font-semibold text-foreground">{t('memoryReview.recentTitle')}</h2>
+          <button
+            onClick={onClose}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-muted-foreground"
+          >
+            {t('memoryReview.browserClose')}
+          </button>
+        </div>
+        <div className="px-4 py-3 space-y-1 overflow-y-auto">
+          {migratedCount > 0 ? (
+            <div className="text-[0.714rem] text-muted-foreground" data-testid="memory-recent-migrated">
+              {t('memoryReview.recentMigrated', { count: migratedCount })}
+            </div>
+          ) : null}
+          {rows.map((row) => (
+            <RecentLearnedRow key={`${row.undo}:${row.id}`} row={row} busy={busy} onUndo={onUndo} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** The deep link into the browser: confirmed style preferences only (§3.4). */
 const STYLE_DEEP_LINK: Partial<MemoryFilters> = {
   keyPrefix: STYLE_KEY_PREFIX,
@@ -511,6 +565,7 @@ export function NabyMemoryReview({
   // `false` = closed; otherwise WHICH view it was opened in. The style entry is a
   // deep link, so what it opens onto is part of the open itself.
   const [browserOpen, setBrowserOpen] = useState<false | 'all' | 'style'>(false);
+  const [recentOpen, setRecentOpen] = useState(false);
 
   // REF INDIRECTION, not a dependency (shell/CLAUDE.md's referential-stability
   // rule). `reload` is the effect that fetches on open; taking an inline callback
@@ -743,28 +798,6 @@ export function NabyMemoryReview({
       ) : null}
 
       {/* ------------------------------------------------------------------
-          1b. RECENTLY LEARNED (memory-auto-apply R29) — a record, not an
-          approval queue: what naby started using this week, what it changed,
-          and what the tidy pass merged. Every line is undoable, because the
-          machine did these without asking (R19: nothing here deleted anything).
-          ------------------------------------------------------------------ */}
-      {recent.length > 0 ? (
-        <div className="space-y-1" data-testid="memory-recent">
-          <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
-            {t('memoryReview.recentTitle')}
-          </div>
-          {migratedCount > 0 ? (
-            <div className="text-[0.714rem] text-muted-foreground" data-testid="memory-recent-migrated">
-              {t('memoryReview.recentMigrated', { count: migratedCount })}
-            </div>
-          ) : null}
-          {recent.map((row) => (
-            <RecentLearnedRow key={`${row.undo}:${row.id}`} row={row} busy={busy} onUndo={handleUndo} />
-          ))}
-        </div>
-      ) : null}
-
-      {/* ------------------------------------------------------------------
           2. THE SUMMARY LINE — what is true right now, plus the evidence that
           the automatic half is running.
           ------------------------------------------------------------------ */}
@@ -938,6 +971,16 @@ export function NabyMemoryReview({
         >
           {t('memoryReview.openStyleBrowser')}
         </button>
+        {recent.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setRecentOpen(true)}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground"
+            data-testid="memory-open-recent"
+          >
+            {t('memoryReview.openRecent', { count: recent.length })}
+          </button>
+        ) : null}
       </div>
 
       {/* ------------------------------------------------------------------
@@ -977,6 +1020,16 @@ export function NabyMemoryReview({
           </div>
         </div>
       </SettingsDetails>
+
+      {recentOpen && recent.length > 0 ? (
+        <RecentLearnedModal
+          rows={recent}
+          migratedCount={migratedCount}
+          busy={busy}
+          onUndo={handleUndo}
+          onClose={() => setRecentOpen(false)}
+        />
+      ) : null}
 
       {/* The browser. Rendered from here because this is where it is opened from,
           and it stacks ABOVE the settings modal that contains this card. */}

@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.16 — 2026-11-09
+
+### en
+
+Settings → Memory is easier to read.
+
+**Improved**
+
+- **Recently learned moved to a popup.** The long list no longer fills the Memory page. Open it with "Recently learned" next to the browse buttons when you want to check or undo something.
+
+### ko
+
+설정 → 기억 화면이 읽기 편해졌어요.
+
+**나아진 것**
+
+- **"최근 배운 것"을 팝업으로 옮겼어요.** 긴 목록이 기억 화면을 차지하지 않아요. 확인하거나 되돌리고 싶을 때 "전체 보기" 옆의 "최근 배운 것 보기"로 열어요.
+
 ## 1.48.15 — 2026-11-09
 
 ### en

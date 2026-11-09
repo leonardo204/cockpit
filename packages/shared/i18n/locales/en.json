@@ -1665,6 +1665,7 @@
     "filterStyleTitle": "Only the style rules — the memories whose key starts with style/.",
     "inboxMemory": "Memory proposals",
     "needsCheckTitle": "Needs checking",
+    "openRecent": "Recently learned ({{count}})",
     "recentTitle": "Recently learned",
     "recentApplied": "Started using: {{value}}",
     "recentChanged": "Changed \"{{old}}\" to \"{{value}}\"",
