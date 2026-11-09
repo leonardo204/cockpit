@@ -52,6 +52,10 @@ interface Block {
 interface ToolResultBlock {
   tool_use_id?: string;
   content?: unknown;
+  /** The structured half of a result, when the engine forwards one live — today
+   *  only `naby_remember`'s, so the memory chip appears with the call
+   *  (memory-auto-apply R10). */
+  data?: unknown;
 }
 export interface StreamEvent {
   type?: string;
@@ -125,6 +129,8 @@ export interface StreamEvent {
    *  anything that predates the pair — the bubble then keeps no closing line
    *  rather than borrowing a time from somewhere else. */
   ended_at?: number;
+  /** `result` only: the memories injected into this turn (memory-auto-apply R13). */
+  memory_ids?: string[];
 }
 
 export function applyStreamEvent(
@@ -248,9 +254,17 @@ export function applyStreamEvent(
       if (b.tool_use_id) {
         const tid = b.tool_use_id;
         const result = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
+        const data = b.data;
         out = out.map((m) =>
           m.id === assistantId
-            ? { ...m, toolCalls: m.toolCalls?.map((tc) => (tc.id === tid ? { ...tc, result, isLoading: false } : tc)) }
+            ? {
+                ...m,
+                toolCalls: m.toolCalls?.map((tc) =>
+                  tc.id === tid
+                    ? { ...tc, result, isLoading: false, ...(data !== undefined ? { resultData: data } : {}) }
+                    : tc,
+                ),
+              }
             : m
         );
       }
@@ -415,6 +429,10 @@ export function applyStreamEvent(
         ...(typeof ev.duration_ms === 'number' ? { durationMs: ev.duration_ms } : {}),
         ...(typeof ev.ended_at === 'number'
           ? { completedAt: new Date(ev.ended_at).toISOString() }
+          : {}),
+        // What this answer was given (R13) — the line under it reads this.
+        ...(Array.isArray(ev.memory_ids) && ev.memory_ids.length > 0
+          ? { memoryIds: ev.memory_ids.filter((id): id is string => typeof id === 'string') }
           : {}),
         toolCalls: base.toolCalls?.map((tc) => ({ ...tc, isLoading: false })),
       };

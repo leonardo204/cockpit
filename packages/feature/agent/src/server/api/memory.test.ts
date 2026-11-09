@@ -263,54 +263,51 @@ describe('listScopedMemory — corroboration (P3-M8b §5.4)', () => {
     expect(res.data.corroboration).toEqual({ a: 3 });
   });
 
-  it('reports the auto-confirm state and the threshold with the list', () => {
+  it('reports the auto-apply switch and the threshold with the list (memory-auto-apply R31)', () => {
     const { store } = fakeStore([makeItem()]);
     const before = listScopedMemory({ scope: 'user', scopeKey: null, status: null }, store);
     expect(before.ok).toBe(true);
     if (before.ok) {
-      // Absent setting = OFF. Nothing is promoted without an explicit opt-in.
-      expect(before.data.autoConfirm).toBe(false);
+      // Absent setting = ON (R8 default).
+      expect(before.data.autoApply).toBe(true);
       expect(before.data.corroborationThreshold).toBeGreaterThan(1);
     }
 
-    runMemoryAction({ action: 'autoConfirm.set', enabled: true }, store);
+    runMemoryAction({ action: 'autoApply.set', enabled: false }, store);
     const after = listScopedMemory({ scope: 'user', scopeKey: null, status: null }, store);
-    if (after.ok) expect(after.data.autoConfirm).toBe(true);
+    if (after.ok) expect(after.data.autoApply).toBe(false);
   });
 });
 
-describe('runMemoryAction — the auto-confirm opt-in', () => {
-  it('reads false before anything has been written', () => {
+describe('runMemoryAction — the auto-apply switch (memory-auto-apply R8/R31)', () => {
+  it('reads true before anything has been written', () => {
     const { store } = fakeStore();
-    expect(runMemoryAction({ action: 'autoConfirm.get' }, store)).toEqual({
-      ok: true,
-      autoConfirm: false,
-    });
+    expect(runMemoryAction({ action: 'autoApply.get' }, store)).toEqual({ ok: true, autoApply: true });
   });
 
-  it('round-trips on and back off', () => {
+  it('round-trips off and back on', () => {
     const { store } = fakeStore();
-    expect(runMemoryAction({ action: 'autoConfirm.set', enabled: true }, store)).toEqual({
+    expect(runMemoryAction({ action: 'autoApply.set', enabled: false }, store)).toEqual({
       ok: true,
-      autoConfirm: true,
+      autoApply: false,
     });
-    expect(runMemoryAction({ action: 'autoConfirm.get' }, store)).toEqual({
-      ok: true,
-      autoConfirm: true,
-    });
-    runMemoryAction({ action: 'autoConfirm.set', enabled: false }, store);
-    expect(runMemoryAction({ action: 'autoConfirm.get' }, store)).toEqual({
-      ok: true,
-      autoConfirm: false,
-    });
+    expect(runMemoryAction({ action: 'autoApply.get' }, store)).toEqual({ ok: true, autoApply: false });
+    runMemoryAction({ action: 'autoApply.set', enabled: true }, store);
+    expect(runMemoryAction({ action: 'autoApply.get' }, store)).toEqual({ ok: true, autoApply: true });
   });
 
-  it('refuses a non-boolean enabled rather than reading it as on', () => {
+  it('refuses a non-boolean enabled rather than guessing', () => {
     const { store, settings } = fakeStore();
     // @ts-expect-error — the whole point is what arrives off the wire.
-    const res = runMemoryAction({ action: 'autoConfirm.set', enabled: 'true' }, store);
+    const res = runMemoryAction({ action: 'autoApply.set', enabled: 'false' }, store);
     expect(res.ok).toBe(false);
     expect(settings.size).toBe(0);
+  });
+
+  it('no longer knows the corroboration opt-in (R8: autoConfirmCorroborated is gone)', () => {
+    const { store } = fakeStore();
+    // @ts-expect-error — the removed action, as an old client would still send it.
+    expect(runMemoryAction({ action: 'autoConfirm.set', enabled: true }, store).ok).toBe(false);
   });
 });
 
@@ -571,13 +568,17 @@ describe('summarizeMemory — the decisions inbox', () => {
     expect(out.pendingCount).toBe(5);
   });
 
-  it('adds the replacement notices to the badge', () => {
+  it('counts a replacement as a record, not a decision (memory-auto-apply R29/R32)', () => {
     const { store } = fakeStore([
       makeItem({ id: 'o1', supersededAt: 3, supersededBy: 'x' }),
     ]);
-    const out = summarizeMemory({}, store);
-    // One row in the fake → the proposed count is 1, plus the one notice.
-    expect(out.pendingCount).toBe(2);
+    const out = summarizeMemory({}, store, 10);
+    // Nothing is waiting for the user: the replacement is under "recently
+    // learned", with its undo, and the badge does not count it.
+    expect(out.pendingCount).toBe(0);
+    expect(out.recentLearned).toEqual([
+      expect.objectContaining({ id: 'o1', undo: 'revertSupersession', kind: 'superseded' }),
+    ]);
   });
 
   it('reports when reflection last ran, and says nothing when it never has', () => {

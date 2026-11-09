@@ -66,8 +66,115 @@ export function pendingMemoryOf(
   if (!resultData || typeof resultData !== 'object') return null;
   const row = resultData as Record<string, unknown>;
   if (row.status !== 'proposed') return null;
+  // memory-auto-apply: a write waiting for its REVIEW is not waiting for the
+  // user — the review decides, and the button would pre-empt it (R11).
+  if (row.review === 'pending' || row.review === 'known') return null;
   const id = typeof row.id === 'string' ? row.id : '';
   const key = typeof row.key === 'string' ? row.key : '';
   if (!id) return null;
   return { id, key: key || id };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MEMORY AUTO-APPLY (specs/memory-auto-apply.md §3)
+//
+// Most writes no longer need the button. A write the evidence rule made eligible
+// is reviewed right after the turn and then used — so the call shows what became
+// of it ("기억하는 중…" → "기억했어요" / "이미 알고 있어요" / "기억을 바꿨어요"),
+// with an undo (R10). The button stays for the writes that are HELD for a person
+// (outside content, a fact about the user with no quote, a quote nobody typed —
+// R11), with the reason beside it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What one `naby_remember` call wrote, read off its structured result. */
+export interface MemoryWrite {
+  id: string;
+  key: string;
+  value?: string;
+  /** `pending` = waiting for its review; `held` = waiting for a person;
+   *  `known` = nothing written, the same claim was already in use. A write from
+   *  before memory-auto-apply (no `review` field) reads as `held` when proposed. */
+  review: 'pending' | 'held' | 'known';
+  /** Why a held write is held (memory-gate `MemoryHoldReason`). */
+  holdReason?: string;
+}
+
+/** The write a `naby_remember` result describes, or null. Total, like
+ *  `pendingMemoryOf`: a shape it does not know produces nothing. */
+export function memoryWriteOf(toolName: string, resultData: unknown): MemoryWrite | null {
+  if (toolName !== REMEMBER_TOOL && !toolName.endsWith(`__${REMEMBER_TOOL}`)) return null;
+  if (!resultData || typeof resultData !== 'object') return null;
+  const row = resultData as Record<string, unknown>;
+  const id = typeof row.id === 'string' ? row.id : '';
+  if (!id) return null;
+  const key = typeof row.key === 'string' && row.key ? row.key : id;
+  const value = typeof row.value === 'string' ? row.value : undefined;
+  const base = { id, key, ...(value !== undefined ? { value } : {}) };
+  if (row.review === 'pending' || row.review === 'known') return { ...base, review: row.review };
+  if (row.review === 'held' || row.status === 'proposed') {
+    return {
+      ...base,
+      review: 'held',
+      ...(typeof row.holdReason === 'string' ? { holdReason: row.holdReason } : {}),
+    };
+  }
+  return null;
+}
+
+/** The server's answer for one memory (`/api/memory` `reviewStatus`). */
+export type MemoryReviewState =
+  | { state: 'pending' }
+  | { state: 'held'; reason?: string }
+  | { state: 'applied'; value: string; undone?: boolean }
+  | { state: 'known'; value: string }
+  | { state: 'changed'; value: string; oldValue: string; undone?: boolean }
+  | { state: 'question' }
+  | { state: 'gone' };
+
+/** What the chip draws. */
+export type MemoryChipView =
+  | { kind: 'pending'; canCancel: true }
+  | { kind: 'applied'; value: string; canCancel: true }
+  | { kind: 'known'; value: string }
+  | { kind: 'changed'; value: string; oldValue: string; canCancel: true }
+  | { kind: 'held'; reason?: string; canConfirm: true }
+  | { kind: 'question' }
+  | { kind: 'undone' }
+  | { kind: 'none' };
+
+/**
+ * Decide what the chip shows from the write and the latest server state. Pure.
+ *
+ * The server's answer wins once it exists; before the first answer arrives the
+ * write's own `review` is drawn, so the chip appears with the call instead of a
+ * moment later. `gone` draws nothing — the memory was deleted elsewhere, and a
+ * chip about it would describe something that no longer exists.
+ */
+export function memoryChipView(write: MemoryWrite, status: MemoryReviewState | undefined): MemoryChipView {
+  if (!status) {
+    if (write.review === 'pending') return { kind: 'pending', canCancel: true };
+    if (write.review === 'known') return { kind: 'known', value: write.value ?? write.key };
+    return { kind: 'held', ...(write.holdReason ? { reason: write.holdReason } : {}), canConfirm: true };
+  }
+  switch (status.state) {
+    case 'pending':
+      return { kind: 'pending', canCancel: true };
+    case 'applied':
+      return status.undone ? { kind: 'undone' } : { kind: 'applied', value: status.value || write.value || write.key, canCancel: true };
+    case 'known':
+      return { kind: 'known', value: status.value };
+    case 'changed':
+      return status.undone
+        ? { kind: 'undone' }
+        : { kind: 'changed', value: status.value, oldValue: status.oldValue, canCancel: true };
+    case 'held': {
+      const reason = status.reason ?? write.holdReason;
+      return { kind: 'held', ...(reason ? { reason } : {}), canConfirm: true };
+    }
+    case 'question':
+      return { kind: 'question' };
+    case 'gone':
+    default:
+      return { kind: 'none' };
+  }
 }

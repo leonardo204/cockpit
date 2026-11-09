@@ -998,20 +998,21 @@ describe('runReflectionSweep — consolidation (P3-M8b §5.4)', () => {
     expect(out.autoConfirmed).toBe(0);
   });
 
-  it('promotes an artifact-tier proposal at the threshold once the opt-in is on', async () => {
+  it('IGNORES the removed opt-in: a stored "true" promotes nothing (memory-auto-apply R8)', async () => {
+    // `memory.autoConfirmCorroborated` is gone. A value left in the database
+    // from before must not quietly keep a second confirmation path alive — the
+    // model review is the only automatic one now.
     const { store, confirmed, memory } = fakeStore([{ sessionId: 's1' }], {
       memory: [artifactProposal('m1')],
       corroboration: { m1: CORROBORATION_THRESHOLD },
       settings: { [MEMORY_AUTO_CONFIRM_KEY]: 'true' },
     });
     const { judge } = honestJudge();
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const out = await runReflectionSweep(store, judge, { now: NOW });
-    log.mockRestore();
 
-    expect(confirmed).toEqual(['m1']);
-    expect(out.autoConfirmed).toBe(1);
-    expect(memory[0]?.status).toBe('confirmed');
+    expect(confirmed).toEqual([]);
+    expect(out.autoConfirmed).toBe(0);
+    expect(memory[0]?.status).toBe('proposed');
   });
 
   it('leaves a proposal one session short of the threshold alone', async () => {
@@ -1036,13 +1037,12 @@ describe('runReflectionSweep — consolidation (P3-M8b §5.4)', () => {
       settings: { [MEMORY_AUTO_CONFIRM_KEY]: 'true' },
     });
     const { judge } = honestJudge();
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const out = await runReflectionSweep(store, judge, { now: NOW });
-    log.mockRestore();
 
-    // memory-contracts §4 invariant 1: only an explicit user action confirms it.
-    expect(confirmed).toEqual(['m-ok']);
-    expect(out.autoConfirmed).toBe(1);
+    // memory-contracts §4 invariant 1: only an explicit user action confirms it —
+    // and since memory-auto-apply R8 corroboration confirms nothing at all.
+    expect(confirmed).toEqual([]);
+    expect(out.autoConfirmed).toBe(0);
   });
 
   it('a consolidation failure does not fail the sweep', async () => {

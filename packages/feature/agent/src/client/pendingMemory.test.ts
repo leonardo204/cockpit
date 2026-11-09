@@ -64,3 +64,70 @@ describe('it cannot be made to throw inside a render', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// memory-auto-apply §3 — what the chip draws
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { memoryChipView, memoryWriteOf } from './pendingMemory';
+
+describe('memoryWriteOf', () => {
+  it('reads the three kinds of write, and an older proposal as held', () => {
+    expect(memoryWriteOf(REMEMBER_TOOL, { id: 'm', key: 'k', value: 'v', review: 'pending', status: 'proposed' })).toEqual({
+      id: 'm',
+      key: 'k',
+      value: 'v',
+      review: 'pending',
+    });
+    expect(memoryWriteOf(REMEMBER_TOOL, { id: 'm', key: 'k', review: 'held', holdReason: 'external', status: 'proposed' })).toEqual({
+      id: 'm',
+      key: 'k',
+      review: 'held',
+      holdReason: 'external',
+    });
+    expect(memoryWriteOf(REMEMBER_TOOL, { id: 'm', key: 'k', review: 'known', status: 'confirmed' })?.review).toBe('known');
+    expect(memoryWriteOf(REMEMBER_TOOL, proposed())?.review).toBe('held');
+  });
+
+  it('reads the Claude engine’s namespaced tool name too', () => {
+    expect(memoryWriteOf('mcp__nabytools__naby_remember', proposed())?.id).toBe('mem-1');
+  });
+
+  it('offers no confirm button for a write waiting for its review (R11)', () => {
+    expect(pendingMemoryOf(REMEMBER_TOOL, proposed({ review: 'pending' }))).toBeNull();
+  });
+});
+
+describe('memoryChipView (R10/R11)', () => {
+  const pending = { id: 'm', key: 'k', value: 'v', review: 'pending' as const };
+  it('says "remembering" until the server answers', () => {
+    expect(memoryChipView(pending, undefined)).toEqual({ kind: 'pending', canCancel: true });
+  });
+  it('then what became of it', () => {
+    expect(memoryChipView(pending, { state: 'applied', value: 'v' })).toMatchObject({ kind: 'applied', canCancel: true });
+    expect(memoryChipView(pending, { state: 'known', value: 'old' })).toEqual({ kind: 'known', value: 'old' });
+    expect(memoryChipView(pending, { state: 'changed', value: 'B', oldValue: 'A' })).toEqual({
+      kind: 'changed',
+      value: 'B',
+      oldValue: 'A',
+      canCancel: true,
+    });
+    expect(memoryChipView(pending, { state: 'held', reason: 'unsupported' })).toEqual({
+      kind: 'held',
+      reason: 'unsupported',
+      canConfirm: true,
+    });
+    expect(memoryChipView(pending, { state: 'question' })).toEqual({ kind: 'question' });
+  });
+  it('an undone change reads as undone, and a deleted memory draws nothing', () => {
+    expect(memoryChipView(pending, { state: 'applied', value: 'v', undone: true })).toEqual({ kind: 'undone' });
+    expect(memoryChipView(pending, { state: 'gone' })).toEqual({ kind: 'none' });
+  });
+  it('a held write shows the confirm offer with its reason before any answer', () => {
+    expect(memoryChipView({ id: 'm', key: 'k', review: 'held', holdReason: 'external' }, undefined)).toEqual({
+      kind: 'held',
+      reason: 'external',
+      canConfirm: true,
+    });
+  });
+});

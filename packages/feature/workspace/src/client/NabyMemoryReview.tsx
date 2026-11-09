@@ -60,6 +60,7 @@ import type {
 import { BootstrapCard } from './BootstrapCard';
 import { MemoryBrowserModal, STYLE_KEY_PREFIX, type MemoryFilters } from './MemoryBrowserModal';
 import { SettingsDetails } from './SettingsDetails';
+import { MemoryChoiceCard } from './MemoryChoiceCard';
 
 // ---------------------------------------------------------------------------
 // Wire helpers.
@@ -96,18 +97,67 @@ export type SummaryResponse = {
   /** Every decision waiting for this user — what the nav badge shows. */
   pendingCount?: number;
   corroboration?: Record<string, number>;
-  autoConfirm?: boolean;
+  /** `memory.autoApply` (memory-auto-apply R31). */
+  autoApply?: boolean;
   corroborationThreshold?: number;
   lastReflectionAt?: number;
+  /** memory-auto-apply R29 group 1 — see the API. */
+  needsCheck?: { questions: MemoryQuestionRow[]; proposed: NeedsCheckRow[] };
+  /** memory-auto-apply R29 group 2 — see the API. */
+  recentLearned?: RecentRow[];
+};
+
+/** One open question (memory-auto-apply §5), as the API renders it. */
+export type MemoryQuestionRow = {
+  id: string;
+  kind: 'conflict' | 'overwrite';
+  a: { id?: string; key: string; value: string; learnedAt: number };
+  b: { id?: string; key: string; value: string; learnedAt: number };
+};
+
+/** A proposal waiting for the user, with why (R11/R29). */
+export type NeedsCheckRow = { item: MemoryItem; reason: string; isGlobalStyle: boolean };
+
+/** One line of "recently learned" (R29). */
+export type RecentRow = {
+  id: string;
+  undo: 'cancel' | 'revertSupersession';
+  kind: string;
+  key: string;
+  value: string;
+  oldValue?: string;
+  at: number;
+  migrated?: boolean;
 };
 
 type MemoryActionBody =
   | { action: 'confirm'; id: string }
   | { action: 'delete'; id: string }
   | { action: 'deleteBySource'; source?: string; sessionId?: string }
-  | { action: 'autoConfirm.set'; enabled: boolean }
+  | { action: 'autoApply.set'; enabled: boolean }
   // P3-M13a §3.1 — the undo behind a replacement notice.
-  | { action: 'revertSupersession'; id: string };
+  | { action: 'revertSupersession'; id: string }
+  // memory-auto-apply R10/R29 — undo what learning did; answer a question.
+  | { action: 'cancel'; id: string }
+  | { action: 'questions.answer'; id: string; answer: 'a' | 'b' | 'both' | 'later' };
+
+/** The i18n key for one "recently learned" line, by what happened (R29). */
+export function recentRowKey(kind: string): string {
+  switch (kind) {
+    case 'applied':
+      return 'memoryReview.recentApplied';
+    case 'tidy-equivalent':
+      return 'memoryReview.recentMerged';
+    case 'tidy-refines':
+    case 'refined':
+      return 'memoryReview.recentRefined';
+    case 'changed':
+    case 'tidy-contradicts':
+    case 'superseded':
+    default:
+      return 'memoryReview.recentChanged';
+  }
+}
 
 /**
  * Read the summary.
@@ -214,6 +264,7 @@ const ProposalRow = memo(function ProposalRow({
   cwd,
   busy,
   manualOnly,
+  reason,
   onConfirm,
   onDelete,
 }: {
@@ -224,10 +275,16 @@ const ProposalRow = memo(function ProposalRow({
    *  setting says (P3-M13c §3.3), so it waits here until a person acts. The badge
    *  states that fact — it is not a severity colour. */
   manualOnly?: boolean;
+  /** memory-auto-apply R11/R29: why it waits — a hold code. */
+  reason?: string;
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
   const { t } = useTranslation();
+  // R30: the evidence is one tap away rather than always open — the card must not
+  // grow with what the model wrote, and most rows need no second look.
+  const [showEvidence, setShowEvidence] = useState(false);
+  const hasEvidence = Boolean(item.provenance.evidenceQuote || item.provenance.basisKind || item.provenance.sessionId);
   return (
     <div className="rounded-lg border border-border p-2.5 space-y-1.5" data-testid="memory-proposal">
       <div className="flex items-start justify-between gap-2">
@@ -250,6 +307,26 @@ const ProposalRow = memo(function ProposalRow({
           <ScopeBadge scope={item.scope as NabyScopeId} cwd={cwd} />
         </div>
       </div>
+      {reason ? (
+        <div className="text-[0.714rem] text-muted-foreground" data-testid="memory-hold-reason">
+          {t(`chat.memoryHold.${reason}`, { defaultValue: t('chat.memoryHold.default') })}
+        </div>
+      ) : null}
+      {showEvidence ? (
+        <div className="text-[0.714rem] text-muted-foreground space-y-0.5" data-testid="memory-evidence">
+          {item.provenance.evidenceQuote ? (
+            <div className="break-words">{t('memoryReview.evidenceQuote', { quote: item.provenance.evidenceQuote })}</div>
+          ) : null}
+          {item.provenance.basisKind ? (
+            <div>
+              {t(item.provenance.basisKind === 'stated' ? 'memoryReview.basisStated' : 'memoryReview.basisInferred')}
+            </div>
+          ) : null}
+          {item.provenance.sessionId ? (
+            <div>{t('memoryReview.learnedIn', { session: item.provenance.sessionId.slice(0, 8) })}</div>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex items-center gap-2">
         <button
           onClick={() => onConfirm(item.id)}
@@ -267,58 +344,100 @@ const ProposalRow = memo(function ProposalRow({
         >
           {t('memoryReview.delete')}
         </button>
+        {hasEvidence ? (
+          <button
+            onClick={() => setShowEvidence((v) => !v)}
+            aria-expanded={showEvidence}
+            className="text-xs px-1 text-muted-foreground hover:text-foreground"
+          >
+            {t('memoryReview.evidenceToggle')}
+          </button>
+        ) : null}
       </div>
     </div>
   );
 });
 
 // ---------------------------------------------------------------------------
-// One replacement notice (settings-ia-reorg §3.3, group c).
+// One open question (memory-auto-apply §5), answerable here as well as in the
+// popup — the popup is rare by design (R27), so this is where a snoozed one waits.
 // ---------------------------------------------------------------------------
 
-/**
- * "X was replaced — here is what by, and here is the undo."
- *
- * WHY IT IS IN THE INBOX AT ALL. Supersession is the one thing on this screen a
- * machine does to a user's own words WITHOUT being asked (P3-M13a §3.1 allows it
- * precisely because it is reversible). A reversible act nobody is told about is
- * an irreversible one in practice, so the notice is not a log entry — it sits
- * with the decisions, and the undo is on it.
- */
-const SupersessionRow = memo(function SupersessionRow({
-  notice,
+const QuestionRow = memo(function QuestionRow({
+  question,
   busy,
-  onRevert,
+  onAnswer,
 }: {
-  notice: SupersessionNotice;
+  question: MemoryQuestionRow;
   busy: boolean;
-  onRevert: (id: string) => void;
+  onAnswer: (id: string, answer: 'a' | 'b' | 'both') => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const metaOf = (side: 'a' | 'b') =>
+    side === 'b' && question.kind === 'overwrite'
+      ? t('memoryQuestion.newCandidate')
+      : t('memoryQuestion.learnedAt', {
+          date: new Date(question[side].learnedAt).toLocaleDateString(i18n.language, { month: 'short', day: 'numeric' }),
+        });
+  return (
+    <div className="rounded-lg border border-border p-3 space-y-2" data-testid="memory-question">
+      <div>
+        <div className="text-sm font-medium text-foreground">{t('memoryReview.questionLine')}</div>
+        <div className="text-xs text-muted-foreground">{t('memoryReview.questionHint')}</div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {(['a', 'b'] as const).map((side) => (
+          <MemoryChoiceCard
+            key={side}
+            value={question[side].value}
+            meta={metaOf(side)}
+            pickLabel={t('memoryReview.pickThis')}
+            moreLabel={t('memoryQuestion.showMore')}
+            lessLabel={t('memoryQuestion.showLess')}
+            disabled={busy}
+            onPick={() => onAnswer(question.id, side)}
+          />
+        ))}
+      </div>
+      <div className="flex justify-end">
+        <button
+          onClick={() => onAnswer(question.id, 'both')}
+          disabled={busy}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+        >
+          {t('memoryReview.keepBoth')}
+        </button>
+      </div>
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// One line of "recently learned" (memory-auto-apply R29), with its undo.
+// ---------------------------------------------------------------------------
+
+const RecentLearnedRow = memo(function RecentLearnedRow({
+  row,
+  busy,
+  onUndo,
+}: {
+  row: RecentRow;
+  busy: boolean;
+  onUndo: (row: RecentRow) => void;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="rounded-lg border border-border p-2.5 space-y-1.5" data-testid="memory-supersession">
-      <div className="text-xs font-medium text-foreground break-words">
-        {t('memoryReview.supersessionLine', { key: notice.oldKey })}
-      </div>
-      {/* ONE LINE OF EACH CLAIM. The old one is what is no longer in use, the new
-          one is what took its place; without both the notice cannot be judged,
-          and with more than a line each it stops being a notice. */}
-      <div className="text-[0.786rem] text-muted-foreground break-words line-clamp-1">
-        {t('memoryReview.supersessionOld', { value: notice.oldValue })}
-      </div>
-      <div className="text-sm text-foreground/90 break-words line-clamp-2">
-        {notice.newValue
-          ? t('memoryReview.supersessionNew', { value: notice.newValue })
-          : t('memoryReview.supersededByGone')}
+    <div className="flex items-start justify-between gap-2 py-1" data-testid="memory-recent-row">
+      <div className="text-xs text-foreground/90 break-words line-clamp-2 min-w-0">
+        {t(recentRowKey(row.kind), { value: row.value, old: row.oldValue ?? '' })}
       </div>
       <button
-        onClick={() => onRevert(notice.oldId)}
+        onClick={() => onUndo(row)}
         disabled={busy}
-        title={t('memoryReview.revertTitle')}
-        data-testid="memory-supersession-revert"
-        className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+        title={t('memoryReview.undoTitle')}
+        className="shrink-0 text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
       >
-        {t('memoryReview.revert')}
+        {t('memoryReview.undo')}
       </button>
     </div>
   );
@@ -370,7 +489,7 @@ export function NabyMemoryReview({
 }) {
   const { t } = useTranslation();
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
-  const [autoConfirm, setAutoConfirm] = useState(false);
+  const [autoApply, setAutoApply] = useState(true);
   const [learningEnabled, setLearningEnabled] = useState(true);
   // P3-M13c §3.3: READ-ONLY. There is deliberately no control here — the profile
   // is counted from the user's own messages and the only thing to do with it is
@@ -378,7 +497,6 @@ export function NabyMemoryReview({
   // shaped it). null means "not enough evidence yet", which is a normal state.
   const [style, setStyle] = useState<StyleFingerprint | null>(null);
   const [styleMinSamples, setStyleMinSamples] = useState(20);
-  const [threshold, setThreshold] = useState(3);
   const [loading, setLoading] = useState(false);
   // WHEN the summary in hand was read. "N hours ago" needs a now, and reading the
   // clock during render is impure (the same panel would say different things on
@@ -405,10 +523,7 @@ export function NabyMemoryReview({
     if (res.ok) {
       setSummary(res.data);
       setLoadedAt(Date.now());
-      setAutoConfirm(res.data.autoConfirm === true);
-      if (typeof res.data.corroborationThreshold === 'number') {
-        setThreshold(res.data.corroborationThreshold);
-      }
+      setAutoApply(res.data.autoApply !== false);
       // The badge follows the same answer this panel just rendered, rather than
       // a second read that could disagree with it.
       notifyPending.current?.(res.data.pendingCount ?? 0);
@@ -468,9 +583,22 @@ export function NabyMemoryReview({
     [runAction],
   );
 
-  const handleRevert = useCallback(
-    (id: string) =>
-      void runAction(id, { action: 'revertSupersession', id }, 'memoryReview.reverted'),
+  // memory-auto-apply R29: undo one "recently learned" line — the review's
+  // own undo for what it did, or the supersession revert for a replacement a
+  // person's confirm made.
+  const handleUndo = useCallback(
+    (row: RecentRow) =>
+      void runAction(
+        row.id,
+        row.undo === 'cancel' ? { action: 'cancel', id: row.id } : { action: 'revertSupersession', id: row.id },
+        'memoryReview.undone',
+      ),
+    [runAction],
+  );
+
+  const handleAnswer = useCallback(
+    (id: string, answer: 'a' | 'b' | 'both') =>
+      void runAction(id, { action: 'questions.answer', id, answer }, 'memoryReview.answered'),
     [runAction],
   );
 
@@ -479,15 +607,15 @@ export function NabyMemoryReview({
     [runAction],
   );
 
-  const handleAutoConfirm = useCallback(
+  const handleAutoApply = useCallback(
     async (enabled: boolean) => {
       // Optimistic, then reconciled by the reload: the checkbox has to answer the
       // click immediately, and the reload is what makes a failed write visible
       // (it puts the box back where the server says it is).
-      setAutoConfirm(enabled);
+      setAutoApply(enabled);
       setBusyId('__setting__');
       try {
-        const res = await memoryPost({ action: 'autoConfirm.set', enabled });
+        const res = await memoryPost({ action: 'autoApply.set', enabled });
         if (!res.ok) toast(t('memoryReview.actionError', { error: res.error ?? '' }), 'error');
         await reload();
       } finally {
@@ -514,12 +642,18 @@ export function NabyMemoryReview({
 
   const busy = busyId !== null;
   const scopes = summary?.scopes ?? [];
-  const proposals = summary?.recentProposed ?? [];
-  const styleProposals = summary?.pendingStyleProposals ?? [];
-  const supersessions = summary?.recentSupersessions ?? [];
+  // memory-auto-apply R29: the two groups. "Needs checking" holds the open
+  // questions and the proposals waiting for a person (a row still inside its
+  // review is not here); "recently learned" holds what naby started using this
+  // week and what the tidy pass did, each with its undo.
+  const questions = summary?.needsCheck?.questions ?? [];
+  const proposals = (summary?.needsCheck?.proposed ?? []).filter((row) => !row.item.key.startsWith(STYLE_KEY_PREFIX));
+  const styleProposals = (summary?.needsCheck?.proposed ?? []).filter((row) => row.item.key.startsWith(STYLE_KEY_PREFIX));
+  const recent = summary?.recentLearned ?? [];
+  const migratedCount = recent.filter((row) => row.migrated).length;
   const totalRows = scopes.reduce((n, s) => n + s.confirmed + s.proposed, 0);
-  // The whole inbox disappears when there is nothing in it — see the header.
-  const hasInbox = proposals.length > 0 || styleProposals.length > 0 || supersessions.length > 0;
+  // The whole group disappears when there is nothing in it (R29) — see the header.
+  const hasInbox = questions.length > 0 || proposals.length > 0 || styleProposals.length > 0;
   const reflection = reflectionAgeCopy(summary?.lastReflectionAt, loadedAt);
 
   return (
@@ -534,41 +668,46 @@ export function NabyMemoryReview({
       <BootstrapCard isOpen={isOpen} onSaved={() => void reload()} />
 
       {/* ------------------------------------------------------------------
-          1. THE DECISIONS INBOX (§3.3). First, because it is the only thing on
-          this tab that is waiting for the user. Absent entirely when empty.
+          1. NEEDS CHECKING (memory-auto-apply R29, formerly the decisions inbox
+          of settings-ia-reorg §3.3). First, because it is the only thing on this
+          tab waiting for the user: open questions and the proposals held for a
+          person, each with why. Absent entirely when empty (R32).
           ------------------------------------------------------------------ */}
       {hasInbox ? (
         <div className="space-y-2" data-testid="memory-inbox">
-          {/* THE HEADING CARRIES THE BADGE'S NUMBER, and it is the same number.
-              A "1" on the nav row with no noun beside it was read as an
-              unexplained ornament ("what does the 1 mean?"), and a tooltip alone
-              only answers that for whoever hovers. So the count is stated where
-              the badge SENDS you, from `pendingCount` — the very field the badge
-              reads — rather than from the lengths of the three lists below,
-              which are capped for size. A badge that said 12 over a heading that
-              said 3 would be worse than the bare number it replaced. */}
+          {/* THE HEADING CARRIES THE COUNT, from `pendingCount` — the same field
+              the server counts uncapped — rather than from the lengths of the
+              lists below. A "1" with no noun beside it was read as an
+              unexplained ornament; a number over the rows it counts is not. */}
           <div
             className="text-[0.714rem] uppercase tracking-wide text-muted-foreground"
             data-testid="memory-inbox-heading"
           >
+            {t('memoryReview.needsCheckTitle')}
+            {' · '}
             {t('memoryReview.summaryPendingCount', { count: summary?.pendingCount ?? 0 })}
           </div>
 
-          {/* All three groups carry their kind, including this one: an inbox
-              where two of three groups are labelled reads as a rendering bug,
-              and "which kind of decision is this?" is the first thing each row
-              has to answer. */}
+          {questions.length > 0 ? (
+            <div className="space-y-1.5" data-testid="memory-questions">
+              {questions.map((q) => (
+                <QuestionRow key={q.id} question={q} busy={busy} onAnswer={handleAnswer} />
+              ))}
+            </div>
+          ) : null}
+
           {proposals.length > 0 ? (
             <div className="space-y-1.5" data-testid="memory-proposals">
               <div className="text-[0.714rem] text-muted-foreground">
                 {t('memoryReview.inboxMemory')}
               </div>
-              {proposals.map((item) => (
+              {proposals.map(({ item, reason }) => (
                 <ProposalRow
                   key={item.id}
                   item={item}
                   cwd={cwd}
                   busy={busy}
+                  reason={reason}
                   onConfirm={handleConfirm}
                   onDelete={handleDelete}
                 />
@@ -576,44 +715,49 @@ export function NabyMemoryReview({
             </div>
           ) : null}
 
-          {/* Style proposals — the same row, one badge different. They are split
-              out because they answer "should naby write like this?" rather than
-              "is this true about me?", and because the global ones can never be
-              confirmed by anything but a person. */}
+          {/* Style proposals — the same row, one badge different: the global ones
+              can never be switched on by anything but a person (P3-M13c §3.3). */}
           {styleProposals.length > 0 ? (
             <div className="space-y-1.5" data-testid="memory-style-proposals">
               <div className="text-[0.714rem] text-muted-foreground">
                 {t('memoryReview.inboxStyle')}
               </div>
-              {styleProposals.map(({ item, isGlobal }) => (
+              {styleProposals.map(({ item, reason, isGlobalStyle }) => (
                 <ProposalRow
                   key={item.id}
                   item={item}
                   cwd={cwd}
                   busy={busy}
-                  manualOnly={isGlobal}
+                  reason={reason}
+                  manualOnly={isGlobalStyle}
                   onConfirm={handleConfirm}
                   onDelete={handleDelete}
                 />
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
 
-          {supersessions.length > 0 ? (
-            <div className="space-y-1.5" data-testid="memory-supersessions">
-              <div className="text-[0.714rem] text-muted-foreground">
-                {t('memoryReview.inboxSuperseded')}
-              </div>
-              {supersessions.map((notice) => (
-                <SupersessionRow
-                  key={notice.oldId}
-                  notice={notice}
-                  busy={busy}
-                  onRevert={handleRevert}
-                />
-              ))}
+      {/* ------------------------------------------------------------------
+          1b. RECENTLY LEARNED (memory-auto-apply R29) — a record, not an
+          approval queue: what naby started using this week, what it changed,
+          and what the tidy pass merged. Every line is undoable, because the
+          machine did these without asking (R19: nothing here deleted anything).
+          ------------------------------------------------------------------ */}
+      {recent.length > 0 ? (
+        <div className="space-y-1" data-testid="memory-recent">
+          <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
+            {t('memoryReview.recentTitle')}
+          </div>
+          {migratedCount > 0 ? (
+            <div className="text-[0.714rem] text-muted-foreground" data-testid="memory-recent-migrated">
+              {t('memoryReview.recentMigrated', { count: migratedCount })}
             </div>
           ) : null}
+          {recent.map((row) => (
+            <RecentLearnedRow key={`${row.undo}:${row.id}`} row={row} busy={busy} onUndo={handleUndo} />
+          ))}
         </div>
       ) : null}
 
@@ -696,21 +840,22 @@ export function NabyMemoryReview({
           {t('memoryReview.learningHint')}
         </p>
 
-        {/* P3-M8b §5.4 — the auto-confirm opt-in. Off by default and stated
-            plainly, including the one thing it does NOT do: external-origin
-            memory is never confirmed without a person, setting or no setting. */}
+        {/* memory-auto-apply R31 — USE WHAT IT LEARNS RIGHT AWAY. It replaced
+            the corroboration opt-in. The hint states the one thing it never
+            does: outside content always waits for the user, switch or no switch. */}
         <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer">
           <input
             type="checkbox"
-            checked={autoConfirm}
+            checked={autoApply}
             disabled={busy}
-            onChange={(e) => void handleAutoConfirm(e.target.checked)}
+            onChange={(e) => void handleAutoApply(e.target.checked)}
             className="mt-0.5 accent-brand disabled:opacity-50"
+            data-testid="memory-auto-apply-toggle"
           />
-          <span>{t('memoryReview.autoConfirmLabel')}</span>
+          <span>{t('memoryReview.autoApplyLabel')}</span>
         </label>
         <p className="text-[0.714rem] text-muted-foreground leading-relaxed pl-6">
-          {t('memoryReview.autoConfirmHint', { count: threshold })}
+          {t('memoryReview.autoApplyHint')}
         </p>
 
         {/* THE FOUR CHANNELS, one sentence each. Together the two switches above

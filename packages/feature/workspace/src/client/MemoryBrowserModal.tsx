@@ -311,6 +311,19 @@ const BrowserRow = memo(function BrowserRow({
             {t('memoryReview.basis', { basis: item.provenance.basis })}
           </span>
         ) : null}
+        {/* memory-auto-apply R30: whether the user said it or naby inferred it,
+            and the user's own words it was learned from (kept only when they
+            were found verbatim in the conversation). */}
+        {item.provenance.basisKind ? (
+          <span data-testid="memory-basis-kind">
+            {t(item.provenance.basisKind === 'stated' ? 'memoryReview.basisStated' : 'memoryReview.basisInferred')}
+          </span>
+        ) : null}
+        {item.provenance.evidenceQuote ? (
+          <span className="basis-full break-words" data-testid="memory-evidence-quote">
+            {t('memoryReview.evidenceQuote', { quote: item.provenance.evidenceQuote })}
+          </span>
+        ) : null}
         <span>
           {item.lastInjectedAt
             ? t('memoryReview.lastUsed', {

@@ -275,46 +275,64 @@ describe('the browser can be narrowed to a key namespace', () => {
  * absent when none of them do.
  */
 describe('the memory tab opens with what needs deciding', () => {
-  it('renders three groups, each only when non-empty', () => {
+  it('renders "needs checking" and "recently learned", each only when non-empty (memory-auto-apply R29)', () => {
     expect(CARD).toContain('data-testid="memory-inbox"');
-    expect(CARD).toMatch(/hasInbox =\s*proposals\.length > 0 \|\| styleProposals\.length > 0 \|\| supersessions\.length > 0/);
+    expect(CARD).toMatch(/hasInbox = questions\.length > 0 \|\| proposals\.length > 0 \|\| styleProposals\.length > 0/);
     expect(CARD).toMatch(/\{hasInbox \? \(/);
+    expect(CARD).toMatch(/\{questions\.length > 0 \? \(/);
     expect(CARD).toMatch(/\{proposals\.length > 0 \? \(/);
-    // Each group says which KIND of decision it holds.
+    expect(CARD).toMatch(/\{styleProposals\.length > 0 \? \(/);
     for (const key of [
+      'memoryReview.needsCheckTitle',
       'memoryReview.inboxMemory',
       'memoryReview.inboxStyle',
-      'memoryReview.inboxSuperseded',
+      'memoryReview.recentTitle',
     ]) {
-      expect(CARD, `${key} missing from the inbox`).toContain(key);
+      expect(CARD, `${key} missing from the memory tab`).toContain(key);
     }
-    expect(CARD).toMatch(/\{styleProposals\.length > 0 \? \(/);
-    expect(CARD).toMatch(/\{supersessions\.length > 0 \? \(/);
+    expect(CARD).toContain('data-testid="memory-recent"');
+    expect(CARD).toMatch(/\{recent\.length > 0 \? \(/);
+    // Both groups read the SERVER's split — a proposal still inside its review
+    // is not the user's business yet, and only the API knows the 24 h rule.
+    expect(CARD).toContain('summary?.needsCheck');
+    expect(CARD).toContain('summary?.recentLearned');
   });
 
   it('badges the style proposals a person MUST approve, and only those', () => {
-    // `style/global/*` is the one class corroboration may never confirm (P3-M13c
-    // §3.3), so the badge carries a fact about what has to happen next — which
-    // is the only reason this pane allows a badge at all.
-    expect(CARD).toContain('manualOnly={isGlobal}');
+    // `style/global/*` is the one class only a person may switch on (P3-M13c
+    // §3.3), so the badge carries a fact about what has to happen next.
+    expect(CARD).toContain('manualOnly={isGlobalStyle}');
     expect(CARD).toContain("t('memoryReview.manualApproval')");
     expect(CARD).toContain('data-testid="memory-manual-approval"');
-    // The flag comes from the SERVER, not from a second spelling of the rule.
-    expect(CARD).toContain('pendingStyleProposals');
   });
 
-  it('states a replacement in both claims, with the undo on it', () => {
-    // Supersession is the one thing here a machine does to a user's own words
-    // without being asked; a reversible act nobody is told about is an
-    // irreversible one in practice.
-    expect(CARD).toContain('data-testid="memory-supersession"');
-    expect(CARD).toContain("t('memoryReview.supersessionLine'");
-    expect(CARD).toContain("t('memoryReview.supersessionOld'");
-    expect(CARD).toContain("t('memoryReview.supersessionNew'");
-    // A replacement the user has since deleted still has to read as something.
-    expect(CARD).toContain("t('memoryReview.supersededByGone')");
-    expect(CARD).toContain("action: 'revertSupersession'");
-    expect(CARD).toContain('data-testid="memory-supersession-revert"');
+  it('says why each proposal waits, and shows its evidence on request (R11, R30)', () => {
+    expect(CARD).toContain('data-testid="memory-hold-reason"');
+    expect(CARD).toContain('`chat.memoryHold.${reason}`');
+    expect(CARD).toContain('data-testid="memory-evidence"');
+    expect(CARD).toContain("t('memoryReview.evidenceQuote'");
+    expect(CARD).toContain("'memoryReview.basisStated'");
+  });
+
+  it('puts an undo on every line of "recently learned" (R19, R29)', () => {
+    // What the machine did without asking is undoable from where it is reported.
+    expect(CARD).toContain('data-testid="memory-recent-row"');
+    expect(CARD).toContain("{ action: 'cancel', id: row.id }");
+    expect(CARD).toContain("{ action: 'revertSupersession', id: row.id }");
+    expect(CARD).toContain("t('memoryReview.undo')");
+  });
+
+  it('answers a question in place as well as in the popup (§5)', () => {
+    expect(CARD).toContain('data-testid="memory-question"');
+    expect(CARD).toContain("action: 'questions.answer'");
+    expect(CARD).toContain("t('memoryReview.keepBoth')");
+  });
+
+  it('swaps the corroboration opt-in for "use what naby learns right away" (R31)', () => {
+    expect(CARD).not.toContain('autoConfirm');
+    expect(CARD).toContain("action: 'autoApply.set'");
+    expect(CARD).toContain("t('memoryReview.autoApplyLabel')");
+    expect(CARD).toContain("t('memoryReview.autoApplyHint')");
   });
 
   it('hands the badge count back rather than being polled for it', () => {
@@ -549,8 +567,14 @@ describe('the new copy exists in both locales', () => {
     // settings-ia-reorg §3.3/§3.4 — the inbox, the badge and the deep link.
     'memoryReview.inboxMemory',
     'memoryReview.inboxStyle',
-    'memoryReview.inboxSuperseded',
     'memoryReview.manualApproval',
+    // memory-auto-apply R29–R31.
+    'memoryReview.needsCheckTitle',
+    'memoryReview.recentTitle',
+    'memoryReview.autoApplyLabel',
+    'memoryReview.autoApplyHint',
+    'memoryReview.evidenceQuote',
+    'memoryReview.undo',
     'memoryReview.manualApprovalTitle',
     'memoryReview.supersessionLine',
     'memoryReview.supersessionOld',

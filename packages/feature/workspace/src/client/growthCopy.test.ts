@@ -138,7 +138,14 @@ describe('growth, check-in and export copy is complete in every locale', () => {
         // sessions" and "once different sessions have said the same thing" are
         // grammatical and say nothing.
         ['memoryReview.corroborated', ['{{count}}']],
-        ['memoryReview.autoConfirmHint', ['{{count}}']],
+        // memory-auto-apply: the chat chip and the "recently learned" lines are
+        // nothing BUT their values — "기억했어요: " with no value says nothing.
+        ['chat.memoryChip.applied', ['{{value}}']],
+        ['chat.memoryChip.changed', ['{{old}}', '{{new}}']],
+        ['chat.memoryUsed', ['{{count}}']],
+        ['memoryReview.recentChanged', ['{{old}}', '{{value}}']],
+        ['memoryReview.recentMerged', ['{{old}}', '{{value}}']],
+        ['memoryQuestion.counter', ['{{index}}', '{{total}}']],
         // P3-M8c: every value in the learning block IS a number. A translation
         // that dropped the placeholder would render an empty cell beside a label,
         // which reads as "zero" rather than as a missing translation.

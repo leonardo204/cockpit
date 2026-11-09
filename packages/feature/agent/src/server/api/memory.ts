@@ -55,16 +55,32 @@ import { getStore } from '../engines/naby';
 // `activateSupersession` lives with the sweep for the same reason: confirmation
 // is the ONLY moment a reservation becomes a supersession, and both confirmation
 // paths (a person here, corroboration there) must run the identical rule.
+import { activateSupersession } from '../lib/reflection';
+// memory-auto-apply: the switch, the chat chip's status, the undo, the
+// questions and "recently learned" all live with the review that produces them.
 import {
-  activateSupersession,
-  readAutoConfirmSetting,
-  writeAutoConfirmSetting,
-} from '../lib/reflection';
+  answerMemoryQuestion,
+  cancelLearnedMemory,
+  memoryReviewStatus,
+  noteQuestionAutoShown,
+  noteQuestionCollapsed,
+  openMemoryQuestions,
+  PENDING_REVIEW_STALE_MS,
+  readAutoApplySetting,
+  readLastAutoShownAt,
+  recentLearned,
+  RECENT_LEARNED_MS,
+  writeAutoApplySetting,
+  type MemoryQuestionView,
+  type MemoryReceiptKind,
+  type MemoryReviewStatus,
+  type MemoryReviewStore,
+} from '../lib/memoryReview';
 
 // The slice of the store this route touches. Named so the handlers depend on an
 // injectable seam (default `getStore()`), which keeps the list/action logic unit-
 // testable against a fake store without opening a real sqlite file.
-type MemoryStore = Pick<
+type MemoryStore = Partial<MemoryReviewStore> & Pick<
   Store,
   | 'getScopedMemory'
   | 'confirmMemory'
@@ -93,6 +109,15 @@ type MemoryStore = Pick<
   // (`learningRead.ts`), so the two surfaces cannot report different times.
   | 'getLatestReflectionAt'
 >;
+
+/** The full review surface, for the actions that need it. The production store
+ *  always has it; a narrow test fake may not, and those actions then refuse. */
+function reviewStoreOf(store: MemoryStore): MemoryReviewStore | undefined {
+  const s = store as Partial<MemoryReviewStore>;
+  return typeof s.listMemoryQuestions === 'function' && typeof s.settleMemoryReview === 'function'
+    ? (store as unknown as MemoryReviewStore)
+    : undefined;
+}
 
 // The store is opened on demand, so this must run on the node runtime and must
 // never be statically rendered.
@@ -174,9 +199,9 @@ export interface MemoryListResult {
    * queue once in the wrong order and then re-sorting it.
    */
   corroboration: Record<string, number>;
-  /** Whether corroborated proposals are auto-confirmed (§5.4). Sent with the
-   *  list so the toggle renders in its true state on first paint. */
-  autoConfirm: boolean;
+  /** `memory.autoApply` (memory-auto-apply R8/R31), sent with the list so the
+   *  switch renders in its true state on first paint. */
+  autoApply: boolean;
   /**
    * How many distinct sessions auto-confirmation requires
    * (`CORROBORATION_THRESHOLD`). Sent rather than duplicated client-side because
@@ -317,7 +342,7 @@ export function listScopedMemory(
       items,
       corroboration,
       supersededBy,
-      autoConfirm: readAutoConfirmSetting(store),
+      autoApply: readAutoApplySetting(store),
       corroborationThreshold: CORROBORATION_THRESHOLD,
       total,
       limit,
@@ -378,8 +403,59 @@ export interface MemoryStyleProposal {
   isGlobal: boolean;
 }
 
+/**
+ * Why a `proposed` row is waiting for a person (memory-auto-apply R11, R29) — a
+ * CODE the client renders per locale. Derived on read from the row itself, so
+ * there is no stored reason to go stale:
+ *
+ *   conflict            an open question names it (R18/R24)
+ *   external            outside content entered its turn (R3 row 5)
+ *   unsupported         the review said its quote does not back it (R41)
+ *   review-waiting      its review has not happened for over a day (R42)
+ *   auto-apply-off      the switch is off (R8)
+ *   user-scope-unquoted a fact about the user with no quote (R3 row 4)
+ *   proposal            anything older than this feature
+ */
+export type MemoryHoldCode =
+  | 'conflict'
+  | 'external'
+  | 'unsupported'
+  | 'review-waiting'
+  | 'auto-apply-off'
+  | 'user-scope-unquoted'
+  | 'proposal';
+
+export interface MemoryNeedsCheckRow {
+  item: MemoryItem;
+  reason: MemoryHoldCode;
+  /** `style/global/*` — the class only a person may switch on (P3-M13c §3.3). */
+  isGlobalStyle: boolean;
+}
+
+/** One line of "recently learned" (R29), with its undo. */
+export interface MemoryRecentRow {
+  /** What the undo action addresses: `cancel` for a receipt, `revertSupersession`
+   *  for a replacement made outside the review (a confirmed reservation). */
+  id: string;
+  undo: 'cancel' | 'revertSupersession';
+  kind: MemoryReceiptKind | 'superseded';
+  key: string;
+  value: string;
+  oldValue?: string;
+  at: number;
+  /** One of the waiting proposals the migration put through review (R33). */
+  migrated?: boolean;
+}
+
 export interface MemorySummaryResult {
   scopes: MemoryScopeSummary[];
+  /** memory-auto-apply R29 group 1: what needs the user — open questions and the
+   *  proposals waiting for a person. A row still inside its review is not here
+   *  until its review is over a day late (R42). */
+  needsCheck: { questions: MemoryQuestionView[]; proposed: MemoryNeedsCheckRow[] };
+  /** memory-auto-apply R29 group 2: what naby started using this week, and what
+   *  the tidy pass did — each with its undo. */
+  recentLearned: MemoryRecentRow[];
   /**
    * The newest few ORDINARY `proposed` rows across every reachable scope — the
    * ones the card offers inline confirm/delete for. Newest first.
@@ -406,7 +482,8 @@ export interface MemorySummaryResult {
    */
   pendingCount: number;
   corroboration: Record<string, number>;
-  autoConfirm: boolean;
+  /** `memory.autoApply` (R31). */
+  autoApply: boolean;
   corroborationThreshold: number;
   /** When the reflection pass last read a finished conversation; absent before
    *  the first one. The summary line's "automatic learning is running" evidence. */
@@ -456,6 +533,7 @@ export function summarizeMemory(
   if (params.cwd) targets.push({ scope: 'project', scopeKey: params.cwd });
 
   const scopes: MemoryScopeSummary[] = [];
+  const allProposed: MemoryItem[] = [];
   const proposals: MemoryItem[] = [];
   const styleProposals: MemoryItem[] = [];
   const supersessions: MemorySupersessionNotice[] = [];
@@ -492,6 +570,7 @@ export function summarizeMemory(
       status: 'proposed',
       superseded: false,
     });
+    allProposed.push(...pending);
     proposals.push(...pending.filter((item) => !isStyleMemoryKey(item.key)).slice(-SUMMARY_PROPOSED_LIMIT));
     styleProposals.push(
       ...pending.filter((item) => isStyleMemoryKey(item.key)).slice(-SUMMARY_PROPOSED_LIMIT),
@@ -535,11 +614,70 @@ export function summarizeMemory(
     .sort((a, b) => b.at - a.at)
     .slice(0, SUMMARY_SUPERSESSION_LIMIT);
 
-  // The badge's number. Read from the COUNTS (which are unbounded) rather than
-  // from the capped lists above — see `pendingCount`. `scopes[].proposed` already
-  // spans both kinds of proposal, so ordinary + style is exactly that sum.
-  const pendingCount =
-    scopes.reduce((n, s) => n + s.proposed, 0) + recentSupersessions.length;
+  // -- memory-auto-apply R29: the two groups --------------------------------
+  const autoApply = readAutoApplySetting(store);
+  const reviewStore = reviewStoreOf(store);
+  let questions: MemoryQuestionView[] = [];
+  try {
+    questions = reviewStore ? openMemoryQuestions(reviewStore) : [];
+  } catch {
+    questions = [];
+  }
+  const questioned = new Set<string>();
+  for (const q of questions) {
+    questioned.add(q.a.id);
+    if (q.b.id) questioned.add(q.b.id);
+  }
+  // A row inside its review is naby's business for now; one whose review is a
+  // day late is the user's (R42). A row an open question already shows is not
+  // listed twice.
+  const needsProposed: MemoryNeedsCheckRow[] = allProposed
+    .filter((item) => !questioned.has(item.id))
+    .filter((item) => item.reviewState !== 'pending' || now - item.createdAt > PENDING_REVIEW_STALE_MS)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .map((item) => ({
+      item,
+      reason: holdReasonOf(item, autoApply, now),
+      isGlobalStyle: isGlobalStyleMemoryKey(item.key),
+    }));
+
+  const recent: MemoryRecentRow[] = [];
+  const covered = new Set<string>();
+  if (reviewStore) {
+    for (const r of recentLearned(reviewStore, now)) {
+      if (r.otherId) covered.add(r.otherId);
+      recent.push({
+        id: r.id,
+        undo: 'cancel',
+        kind: r.kind,
+        key: r.key,
+        value: r.value,
+        ...(r.oldValue !== undefined ? { oldValue: r.oldValue } : {}),
+        at: r.at,
+        ...(r.migrated ? { migrated: true } : {}),
+      });
+    }
+  }
+  // A replacement made outside the review (a person confirming a reservation)
+  // is still something naby changed this week, and still undoable.
+  for (const n of supersessions) {
+    if (covered.has(n.oldId) || now - n.at > RECENT_LEARNED_MS) continue;
+    recent.push({
+      id: n.oldId,
+      undo: 'revertSupersession',
+      kind: 'superseded',
+      key: n.newKey,
+      value: n.newValue,
+      oldValue: n.oldValue,
+      at: n.at,
+    });
+  }
+  recent.sort((a, b) => b.at - a.at);
+
+  // The badge's number (R32): what needs the USER, uncapped. Since
+  // memory-auto-apply a replacement is a record, not a decision, so it no longer
+  // counts — "recently learned" shows it with its undo.
+  const pendingCount = questions.length + needsProposed.length;
 
   // Best-effort, like every other read the learning block makes: a store that
   // cannot answer "when did reflection last run" must not cost the user their
@@ -553,6 +691,8 @@ export function summarizeMemory(
 
   return {
     scopes,
+    needsCheck: { questions, proposed: needsProposed },
+    recentLearned: recent,
     recentProposed,
     pendingStyleProposals,
     recentSupersessions,
@@ -561,10 +701,22 @@ export function summarizeMemory(
       ...recentProposed.map((item) => item.id),
       ...pendingStyleProposals.map(({ item }) => item.id),
     ]),
-    autoConfirm: readAutoConfirmSetting(store),
+    autoApply,
     corroborationThreshold: CORROBORATION_THRESHOLD,
     ...(typeof lastReflectionAt === 'number' ? { lastReflectionAt } : {}),
   };
+}
+
+/** See `MemoryHoldCode`. Pure. */
+export function holdReasonOf(item: MemoryItem, autoApply: boolean, now: number): MemoryHoldCode {
+  if (item.reviewState === 'pending') return now - item.createdAt > PENDING_REVIEW_STALE_MS ? 'review-waiting' : 'proposal';
+  if (item.provenance.source === 'external') return 'external';
+  if (item.reviewedAt !== undefined) return 'unsupported';
+  if (!autoApply) return 'auto-apply-off';
+  if (item.scope === 'user' && !item.provenance.evidenceQuote && item.provenance.basisKind !== undefined) {
+    return 'user-scope-unquoted';
+  }
+  return 'proposal';
 }
 
 // ---------------------------------------------------------------------------
@@ -579,12 +731,22 @@ export type MemoryAction =
   // taught", across every trust tier), or both ("this session's external
   // memory"). At least one selector is required.
   | { action: 'deleteBySource'; source?: TrustTier; sessionId?: string }
-  // P3-M8b §5.4 — the opt-in that lets the consolidation step confirm a
-  // `proposed` row that CORROBORATION_THRESHOLD distinct sessions agree with.
-  // Off by default, and `external`-origin memory is untouched by it either way
-  // (memory-contracts §4 invariant 1 is not a setting).
-  | { action: 'autoConfirm.get' }
-  | { action: 'autoConfirm.set'; enabled: boolean }
+  // memory-auto-apply R8/R31 — "use what naby learns right away". On by
+  // default; off puts every write back on the confirm button. (It replaces the
+  // P3-M8b corroboration opt-in, `autoConfirm.*`, which is gone.)
+  | { action: 'autoApply.get' }
+  | { action: 'autoApply.set'; enabled: boolean }
+  // memory-auto-apply R10 — what each memory a `naby_remember` call wrote has
+  // become (the chat chip), and its undo.
+  | { action: 'reviewStatus'; ids: string[] }
+  | { action: 'cancel'; id: string }
+  // memory-auto-apply R13 — the memories one answer used, by id.
+  | { action: 'byIds'; ids: string[] }
+  // memory-auto-apply §5 — the question popup.
+  | { action: 'questions.list'; sessionId?: string }
+  | { action: 'questions.answer'; id: string; answer: 'a' | 'b' | 'both' | 'later' }
+  | { action: 'questions.collapsed'; id: string }
+  | { action: 'questions.autoShown' }
   // -- P3-M10 (memory-hygiene §3) — the sovereignty actions -----------------
   // EDIT one row's value. Promotes it to the `user` trust tier and resets its
   // corroboration when the claim actually changed; the store owns both rules.
@@ -601,8 +763,26 @@ export type MemoryAction =
   | { action: 'revertSupersession'; id: string };
 
 export type MemoryActionResult =
-  | { ok: true; autoConfirm?: boolean; item?: MemoryItem }
+  | {
+      ok: true;
+      autoApply?: boolean;
+      item?: MemoryItem;
+      items?: MemoryItem[];
+      statuses?: MemoryReviewStatus[];
+      questions?: MemoryQuestionView[];
+      /** When the popup last raised itself (R27). */
+      lastAutoShownAt?: number;
+      /** The popup must not raise itself for this session (R27: temporary or
+       *  fast-growth session). */
+      suppressed?: boolean;
+    }
   | { ok: false; error: string };
+
+/** Ids off the wire: strings only, deduplicated, capped. */
+function readIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.filter((x): x is string => typeof x === 'string' && x.length > 0))].slice(0, 50);
+}
 
 export function runMemoryAction(
   body: MemoryAction,
@@ -661,19 +841,86 @@ export function runMemoryAction(
       return { ok: false, error: 'deleteBySource requires source and/or sessionId' };
     }
 
-    case 'autoConfirm.get':
-      return { ok: true, autoConfirm: readAutoConfirmSetting(store) };
+    case 'autoApply.get':
+      return { ok: true, autoApply: readAutoApplySetting(store) };
 
-    case 'autoConfirm.set': {
-      // Strictly boolean: a missing or string-ish `enabled` would otherwise turn
-      // auto-confirmation ON by accident, which is the one direction this switch
-      // must never be flipped by a malformed request.
+    case 'autoApply.set': {
+      // Strictly boolean: a string-ish `enabled` must not flip a switch about
+      // how freely naby acts on what it learned.
       if (typeof body.enabled !== 'boolean') {
         return { ok: false, error: 'enabled must be a boolean' };
       }
-      writeAutoConfirmSetting(store, body.enabled);
-      return { ok: true, autoConfirm: body.enabled };
+      writeAutoApplySetting(store, body.enabled);
+      return { ok: true, autoApply: body.enabled };
     }
+
+    case 'reviewStatus': {
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: false, error: 'memory review is unavailable' };
+      return { ok: true, statuses: memoryReviewStatus(review, readIds(body.ids)) };
+    }
+
+    case 'cancel': {
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: false, error: 'memory review is unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      // Reported, not swallowed: the user asked to take something back, and a
+      // silent no-op would look like it worked.
+      if (!cancelLearnedMemory(review, body.id)) return { ok: false, error: 'nothing to undo' };
+      return { ok: true };
+    }
+
+    case 'byIds': {
+      const items: MemoryItem[] = [];
+      for (const id of readIds(body.ids)) {
+        const item = store.getMemoryById(id);
+        if (item) items.push(item);
+      }
+      return { ok: true, items };
+    }
+
+    case 'questions.list': {
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: true, questions: [] };
+      // R27: never raised on its own over a temporary or fast-growth session.
+      let suppressed = false;
+      if (typeof body.sessionId === 'string' && body.sessionId) {
+        try {
+          const session = (store as unknown as { getSession?(id: string): { noLearn?: boolean; fastGrowth?: boolean } | undefined })
+            .getSession?.(body.sessionId);
+          suppressed = session?.noLearn === true || session?.fastGrowth === true;
+        } catch {
+          suppressed = false;
+        }
+      }
+      const lastAutoShownAt = readLastAutoShownAt(store);
+      return {
+        ok: true,
+        questions: openMemoryQuestions(review),
+        ...(lastAutoShownAt !== undefined ? { lastAutoShownAt } : {}),
+        suppressed,
+      };
+    }
+
+    case 'questions.answer': {
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: false, error: 'memory review is unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      const res = answerMemoryQuestion(review, body.id, body.answer);
+      return res.ok ? { ok: true, questions: openMemoryQuestions(review) } : res;
+    }
+
+    case 'questions.collapsed': {
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: false, error: 'memory review is unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      noteQuestionCollapsed(review, body.id);
+      return { ok: true };
+    }
+
+    case 'questions.autoShown':
+      noteQuestionAutoShown(store as unknown as Pick<Store, 'getSetting' | 'setSetting'>);
+      return { ok: true };
 
     case 'edit': {
       if (typeof body.id !== 'string' || !body.id) {

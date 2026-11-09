@@ -85,6 +85,42 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.14 — 2026-11-09
+
+### en
+
+naby now uses what it learns right away, without asking you to confirm each memory.
+
+**New**
+
+- **Memories apply on their own.** Tell naby to remember something and the chat shows "Remembered · Undo". After a quick background check by your session's model, it's in use from the next turn.
+- **Tidies itself.** naby compares what it remembers by meaning, folds duplicates together, and replaces outdated facts. Nothing is deleted: anything it changes can be restored in Settings → Memory.
+- **See it working.** Answers that drew on memory show "N memories used"; click to see which ones.
+- **Asks only when it really can't tell.** If two memories truly disagree, a small panel in the corner asks which to keep, at most about once a day, and never interrupts your typing.
+
+**Improved**
+
+- **Settings → Memory is now a record.** "Needs your check" and "Recently learned" sit on top, each line can be undone, and you can see the words a memory came from. "Use what naby learns right away" turns all of this off.
+
+Memories learned from web pages or other outside content still wait for your confirmation.
+
+### ko
+
+나비가 배운 것을 기억마다 확인받지 않고 바로 써요.
+
+**새로 생긴 것**
+
+- **기억이 바로 적용돼요.** 나비에게 기억하라고 하면 채팅에 "기억했어요 · 취소"가 보여요. 세션 모델이 백그라운드에서 한 번 검수한 뒤 다음 턴부터 쓰여요.
+- **기억을 스스로 정리해요.** 뜻으로 비교해서 중복을 합치고 낡은 내용을 바꿔요. 지우지는 않아서 설정 → 기억에서 되돌릴 수 있어요.
+- **반영되는 걸 볼 수 있어요.** 기억을 쓴 답변 아래에 "기억 N개 반영"이 나오고, 누르면 어떤 기억인지 보여요.
+- **정말 애매할 때만 물어요.** 기억 둘이 실제로 어긋나면 화면 구석의 작은 패널로 어느 쪽을 남길지 물어요. 하루 한 번 정도만 뜨고, 입력을 방해하지 않아요.
+
+**나아진 것**
+
+- **설정 → 기억이 기록 화면이 됐어요.** 맨 위에 "확인이 필요한 것"과 "최근 배운 것"이 있고, 줄마다 되돌릴 수 있어요. 기억의 근거가 된 말도 볼 수 있어요. "배운 것을 바로 쓰기"를 끄면 예전처럼 동작해요.
+
+웹 페이지 같은 외부 내용에서 배운 것은 지금처럼 확인을 받아요.
+
 ## 1.48.13 — 2026-11-05
 
 ### en

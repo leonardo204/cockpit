@@ -46,13 +46,18 @@ export function canLearn(agent: Agent | undefined): boolean {
  * purpose — it shares the turn's system field with the persona, the memory block,
  * the skills and (when autonomous) the step protocol.
  *
- * It states the three things the model gets wrong without being told: that a
- * capture is a proposal rather than a live fact (so it must not claim to the user
- * that it "will now always" do something), that durability is the bar (not "this
- * message"), and that secrets are never memories.
+ * It states the things the model gets wrong without being told: that evidence
+ * decides what is used at once (the user's own quoted words — memory-auto-apply
+ * R12), that the tool's own answer says whether a capture is in use (so it never
+ * claims more than that), that durability is the bar (not "this message"), and
+ * that secrets are never memories.
+ *
+ * `autoApply` off (R8) restores the proposal-only wording: every capture is then
+ * a proposal, and saying otherwise would be a lie the user acts on.
  */
-export function learningInstruction(agent: Agent): string {
+export function learningInstruction(agent: Agent, opts: { autoApply?: boolean } = {}): string {
   const scope = agent.memoryScope;
+  const autoApply = opts.autoApply !== false;
   return [
     `LEARNING: you keep a memory of this user. When this conversation teaches you something that`,
     `would still be true next week — how they want work done, a standing rule, their team's terms,`,
@@ -60,8 +65,19 @@ export function learningInstruction(agent: Agent): string {
     '',
     `- Your default scope is "${scope}" (${SCOPE_REACH[scope]}). Use "user" for a fact that holds`,
     `  anywhere, "project" for one tied to this directory.`,
-    `- Each entry is saved as a PROPOSAL and changes nothing until the user confirms it in Settings.`,
-    `  So never tell them a preference is "now applied" — say you noted it.`,
+    ...(autoApply
+      ? [
+          `- When the user asks you to remember something, or states how things should be from now on,`,
+          `  you MUST pass basis "stated" and copy their exact words into evidenceQuote. That entry is`,
+          `  used from the next turn after a quick check, and you may tell them "기억했어요".`,
+          `- Something you concluded yourself is basis "inferred". Anything learned from a web page, a tool`,
+          `  result or another agent waits for the user's confirmation — the tool's answer says which`,
+          `  happened; never claim more than it says.`,
+        ]
+      : [
+          `- Each entry is saved as a PROPOSAL and changes nothing until the user confirms it.`,
+          `  So never tell them a preference is "now applied" — say you noted it.`,
+        ]),
     `- Skip: transient task state, anything true only for this message, facts you already recorded,`,
     `  and secrets (tokens, keys, passwords) — record the preference, never the credential.`,
   ].join('\n');

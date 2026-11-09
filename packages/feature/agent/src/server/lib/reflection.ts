@@ -23,10 +23,13 @@
 //     `proposed`/`artifact` memory through the ordinary `putMemory` gate. A
 //     refused write is counted and the sweep carries on; reflection gets no more
 //     latitude than a `naby_remember` call the user watched happen.
-//   * CONSOLIDATION, once at the end. If (and only if) the user opted in, a
-//     `proposed` row that distinct sessions keep agreeing with is confirmed. It
-//     rides the end of the sweep rather than a timer of its own, for the reason
-//     §4.3 gives about the sweep itself.
+//   * CONSOLIDATION, once at the end. Since memory-auto-apply this is no longer
+//     the corroboration opt-in (`memory.autoConfirmCorroborated` is gone, R8):
+//     proposals go through the model review instead (§2a, R21), and the end of
+//     the sweep carries the TIDY pass over the backlog (§4, R14) — both on the
+//     model of the turn that kicked the sweep (R38). It rides the end of the
+//     sweep rather than a timer of its own, for the reason §4.3 gives about the
+//     sweep itself.
 //
 // WHY IT RIDES ON A TURN AND NOT ON A TIMER (§4.3). A background daemon in a
 // desktop app is a process that keeps spending the user's money while they are not
@@ -65,7 +68,6 @@ import {
   ClaudeAgentSdkEngine,
   collectReflectionUserMessages,
   computeStyleFingerprint,
-  CORROBORATION_THRESHOLD,
   DEFAULT_USER_ID,
   isClaudeAgentSdkAvailable,
   isSessionDueForReflection,
@@ -86,9 +88,9 @@ import {
   readSettings,
   resolveMemoryScopeKey,
   resolveProviderCredential,
+  sameMemoryValue,
   serializeStyleFingerprint,
   toSelectOptions,
-  shouldAutoConfirmMemory,
   staleReviewCutoff,
   shouldExtractMemoryOnly,
   STYLE_FINGERPRINT_KEY,
@@ -117,6 +119,15 @@ import {
   type StyleFingerprint,
   type ValidatedMemoryCandidate,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import {
+  readAutoApplySetting,
+  runMemoryTidy,
+  runTurnMemoryReview,
+  type MemoryReviewer,
+  type MemoryReviewResult,
+  type MemoryReviewStore,
+  type MemoryTidyResult,
+} from './memoryReview';
 
 /** The narrow slice of the store the sweep needs. Same trick as
  *  `GrowthLedgerStore`: a test can hand this a plain object instead of a whole
@@ -169,26 +180,16 @@ export interface ReflectionStore {
   setSetting(key: string, value: string): void;
 }
 
-/** The opt-in that lets consolidation confirm a corroborated proposal without a
- *  person (spec §5.4). Absent reads as OFF: silent promotion of memory is not
- *  something to opt someone out of after the fact. */
+/** The OLD corroboration opt-in (P3-M8b §5.4). REMOVED by memory-auto-apply R8:
+ *  a value still stored under it is never read. Named here only so the removal
+ *  is findable. */
 export const MEMORY_AUTO_CONFIRM_KEY = 'memory.autoConfirmCorroborated';
 
-/** Read the opt-in. `'true'` and nothing else means on — the same 'true'/'false'
- *  spelling the telegram and gate settings already use. */
-export function readAutoConfirmSetting(store: Pick<ReflectionStore, 'getSetting'>): boolean {
-  return (store.getSetting(MEMORY_AUTO_CONFIRM_KEY) ?? 'false') === 'true';
-}
-
-/** Write the opt-in. */
-export function writeAutoConfirmSetting(
-  store: { setSetting(key: string, value: string): void },
-  enabled: boolean,
-): void {
-  store.setSetting(MEMORY_AUTO_CONFIRM_KEY, enabled ? 'true' : 'false');
-}
-
 export type ReflectionSweepOptions = {
+  /** The model the review and tidy calls run on — the turn that kicked the sweep
+   *  (memory-auto-apply R38). Absent = neither runs; proposals simply wait for
+   *  the next turn's review (R42). */
+  reviewer?: MemoryReviewer;
   /** The session currently being typed in — never reflected on (§4.3). */
   excludeSessionId?: string;
   /** Max sessions this sweep may process. Defaults to REFLECTION_SWEEP_CAP. */
@@ -218,8 +219,13 @@ export type ReflectionSweepResult = {
    *  silent refusal is indistinguishable from a judge that proposed nothing. */
   droppedCandidates: number;
   /** Proposals the consolidation step confirmed on corroboration (P3-M8b §5.4).
-   *  Always 0 while the opt-in setting is off. */
+   *  ALWAYS 0 since memory-auto-apply removed that path (R8); kept so the
+   *  `reflection.run` answer and the activity log keep their shape. */
   autoConfirmed: number;
+  /** memory-auto-apply R21/R37: the review of this sweep's proposals. */
+  review?: MemoryReviewResult;
+  /** memory-auto-apply §4: the tidy pass over the backlog. */
+  tidy?: MemoryTidyResult;
   /**
    * Confirmed memories nobody has used in `MEMORY_DECAY_REVIEW_MS` (P3-M10 §2.2)
    * — the size of the stale-review queue as of this sweep.
@@ -363,6 +369,12 @@ export async function runReflectionSweep(
   } catch {
     console.warn('[reflection] learning setting unreadable — proposing no memory this sweep');
   }
+  // memory-auto-apply (R8, R21): with the switch on, a proposal is written
+  // review-pending and the REVIEW relates it to what is already remembered — by
+  // meaning, over the whole scope. The P3-M13a lexical relation task is then
+  // redundant and is not asked (no existing rows are sent to the judge). With
+  // the switch off, the sweep is exactly what it was.
+  const autoApply = learningEnabled && readAutoApplySetting(store);
 
   let sessions: SessionRef[];
   try {
@@ -449,9 +461,8 @@ export async function runReflectionSweep(
       // A read failure is not fatal: with no existing rows the relation task is
       // simply dropped and every proposal is an ADD, which is exactly the
       // pre-M13a behaviour.
-      const existingMemories = learningEnabled
-        ? readExistingMemories(store, session.sessionId, session.cwd)
-        : [];
+      const existingMemories =
+        learningEnabled && !autoApply ? readExistingMemories(store, session.sessionId, session.cwd) : [];
       const context: ReflectionSessionContext = {
         sessionId: session.sessionId,
         ...(session.cwd ? { cwd: session.cwd } : {}),
@@ -512,7 +523,7 @@ export async function runReflectionSweep(
           hasCwd: Boolean(context.cwd),
         });
         result.droppedCandidates += dropped;
-        proposeMemories(store, kept, context, relations, result);
+        proposeMemories(store, kept, context, relations, result, autoApply);
 
         // P3-M13c (§3.3): style preferences travel the SAME path — they are
         // ordinary `procedural`/`user` memory with a namespaced key, so they go
@@ -522,7 +533,7 @@ export async function runReflectionSweep(
         const styles = validateStyleCandidates(answer.styles ?? [], userMessages);
         result.droppedCandidates += styles.dropped;
         const beforeStyles = result.proposedMemories;
-        proposeMemories(store, styles.kept, context, relations, result);
+        proposeMemories(store, styles.kept, context, relations, result, autoApply);
         result.proposedStyles += result.proposedMemories - beforeStyles;
 
         // And the deterministic half: the user's own words, banked for the one
@@ -560,6 +571,16 @@ export async function runReflectionSweep(
   // sessions read in the SAME sweep is promoted in that sweep rather than
   // waiting for the next one.
   consolidateMemory(store, result, now);
+
+  // memory-auto-apply: the REVIEW of what this sweep proposed (R21, R37) and
+  // the TIDY pass over the backlog (§4, R14), on the kicking turn's model (R38).
+  // Both never throw, both change nothing without a model (R22, R42). With
+  // learning off the sweep proposed nothing and tidying is left for later too:
+  // the switch means "leave my memory alone", which is the cautious reading.
+  if (autoApply && opts.reviewer && supportsMemoryReview(store)) {
+    result.review = await runTurnMemoryReview(store, opts.reviewer, { now });
+    result.tidy = await runMemoryTidy(store, opts.reviewer, { now });
+  }
 
   // THE STYLE FINGERPRINT IS NO LONGER LEARNED, and the removal is the point
   // rather than a cleanup.
@@ -634,7 +655,12 @@ function proposeMemories(
   context: ReflectionSessionContext,
   relations: PairRelationLookup,
   result: ReflectionSweepResult,
+  autoApply = false,
 ): void {
+  if (autoApply) {
+    proposeForReview(store, kept, context, result);
+    return;
+  }
   for (const candidate of kept) {
     // Scope → key is a runtime contract fact, so it is resolved by the runtime's
     // own resolver — the same one `naby_remember` uses — rather than by a second
@@ -698,6 +724,98 @@ function proposeMemories(
       if (op.op === 'add' && op.supersedes) result.supersessionsReserved += 1;
     } catch (e) {
       // A memory-gate deny. Counted, logged, and stepped over.
+      result.droppedCandidates += 1;
+      console.warn(
+        `[reflection] proposal "${candidate.key}" refused: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+}
+
+/** Does this store carry the review surface (memory-auto-apply)? The production
+ *  store always does; a test's narrow fake may not, and then nothing is reviewed. */
+function supportsMemoryReview(store: ReflectionStore): store is ReflectionStore & MemoryReviewStore {
+  const s = store as Partial<MemoryReviewStore>;
+  return (
+    typeof s.listPendingReviewMemory === 'function' &&
+    typeof s.listUnreviewedMemory === 'function' &&
+    typeof s.settleMemoryReview === 'function'
+  );
+}
+
+/**
+ * The memory-auto-apply write of a reflection proposal (R21): `proposed` +
+ * review-pending, `artifact` tier, `inferred`, with the quote the validator just
+ * found in the user's own words (R2) — so it clears the evidence rule's row 2 by
+ * construction, and the review after the sweep decides what it does.
+ *
+ * The same two guards `naby_remember` has, so a background pass cannot destroy
+ * what a review has not looked at: an exact restatement of a row in use only
+ * corroborates it, and a different value at a key in use goes to a fresh key
+ * beside it (the review then refines, supersedes, or asks — R18/R21).
+ */
+function proposeForReview(
+  store: ReflectionStore,
+  kept: readonly ValidatedMemoryCandidate[],
+  context: ReflectionSessionContext,
+  result: ReflectionSweepResult,
+): void {
+  for (const candidate of kept) {
+    const scopeKey = resolveMemoryScopeKey(candidate.scope, {
+      sessionId: context.sessionId,
+      ...(context.cwd ? { cwd: context.cwd } : {}),
+      userId: DEFAULT_USER_ID,
+    });
+    if (!scopeKey) {
+      result.droppedCandidates += 1;
+      continue;
+    }
+    const createdFrom = `${context.sessionId}:${candidate.evidenceSeq}`;
+    let rows: MemoryItem[] = [];
+    try {
+      rows = store.getScopedMemory(candidate.scope, scopeKey);
+    } catch {
+      rows = [];
+    }
+    const inUse = (key: string): MemoryItem | undefined =>
+      rows.find((m) => m.key === key && m.supersededAt === undefined && m.status === 'confirmed');
+    const current = inUse(candidate.key);
+    if (current && sameMemoryValue(current.value, candidate.value)) {
+      if (store.corroborateMemory(current.id, context.sessionId, { createdFrom })) result.consolidatedNoops += 1;
+      continue;
+    }
+    let key = candidate.key;
+    if (current) {
+      for (let n = 2; n <= 9; n += 1) {
+        const next = `${candidate.key}-${n}`.slice(0, 64);
+        if (!inUse(next)) {
+          key = next;
+          break;
+        }
+      }
+    }
+    try {
+      store.putMemory({
+        scope: candidate.scope,
+        scopeKey,
+        type: candidate.type,
+        key,
+        value: candidate.value,
+        volatility: candidate.volatility,
+        provenance: {
+          source: 'artifact',
+          sessionId: context.sessionId,
+          basis: 'observed in session reflection',
+          createdFrom,
+          evidenceQuote: candidate.evidenceQuote,
+          basisKind: 'inferred',
+        },
+        confidence: REFLECTION_CONFIDENCE,
+        requestedStatus: 'proposed',
+        reviewState: 'pending',
+      });
+      result.proposedMemories += 1;
+    } catch (e) {
       result.droppedCandidates += 1;
       console.warn(
         `[reflection] proposal "${candidate.key}" refused: ${e instanceof Error ? e.message : String(e)}`,
@@ -860,11 +978,12 @@ function updateStyleFingerprint(
 }
 
 /**
- * Promote `proposed` rows that enough DISTINCT sessions keep agreeing with
- * (§5.4). Opt-in, off by default, and never applied to `external`-origin memory
- * whatever the setting says — memory-contracts §4 invariant 1 reserves that path
- * for an explicit user action, and `shouldAutoConfirmMemory` is where all four
- * conditions are stated together.
+ * The end-of-sweep consolidation: the stale-review count (P3-M10 §2.2).
+ *
+ * THE CORROBORATION PROMOTION THAT USED TO FOLLOW IS GONE (memory-auto-apply R8).
+ * It confirmed a proposal three sessions agreed with, behind an opt-in nobody had
+ * on; the model review now confirms an eligible proposal after its first turn,
+ * and `memory.autoConfirmCorroborated` is never read again.
  *
  * NEVER THROWS. Consolidation is a tidy-up at the end of a background pass; a
  * store hiccup here must not turn a successful sweep into a failed one.
@@ -876,8 +995,7 @@ function consolidateMemory(
 ): void {
   // -- THE STALE-REVIEW DERIVATION (P3-M10 §2.2) ---------------------------
   //
-  // Runs FIRST, and unconditionally: it is independent of the auto-confirm
-  // opt-in below (which returns early when off) and it must not be skipped by it.
+  // Unconditional: it depends on no setting.
   //
   // IT WRITES NOTHING. No status change, no flag, no deletion — it counts the
   // confirmed rows whose last use is older than the review window so the sweep
@@ -905,41 +1023,6 @@ function consolidateMemory(
   } catch (e) {
     console.warn(
       `[reflection] stale review skipped: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  try {
-    const enabled = readAutoConfirmSetting(store);
-    // The read is skipped entirely while the opt-in is off, so the default costs
-    // one settings lookup per sweep and nothing else.
-    if (!enabled) return;
-
-    const candidates = store.listCorroboratedProposed(CORROBORATION_THRESHOLD);
-    if (candidates.length === 0) return;
-    const counts = store.getMemoryCorroboration(candidates.map((item) => item.id));
-
-    for (const item of candidates) {
-      const corroboration = counts[item.id] ?? 0;
-      // `shouldAutoConfirmMemory` is where ALL the conditions live, including
-      // P3-M13c's: a `style/global/*` row is never promoted by corroboration
-      // however many sessions agree, because a change to the agent's global tone
-      // is the adaptation a user is least likely to notice happening.
-      if (!shouldAutoConfirmMemory(item, corroboration, { enabled })) continue;
-      store.confirmMemory(item.id);
-      result.autoConfirmed += 1;
-      // AND ONLY NOW may this row retire the one it contradicted (§3.1). The
-      // reservation has been sitting on it since it was proposed and has changed
-      // nothing; confirmation is what activates it.
-      if (activateSupersession(store, item.id, now)) result.supersessionsActivated += 1;
-      // Logged per promotion, by name and by evidence: a row that starts shaping
-      // answers without anyone clicking anything has to be findable afterwards.
-      console.log(
-        `[reflection] auto-confirmed memory "${item.key}" (${item.scope}) — corroborated by ${corroboration} sessions`,
-      );
-    }
-  } catch (e) {
-    console.warn(
-      `[reflection] consolidation skipped: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
 }

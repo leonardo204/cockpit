@@ -81,6 +81,8 @@ export interface ChatMessage {
    *  bubble's creation time: on a four-minute turn the two are four minutes
    *  apart, and the user is asking when the answer ARRIVED. */
   completedAt?: string;
+  /** The memories injected into this turn (memory-auto-apply R13). */
+  memoryIds?: string[];
   /** WHAT HAPPENED IN WHAT ORDER — text runs and tool-call runs, in the order
    *  the rows were written. Built with the SAME pure helpers the live reducer
    *  uses (`shared/turnSegments.ts`), so a reloaded turn renders as the
@@ -251,7 +253,14 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
       // the turn ended (Store.stampTurnEnd). Kept in one place so the merge
       // branch below and the new-bubble branch cannot drift.
       const turn = m.turn
-        ? { durationMs: m.turn.durationMs, completedAt: new Date(m.turn.endedAt).toISOString() }
+        ? {
+            durationMs: m.turn.durationMs,
+            completedAt: new Date(m.turn.endedAt).toISOString(),
+            // memory-auto-apply R13: the memories the answer was given.
+            ...(Array.isArray(m.turn.memoryIds) && m.turn.memoryIds.length > 0
+              ? { memoryIds: [...m.turn.memoryIds] }
+              : {}),
+          }
         : undefined;
       const previous = out[out.length - 1];
       const isToolCallOnly = m.content.trim() === '' && toolCalls.length > 0;

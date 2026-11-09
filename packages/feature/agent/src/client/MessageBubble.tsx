@@ -13,6 +13,7 @@ import { NabyAvatar, Portal, toast } from '@cockpit/shared-ui';
 import { MessageCircleQuestion, Circle, Loader, CheckCircle2, ChevronDown, ChevronRight, RotateCw, Pencil } from 'lucide-react';
 import { setComposerText } from './fileRefBus';
 import { ToolCallModal } from './ToolCallModal';
+import { MemoryUsedLine } from './MemoryUsedLine';
 import { SubagentBlock } from './SubagentBlock';
 import { BackgroundJobBlock } from './BackgroundJobBlock';
 import { groupSubagentCalls } from './subagentGroups';
@@ -1100,6 +1101,10 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
               <span>{t('chat.viewQuestions')}</span>
             </button>
           </div>
+        )}
+        {/* What this answer was given from memory (memory-auto-apply R13). */}
+        {!isUser && !message.isStreaming && message.memoryIds && message.memoryIds.length > 0 && (
+          <MemoryUsedLine ids={message.memoryIds} />
         )}
         {/* The turn's closing line: how long it took and when it finished.
             Last, because it is the one thing that is only true once everything

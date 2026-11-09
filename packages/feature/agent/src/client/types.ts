@@ -115,6 +115,9 @@ export interface ChatMessage {
    *  engine's own reading at the same instant as `durationMs`, so the pair can
    *  never disagree. */
   completedAt?: string;
+  /** The memories injected into this turn, by id (memory-auto-apply R13) — the
+   *  "기억 N개 반영" line under the answer. Absent = none (or an older turn). */
+  memoryIds?: string[];
   // Set on role:'system' rows — a harness event rendered as a muted one-line bar
   // (not a conversation bubble). `task-notification` shows the <summary> line;
   // `meta` covers skill image annotations / compact-summary notices.

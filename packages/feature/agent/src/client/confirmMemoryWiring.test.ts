@@ -19,11 +19,14 @@ import ko from '../../../../shared/i18n/locales/ko.json';
 
 const HERE = __dirname;
 const MODAL = readFileSync(join(HERE, 'ToolCallModal.tsx'), 'utf8');
+const CHIP = readFileSync(join(HERE, 'MemoryWriteChip.tsx'), 'utf8');
 const MAPPER = readFileSync(
   join(HERE, '../server/api/session/toChatMessages.ts'),
   'utf8',
 );
-const chat = (d: unknown) => (d as { chat: Record<string, string> }).chat;
+const REDUCER = readFileSync(join(HERE, 'applyStreamEvent.ts'), 'utf8');
+const chat = (d: unknown) => (d as { chat: Record<string, unknown> }).chat;
+const chip = (d: unknown) => (chat(d).memoryChip ?? {}) as Record<string, string>;
 
 describe('the structured half of a tool result reaches the transcript', () => {
   it('is carried through the mapper, not dropped', () => {
@@ -33,47 +36,61 @@ describe('the structured half of a tool result reaches the transcript', () => {
     expect(MAPPER).toContain('if (m.output?.data !== undefined) toolData.set(m.toolCallId, m.output.data)');
     expect(MAPPER).toContain('resultData: toolData.get(tc.toolCallId)');
   });
+
+  it('rides the live stream too, so the chip appears with the call (memory-auto-apply R10)', () => {
+    expect(REDUCER).toContain('resultData: data');
+  });
 });
 
-describe('the offer', () => {
-  it('goes through the tested rule rather than sniffing the row inline', () => {
-    expect(MODAL).toContain('pendingMemoryOf(toolCall.name, toolCall.resultData)');
+describe('the chip (memory-auto-apply §3)', () => {
+  it('goes through the tested rules rather than sniffing the row inline', () => {
+    expect(MODAL).toContain('memoryWriteOf(toolCall.name, toolCall.resultData)');
+    expect(CHIP).toContain('memoryChipView(write, status)');
   });
 
   it('is visible without expanding the row', () => {
-    // An offer nobody sees is a settings screen with extra steps. It sits
-    // OUTSIDE the `expanded &&` block.
-    const offer = /\{pending && \([\s\S]*?\n          \)\}/.exec(MODAL)?.[0];
-    expect(offer, 'the offer is gone — did the row change?').toBeDefined();
-    expect(MODAL.indexOf('{pending && (')).toBeLessThan(
-      MODAL.indexOf('{expanded && !toolCall.isLoading && ('),
-    );
+    // An offer — or an undo — nobody sees is a settings screen with extra steps.
+    // It sits OUTSIDE the `expanded &&` detail block.
+    const at = MODAL.indexOf('{memoryWrite && <MemoryWriteChip write={memoryWrite} />}');
+    expect(at, 'the chip is gone — did the row change?').toBeGreaterThan(-1);
+    expect(at).toBeLessThan(MODAL.indexOf('{expanded && ('));
   });
 
-  it('disappears once it has been taken', () => {
-    // Asking again for agreement already given is a button that does nothing.
-    expect(MODAL).toContain('const pending = confirmed ? null : pendingMemoryOf(');
+  it('asks the server what became of the memory, and stops asking once settled', () => {
+    expect(CHIP).toContain("action: 'reviewStatus', ids: [write.id]");
+    expect(CHIP).toMatch(/stillPending && polls\.current < POLL_MAX/);
+  });
+
+  it('undoes through the memory route (R10)', () => {
+    expect(CHIP).toContain("action: 'cancel', id: write.id");
+    expect(CHIP).toContain('data-testid="memory-chip-cancel"');
   });
 });
 
-describe('who is allowed to confirm', () => {
+describe('who is allowed to confirm a HELD memory (R11)', () => {
   it('goes through the same HTTP action the settings screen uses', () => {
     // `confirmMemory` is "the ONLY path external-origin memory becomes
     // confirmed… a threshold can never do it, only a user". A tool call is the
     // model, however faithfully it reports what the user just said — so the
     // click is the user, and it takes the user's own route.
-    expect(MODAL).toContain("body: JSON.stringify({ action: 'confirm', id: pending.id })");
-    expect(MODAL).toContain("fetch('/api/memory'");
+    expect(CHIP).toContain("action: 'confirm', id: write.id");
+    expect(CHIP).toContain("fetch('/api/memory'");
+    expect(CHIP).toContain('data-testid="confirm-memory"');
   });
 
   it('does not claim success it did not get', () => {
     // A failed confirm leaves the offer standing, because the memory is still
     // waiting.
-    expect(MODAL).toContain('if (res.ok) setConfirmed(true);');
+    expect(CHIP).toContain('if (ok) setConfirmed(true);');
   });
 
   it('cannot be fired twice while one is in flight', () => {
-    expect(MODAL).toContain('if (!pending || confirming) return;');
+    expect(CHIP).toContain('if (busy) return;');
+  });
+
+  it('says why it is held, in one line beside the button', () => {
+    expect(CHIP).toContain('data-testid="memory-hold-reason"');
+    expect(CHIP).toContain('`chat.memoryHold.${view.reason}`');
   });
 });
 
@@ -84,12 +101,24 @@ describe('what it says', () => {
       expect(chat(ko)[key], `ko: ${key}`).toBeTruthy();
       expect(chat(ko)[key]).not.toBe(chat(en)[key]);
     }
+    for (const key of ['pending', 'applied', 'known', 'changed', 'cancel', 'undone', 'question']) {
+      expect(chip(en)[key], `en: memoryChip.${key}`).toBeTruthy();
+      expect(chip(ko)[key], `ko: memoryChip.${key}`).toBeTruthy();
+    }
+  });
+
+  it('speaks the chat chips in the words the spec gives (memory-auto-apply R10)', () => {
+    expect(chip(ko).pending).toBe('기억하는 중…');
+    expect(chip(ko).applied).toBe('기억했어요: {{value}}');
+    expect(chip(ko).known).toBe('이미 알고 있어요');
+    expect(chip(ko).changed).toBe('기억을 바꿨어요: {{old}} → {{new}}');
+    expect(chip(ko).cancel).toBe('취소');
   });
 
   it('says what agreeing actually buys', () => {
     // The reason to press it is not "save a note" — it is that a thing the user
     // agreed to outranks a thing naby inferred. The hint says so.
-    expect(chat(en).confirmMemoryHint).toContain('outrank');
-    expect(chat(ko).confirmMemoryHint).toContain('우선');
+    expect(String(chat(en).confirmMemoryHint)).toContain('outrank');
+    expect(String(chat(ko).confirmMemoryHint)).toContain('우선');
   });
 });

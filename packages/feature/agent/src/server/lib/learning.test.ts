@@ -51,15 +51,29 @@ describe('learning — the injected instruction', () => {
     expect(text).toContain('this working directory only');
   });
 
-  it('states the three things a model gets wrong unprompted', () => {
+  it('states the things a model gets wrong unprompted (memory-auto-apply R12)', () => {
     const text = learningInstruction(agent());
-    // (1) a capture is a proposal, not a live fact
+    // (1) a stated instruction carries basis + the user's exact words, and is
+    // then in use — the model may say so
+    expect(text).toMatch(/basis "stated"/);
+    expect(text).toMatch(/evidenceQuote/);
+    expect(text).toContain('기억했어요');
+    // (2) outside content still waits, and the tool's answer is the authority
+    expect(text).toMatch(/web page/);
+    expect(text).toMatch(/never claim more than it says/);
+    // (3) durability is the bar
+    expect(text).toMatch(/still be true next week/);
+    // (4) never store credentials
+    expect(text).toMatch(/secrets|credential/);
+    // The proposal-only promise is gone while the switch is on.
+    expect(text).not.toMatch(/PROPOSAL/);
+  });
+
+  it('with memory.autoApply off, says every capture is a proposal (R8)', () => {
+    const text = learningInstruction(agent(), { autoApply: false });
     expect(text).toMatch(/PROPOSAL/);
     expect(text).toMatch(/now applied/);
-    // (2) durability is the bar
-    expect(text).toMatch(/still be true next week/);
-    // (3) never store credentials
-    expect(text).toMatch(/secrets|credential/);
+    expect(text).not.toContain('기억했어요');
   });
 
   it('reads the scope off the agent, not a constant', () => {

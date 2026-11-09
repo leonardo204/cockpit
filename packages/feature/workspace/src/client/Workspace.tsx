@@ -21,6 +21,7 @@ import { NabyOnboardingWizard } from './NabyProviderSetup';
 // when the version actually went up for THIS installation; null in every other
 // case, including a fresh install and the browser dev server.
 import { WhatsNewGate } from './WhatsNewModal';
+import { MemoryQuestionPopup } from './MemoryQuestionPopup';
 import { TokenStatsModal } from '@cockpit/feature-agent';
 import { NoteModal } from './NoteModal';
 import { SessionCompleteToastContainer, showSessionCompleteToast, OrgUpdateToast } from '@cockpit/feature-agent';
@@ -139,6 +140,10 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
   const initialSessionIdsRef = useRef<Map<string, { sessionId: string; switchToAgent?: boolean }>>(new Map());
   // Track the current sessionId per project (used for URL updates, not iframe src)
   const projectSessionIdsRef = useRef<Map<string, string>>(new Map());
+  // memory-auto-apply R27: the folded question's dot, and the click that re-opens it.
+  const [memoryQuestionDot, setMemoryQuestionDot] = useState(false);
+  const [memoryQuestionReopen, setMemoryQuestionReopen] = useState(0);
+  const reopenMemoryQuestion = useCallback(() => setMemoryQuestionReopen((n) => n + 1), []);
   // Project index saved before screenshot; restored when screenshot completes
   const preScreenshotIndexRef = useRef<number | null>(null);
 
@@ -783,6 +788,8 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
       {projectFolderMenu}
       {/* Left project list */}
       <ProjectSidebar
+        memoryQuestionDot={memoryQuestionDot}
+        onMemoryQuestionDot={reopenMemoryQuestion}
         projects={projects}
         activeIndex={activeIndex}
         collapsed={collapsed}
@@ -934,6 +941,20 @@ export function Workspace({ initialCwd, initialSessionId }: WorkspaceProps) {
           under it (z-50 vs z-[60]); it also waits for onboarding to be finished
           before it shows anything, so a new user never gets both. */}
       <WhatsNewGate />
+
+      {/* memory-auto-apply §5: the occasional question about two memories that
+          disagree. Non-modal, bottom-right, z-40 — under the overlays above,
+          over the project iframes — and never in the transcript. */}
+      <MemoryQuestionPopup
+        activeCwd={projects[activeIndex]?.cwd}
+        activeSessionId={
+          projects[activeIndex]?.cwd
+            ? projectSessionIdsRef.current.get(projects[activeIndex].cwd)
+            : undefined
+        }
+        onDotChange={setMemoryQuestionDot}
+        reopenSignal={memoryQuestionReopen}
+      />
     </div>
   );
 }

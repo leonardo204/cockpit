@@ -113,6 +113,11 @@ import {
   NO_ENGINE_DEV_HINT,
   parseStyleFingerprint,
   readLearningEnabled,
+  // memory-auto-apply §2: the one "did outside content enter this turn"
+  // predicate (R4), and the user's own messages the quote check reads (R2).
+  isExternalContentTool,
+  collectReflectionUserMessages,
+  type HarnessUserOrigin,
   renderStyleFingerprintLine,
   renderVoiceLanguageLine,
   STYLE_FINGERPRINT_KEY,
@@ -236,6 +241,14 @@ import {
 import { ensureOrgHarnessQuitHandler, makeOrgTurnHooks, orgHookContextBlock } from '../lib/orgHarnessHooks';
 import { unclaimedLineLedVerbs } from '../lib/slashCommands';
 import { kickReflectionSweep } from '../lib/reflection';
+import {
+  engineReviewer,
+  kickMemoryReview,
+  migrateWaitingProposals,
+  readAutoApplySetting,
+  resolveSessionReviewBackend,
+  type MemoryReviewer,
+} from '../lib/memoryReview';
 import {
   closeRecommendationsOnDecline,
   closeRecommendationsOnJoin,
@@ -649,6 +662,13 @@ export interface NabyEngineDeps {
    * that covers the wiring injects a recorder here.
    */
   recommendationSweep?: (store: Store, opts: { sessionId: string }) => void;
+  /**
+   * The memory review's model (memory-auto-apply §2a). Production leaves it unset
+   * and reviews on the turn's own backend (R38). DEFAULTS TO NONE on the two test
+   * seams — a review call would consume the scripted model's answers — so a test
+   * that covers the review injects a deterministic reviewer here.
+   */
+  memoryReviewer?: MemoryReviewer;
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +760,18 @@ export function toRateLimitRunEvent(
       ...(ev.surpassedThreshold !== undefined ? { surpassedThreshold: ev.surpassedThreshold } : {}),
     },
   };
+}
+
+/**
+ * Which harness wrote a turn's prompt, from the turn's `source` (memory-auto-apply
+ * R2). `chat` and `telegram` are the user typing — Telegram counts as user input —
+ * so they have none.
+ */
+export function harnessOriginOf(source: string): HarnessUserOrigin | undefined {
+  if (source === 'scheduled') return 'scheduled';
+  if (source === JOB_REPORT_SOURCE) return 'job-report';
+  if (source === 'kickoff') return 'kickoff';
+  return undefined;
 }
 
 export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
@@ -886,15 +918,31 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
          * the convenience, so a store fault costs the reload's number and not the
          * answer.
          */
-        const measureTurn = (): { duration_ms: number; ended_at: number } => {
+        // memory-auto-apply: the ids injected across this run's steps (R13), and
+        // whether outside content has entered the run yet (R4) — set by the event
+        // translation on every tool request, read by `naby_remember` at call time.
+        const turnMemoryIds = new Set<string>();
+        const turnExternal = { seen: false };
+        const measureTurn = (): { duration_ms: number; ended_at: number; memory_ids?: string[] } => {
           const endedAt = Date.now();
-          const turn: TurnStats = { durationMs: endedAt - startedAt, endedAt };
+          // memory-auto-apply R13: the memories this turn's answer was given,
+          // stamped with the turn so a reloaded transcript still says "N used".
+          const memoryIds = [...turnMemoryIds];
+          const turn: TurnStats = {
+            durationMs: endedAt - startedAt,
+            endedAt,
+            ...(memoryIds.length > 0 ? { memoryIds } : {}),
+          };
           try {
             store.stampTurnEnd(sessionId, turn);
           } catch (e) {
             console.log(`[engine:naby] turn stamp failed: ${e instanceof Error ? e.message : String(e)}`);
           }
-          return { duration_ms: turn.durationMs, ended_at: endedAt };
+          return {
+            duration_ms: turn.durationMs,
+            ended_at: endedAt,
+            ...(memoryIds.length > 0 ? { memory_ids: memoryIds } : {}),
+          };
         };
 
         // ---- may this turn LEARN? (Phase 3, P3-M10 — memory-hygiene §3) ----
@@ -928,6 +976,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             `[engine:naby] learning: OFF (${sessionNoLearn ? 'temporary session' : 'memory.learningEnabled=false'})`,
           );
         }
+        // memory-auto-apply R8: read per turn like the switches above, so turning
+        // it off lands on the very next write. And the one-time move of waiting
+        // proposals into review (R33/R34) — a single settings read once done.
+        const autoApply = readAutoApplySetting(store);
+        if (autoApply) migrateWaitingProposals(store);
 
         // ---- session reflection, fire-and-forget (Phase 3, P3-M8a) ---------
         //
@@ -944,7 +997,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // `modelReflectionJudge(store)` (see `kickReflectionSweep`), so the sweep's
         // model call is billed to the provider this user picked — the same one
         // `resolveMeteredProvider` resolves for the turn below.
-        kickReflectionSweep(store, { excludeSessionId: sessionId });
+        //
+        // memory-auto-apply: KICKED BELOW, once the engine is chosen — the review
+        // and tidy calls at the end of the sweep run on THIS turn's model (R38),
+        // which is not known until then.
 
         const requestedModel =
           typeof ctx.params.model === 'string' ? ctx.params.model : undefined;
@@ -1007,6 +1063,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         let providerId = 'injected';
         let engineId = 'ai-sdk';
         let costBasis: 'metered' | 'subscription' = 'metered';
+        // memory-auto-apply R38: how to build ANOTHER engine on exactly this
+        // turn's backend, for the review calls that run after (or beside) it. Left
+        // undefined on the two test seams, where a review would eat the scripted
+        // model's answers — those inject `deps.memoryReviewer` instead.
+        let reviewEngineFactory: (() => Engine) | undefined;
 
         if (deps.devClaudeEngine) {
           // The M4 spike seam (see `NabyEngineDeps.devClaudeEngine`): the
@@ -1072,6 +1133,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // which is why the select action discloses `appliesNextTurn` instead of
             // refusing. Nothing downstream re-reads the store for the account.
             claudeAccountId = activeClaudeAccountId(store);
+            const accountForReview = claudeAccountId;
+            reviewEngineFactory = () =>
+              new ClaudeAgentSdkEngine(accountForReview ? { accountId: accountForReview } : {});
             engine = new ClaudeAgentSdkEngine(
               claudeAccountId ? { accountId: claudeAccountId } : {},
             );
@@ -1153,6 +1217,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // the same treatment the Claude dev engine gets.
             costBasis = 'subscription';
             const base = makeModelResolver([profile], () => ({ kind: 'chatgpt-oauth', source }));
+            reviewEngineFactory = () =>
+              new AiSdkEngine({ resolveModel: (selectionArg) => base(selectionArg.providerId, selectionArg.model) });
             engine = new AiSdkEngine({
               resolveModel: (selectionArg) => base(selectionArg.providerId, selectionArg.model),
             });
@@ -1194,11 +1260,60 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             const base = makeModelResolver([profile], () => apiKeyCredential(apiKey));
             // Our ModelResolver takes a ModelSelection; makeModelResolver's
             // signature is (providerId, model?). Bridge the two.
+            reviewEngineFactory = () =>
+              new AiSdkEngine({ resolveModel: (selectionArg) => base(selectionArg.providerId, selectionArg.model) });
             engine = new AiSdkEngine({
               resolveModel: (selectionArg) => base(selectionArg.providerId, selectionArg.model),
             });
           }
         }
+
+        // ---- the memory reviewer: THIS turn's provider and model (R38) -----
+        //
+        // memory-auto-apply §2a. The review of what this turn (or the sweep it
+        // kicks) wrote runs on the backend the turn ran on — built from the same
+        // branch above, so a subscription turn reviews on the subscription, a key
+        // turn on that key, and nothing ever reaches for another provider's key.
+        // `reviewModel` is filled in by `nabyTurnOptions` with the model the turn
+        // actually sends (the routed agent's, or the router's) — read at CALL
+        // time, so the post-turn review uses it. Until then it is undefined,
+        // which an engine reads as "your own default"; nothing here reads
+        // `modelForEngine` eagerly (it is deliberately empty on an `auto` turn
+        // until the router runs, nabyAutoModel.test.ts).
+        let reviewModel: string | undefined;
+        const reviewEngineId = engineId;
+        const reviewProviderId = providerId;
+        const reviewAccountId = claudeAccountId;
+        const reviewFactory = reviewEngineFactory;
+        const sessionReviewer: MemoryReviewer | undefined =
+          deps.memoryReviewer ??
+          (reviewFactory
+            ? {
+                label: `${reviewEngineId} (${reviewProviderId})`,
+                async call(prompt) {
+                  const backend = await resolveSessionReviewBackend(
+                    {
+                      engineId: reviewEngineId,
+                      providerId: reviewProviderId,
+                      ...(reviewModel ? { model: reviewModel } : {}),
+                      ...(reviewAccountId ? { accountId: reviewAccountId } : {}),
+                    },
+                    { makeEngine: reviewFactory },
+                  );
+                  if (!backend) throw new Error('no backend for this session');
+                  return engineReviewer(backend).call(prompt);
+                },
+              }
+            : undefined);
+
+        // ---- session reflection, fire-and-forget (Phase 3, P3-M8a) — kicked
+        // HERE rather than at the top so the review and tidy calls at the end of
+        // the sweep run on this turn's model (memory-auto-apply R38). See the
+        // note above `requestedModel` for everything else about it.
+        kickReflectionSweep(store, {
+          excludeSessionId: sessionId,
+          ...(sessionReviewer ? { reviewer: sessionReviewer } : {}),
+        });
 
         // ---- @agent routing, resolved early (Phase 3, P3-M2) --------------
         //
@@ -1589,6 +1704,39 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 ...(projectCwd ? { cwd: projectCwd } : {}),
                 userId: DEFAULT_USER_ID,
                 defaultScope: growthSubject.memoryScope,
+                // memory-auto-apply §2: the evidence rule's inputs. Everything is
+                // read at CALL time — the external flag especially, which the
+                // event translation raises the moment an outside-content tool is
+                // requested (R4), and the user messages, which by then include
+                // this turn's own (runTurn appends it before the engine runs).
+                activation: {
+                  autoApply,
+                  externalTurn: () => turnExternal.seen,
+                  // Whole messages, the user's own only (`isUserAuthored`): a
+                  // harness row, another session's request and a hand-off never
+                  // count as something the user said (R2).
+                  userMessages: () =>
+                    collectReflectionUserMessages(store.getMessages(sessionId), {
+                      messageCap: Number.MAX_SAFE_INTEGER,
+                      cap: Number.MAX_SAFE_INTEGER,
+                      maxChars: Number.MAX_SAFE_INTEGER,
+                    }),
+                  getExisting: (scope, scopeKey, key) =>
+                    store.getScopedMemory(scope, scopeKey).find((m) => m.key === key),
+                  corroborate: (id) => store.corroborateMemory(id, sessionId),
+                  upgradeProvenance: (id, patch) => {
+                    store.patchMemoryProvenance(id, patch);
+                  },
+                  // R24 case 3: the refusal stands; the candidate becomes a
+                  // question for the user instead of disappearing.
+                  onOverwriteRefused: (existing, candidate) => {
+                    try {
+                      store.putMemoryQuestion({ kind: 'overwrite', aId: existing.id, candidate });
+                    } catch (e) {
+                      console.log(`[engine:naby] memory question not saved: ${e instanceof Error ? e.message : String(e)}`);
+                    }
+                  },
+                },
               }
             : undefined,
           checkinSink,
@@ -1756,6 +1904,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // participant never gets them (participantTurn's exclusion list), a
         // delegated run has them filtered out, and the gate refuses a subagent.
         const crossSessionTurn = isCrossSessionMeta(ctx.params.crossSession) ? ctx.params.crossSession : undefined;
+        // memory-auto-apply R4: a turn another session started IS outside
+        // content — its prompt is that session's words, or its answer.
+        if (crossSessionTurn) turnExternal.seen = true;
 
         // OTHER PROJECTS (cross-project-context). One guard per turn holds the
         // single access decision (R5) and raises the access card itself,
@@ -2327,7 +2478,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               ? stageInstruction(routedStage, stageProgressSummary(routedGrowth!))
               : undefined,
             autonomous ? autonomyInstruction(maxSteps) : undefined,
-            learns && growthSubject ? learningInstruction(growthSubject) : undefined,
+            learns && growthSubject ? learningInstruction(growthSubject, { autoApply }) : undefined,
             // The stage picks the WORDING only (checkinTurn.ts): the block never
             // names a stage, a number or anything that is counted.
             checksIn ? checkinInstruction(subjectGrowth?.stage) : undefined,
@@ -3238,6 +3389,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           toolUseId: string,
           content: string,
           isError: boolean,
+          data?: unknown,
         ): void => {
           ctx.emit({
             type: 'user',
@@ -3249,12 +3401,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   tool_use_id: toolUseId,
                   content,
                   is_error: isError,
+                  ...(data !== undefined ? { data } : {}),
                 },
               ],
             },
             session_id: sessionId,
           } satisfies RunEvent);
         };
+        // The `naby_remember` calls of this run, by id — whose results carry data.
+        const rememberCallIds = new Set<string>();
 
         try {
           // runTurn owns the history: it loads the session's prior messages
@@ -3376,6 +3531,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // gets to try something else rather than ending the run.
                   stepUsedTool = true;
                   stepTools.push(ev.toolName);
+                  // memory-auto-apply R4: from here on, this run has read
+                  // someone else's words. Raised on the REQUEST, not the result —
+                  // a parallel batch's `naby_remember` must not slip in first.
+                  if (isExternalContentTool(ev.toolName)) turnExternal.seen = true;
+                  if (ev.toolName === 'naby_remember' || ev.toolName.endsWith('__naby_remember')) {
+                    rememberCallIds.add(ev.toolCallId);
+                  }
                   // Remembered for PostToolUse, whose result event carries only
                   // the id (org-harness-sync §3.5).
                   if (orgHooks.enabled) {
@@ -3440,7 +3602,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 }
 
                 case 'tool_result': {
-                  emitToolResult(ev.toolCallId, ev.output.content, ev.isError);
+                  // memory-auto-apply R10: `naby_remember`'s structured half rides
+                  // the live stream too, so the chat can show "기억하는 중…" on the
+                  // call at once instead of after the transcript reconciles.
+                  const rememberData =
+                    rememberCallIds.has(ev.toolCallId) && ev.output.data !== undefined ? ev.output.data : undefined;
+                  emitToolResult(ev.toolCallId, ev.output.content, ev.isError, rememberData);
                   // PostToolUse (§3.5): an EXECUTED call — a denied one never gets
                   // here (no tool_result follows a deny). Fire-and-forget.
                   const requested = orgToolCalls.get(ev.toolCallId);
@@ -3667,6 +3834,8 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // the stored `auto` gets exactly what it asked for.
               model: (() => {
                 const m = effectiveAgentModel(routedAgent?.model) ?? modelForEngine;
+                // memory-auto-apply R38: the post-turn review runs on exactly this.
+                reviewModel = m;
                 return { providerId, ...(m ? { model: m } : {}) };
               })(),
               // Step 1 is the user's own words; every later step is the harness
@@ -3759,6 +3928,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 orgId: DEFAULT_ORG_ID,
               },
               onMemoryInjection: (injected) => {
+                // memory-auto-apply R13: what this answer was given, for the
+                // "기억 N개 반영" line under it (stamped with the turn).
+                for (const item of injected.items) turnMemoryIds.add(item.id);
                 if (injected.items.length > 0 || injected.droppedForBudget > 0) {
                   console.log(
                     `[engine:naby] memory: injected ${injected.items.length}` +
@@ -4323,6 +4495,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   await runTurn(participantTurnOptions(agent, i));
                 } finally {
                   currentSpeaker = undefined;
+                  // memory-auto-apply R4: a participant's words are now in the
+                  // round naby continues — outside content for its memory writes.
+                  turnExternal.seen = true;
                 }
                 speeches.push({ agent: i.agent, persona: false, text: stepText });
                 return { text: stepText, ok: speechOk, toolCalls: stepTools.length, tools: [...stepTools] };
@@ -4406,6 +4581,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // learner reads it as the user's words (§3.3). Later steps are the
               // harness's own continuation prompts, as on every turn.
               ...(step === 1 && crossSessionTurn ? { crossSession: crossSessionTurn } : {}),
+              // memory-auto-apply R2: and THOSE are labelled too, as is the first
+              // row of a turn the harness itself started (a scheduled task, a job
+              // report, a kickoff) — so no memory can cite them as the user's words.
+              ...(() => {
+                const origin: HarnessUserOrigin | undefined =
+                  step > 1 ? 'autonomy' : step === 1 && !crossSessionTurn ? harnessOriginOf(turnSource) : undefined;
+                return origin ? { harnessOrigin: origin } : {};
+              })(),
             });
             // Between steps: tell the user (a muted one-line bar) that the agent
             // is continuing, or why it stopped. Emitted here rather than in the
@@ -4500,6 +4683,21 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             sweep?.(store, { sessionId });
           } catch (e) {
             console.log(`[engine:naby] recommendation sweep not kicked: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+
+        // ---- the memory review, fire-and-forget (memory-auto-apply §2a) ----
+        //
+        // The turn is over, so the memories it wrote are reviewed now — one call,
+        // on this turn's model (R37, R38), never awaited. A turn that wrote
+        // nothing costs one indexed read and no call (R44). It runs even after a
+        // stop: what was written is pending either way, and the user stopping the
+        // answer is not the user retracting what they asked naby to remember.
+        if (autoApply) {
+          try {
+            kickMemoryReview(store, async () => sessionReviewer, { sessionId });
+          } catch (e) {
+            console.log(`[engine:naby] memory review not kicked: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
 
