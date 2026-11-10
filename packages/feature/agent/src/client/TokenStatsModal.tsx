@@ -13,6 +13,7 @@ interface TokenStatsModalProps {
 
 // Claude API official pricing ($/MTok) — 2026.09
 const MODEL_PRICING: Record<string, { label: string; input: number; output: number; cacheRead: number; cacheWrite: number; color: string }> = {
+  'claude-fable-5-2':           { label: 'Fable 5.2',  input: 8,  output: 40, cacheRead: 0.20, cacheWrite: 10.0, color: '#9333ea' },
   'claude-fable-5-1':           { label: 'Fable 5.1',  input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, color: '#a855f7' },
   'claude-fable-5':             { label: 'Fable 5',    input: 10, output: 50, cacheRead: 1.00, cacheWrite: 12.5, color: '#c084fc' },
   'claude-opus-5-5':            { label: 'Opus 5.5',   input: 4,  output: 20, cacheRead: 0.20, cacheWrite: 5.00, color: '#dc2626' },

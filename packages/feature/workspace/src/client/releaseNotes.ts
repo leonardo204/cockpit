@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.19 — 2026-11-10
+
+### en
+
+naby now supports Claude Fable 5.2.
+
+**Improved**
+
+- **Claude Fable 5.2.** The Claude Agent SDK is updated. When naby picks Fable, it now takes the newest version the model list offers, and token stats price Fable 5.2 correctly.
+
+### ko
+
+나비가 Claude Fable 5.2를 지원해요.
+
+**나아진 것**
+
+- **Claude Fable 5.2.** Claude Agent SDK를 업데이트했어요. 나비가 Fable을 고를 때 모델 목록에서 가장 새 버전을 고르고, 토큰 통계도 Fable 5.2 가격으로 계산해요.
+
 ## 1.48.18 — 2026-11-10
 
 ### en
