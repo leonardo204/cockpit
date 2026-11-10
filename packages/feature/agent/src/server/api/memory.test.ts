@@ -456,6 +456,12 @@ describe('summarizeMemory — the settings card (P3-M10 §4)', () => {
         superseded: false,
       },
       { superseded: true },
+      // memory-tiers §6: the three tiers of current, confirmed rows, and the
+      // archived ones.
+      { status: 'confirmed', superseded: false, tier: 'anchored' },
+      { status: 'confirmed', superseded: false, tier: 'long' },
+      { status: 'confirmed', superseded: false, tier: 'short' },
+      { archived: true },
     ]);
   });
 

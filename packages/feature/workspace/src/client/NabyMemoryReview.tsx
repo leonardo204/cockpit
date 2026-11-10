@@ -62,6 +62,7 @@ import { MemoryBrowserModal, STYLE_KEY_PREFIX, type MemoryFilters } from './Memo
 import { SettingsDetails } from './SettingsDetails';
 import { MemoryChoiceCard } from './MemoryChoiceCard';
 import { MemoryText } from './MemoryText';
+import { MemoryWorkRow } from './MemoryWorkRow';
 
 // ---------------------------------------------------------------------------
 // Wire helpers.
@@ -77,6 +78,12 @@ type ScopeSummary = {
    *  counted in `confirmed` — the card would otherwise overstate what naby
    *  currently believes. */
   replaced?: number;
+  /** memory-tiers §6: confirmed, current rows per tier. Absent from a server
+   *  that predates tiers — the line then falls back to the confirmed count. */
+  anchored?: number;
+  long?: number;
+  short?: number;
+  archived?: number;
 };
 
 /** One replaced memory, as the inbox shows it (settings-ia-reorg §3.3). */
@@ -103,9 +110,13 @@ export type SummaryResponse = {
   corroborationThreshold?: number;
   lastReflectionAt?: number;
   /** memory-auto-apply R29 group 1 — see the API. */
-  needsCheck?: { questions: MemoryQuestionRow[]; proposed: NeedsCheckRow[] };
+  needsCheck?: { questions: MemoryQuestionRow[]; proposed: NeedsCheckRow[]; anchorFull?: MemoryItem[] };
   /** memory-auto-apply R29 group 2 — see the API. */
   recentLearned?: RecentRow[];
+  /** memory-tiers §6: the anchored rows, oldest anchoring first. */
+  anchored?: MemoryItem[];
+  /** memory-tiers R22: the one-time "archiving starts in 30 days" notice. */
+  tierGraceNotice?: { until: number };
 };
 
 /** One open question (memory-auto-apply §5), as the API renders it. */
@@ -122,8 +133,11 @@ export type NeedsCheckRow = { item: MemoryItem; reason: string; isGlobalStyle: b
 /** One line of "recently learned" (R29). */
 export type RecentRow = {
   id: string;
-  undo: 'cancel' | 'revertSupersession';
+  /** `none` = memory-tiers R13's archive line: nothing to undo here. */
+  undo: 'cancel' | 'revertSupersession' | 'none';
   kind: string;
+  /** memory-tiers R13: how many were archived that day. */
+  count?: number;
   key: string;
   value: string;
   oldValue?: string;
@@ -142,7 +156,11 @@ type MemoryActionBody =
   | { action: 'revertSupersession'; id: string }
   // memory-auto-apply R10/R29 — undo what learning did; answer a question.
   | { action: 'cancel'; id: string }
-  | { action: 'questions.answer'; id: string; answer: 'a' | 'b' | 'both' | 'later' };
+  | { action: 'questions.answer'; id: string; answer: 'a' | 'b' | 'both' | 'later' }
+  // memory-tiers §6 — unpin / edit an anchored memory, the one-time notice.
+  | { action: 'unpin'; id: string }
+  | { action: 'edit'; id: string; value: string }
+  | { action: 'tiers.noticeShown' };
 
 /** The i18n key for one "recently learned" line, by what happened (R29). */
 export function recentRowKey(kind: string): string {
@@ -154,6 +172,8 @@ export function recentRowKey(kind: string): string {
     case 'tidy-refines':
     case 'refined':
       return 'memoryReview.recentRefined';
+    case 'archived':
+      return 'memoryReview.recentArchived';
     case 'changed':
     case 'tidy-contradicts':
     case 'superseded':
@@ -432,19 +452,134 @@ const RecentLearnedRow = memo(function RecentLearnedRow({
   return (
     <div className="flex items-start justify-between gap-2 py-1" data-testid="memory-recent-row">
       <div className="text-xs text-foreground/90 break-words line-clamp-3 min-w-0">
-        {t(recentRowKey(row.kind), { value: row.summary ?? row.value, old: row.oldSummary ?? row.oldValue ?? '' })}
+        {t(recentRowKey(row.kind), {
+          value: row.summary ?? row.value,
+          old: row.oldSummary ?? row.oldValue ?? '',
+          count: row.count ?? 0,
+        })}
       </div>
-      <button
-        onClick={() => onUndo(row)}
-        disabled={busy}
-        title={t('memoryReview.undoTitle')}
-        className="shrink-0 text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
-      >
-        {t('memoryReview.undo')}
-      </button>
+      {row.undo === 'none' ? null : (
+        <button
+          onClick={() => onUndo(row)}
+          disabled={busy}
+          title={t('memoryReview.undoTitle')}
+          className="shrink-0 text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+        >
+          {t('memoryReview.undo')}
+        </button>
+      )}
     </div>
   );
 });
+
+// ---------------------------------------------------------------------------
+// One anchored memory (memory-tiers §6, R20): edit in place, or unpin.
+// ---------------------------------------------------------------------------
+
+const AnchoredRow = memo(function AnchoredRow({
+  item,
+  busy,
+  onEdit,
+  onUnpin,
+}: {
+  item: MemoryItem;
+  busy: boolean;
+  onEdit: (id: string, value: string) => void;
+  onUnpin: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.value);
+  return (
+    <div className="rounded-lg border border-border p-2.5 space-y-1.5" data-testid="memory-anchored-row">
+      {editing ? (
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          rows={3}
+          className="w-full text-sm rounded border border-border bg-background p-1.5"
+          data-testid="memory-anchored-edit"
+        />
+      ) : (
+        <MemoryText value={item.value} {...(item.summary ? { summary: item.summary } : {})} className="text-sm text-foreground/90" />
+      )}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <ScopeBadge scope={item.scope as NabyScopeId} />
+        <span className="text-[0.714rem] text-muted-foreground">
+          {t(
+            item.anchorOrigin === 'auto'
+              ? 'memoryReview.anchoredOriginAuto'
+              : item.anchorOrigin === 'explicit'
+                ? 'memoryReview.anchoredOriginExplicit'
+                : 'memoryReview.anchoredOriginUser',
+          )}
+        </span>
+        <span className="flex-1" />
+        {editing ? (
+          <>
+            <button
+              onClick={() => {
+                if (draft.trim()) onEdit(item.id, draft.trim());
+                setEditing(false);
+              }}
+              disabled={busy || !draft.trim()}
+              className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+            >
+              {t('memoryReview.anchoredSave')}
+            </button>
+            <button
+              onClick={() => {
+                setDraft(item.value);
+                setEditing(false);
+              }}
+              className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground"
+            >
+              {t('memoryReview.anchoredCancel')}
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={() => {
+                setDraft(item.value);
+                setEditing(true);
+              }}
+              disabled={busy}
+              data-testid="memory-anchored-edit-button"
+              className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+            >
+              {t('memoryReview.anchoredEdit')}
+            </button>
+            <button
+              onClick={() => onUnpin(item.id)}
+              disabled={busy}
+              data-testid="memory-anchored-unpin"
+              className="text-xs px-2 py-0.5 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+            >
+              {t('memoryReview.anchoredUnpin')}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
+
+/**
+ * memory-tiers §6: the summary line's per-scope text — "고정 N · 기억 N · 최근 N"
+ * when the server reports tiers, the confirmed count otherwise. Pure.
+ */
+export function scopeTierCopy(s: {
+  confirmed: number;
+  anchored?: number;
+  long?: number;
+  short?: number;
+}): { key: string; values: Record<string, number> } {
+  if (typeof s.anchored === 'number' && typeof s.long === 'number' && typeof s.short === 'number') {
+    return { key: 'memoryReview.summaryTiers', values: { anchored: s.anchored, long: s.long, short: s.short } };
+  }
+  return { key: 'memoryReview.summaryConfirmed', values: { count: s.confirmed } };
+}
 
 // ---------------------------------------------------------------------------
 // The tab.
@@ -654,6 +789,16 @@ export function NabyMemoryReview({
     [runAction],
   );
 
+  // memory-tiers R20: a person edits or unpins an anchored memory.
+  const handleAnchoredEdit = useCallback(
+    (id: string, value: string) => void runAction(id, { action: 'edit', id, value }, 'memoryReview.anchoredSaved'),
+    [runAction],
+  );
+  const handleUnpin = useCallback(
+    (id: string) => void runAction(id, { action: 'unpin', id }, 'memoryReview.anchoredUnpinned'),
+    [runAction],
+  );
+
   const handleAnswer = useCallback(
     (id: string, answer: 'a' | 'b' | 'both') =>
       void runAction(id, { action: 'questions.answer', id, answer }, 'memoryReview.answered'),
@@ -710,8 +855,20 @@ export function NabyMemoryReview({
   const recent = summary?.recentLearned ?? [];
   const migratedCount = recent.filter((row) => row.migrated).length;
   const totalRows = scopes.reduce((n, s) => n + s.confirmed + s.proposed, 0);
+  // memory-tiers R17: rows that met the anchoring rule with the budget full.
+  const anchorFull = summary?.needsCheck?.anchorFull ?? [];
+  const anchored = summary?.anchored ?? [];
   // The whole group disappears when there is nothing in it (R29) — see the header.
-  const hasInbox = questions.length > 0 || proposals.length > 0 || styleProposals.length > 0;
+  const hasInbox = questions.length > 0 || proposals.length > 0 || styleProposals.length > 0 || anchorFull.length > 0;
+  const graceUntil = summary?.tierGraceNotice?.until;
+  // R22: "once" — the server forgets the notice as soon as it has been drawn;
+  // this render keeps it on screen.
+  const graceNoted = useRef(false);
+  useEffect(() => {
+    if (!graceUntil || graceNoted.current) return;
+    graceNoted.current = true;
+    void memoryPost({ action: 'tiers.noticeShown' });
+  }, [graceUntil]);
   const reflection = reflectionAgeCopy(summary?.lastReflectionAt, loadedAt);
 
   return (
@@ -745,6 +902,18 @@ export function NabyMemoryReview({
             {' · '}
             {t('memoryReview.summaryPendingCount', { count: summary?.pendingCount ?? 0 })}
           </div>
+
+          {anchorFull.length > 0 ? (
+            <div className="space-y-1.5" data-testid="memory-anchor-full">
+              <div className="text-[0.714rem] text-muted-foreground">{t('memoryReview.anchorFullTitle')}</div>
+              {anchorFull.map((item) => (
+                <div key={item.id} className="rounded-lg border border-border p-2.5">
+                  <MemoryText value={item.value} {...(item.summary ? { summary: item.summary } : {})} className="text-sm text-foreground/90" />
+                </div>
+              ))}
+              <div className="text-[0.714rem] text-muted-foreground">{t('memoryReview.anchorFullHint')}</div>
+            </div>
+          ) : null}
 
           {questions.length > 0 ? (
             <div className="space-y-1.5" data-testid="memory-questions">
@@ -797,6 +966,28 @@ export function NabyMemoryReview({
         </div>
       ) : null}
 
+      {/* memory-tiers R22: shown once after the v18 migration. */}
+      {graceUntil ? (
+        <p className="text-xs text-muted-foreground" data-testid="memory-tier-grace">
+          {t('memoryReview.tierGraceNotice')}
+        </p>
+      ) : null}
+
+      {/* memory-tiers §6: ANCHORED MEMORY — always used, never changed by naby.
+          Its own group at the top of what is true, each row editable and
+          unpinnable (R20). Absent when there is none. */}
+      {anchored.length > 0 ? (
+        <div className="space-y-1.5" data-testid="memory-anchored">
+          <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
+            {t('memoryReview.anchoredTitle')}
+          </div>
+          <p className="text-[0.714rem] text-muted-foreground">{t('memoryReview.anchoredHint')}</p>
+          {anchored.map((item) => (
+            <AnchoredRow key={item.id} item={item} busy={busy} onEdit={handleAnchoredEdit} onUnpin={handleUnpin} />
+          ))}
+        </div>
+      ) : null}
+
       {/* ------------------------------------------------------------------
           2. THE SUMMARY LINE — what is true right now, plus the evidence that
           the automatic half is running.
@@ -818,7 +1009,12 @@ export function NabyMemoryReview({
             {scopes.map((s) => (
               <div key={`${s.scope}:${s.scopeKey}`} className="text-xs text-foreground">
                 <span className="text-muted-foreground">{t(SCOPE_LABELS[s.scope] ?? s.scope)}</span>{' '}
-                <span>{t('memoryReview.summaryConfirmed', { count: s.confirmed })}</span>
+                <span data-testid="memory-summary-tiers">
+                  {(() => {
+                    const copy = scopeTierCopy(s);
+                    return t(copy.key, copy.values);
+                  })()}
+                </span>
                 {s.proposed > 0 ? (
                   <span className="text-warning">
                     {' · '}
@@ -848,6 +1044,11 @@ export function NabyMemoryReview({
           {t(reflection.key, { count: reflection.count })}
         </p>
       </div>
+
+      {/* memory-worker §2 — what the memory process is doing right now. One
+          collapsed row: the state word, and behind it the job, the queue, the
+          last result and failure, the model and today's calls. Counts only. */}
+      <MemoryWorkRow isOpen={isOpen} />
 
       {/* ------------------------------------------------------------------
           3. HOW IT LEARNS — both switches, and the four channels they govern.

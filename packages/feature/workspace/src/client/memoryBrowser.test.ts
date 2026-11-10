@@ -186,7 +186,8 @@ describe('the browser carries the sovereignty actions (§3)', () => {
   it('does not offer "keep" on a proposal', () => {
     // A proposal is not in the decay queue — the answer for it is confirm or
     // delete, and a third verb would only be a way to leave it undecided.
-    expect(BROWSER).toMatch(/!isProposed && !isSuperseded \? \([^]*memoryReview\.keepAlive/);
+    // memory-tiers: nor on an archived or anchored row (neither decays).
+    expect(BROWSER).toMatch(/!isProposed && !isSuperseded && !isArchived && item\.tier !== 'anchored' \? \([^]*memoryReview\.keepAlive/);
   });
 });
 

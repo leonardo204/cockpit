@@ -40,10 +40,22 @@ import {
   isGlobalStyleMemoryKey,
   isStyleMemoryKey,
   staleReviewCutoff,
+  // memory-tiers (specs/memory-tiers.md): pin / unpin / restore, the archive
+  // countdown, the grace notice and the archive line in "recently learned".
+  anchorMemory,
+  archiveDaysLeft,
+  markTierGraceNoticeShown,
+  readArchiveLog,
+  readTierGraceUntil,
+  shouldShowTierGraceNotice,
+  unanchorMemory,
+  type MemoryTier,
+  type TierStore,
   type MemoryItem,
   type MemoryScope,
   type MemoryStatus,
   type MemoryType,
+  type MemoryWorkStatus,
   type ScopedMemoryQuery,
   type Store,
   type TrustTier,
@@ -63,6 +75,8 @@ import {
   settleOpenMemoryQuestions,
   cancelLearnedMemory,
   memoryReviewStatus,
+  replaceAnchoredMemory,
+  undoMemoryAnchor,
   noteQuestionAutoShown,
   noteQuestionCollapsed,
   openMemoryQuestions,
@@ -77,6 +91,9 @@ import {
   type MemoryReviewStatus,
   type MemoryReviewStore,
 } from '../lib/memoryReview';
+// memory-worker §2: the status of the memory process, read off its supervisor.
+import { memoryWork } from '../lib/memoryWorker';
+import type { MemoryWorkStore } from '../lib/memoryJobs';
 
 // The slice of the store this route touches. Named so the handlers depend on an
 // injectable seam (default `getStore()`), which keeps the list/action logic unit-
@@ -113,6 +130,19 @@ type MemoryStore = Partial<MemoryReviewStore> & Pick<
 
 /** The full review surface, for the actions that need it. The production store
  *  always has it; a narrow test fake may not, and those actions then refuse. */
+/** The tier surface (memory-tiers), for the pin / unpin / restore actions. A
+ *  narrow test fake may not have it, and those actions then refuse. */
+function tierStoreOf(store: MemoryStore): TierStore | undefined {
+  const s = store as Partial<TierStore>;
+  return typeof s.setMemoryTierState === 'function' && typeof s.listTieredMemory === 'function'
+    ? (store as unknown as TierStore)
+    : undefined;
+}
+
+function isTier(v: unknown): v is MemoryTier {
+  return v === 'short' || v === 'long' || v === 'anchored';
+}
+
 function reviewStoreOf(store: MemoryStore): MemoryReviewStore | undefined {
   const s = store as Partial<MemoryReviewStore>;
   return typeof s.listMemoryQuestions === 'function' && typeof s.settleMemoryReview === 'function'
@@ -237,6 +267,9 @@ export interface MemoryListResult {
    * it — a client could not look it up from what it was sent.
    */
   supersededBy: Record<string, string>;
+  /** memory-tiers §6: for each ARCHIVED row listed, whole days left before it
+   *  is deleted (R12). Empty unless the "보관됨" filter is on. */
+  daysLeft: Record<string, number>;
 }
 
 export function listScopedMemory(
@@ -257,6 +290,10 @@ export function listScopedMemory(
     /** '1'/'true' shows ONLY replaced rows; '0'/'false' shows only current ones;
      *  absent shows both, which is what every pre-M13 request gets. */
     superseded?: string | null;
+    /** memory-tiers §6: short | long | anchored. Absent = every tier. */
+    tier?: string | null;
+    /** memory-tiers §6: '1'/'true' lists ONLY archived rows ("보관됨"). */
+    archived?: string | null;
     limit?: number | undefined;
     offset?: number | undefined;
   },
@@ -272,10 +309,14 @@ export function listScopedMemory(
   if (params.type != null && params.type !== '' && !isType(params.type)) {
     return { ok: false, error: `type must be one of ${MEMORY_TYPES.join(', ')}` };
   }
+  if (params.tier != null && params.tier !== '' && !isTier(params.tier)) {
+    return { ok: false, error: 'tier must be one of short, long, anchored' };
+  }
   const scopeKey = resolveScopeKey(params.scope, params.scopeKey);
   if (scopeKey === null) {
     return { ok: false, error: `scopeKey is required for ${params.scope} scope` };
   }
+  const archived = params.archived === '1' || params.archived === 'true';
 
   // CLAMPED, not trusted. `limit` comes off the wire and a request for a million
   // rows is a way to hang the renderer from a URL; 0 is refused too, since a page
@@ -313,6 +354,8 @@ export function listScopedMemory(
     // the "unused" chip would list rows the runtime does not think are unused.
     ...(staleBefore !== null ? { staleBefore, staleWindowMs: MEMORY_DECAY_REVIEW_MS } : {}),
     ...(superseded !== undefined ? { superseded } : {}),
+    ...(params.tier && isTier(params.tier) ? { tier: params.tier } : {}),
+    ...(archived ? { archived: true } : {}),
   };
 
   const items = store.getScopedMemory(params.scope, scopeKey, { ...filter, limit, offset });
@@ -335,6 +378,11 @@ export function listScopedMemory(
     // without naming a memory that no longer exists.
     if (replacement) supersededBy[item.id] = replacement.key;
   }
+  const daysLeft: Record<string, number> = {};
+  for (const item of items) {
+    const left = archiveDaysLeft(item, now);
+    if (left !== undefined) daysLeft[item.id] = left;
+  }
   return {
     ok: true,
     data: {
@@ -343,6 +391,7 @@ export function listScopedMemory(
       items,
       corroboration,
       supersededBy,
+      daysLeft,
       autoApply: readAutoApplySetting(store),
       corroborationThreshold: CORROBORATION_THRESHOLD,
       total,
@@ -370,6 +419,13 @@ export interface MemoryScopeSummary {
    *  things naby currently thinks, and counting it as confirmed would make the
    *  card overstate what the agent knows. */
   replaced: number;
+  /** memory-tiers §6: the confirmed, current rows per tier — "고정 N · 기억 N ·
+   *  최근 N". */
+  anchored: number;
+  long: number;
+  short: number;
+  /** memory-tiers R11: rows archived (restorable). */
+  archived: number;
 }
 
 /**
@@ -438,8 +494,11 @@ export interface MemoryRecentRow {
   /** What the undo action addresses: `cancel` for a receipt, `revertSupersession`
    *  for a replacement made outside the review (a confirmed reservation). */
   id: string;
-  undo: 'cancel' | 'revertSupersession';
-  kind: MemoryReceiptKind | 'superseded';
+  undo: 'cancel' | 'revertSupersession' | 'none';
+  /** `archived` = memory-tiers R13's one line per day ("기억 N개를 보관했어요"). */
+  kind: MemoryReceiptKind | 'superseded' | 'archived';
+  /** For `archived`: how many that day. */
+  count?: number;
   key: string;
   value: string;
   oldValue?: string;
@@ -455,7 +514,19 @@ export interface MemorySummaryResult {
   /** memory-auto-apply R29 group 1: what needs the user — open questions and the
    *  proposals waiting for a person. A row still inside its review is not here
    *  until its review is over a day late (R42). */
-  needsCheck: { questions: MemoryQuestionView[]; proposed: MemoryNeedsCheckRow[] };
+  needsCheck: {
+    questions: MemoryQuestionView[];
+    proposed: MemoryNeedsCheckRow[];
+    /** memory-tiers R17: rows that met the anchoring rule while the anchored
+     *  budget was full — shown as "고정 기억이 가득 찼어요". */
+    anchorFull: MemoryItem[];
+  };
+  /** memory-tiers §6: the anchored rows of every reachable scope, oldest
+   *  anchoring first — the top group of the memory screen. */
+  anchored: MemoryItem[];
+  /** memory-tiers R22: show "30일 뒤부터 오래 안 쓴 기억을 보관해요" once; the
+   *  instant archiving begins. Absent = nothing to show. */
+  tierGraceNotice?: { until: number };
   /** memory-auto-apply R29 group 2: what naby started using this week, and what
    *  the tidy pass did — each with its undo. */
   recentLearned: MemoryRecentRow[];
@@ -540,6 +611,8 @@ export function summarizeMemory(
   const proposals: MemoryItem[] = [];
   const styleProposals: MemoryItem[] = [];
   const supersessions: MemorySupersessionNotice[] = [];
+  const anchoredRows: MemoryItem[] = [];
+  const anchorFull: MemoryItem[] = [];
   for (const target of targets) {
     scopes.push({
       ...target,
@@ -557,7 +630,32 @@ export function summarizeMemory(
         superseded: false,
       }),
       replaced: store.countScopedMemory(target.scope, target.scopeKey, { superseded: true }),
+      ...(['anchored', 'long', 'short'] as const).reduce(
+        (acc, tier) => ({
+          ...acc,
+          [tier]: store.countScopedMemory(target.scope, target.scopeKey, {
+            status: 'confirmed',
+            superseded: false,
+            tier,
+          }),
+        }),
+        {} as Record<MemoryTier, number>,
+      ),
+      archived: store.countScopedMemory(target.scope, target.scopeKey, { archived: true }),
     });
+    anchoredRows.push(
+      ...store.getScopedMemory(target.scope, target.scopeKey, {
+        status: 'confirmed',
+        superseded: false,
+        tier: 'anchored',
+      }),
+    );
+    for (const item of store.getScopedMemory(target.scope, target.scopeKey, {
+      status: 'confirmed',
+      superseded: false,
+    })) {
+      if (item.anchorCandidate && item.tier !== 'anchored') anchorFull.push(item);
+    }
     // The proposals themselves, capped per scope BEFORE the merge: the store
     // orders by createdAt asc, so the newest are at the END — hence the window is
     // taken from the tail rather than the head.
@@ -685,12 +783,37 @@ export function summarizeMemory(
       at: n.at,
     });
   }
+  // memory-tiers R13: archival is quiet — one line per day, a count, no undo
+  // here (the browser's "보관됨" filter restores).
+  try {
+    for (const entry of readArchiveLog(store)) {
+      if (now - entry.at > RECENT_LEARNED_MS) continue;
+      recent.push({
+        id: `archive:${entry.day}`,
+        undo: 'none',
+        kind: 'archived',
+        key: '',
+        value: '',
+        count: entry.count,
+        at: entry.at,
+      });
+    }
+  } catch {
+    /* no log yet */
+  }
   recent.sort((a, b) => b.at - a.at);
 
   // The badge's number (R32): what needs the USER, uncapped. Since
   // memory-auto-apply a replacement is a record, not a decision, so it no longer
   // counts — "recently learned" shows it with its undo.
-  const pendingCount = questions.length + needsProposed.length;
+  const pendingCount = questions.length + needsProposed.length + anchorFull.length;
+  let tierGraceNotice: { until: number } | undefined;
+  try {
+    const until = readTierGraceUntil(store);
+    if (until !== undefined && shouldShowTierGraceNotice(store, now)) tierGraceNotice = { until };
+  } catch {
+    tierGraceNotice = undefined;
+  }
 
   // Best-effort, like every other read the learning block makes: a store that
   // cannot answer "when did reflection last run" must not cost the user their
@@ -704,7 +827,9 @@ export function summarizeMemory(
 
   return {
     scopes,
-    needsCheck: { questions, proposed: needsProposed },
+    needsCheck: { questions, proposed: needsProposed, anchorFull },
+    anchored: anchoredRows.sort((a, b) => (a.tierSince ?? a.createdAt) - (b.tierSince ?? b.createdAt)),
+    ...(tierGraceNotice ? { tierGraceNotice } : {}),
     recentLearned: recent,
     recentProposed,
     pendingStyleProposals,
@@ -773,7 +898,24 @@ export type MemoryAction =
   // allowed to be automatic at all: the machine decided which of two beliefs is
   // current, and the person whose beliefs they are can say otherwise. The
   // replaced row was never deleted, so this is a stamp being cleared.
-  | { action: 'revertSupersession'; id: string };
+  | { action: 'revertSupersession'; id: string }
+  // -- memory-worker §2 — what the memory process is doing ------------------
+  // Counts, kinds, codes and the backend label; never a memory's text. Polled
+  // every few seconds while the settings row is open.
+  | { action: 'work.status' }
+  // -- memory-tiers §6 — the anchored group, the pin button, "보관됨" -------
+  // R5/R20: a person pins or unpins. Pinning respects the anchored budget
+  // (R16/R17) and fails with `anchored-full` when there is no room.
+  | { action: 'pin'; id: string }
+  | { action: 'unpin'; id: string }
+  // R11: bring an archived memory back (long-term, clock restarted).
+  | { action: 'restore'; id: string }
+  // R6: the chat chip's undo of an anchoring.
+  | { action: 'unanchorChip'; id: string }
+  // R19: the chat chip's "새 내용으로 바꾸기".
+  | { action: 'replaceAnchored'; id: string }
+  // R22: the one-time grace notice was seen.
+  | { action: 'tiers.noticeShown' };
 
 export type MemoryActionResult =
   | {
@@ -788,6 +930,8 @@ export type MemoryActionResult =
       /** The popup must not raise itself for this session (R27: temporary or
        *  fast-growth session). */
       suppressed?: boolean;
+      /** memory-worker §2: the memory process's status. */
+      work?: MemoryWorkStatus;
     }
   | { ok: false; error: string };
 
@@ -976,6 +1120,60 @@ export function runMemoryAction(
       return { ok: true, item: store.getMemoryById(body.id) };
     }
 
+    case 'pin': {
+      const tiers = tierStoreOf(store);
+      if (!tiers) return { ok: false, error: 'memory tiers are unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      const r = anchorMemory(tiers, body.id, 'user');
+      if (r === 'full') return { ok: false, error: 'anchored-full' };
+      if (r === 'missing' || r === 'refused') return { ok: false, error: 'that memory cannot be pinned' };
+      return { ok: true, item: store.getMemoryById(body.id) };
+    }
+
+    case 'unpin': {
+      const tiers = tierStoreOf(store);
+      if (!tiers) return { ok: false, error: 'memory tiers are unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      if (!unanchorMemory(tiers, body.id)) return { ok: false, error: 'that memory is not pinned' };
+      return { ok: true, item: store.getMemoryById(body.id) };
+    }
+
+    case 'restore': {
+      const restorer = store as Partial<Pick<Store, 'restoreMemory'>>;
+      if (typeof restorer.restoreMemory !== 'function') return { ok: false, error: 'memory tiers are unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      if (!restorer.restoreMemory(body.id)) return { ok: false, error: 'that memory is not archived' };
+      return { ok: true, item: store.getMemoryById(body.id) };
+    }
+
+    case 'unanchorChip': {
+      const review = reviewStoreOf(store);
+      if (!review || !tierStoreOf(store)) return { ok: false, error: 'memory review is unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      if (!undoMemoryAnchor(review, body.id)) return { ok: false, error: 'nothing to undo' };
+      return { ok: true };
+    }
+
+    case 'replaceAnchored': {
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: false, error: 'memory review is unavailable' };
+      if (typeof body.id !== 'string' || !body.id) return { ok: false, error: 'id is required' };
+      if (!replaceAnchoredMemory(review, body.id)) return { ok: false, error: 'nothing to replace' };
+      return { ok: true };
+    }
+
+    case 'tiers.noticeShown':
+      markTierGraceNoticeShown(store, Date.now());
+      return { ok: true };
+
+    case 'work.status': {
+      // The full store is what the memory work runs on when it has to run here
+      // (the fallback); a narrow test fake has none of it.
+      const review = reviewStoreOf(store);
+      if (!review) return { ok: false, error: 'memory review is unavailable' };
+      return { ok: true, work: memoryWork().status(review as unknown as MemoryWorkStore) };
+    }
+
     default:
       return { ok: false, error: 'unknown action' };
   }
@@ -1011,6 +1209,8 @@ export const GET = handler((request) =>
         keyPrefix: params.get('keyPrefix'),
         stale: params.get('stale'),
         superseded: params.get('superseded'),
+        tier: params.get('tier'),
+        archived: params.get('archived'),
         limit: parseCount(params.get('limit')),
         offset: parseCount(params.get('offset')),
       }),

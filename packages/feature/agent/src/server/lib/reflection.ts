@@ -1104,6 +1104,14 @@ export function selectedJudgeProviderId(store: JudgeProviderStore): string | und
   return toSelectOptions(readSettings(store as unknown as Store)).providerId;
 }
 
+/** One judge call made by someone else — the memory queue's port. Prompt in,
+ *  raw answer out; throws `ReflectionJudgeUnavailableError` when there is no
+ *  judge, and any other error when the call failed. */
+export type ReflectionJudgeCall = (
+  prompt: { system: string; user: string },
+  providerId: string | undefined,
+) => Promise<string>;
+
 export type JudgeBackendOptions = {
   /**
    * The provider the user picked, from `selectedJudgeProviderId`. Undefined means
@@ -1220,7 +1228,17 @@ export async function resolveJudgeBackend(
  * the existing test callers, which inject their own judge anyway, are untouched;
  * omitting it means "automatic", the pre-choice behaviour.
  */
-export function modelReflectionJudge(store?: JudgeProviderStore): ReflectionJudge {
+export function modelReflectionJudge(
+  store?: JudgeProviderStore,
+  // THE MEMORY PROCESS'S SEAM (memory-worker R1/R2/R5). When the sweep runs as a
+  // queued memory job, its model call goes through the queue's one call port —
+  // so it is counted, serialized with every other memory call, and backed off on
+  // a rate limit — instead of resolving and driving a backend here. The port is
+  // handed the SAME provider choice read below and must throw
+  // `ReflectionJudgeUnavailableError` when nothing can answer. Absent, this is
+  // exactly the judge it always was.
+  call?: ReflectionJudgeCall,
+): ReflectionJudge {
   return async (cases: readonly ReflectionCase[], context?: ReflectionSessionContext) => {
     // NOTHING TO ASK ABOUT: no case to judge AND no conversation to read facts
     // out of. Since M8c the first half alone is no longer a reason to skip — a
@@ -1231,6 +1249,9 @@ export function modelReflectionJudge(store?: JudgeProviderStore): ReflectionJudg
     }
 
     const providerId = store ? selectedJudgeProviderId(store) : undefined;
+    if (call) {
+      return parseReflectionAnswer(await call(buildReflectionPrompt(cases, context), providerId));
+    }
     const backend = await resolveJudgeBackend(providerId ? { providerId } : {});
     if (!backend) {
       throw new ReflectionJudgeUnavailableError(
@@ -1283,6 +1304,11 @@ let sweepInFlight = false;
  * Kick a sweep from a starting turn. Returns IMMEDIATELY and never throws: the
  * turn that triggered it must be byte-for-byte unaffected — nothing here touches
  * its prompt, its events or its timing.
+ *
+ * NO LONGER THE ENGINE'S TRIGGER (specs/memory-worker.md R9). A turn now posts a
+ * "started" notice and the sweep runs as a queued job in the memory process
+ * (memoryJobs.ts), one model call at a time beside every other memory call. This
+ * stays as the in-process, one-at-a-time kick for callers that have no queue.
  */
 export function kickReflectionSweep(
   store: ReflectionStore,

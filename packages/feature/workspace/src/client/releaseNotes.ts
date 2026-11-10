@@ -85,6 +85,30 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.18 — 2026-11-10
+
+### en
+
+naby now remembers like a person: recent things fade unless they come up again, and what you stress stays.
+
+**New**
+
+- **Short-term, long-term and pinned memories.** A new memory starts as recent. It becomes long-term when you said it yourself or it comes up again on another day. Things you stress in three different chats, or ask naby to always remember, become pinned and are used in every answer.
+- **Memories have a lifespan.** Recent memories are archived after 14 days unless they come back. Long-term ones are archived after 90 days unused (up to a year for often-used ones). Archived memories can be restored for 30 days, then they are deleted. Nothing is archived for the first 30 days after this update.
+- **Memory work runs on its own.** Reviewing, tidying and summarizing memories now happen in a separate background process, so they don't slow down your chats. Settings → Memory shows what it is doing.
+- **Times under chat bubbles.** Each question shows when you sent it, and each answer shows how long it took and when it finished (HH:MM:SS).
+
+### ko
+
+나비가 사람처럼 기억해요. 다시 나오지 않는 최근 기억은 흐려지고, 강조한 것은 남아요.
+
+**새로 생긴 것**
+
+- **최근 기억, 기억, 고정 기억.** 새 기억은 최근 기억으로 시작해요. 직접 말했거나 다른 날 다시 나오면 기억으로 남아요. 서로 다른 대화 세 곳에서 강조했거나 "항상 기억해"라고 하면 고정 기억이 되고, 모든 답변에 쓰여요.
+- **기억에 수명이 생겼어요.** 최근 기억은 14일 안에 다시 나오지 않으면 보관돼요. 기억은 90일 동안 안 쓰이면 보관되고, 자주 쓰인 기억은 최대 1년까지 가요. 보관된 기억은 30일 동안 되살릴 수 있고 그 뒤 지워져요. 업데이트 후 30일 동안은 보관하지 않아요.
+- **기억 작업이 따로 돌아요.** 기억 검수, 정리, 요약을 별도 백그라운드 프로세스에서 해서 대화를 느리게 하지 않아요. 설정 → 기억에서 무슨 작업을 하는지 볼 수 있어요.
+- **말풍선 아래에 시각이 보여요.** 질문에는 보낸 시각이, 답변에는 걸린 시간과 끝난 시각이 나와요(HH:MM:SS).
+
 ## 1.48.17 — 2026-11-09
 
 ### en

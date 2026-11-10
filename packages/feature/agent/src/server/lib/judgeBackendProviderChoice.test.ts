@@ -221,9 +221,11 @@ describe('the four callers actually pass the choice', () => {
 
   it('the engine hands its store to both paths it starts', () => {
     const src = readFileSync(join(__dirname, '..', 'engines', 'naby.ts'), 'utf8');
-    // The sweep: the store IS the wiring, because the default judge is built from
-    // it. The voice port: the same store the turn resolved its own provider from.
-    expect(src).toContain('kickReflectionSweep(store,');
+    // The sweep: queued in the memory process (memory-worker R9), whose job
+    // builds the judge from ITS store — the same database, so the same choice.
+    // The voice port: the same store the turn resolved its own provider from.
+    expect(src).toContain('memoryWork().turnStarted(');
+    expect(read('memoryJobs.ts')).toContain('modelReflectionJudge(store,');
     // `[^}]` already spans newlines, so no dotAll flag (and no es2018 target
     // requirement) is needed to reach across the comment above the property.
     expect(/createVoicePort\(\{[^}]*\bstore,/.test(src)).toBe(true);

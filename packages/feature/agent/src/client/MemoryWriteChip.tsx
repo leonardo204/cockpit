@@ -8,6 +8,9 @@
  *   이미 알고 있어요                the same claim was already remembered (R41)
  *   기억을 바꿨어요: ‹A› → ‹B› · 취소  it replaced or refined an older memory (R10, R17a)
  *   기억할까요? + 이유 한 줄        held for the user (R11)
+ *   고정했어요: ‹요약› · 취소        anchored on request (memory-tiers R6)
+ *   자주 말씀하신 걸 고정했어요 · 취소 anchored from restatements (R6)
+ *   고정 기억 ‹요약›과 달라서 … · 새 내용으로 바꾸기  an anchored memory won (R19)
  *
  * The rule for WHAT to draw is pure and lives in pendingMemory.ts
  * (`memoryChipView`); this file only fetches the server's answer and draws it.
@@ -84,6 +87,26 @@ export const MemoryWriteChip = memo(function MemoryWriteChip({ write }: { write:
     setBusy(true);
     const { ok } = await memoryPost({ action: 'cancel', id: write.id });
     if (!ok) toast(t('chat.memoryChip.cancelFailed', { defaultValue: 'Could not undo that.' }), 'error');
+    await refresh();
+    setBusy(false);
+  }, [busy, write.id, refresh, t]);
+
+  // memory-tiers R6: the undo of an anchoring — back to long-term, never deleted.
+  const unanchor = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    const { ok } = await memoryPost({ action: 'unanchorChip', id: write.id });
+    if (!ok) toast(t('chat.memoryChip.cancelFailed', { defaultValue: 'Could not undo that.' }), 'error');
+    await refresh();
+    setBusy(false);
+  }, [busy, write.id, refresh, t]);
+
+  // memory-tiers R19: the anchored memory takes the new words.
+  const replaceAnchored = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    const { ok } = await memoryPost({ action: 'replaceAnchored', id: write.id });
+    if (!ok) toast(t('chat.memoryChip.replaceFailed', { defaultValue: 'Could not change the pinned memory.' }), 'error');
     await refresh();
     setBusy(false);
   }, [busy, write.id, refresh, t]);
@@ -182,6 +205,53 @@ export const MemoryWriteChip = memo(function MemoryWriteChip({ write }: { write:
         <span>{t('chat.memoryChip.question', { defaultValue: 'I will ask you about this later' })}</span>
       )}
       {view.kind === 'undone' && <span>{t('chat.memoryChip.undone', { defaultValue: 'Undone' })}</span>}
+      {view.kind === 'anchored' && (
+        <>
+          <span className="min-w-0 break-words line-clamp-3" data-testid="memory-chip-anchored">
+            {view.origin === 'auto'
+              ? t('chat.memoryChip.anchoredAuto', { defaultValue: 'Pinned what you keep telling me: {{value}}', value: view.value })
+              : t('chat.memoryChip.anchoredExplicit', { defaultValue: 'Pinned: {{value}}', value: view.value })}
+          </span>
+          <span aria-hidden>·</span>
+          <button
+            type="button"
+            onClick={() => void unanchor()}
+            disabled={busy}
+            data-testid="memory-chip-unanchor"
+            className="text-brand hover:text-brand/80 disabled:opacity-50"
+          >
+            {t('chat.memoryChip.cancel', { defaultValue: 'Undo' })}
+          </button>
+        </>
+      )}
+      {view.kind === 'unanchored' && (
+        <span>{t('chat.memoryChip.unanchored', { defaultValue: 'Unpinned' })}</span>
+      )}
+      {view.kind === 'anchored-conflict' && (
+        <>
+          <span className="min-w-0 break-words line-clamp-3" data-testid="memory-chip-anchored-conflict">
+            {t('chat.memoryChip.anchoredConflict', {
+              defaultValue: 'That differs from the pinned memory {{anchored}}, so I will follow the pinned one',
+              anchored: view.anchoredValue,
+            })}
+          </span>
+          <span aria-hidden>·</span>
+          <button
+            type="button"
+            onClick={() => void replaceAnchored()}
+            disabled={busy}
+            data-testid="memory-chip-replace-anchored"
+            className="text-brand hover:text-brand/80 disabled:opacity-50"
+          >
+            {t('chat.memoryChip.replaceAnchored', { defaultValue: 'Use the new one instead' })}
+          </button>
+        </>
+      )}
+      {view.kind === 'anchored-replaced' && (
+        <span className="min-w-0 break-words line-clamp-3">
+          {t('chat.memoryChip.anchoredReplaced', { defaultValue: 'Changed the pinned memory: {{value}}', value: view.value })}
+        </span>
+      )}
     </div>
   );
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createNabySpec, getStore, harnessOriginOf } from './naby';
-import { settleMemoryReviews, type MemoryReviewer } from '../lib/memoryReview';
+import type { MemoryReviewer } from '../lib/memoryReview';
+import { settleMemoryWork } from '../lib/memoryWorker';
 import { toChatMessages } from '../api/session/toChatMessages';
 import type { RunCtx, RunEvent } from './types';
 
@@ -149,7 +150,7 @@ describe('naby_remember applies after its review, without a click (memory-auto-a
     // The instruction told the model what to pass (R12).
     expect(prompts1[0]).toContain('basis \\"stated\\"');
 
-    await settleMemoryReviews();
+    await settleMemoryWork();
     expect(reviewCalls).toHaveLength(1);
     const row = store.getMemoryById(String(res?.data?.id));
     expect(row).toMatchObject({ status: 'confirmed', provenance: { source: 'user', basisKind: 'stated' } });
@@ -191,7 +192,7 @@ describe('naby_remember applies after its review, without a click (memory-auto-a
     // flag — the result may well have carried a page.
     expect(res?.data).toMatchObject({ review: 'held', holdReason: 'external', status: 'proposed' });
     expect(res?.content).toContain('PROPOSAL');
-    await settleMemoryReviews();
+    await settleMemoryWork();
     expect(store.listPendingReviewMemory().some((m) => m.key === 'injected-rule')).toBe(false);
   });
 });

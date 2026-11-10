@@ -113,6 +113,7 @@ import {
   NO_ENGINE_DEV_HINT,
   parseStyleFingerprint,
   readLearningEnabled,
+  requestMemoryPin,
   // memory-auto-apply §2: the one "did outside content enter this turn"
   // predicate (R4), and the user's own messages the quote check reads (R2).
   isExternalContentTool,
@@ -240,15 +241,15 @@ import {
 // for both engines because every call site below is engine-independent.
 import { ensureOrgHarnessQuitHandler, makeOrgTurnHooks, orgHookContextBlock } from '../lib/orgHarnessHooks';
 import { unclaimedLineLedVerbs } from '../lib/slashCommands';
-import { kickReflectionSweep } from '../lib/reflection';
 import {
-  engineReviewer,
-  kickMemoryReview,
   migrateWaitingProposals,
   readAutoApplySetting,
-  resolveSessionReviewBackend,
   type MemoryReviewer,
 } from '../lib/memoryReview';
+// specs/memory-worker.md: memory work runs in its own process; a turn only posts
+// "started" / "ended" notices to it.
+import { memoryWork } from '../lib/memoryWorker';
+import type { MemoryWorkStore } from '../lib/memoryJobs';
 import {
   closeRecommendationsOnDecline,
   closeRecommendationsOnJoin,
@@ -666,7 +667,9 @@ export interface NabyEngineDeps {
    * The memory review's model (memory-auto-apply §2a). Production leaves it unset
    * and reviews on the turn's own backend (R38). DEFAULTS TO NONE on the two test
    * seams — a review call would consume the scripted model's answers — so a test
-   * that covers the review injects a deterministic reviewer here.
+   * that covers the review injects a deterministic reviewer here. An injected
+   * reviewer cannot cross into the memory process, so its work runs in this one
+   * (memory-worker.ts, the in-process path).
    */
   memoryReviewer?: MemoryReviewer;
 }
@@ -988,19 +991,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // §4.3): sessions the user walked away from are read back here, and the
         // autonomous actions they later corrected are written to the ledger.
         //
-        // NOTHING BELOW WAITS FOR IT. No await, no shared state with the turn, and
-        // THIS session is excluded — the user is still reacting to it, so judging
-        // it now would score an unfinished exchange. A failure is logged inside
-        // `kickReflectionSweep` and cannot surface in the turn.
+        // NOTHING BELOW WAITS FOR IT. It runs in the memory process
+        // (specs/memory-worker.md), and THIS session is excluded — the user is
+        // still reacting to it, so judging it now would score an unfinished
+        // exchange. A failure is logged there and cannot surface in the turn.
         //
-        // THE STORE IS ALSO HOW THE PROVIDER CHOICE TRAVELS. The default judge is
-        // `modelReflectionJudge(store)` (see `kickReflectionSweep`), so the sweep's
-        // model call is billed to the provider this user picked — the same one
+        // THE STORE IS ALSO HOW THE PROVIDER CHOICE TRAVELS. The memory process
+        // builds the judge as `modelReflectionJudge(store)` over its own
+        // connection to the same database (memoryJobs.ts), so the sweep's model
+        // call is billed to the provider this user picked — the same one
         // `resolveMeteredProvider` resolves for the turn below.
         //
-        // memory-auto-apply: KICKED BELOW, once the engine is chosen — the review
-        // and tidy calls at the end of the sweep run on THIS turn's model (R38),
-        // which is not known until then.
+        // memory-auto-apply: QUEUED BELOW, once the engine is chosen — the review
+        // and tidy the sweep leaves owed run on THIS turn's model (R38), which is
+        // not known until then.
 
         const requestedModel =
           typeof ctx.params.model === 'string' ? ctx.params.model : undefined;
@@ -1268,52 +1272,63 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           }
         }
 
-        // ---- the memory reviewer: THIS turn's provider and model (R38) -----
+        // ---- the memory work's model: THIS turn's provider and model (R38) --
         //
-        // memory-auto-apply §2a. The review of what this turn (or the sweep it
-        // kicks) wrote runs on the backend the turn ran on — built from the same
-        // branch above, so a subscription turn reviews on the subscription, a key
-        // turn on that key, and nothing ever reaches for another provider's key.
+        // memory-auto-apply §2a, memory-worker R6. The review of what this turn
+        // (or the sweep its start queues) wrote runs on the backend the turn ran
+        // on. The work runs in the memory process, so what travels is a
+        // DESCRIPTOR — engine branch, provider, model, subscription — and the
+        // backend is rebuilt from it on the other side (`resolveMemoryCallRoute`:
+        // a subscription turn reviews on the subscription, a key turn on that key,
+        // and nothing ever reaches for another provider's key). Every real branch
+        // above set `reviewEngineFactory`; its absence marks the two test seams,
+        // which have no backend to rebuild and keep their work in this process.
+        //
         // `reviewModel` is filled in by `nabyTurnOptions` with the model the turn
-        // actually sends (the routed agent's, or the router's) — read at CALL
-        // time, so the post-turn review uses it. Until then it is undefined,
-        // which an engine reads as "your own default"; nothing here reads
-        // `modelForEngine` eagerly (it is deliberately empty on an `auto` turn
-        // until the router runs, nabyAutoModel.test.ts).
+        // actually sends (the routed agent's, or the router's) and posted as a
+        // `turnModel` notice the moment it is known — the memory process looks
+        // the descriptor up at RUN time, the same "read at call time" the old
+        // in-turn closure had. Nothing here reads `modelForEngine` eagerly (it is
+        // deliberately empty on an `auto` turn until the router runs,
+        // nabyAutoModel.test.ts).
         let reviewModel: string | undefined;
-        const reviewEngineId = engineId;
-        const reviewProviderId = providerId;
-        const reviewAccountId = claudeAccountId;
-        const reviewFactory = reviewEngineFactory;
-        const sessionReviewer: MemoryReviewer | undefined =
-          deps.memoryReviewer ??
-          (reviewFactory
+        const memoryTurnRebuildable = reviewEngineFactory !== undefined;
+        const memoryTurnModel = () =>
+          memoryTurnRebuildable
             ? {
-                label: `${reviewEngineId} (${reviewProviderId})`,
-                async call(prompt) {
-                  const backend = await resolveSessionReviewBackend(
-                    {
-                      engineId: reviewEngineId,
-                      providerId: reviewProviderId,
-                      ...(reviewModel ? { model: reviewModel } : {}),
-                      ...(reviewAccountId ? { accountId: reviewAccountId } : {}),
-                    },
-                    { makeEngine: reviewFactory },
-                  );
-                  if (!backend) throw new Error('no backend for this session');
-                  return engineReviewer(backend).call(prompt);
-                },
+                engineId,
+                providerId,
+                ...(reviewModel ? { model: reviewModel } : {}),
+                ...(claudeAccountId ? { accountId: claudeAccountId } : {}),
               }
-            : undefined);
+            : undefined;
+        const memoryNotice = () => {
+          const model = memoryTurnModel();
+          return {
+            sessionId,
+            store: store as unknown as MemoryWorkStore,
+            ...(model ? { model } : {}),
+            ...(deps.memoryReviewer ? { reviewer: deps.memoryReviewer } : {}),
+            ...(memoryTurnRebuildable ? {} : { inProcess: true }),
+          };
+        };
+        let postedReviewModel: string | undefined;
+        const noteMemoryTurnModel = (m: string | undefined) => {
+          if (!memoryTurnRebuildable || m === postedReviewModel || m === undefined) return;
+          postedReviewModel = m;
+          const model = memoryTurnModel();
+          if (model) memoryWork().turnModel({ ...memoryNotice(), model });
+        };
 
-        // ---- session reflection, fire-and-forget (Phase 3, P3-M8a) — kicked
-        // HERE rather than at the top so the review and tidy calls at the end of
-        // the sweep run on this turn's model (memory-auto-apply R38). See the
-        // note above `requestedModel` for everything else about it.
-        kickReflectionSweep(store, {
-          excludeSessionId: sessionId,
-          ...(sessionReviewer ? { reviewer: sessionReviewer } : {}),
-        });
+        // ---- session reflection, queued (Phase 3, P3-M8a; memory-worker R9) --
+        //
+        // The turn only SAYS it started. The sweep is queued in the memory
+        // process, which runs it beside this turn without sharing its event loop,
+        // its database connection or its CPU priority; the judge resolves the
+        // provider the user picked from that process's own store, and the review
+        // and tidy it leaves owed run on this turn's model (R38). Posting is one
+        // IPC message and never throws.
+        memoryWork().turnStarted(memoryNotice());
 
         // ---- @agent routing, resolved early (Phase 3, P3-M2) --------------
         //
@@ -1723,10 +1738,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     }),
                   getExisting: (scope, scopeKey, key) =>
                     store.getScopedMemory(scope, scopeKey).find((m) => m.key === key),
-                  corroborate: (id) => store.corroborateMemory(id, sessionId),
+                  corroborate: (id, o) =>
+                    store.corroborateMemory(id, sessionId, o?.stated ? { stated: true } : undefined),
                   upgradeProvenance: (id, patch) => {
                     store.patchMemoryProvenance(id, patch);
                   },
+                  // memory-tiers R5: "always remember this" with the user's own
+                  // verified words — anchored now, or once the review confirms.
+                  requestPin: (id) => requestMemoryPin(store, id),
                 },
               }
             : undefined,
@@ -3827,6 +3846,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 const m = effectiveAgentModel(routedAgent?.model) ?? modelForEngine;
                 // memory-auto-apply R38: the post-turn review runs on exactly this.
                 reviewModel = m;
+                noteMemoryTurnModel(m);
                 return { providerId, ...(m ? { model: m } : {}) };
               })(),
               // Step 1 is the user's own words; every later step is the harness
@@ -4677,20 +4697,15 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           }
         }
 
-        // ---- the memory review, fire-and-forget (memory-auto-apply §2a) ----
+        // ---- the memory review, queued (memory-auto-apply §2a) -------------
         //
-        // The turn is over, so the memories it wrote are reviewed now — one call,
-        // on this turn's model (R37, R38), never awaited. A turn that wrote
-        // nothing costs one indexed read and no call (R44). It runs even after a
-        // stop: what was written is pending either way, and the user stopping the
-        // answer is not the user retracting what they asked naby to remember.
-        if (autoApply) {
-          try {
-            kickMemoryReview(store, async () => sessionReviewer, { sessionId });
-          } catch (e) {
-            console.log(`[engine:naby] memory review not kicked: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
+        // The turn is over, so the memories it wrote are queued for review — one
+        // call, on this turn's model (R37, R38), in the memory process, never
+        // awaited. A turn that wrote nothing costs one indexed read there and no
+        // call (R44). It is queued even after a stop: what was written is pending
+        // either way, and the user stopping the answer is not the user retracting
+        // what they asked naby to remember.
+        memoryWork().turnEnded({ ...memoryNotice(), autoApply });
 
         // ---- the final report (Phase 3, P3-M3b) --------------------------
         //

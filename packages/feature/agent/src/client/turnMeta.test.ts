@@ -5,7 +5,7 @@ import i18n from '@cockpit/shared-i18n';
 import { formatTurnMeta } from './elapsed';
 
 /**
- * THE CLOSING LINE OF A FINISHED TURN — `12.3초 · 오후 2:15`.
+ * THE CLOSING LINE OF A FINISHED TURN — `12.3초 · 14:15:00`.
  *
  * Two halves, and they fail differently. What the line SAYS is decided by a
  * pure function and is tested as one. WHERE it is drawn and whether the user
@@ -25,7 +25,7 @@ describe('turn meta — what the line says', () => {
 
   it('reads as duration then arrival time, in that order', () => {
     const endedAt = new Date(2026, 7, 19, 14, 15, 0).toISOString();
-    expect(formatTurnMeta(12_340, endedAt)).toBe('12.3초 · 오후 2:15');
+    expect(formatTurnMeta(12_340, endedAt)).toBe('12.3초 · 14:15:00');
   });
 
   it('draws NOTHING for a turn that recorded no measurement', () => {
@@ -59,7 +59,7 @@ describe('turn meta — what the line says', () => {
   it('follows the UI language, both halves of it', async () => {
     const endedAt = new Date(2026, 7, 19, 14, 15, 0).toISOString();
     await i18n.changeLanguage('en');
-    expect(formatTurnMeta(12_340, endedAt)).toBe('12.3s · 2:15 PM');
+    expect(formatTurnMeta(12_340, endedAt)).toBe('12.3s · 14:15:00');
   });
 });
 
@@ -84,13 +84,15 @@ describe('turn meta — where MessageBubble draws it', () => {
     expect(el).not.toContain('group-hover');
   });
 
-  it('is gated on a finished ASSISTANT turn', () => {
-    // A user message has no turn to measure, and a running turn's number would
-    // tick and then settle — which reads as instability, not as information.
+  it('waits for the turn to finish; a user bubble shows only when it was sent', () => {
+    // A running turn's number would tick and then settle — which reads as
+    // instability, not as information. A user message has no turn to measure,
+    // so it carries its send time alone.
     const source = src();
     const guard = /const turnMeta = useMemo\(\(\) => \{([\s\S]*?)\n  \}, \[/.exec(source);
     expect(guard, 'the turnMeta memo moved or was renamed').not.toBeNull();
-    expect(guard![1]).toContain('if (isUser || message.isStreaming) return null;');
+    expect(guard![1]).toContain('if (message.isStreaming) return null;');
+    expect(guard![1]).toContain('formatTurnEndTime(message.timestamp)');
   });
 
   it('is memoised, and does not format a clock on every render', () => {

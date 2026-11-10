@@ -129,7 +129,10 @@ export type MemoryReviewState =
   | { state: 'known'; value: string }
   | { state: 'changed'; value: string; oldValue: string; summary?: string; oldSummary?: string; undone?: boolean }
   | { state: 'question' }
-  | { state: 'gone' };
+  | { state: 'gone' }
+  // memory-tiers R6 / R19.
+  | { state: 'anchored'; origin: 'explicit' | 'auto'; value: string; summary?: string; undone?: boolean }
+  | { state: 'anchored-conflict'; value: string; anchoredValue: string; anchoredSummary?: string; replaced?: boolean };
 
 /** Taller than three lines (runtime MEMORY_SUMMARY_MIN_*; a client bundle
  *  cannot import the runtime). */
@@ -156,6 +159,16 @@ export type MemoryChipView =
   | { kind: 'held'; reason?: string; summary?: string; canConfirm: true }
   | { kind: 'question' }
   | { kind: 'undone' }
+  /** memory-tiers R6: "고정했어요: ‹요약› · 취소" (explicit) / "자주 말씀하신 걸
+   *  고정했어요: ‹요약› · 취소" (auto). The undo un-anchors, it never deletes. */
+  | { kind: 'anchored'; origin: 'explicit' | 'auto'; value: string; canUnanchor: true }
+  /** memory-tiers R6: the anchoring was taken back from a chip. */
+  | { kind: 'unanchored' }
+  /** memory-tiers R19: "고정 기억 ‹요약›과 달라서 고정 기억대로 할게요 · 새
+   *  내용으로 바꾸기". */
+  | { kind: 'anchored-conflict'; anchoredValue: string; value: string; canReplace: true }
+  /** memory-tiers R19: after "새 내용으로 바꾸기". */
+  | { kind: 'anchored-replaced'; value: string }
   | { kind: 'none' };
 
 /**
@@ -199,6 +212,19 @@ export function memoryChipView(write: MemoryWrite, status: MemoryReviewState | u
     }
     case 'question':
       return { kind: 'question' };
+    case 'anchored':
+      return status.undone
+        ? { kind: 'unanchored' }
+        : { kind: 'anchored', origin: status.origin, value: status.summary || status.value, canUnanchor: true };
+    case 'anchored-conflict':
+      return status.replaced
+        ? { kind: 'anchored-replaced', value: status.value }
+        : {
+            kind: 'anchored-conflict',
+            anchoredValue: status.anchoredSummary || status.anchoredValue,
+            value: status.value,
+            canReplace: true,
+          };
     case 'gone':
     default:
       return { kind: 'none' };

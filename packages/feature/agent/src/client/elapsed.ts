@@ -91,13 +91,11 @@ export function formatTurnDuration(ms: number): string {
 }
 
 /**
- * WHEN a turn finished, on the wall clock: `오후 2:15` in Korean, `2:15 PM` in
- * English.
+ * A clock time as `HH:MM:SS`, 24-hour, zero-padded — the time shown under every
+ * chat bubble (when the user asked, when naby finished answering).
  *
- * Follows the ACTIVE UI language rather than a fixed locale. The nearby
- * `UserMessagesModal.formatTime` hardcodes `'zh-CN'`, inherited from upstream
- * cockpit; this app ships Korean and English, so that literal is a bug and is
- * deliberately not copied here.
+ * The same in every UI language on purpose: the user asked for the exact
+ * second, and a localised `오후 2:15` cannot carry it.
  *
  * Returns '' for a missing or unparseable value, so a caller can test the string
  * itself instead of carrying a second "is there a time" flag.
@@ -106,14 +104,12 @@ export function formatTurnEndTime(iso: string | undefined): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
-  // `hour: 'numeric'` and not '2-digit': a leading zero on the hour is a
-  // machine's way of writing a time, and every locale here reads better without
-  // one. The minute keeps its zero, because "2:5" is not a time.
-  return d.toLocaleTimeString(i18n.language, { hour: 'numeric', minute: '2-digit' });
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 /**
- * The closing line of a finished turn: `12.3초 · 오후 2:15`.
+ * The closing line of a finished turn: `12.3초 · 14:15:07`.
  *
  * A FUNCTION AND NOT A TEMPLATE IN JSX, because the interesting part is what it
  * declines to draw. `null` means the turn has nothing to say — no measurement

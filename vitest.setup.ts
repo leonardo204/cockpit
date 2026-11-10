@@ -39,6 +39,13 @@ process.env.NABY_DB_PATH = join(home, 'app.db');
 // under `tmpdir()` cannot land in the real home — but this file's whole reason
 // for existing is that "cannot" was wrong once, and a throw here names the
 // problem at setup time instead of after the suite has written somewhere.
+// KEEP MEMORY WORK IN THE TEST PROCESS (specs/memory-worker.md). Production
+// forks a memory process from `shell/dist/memoryWorker.mjs`; a test that ran a
+// turn would otherwise fork whatever bundle the last build left there, against
+// this worker's temp database, and nothing in the test could wait for it. The
+// supervisor's own tests drive a fake child instead.
+process.env.NABY_MEMORY_WORKER = 'off';
+
 const realHome = join(homedir(), '.naby');
 if (home === realHome || home.startsWith(realHome + '/')) {
   throw new Error(`vitest setup resolved a naby home inside the real one: ${home}`);

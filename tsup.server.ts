@@ -11,6 +11,9 @@ export default defineConfig({
     // Settles what an unclean shutdown left behind: jobs whose record still says
     // `running`, and session rows still marked `loading`. Boot-only, by design.
     bootReconcile: 'packages/feature/agent/src/server/lib/bootReconcileBoot.ts',
+    // The memory process (specs/memory-worker.md R1): forked by the supervisor
+    // in lib/memoryWorker.ts, which looks for it here as `dist/memoryWorker.mjs`.
+    memoryWorker: 'packages/feature/agent/src/server/lib/memoryWorkerMain.ts',
   },
   outDir: 'dist',
   format: 'esm',

@@ -38,6 +38,7 @@ import type {
   MemoryItem,
   MemoryScope,
   MemoryStatus,
+  MemoryTier,
   MemoryType,
   TrustTier,
 } from '../../../../../../dist/naby-runtime.mjs';
@@ -59,6 +60,8 @@ export type MemoryPage = {
   limit: number;
   offset: number;
   staleBefore: number | null;
+  /** memory-tiers §6: archived row id → whole days left before deletion. */
+  daysLeft?: Record<string, number>;
 };
 
 type BrowserAction =
@@ -69,7 +72,12 @@ type BrowserAction =
   // P3-M13a §3.1: the UNDO. Supersession is automatic, so it has to be
   // reversible by the person whose memory it is — that is the trade the spec
   // makes, and this button is naby's half of it.
-  | { action: 'revertSupersession'; id: string };
+  | { action: 'revertSupersession'; id: string }
+  // memory-tiers §6: pin a long-term memory (R5), unpin an anchored one (R20),
+  // bring an archived one back (R11).
+  | { action: 'pin'; id: string }
+  | { action: 'unpin'; id: string }
+  | { action: 'restore'; id: string };
 
 /** The filter chips' values, kept in one object so a change to any of them can
  *  reset the page offset in a single place — a filter change that kept the
@@ -95,6 +103,10 @@ export type MemoryFilters = {
    */
   keyPrefix: string;
   search: string;
+  /** memory-tiers §6: one tier only. Absent / 'all' = every tier. */
+  tier?: MemoryTier | 'all';
+  /** memory-tiers §6: show ONLY archived rows ("보관됨"). Off = live rows. */
+  archived?: boolean;
 };
 
 /** The one namespace the UI deep links into today: `style/<target>/<slug>`, the
@@ -127,6 +139,8 @@ export function buildMemoryQuery(
   if (prefix) params.set('keyPrefix', prefix);
   const term = filters.search.trim();
   if (term) params.set('search', term);
+  if (filters.tier && filters.tier !== 'all') params.set('tier', filters.tier);
+  if (filters.archived) params.set('archived', '1');
   params.set('limit', String(page.limit));
   params.set('offset', String(page.offset));
   return params.toString();
@@ -196,11 +210,15 @@ const BrowserRow = memo(function BrowserRow({
   /** The KEY of the memory that replaced this one, when it was replaced. A
    *  primitive, so the row stays `memo`-friendly. */
   replacedBy,
+  daysLeft,
   onConfirm,
   onDelete,
   onEdit,
   onKeepAlive,
   onRevert,
+  onPin,
+  onUnpin,
+  onRestore,
 }: {
   item: MemoryItem;
   scope: NabyScopeId;
@@ -209,11 +227,16 @@ const BrowserRow = memo(function BrowserRow({
   corroboration: number;
   staleBefore: number | null;
   replacedBy?: string;
+  /** memory-tiers §6: days left before an archived row is deleted. */
+  daysLeft?: number;
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
   onEdit: (id: string, value: string) => void;
   onKeepAlive: (id: string) => void;
   onRevert: (id: string) => void;
+  onPin: (id: string) => void;
+  onUnpin: (id: string) => void;
+  onRestore: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
@@ -222,6 +245,8 @@ const BrowserRow = memo(function BrowserRow({
   const isSuperseded = item.supersededAt !== undefined;
   const lastUsed = item.lastInjectedAt ?? item.updatedAt;
   const isStale = staleBefore !== null && item.status === 'confirmed' && lastUsed < staleBefore;
+  const isArchived = item.archivedAt !== undefined;
+  const tierKey = memoryTierLabelKey(item);
 
   // The draft follows the item when the list reloads under it (a confirm, a
   // sibling's delete). Without this an edit box left open would keep showing the
@@ -270,6 +295,24 @@ const BrowserRow = memo(function BrowserRow({
           {isStale ? (
             <span className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground">
               {t('memoryReview.staleBadge')}
+            </span>
+          ) : null}
+          {tierKey && !isArchived ? (
+            <span
+              className={`text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium ${
+                item.tier === 'anchored' ? 'bg-brand/15 text-brand' : 'bg-muted text-muted-foreground'
+              }`}
+              data-testid="memory-tier-badge"
+            >
+              {t(tierKey)}
+            </span>
+          ) : null}
+          {isArchived ? (
+            <span
+              className="text-[0.714rem] px-1.5 py-0.5 rounded-full font-medium bg-muted text-muted-foreground"
+              data-testid="memory-archived-badge"
+            >
+              {t('memoryReview.archivedBadge', { count: daysLeft ?? 0 })}
             </span>
           ) : null}
           {isSuperseded ? (
@@ -365,6 +408,41 @@ const BrowserRow = memo(function BrowserRow({
                 confirming or keeping alive a memory that is not being used
                 would be buttons that appear to do nothing. Delete stays, since
                 deleting is always available. */}
+            {/* memory-tiers R11: an archived row's actions are bring it back or
+                delete it — nothing else means anything while it is hidden. */}
+            {isArchived ? (
+              <button
+                onClick={() => onRestore(item.id)}
+                disabled={busy}
+                data-testid="memory-restore"
+                className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+              >
+                {t('memoryReview.restore')}
+              </button>
+            ) : null}
+            {/* memory-tiers §6: "고정" on a long-term row, "고정 풀기" on an
+                anchored one (R5 user pin, R20). */}
+            {!isArchived && !isSuperseded && item.tier === 'long' ? (
+              <button
+                onClick={() => onPin(item.id)}
+                disabled={busy}
+                title={t('memoryReview.pinTitle')}
+                data-testid="memory-pin"
+                className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+              >
+                {t('memoryReview.pin')}
+              </button>
+            ) : null}
+            {!isArchived && item.tier === 'anchored' ? (
+              <button
+                onClick={() => onUnpin(item.id)}
+                disabled={busy}
+                data-testid="memory-unpin"
+                className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground disabled:opacity-50"
+              >
+                {t('memoryReview.anchoredUnpin')}
+              </button>
+            ) : null}
             {isSuperseded ? (
               <button
                 onClick={() => onRevert(item.id)}
@@ -396,7 +474,7 @@ const BrowserRow = memo(function BrowserRow({
             </button>
             {/* "Keep" is only meaningful for a row the decay queue can hold —
                 a confirmed one. On a proposal the answer is confirm or delete. */}
-            {!isProposed && !isSuperseded ? (
+            {!isProposed && !isSuperseded && !isArchived && item.tier !== 'anchored' ? (
               <button
                 onClick={() => onKeepAlive(item.id)}
                 disabled={busy}
@@ -421,6 +499,21 @@ const BrowserRow = memo(function BrowserRow({
   );
 });
 
+/** memory-tiers §6: the tier badge's label key, or undefined for a row with no
+ *  tier (a proposal). Pure and exported for the tests. */
+export function memoryTierLabelKey(item: Pick<MemoryItem, 'tier'>): string | undefined {
+  switch (item.tier) {
+    case 'anchored':
+      return 'memoryReview.tierAnchored';
+    case 'long':
+      return 'memoryReview.tierLong';
+    case 'short':
+      return 'memoryReview.tierShort';
+    default:
+      return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The modal.
 // ---------------------------------------------------------------------------
@@ -431,6 +524,14 @@ const STATUS_CHIPS: { value: MemoryStatus | 'all'; labelKey: string }[] = [
   { value: 'all', labelKey: 'memoryReview.statusAll' },
   { value: 'proposed', labelKey: 'memoryReview.statusProposed' },
   { value: 'confirmed', labelKey: 'memoryReview.statusConfirmed' },
+];
+
+/** memory-tiers §6: the tier filter. */
+const TIER_CHIPS: { value: MemoryTier | 'all'; labelKey: string }[] = [
+  { value: 'all', labelKey: 'memoryReview.filterAll' },
+  { value: 'anchored', labelKey: 'memoryReview.tierAnchored' },
+  { value: 'long', labelKey: 'memoryReview.tierLong' },
+  { value: 'short', labelKey: 'memoryReview.tierShort' },
 ];
 
 const TYPE_CHIPS: { value: MemoryType | 'all'; labelKey: string }[] = [
@@ -456,6 +557,8 @@ const DEFAULT_FILTERS: MemoryFilters = {
   superseded: false,
   keyPrefix: '',
   search: '',
+  tier: 'all',
+  archived: false,
 };
 
 export function MemoryBrowserModal({
@@ -578,7 +681,13 @@ export function MemoryBrowserModal({
           toast(t(successKey), 'success');
           await reload();
         } else {
-          toast(t('memoryReview.actionError', { error: res.error ?? '' }), 'error');
+          // memory-tiers R17: a full anchored budget is a state, not an error.
+          toast(
+            res.error === 'anchored-full'
+              ? t('memoryReview.anchorFullTitle')
+              : t('memoryReview.actionError', { error: res.error ?? '' }),
+            'error',
+          );
         }
       } finally {
         setBusyId(null);
@@ -606,6 +715,18 @@ export function MemoryBrowserModal({
   const handleRevert = useCallback(
     (id: string) =>
       void run(id, { action: 'revertSupersession', id }, 'memoryReview.reverted'),
+    [run],
+  );
+  const handlePin = useCallback(
+    (id: string) => void run(id, { action: 'pin', id }, 'memoryReview.pinned'),
+    [run],
+  );
+  const handleUnpin = useCallback(
+    (id: string) => void run(id, { action: 'unpin', id }, 'memoryReview.anchoredUnpinned'),
+    [run],
+  );
+  const handleRestore = useCallback(
+    (id: string) => void run(id, { action: 'restore', id }, 'memoryReview.restored'),
     [run],
   );
 
@@ -681,6 +802,27 @@ export function MemoryBrowserModal({
                 {t(o.labelKey)}
               </button>
             ))}
+          </div>
+          {/* memory-tiers §6: the tier filter, and "보관됨" (archived rows only,
+              each with its days left and 되살리기). */}
+          <div className="flex flex-wrap gap-1.5" data-testid="memory-tier-chips">
+            {TIER_CHIPS.map((o) => (
+              <button
+                key={o.value}
+                onClick={() => setFilter({ tier: o.value })}
+                className={chip((filters.tier ?? 'all') === o.value)}
+              >
+                {t(o.labelKey)}
+              </button>
+            ))}
+            <button
+              onClick={() => setFilter({ archived: !filters.archived })}
+              title={t('memoryReview.filterArchivedTitle')}
+              className={chip(filters.archived === true)}
+              data-testid="memory-archived-chip"
+            >
+              {t('memoryReview.filterArchived')}
+            </button>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {TYPE_CHIPS.map((o) => (
@@ -759,6 +901,10 @@ export function MemoryBrowserModal({
                 onEdit={handleEdit}
                 onKeepAlive={handleKeepAlive}
                 onRevert={handleRevert}
+                onPin={handlePin}
+                onUnpin={handleUnpin}
+                onRestore={handleRestore}
+                {...(page.daysLeft?.[item.id] !== undefined ? { daysLeft: page.daysLeft[item.id] } : {})}
               />
             ))
           )}

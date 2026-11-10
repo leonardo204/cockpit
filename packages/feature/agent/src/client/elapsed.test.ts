@@ -91,22 +91,15 @@ describe('formatTurnDuration', () => {
 });
 
 describe('formatTurnEndTime', () => {
-  // 14:15 local, built from local parts so the assertion does not depend on the
-  // machine's timezone — the point under test is the FORMAT, not the offset.
-  const at = (h: number, m: number) => new Date(2026, 7, 19, h, m, 0).toISOString();
+  // Built from local parts so the assertion does not depend on the machine's
+  // timezone — the point under test is the FORMAT, not the offset.
+  const at = (h: number, m: number, sec = 0) => new Date(2026, 7, 19, h, m, sec).toISOString();
 
-  it('follows the active UI language — not a hardcoded locale', async () => {
-    // `UserMessagesModal.formatTime` hardcodes 'zh-CN'; this app ships Korean
-    // and English, and that literal is deliberately not copied here.
+  it('is HH:MM:SS, 24-hour and zero-padded, in every UI language', async () => {
     await i18n.changeLanguage('ko');
-    expect(formatTurnEndTime(at(14, 15))).toBe('오후 2:15');
+    expect(formatTurnEndTime(at(14, 15, 7))).toBe('14:15:07');
     await i18n.changeLanguage('en');
-    expect(formatTurnEndTime(at(14, 15))).toBe('2:15 PM');
-  });
-
-  it('keeps the minute’s leading zero and drops the hour’s', async () => {
-    await i18n.changeLanguage('en');
-    expect(formatTurnEndTime(at(9, 5))).toBe('9:05 AM');
+    expect(formatTurnEndTime(at(9, 5, 0))).toBe('09:05:00');
   });
 
   it('is empty — never a stray string — for a missing or unparseable value', () => {

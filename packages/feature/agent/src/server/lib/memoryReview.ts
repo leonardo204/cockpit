@@ -18,13 +18,18 @@
 // with no way to reach it the review simply waits (R42) — a review that cannot be
 // asked is not an answer, and a verdict is never invented.
 //
-// NOTHING HERE BLOCKS A TURN (R37). The review is kicked fire-and-forget after
-// the turn's last event, one at a time per process; a kick that arrives while one
-// is running asks for one more pass when it finishes.
+// NOTHING HERE BLOCKS A TURN (R37). The review is queued after the turn's last
+// event and runs in the memory process, one job at a time (memory-worker.ts,
+// specs/memory-worker.md); this file is the work itself, not its scheduling.
 
 import {
   AiSdkEngine,
   apiKeyCredential,
+  CHATGPT_OAUTH_DEFAULT_MODEL,
+  CHATGPT_OAUTH_LABEL,
+  CHATGPT_OAUTH_PROVIDER_ID,
+  getChatgptTokenSource,
+  isChatgptOauthEnabled,
   buildMemoryReviewPrompt,
   buildMemorySummaryPrompt,
   MEMORY_SUMMARY_BATCH_CAP,
@@ -40,7 +45,10 @@ import {
   parseMemoryReviewAnswer,
   resolveProviderCredential,
   selectReviewContext,
+  requestMemoryPin,
+  settlePinRequest,
   TIDY_BATCH_CAP,
+  unanchorMemory,
   type Engine,
   type MemoryItem,
   type MemoryPairVerdict,
@@ -49,6 +57,7 @@ import {
   type MemoryQuestionAnswer,
   type MemoryReviewSubject,
   type ModelSelection,
+  type ProviderProfile,
   type ReviewRelation,
   type Store,
 } from '../../../../../../../dist/naby-runtime.mjs';
@@ -123,7 +132,10 @@ export type MemoryReceiptKind =
   | 'question' // R18/R21: the user will be asked
   | 'tidy-equivalent'
   | 'tidy-refines'
-  | 'tidy-contradicts';
+  | 'tidy-contradicts'
+  /** memory-tiers R19: the new memory contradicted an anchored one — kept, but
+   *  the anchored row wins until the user presses "replace". */
+  | 'anchored-conflict';
 
 export type MemoryReceipt = {
   /** The id the chip/row addresses: the reviewed row (review) or the retired row (tidy). */
@@ -143,6 +155,8 @@ export type MemoryReceipt = {
   /** The migration batch (R33). */
   migrated?: boolean;
   undone?: boolean;
+  /** memory-tiers R19: the user replaced the anchored value with this one. */
+  replaced?: boolean;
 };
 
 export function readReceipts(store: Pick<Store, 'getSetting'>): MemoryReceipt[] {
@@ -244,6 +258,30 @@ export async function resolveSessionReviewBackend(
       label: `claude-agent-sdk (subscription${turn.model ? ` ${turn.model}` : ''})`,
     };
   }
+  // THE CHATGPT SUBSCRIPTION, rebuilt from the descriptor the same way the
+  // engine's own branch builds it (engines/naby.ts): the token SOURCE the Electron
+  // main process installed, never a key. Needed since the review left the turn's
+  // closure for the memory queue (memory-worker R6) — the descriptor is all that
+  // travels, so every engine branch must be rebuildable from it.
+  if (turn.providerId === CHATGPT_OAUTH_PROVIDER_ID) {
+    const source = isChatgptOauthEnabled() ? getChatgptTokenSource() : undefined;
+    if (!source) return undefined;
+    const chatgptModel = turn.model ?? CHATGPT_OAUTH_DEFAULT_MODEL;
+    const profile: ProviderProfile = {
+      id: CHATGPT_OAUTH_PROVIDER_ID,
+      label: CHATGPT_OAUTH_LABEL,
+      kind: 'openai-chatgpt-oauth',
+      config: { kind: 'openai-chatgpt-oauth' },
+      model: chatgptModel,
+      credentialRef: 'chatgpt-oauth',
+    };
+    const base = makeModelResolver([profile], () => ({ kind: 'chatgpt-oauth', source }));
+    return {
+      engine: () => new AiSdkEngine({ resolveModel: (s) => base(s.providerId, s.model) }),
+      model: { providerId: CHATGPT_OAUTH_PROVIDER_ID, model: chatgptModel },
+      label: `ai-sdk (chatgpt subscription ${chatgptModel})`,
+    };
+  }
   const resolution = await resolveProviderCredential({ providerId: turn.providerId });
   if (!resolution.ok || resolution.value.profile.id !== turn.providerId) return undefined;
   const { profile, apiKey } = resolution.value;
@@ -258,12 +296,16 @@ export async function resolveSessionReviewBackend(
 /** Drive a backend for one strict-JSON answer: no tools, a deny-all gate, a
  *  timeout. The same shape as the reflection judge — the review leaves no trace
  *  in any transcript. */
-export function engineReviewer(backend: ReviewBackend): MemoryReviewer {
+export function engineReviewer(
+  backend: ReviewBackend,
+  opts: { timeoutMs?: number } = {},
+): MemoryReviewer {
+  const timeoutMs = opts.timeoutMs ?? MEMORY_REVIEW_TIMEOUT_MS;
   return {
     label: backend.label,
     async call(prompt) {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), MEMORY_REVIEW_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       let answer = '';
       try {
         for await (const event of backend.engine().run({
@@ -319,6 +361,10 @@ export type MemoryReviewStore = Pick<
   | 'getMemoryQuestion'
   | 'listMemoryQuestions'
   | 'updateMemoryQuestion'
+  // memory-tiers: pins settle when a review confirms (R5), and the chips' undo
+  // and "replace" act on the anchored row (R6, R19).
+  | 'setMemoryTierState'
+  | 'listTieredMemory'
 >;
 
 /** Has the user said "keep both" about this pair (R26)? Never re-asked. */
@@ -488,8 +534,27 @@ function applyReviewOutcome(
 
     case 'confirm':
       store.settleMemoryReview(item.id, { status: 'confirmed', at: now });
+      // memory-tiers R5: an explicit pin waited for exactly this moment.
+      settlePin(store, item.id, now);
       result.applied += 1;
       return { ...base, kind: 'applied', memoryId: item.id };
+
+    case 'anchored-wins': {
+      // memory-tiers R19: the new memory is KEPT (confirmed) but loses to the
+      // anchored row — retired in its favour, so injection never carries both.
+      // The chip offers "replace" (`replaceAnchoredMemory`); nothing is asked.
+      store.settleMemoryReview(item.id, { status: 'confirmed', at: now });
+      store.setMemoryTierState(item.id, { pinRequested: false });
+      store.supersedeMemory(item.id, outcome.target.id, now, 'anchored-wins');
+      result.applied += 1;
+      return {
+        ...base,
+        kind: 'anchored-conflict',
+        memoryId: item.id,
+        otherId: outcome.target.id,
+        oldValue: outcome.target.value,
+      };
+    }
 
     case 'merge': {
       const target = store.getMemoryById(outcome.target.id);
@@ -506,8 +571,11 @@ function applyReviewOutcome(
           ...(item.provenance.basisKind ? { basisKind: item.provenance.basisKind } : {}),
         });
       }
+      // memory-tiers R5: a pin asked for the same claim goes to the row holding it.
+      const pinWanted = item.pinRequested === true;
       // No new row (R41): the claim already lives in `target`.
       store.deleteMemory({ id: item.id });
+      if (pinWanted) requestMemoryPin(store, target.id, now);
       result.merged += 1;
       return { ...base, kind: 'known', memoryId: target.id, otherId: target.id, value: target.value };
     }
@@ -520,7 +588,9 @@ function applyReviewOutcome(
         return { ...base, kind: 'applied', memoryId: item.id };
       }
       store.reviseMemoryValue(target.id, item.value, { ...item.provenance }, now);
+      const pinWanted = item.pinRequested === true;
       store.deleteMemory({ id: item.id });
+      if (pinWanted) requestMemoryPin(store, target.id, now);
       result.refined += 1;
       return {
         ...base,
@@ -534,6 +604,7 @@ function applyReviewOutcome(
 
     case 'supersede': {
       store.settleMemoryReview(item.id, { status: 'confirmed', at: now });
+      settlePin(store, item.id, now);
       const stamped = store.supersedeMemory(outcome.target.id, item.id, now, 'review-contradicts');
       if (!stamped) {
         result.applied += 1;
@@ -544,6 +615,16 @@ function applyReviewOutcome(
     }
   }
   return undefined;
+}
+
+/** Act on a pin request a just-confirmed row carried (memory-tiers R5). Never
+ *  throws: a pin that cannot land leaves an ordinary memory. */
+function settlePin(store: MemoryReviewStore, id: string, now: number): void {
+  try {
+    settlePinRequest(store, id, now);
+  } catch (e) {
+    console.warn(`[memory-review] pin not settled: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -732,56 +813,6 @@ export async function runMemorySummaries(
 }
 
 // ---------------------------------------------------------------------------
-// Fire-and-forget (R37)
-// ---------------------------------------------------------------------------
-
-let reviewInFlight: Promise<void> | undefined;
-let reviewAgain: (() => Promise<unknown>) | undefined;
-
-/**
- * Kick a turn review. Returns IMMEDIATELY and never throws — the turn that ended
- * must be byte-for-byte unaffected. One review at a time per process: a kick
- * arriving mid-review queues ONE more pass (the latest), so rows written by a
- * quick second turn are not left until the third.
- */
-export function kickMemoryReview(
-  store: MemoryReviewStore,
-  reviewer: () => Promise<MemoryReviewer | undefined>,
-  opts: { sessionId?: string } = {},
-): void {
-  const job = async (): Promise<unknown> => {
-    const resolved = await reviewer();
-    await runTurnMemoryReview(store, resolved, opts);
-    return runMemorySummaries(store, resolved);
-  };
-  if (reviewInFlight) {
-    reviewAgain = job;
-    return;
-  }
-  const loop = async (): Promise<void> => {
-    let next: (() => Promise<unknown>) | undefined = job;
-    while (next) {
-      const current = next;
-      reviewAgain = undefined;
-      try {
-        await current();
-      } catch (e) {
-        console.warn(`[memory-review] review failed: ${e instanceof Error ? e.message : String(e)}`);
-      }
-      next = reviewAgain;
-    }
-  };
-  reviewInFlight = loop().finally(() => {
-    reviewInFlight = undefined;
-  });
-}
-
-/** For tests: wait for the in-flight review (if any) to finish. */
-export async function settleMemoryReviews(): Promise<void> {
-  while (reviewInFlight) await reviewInFlight;
-}
-
-// ---------------------------------------------------------------------------
 // What the chat chip shows (R10/R11), and the undo
 // ---------------------------------------------------------------------------
 
@@ -792,7 +823,52 @@ export type MemoryReviewStatus =
   | { id: string; state: 'known'; value: string }
   | { id: string; state: 'changed'; value: string; oldValue: string; summary?: string; oldSummary?: string; undone?: boolean }
   | { id: string; state: 'question' }
-  | { id: string; state: 'gone' };
+  | { id: string; state: 'gone' }
+  /** memory-tiers R6: the memory this chip is about is now anchored — `explicit`
+   *  ("고정했어요") or `auto` ("자주 말씀하신 걸 고정했어요"). `undone` = the
+   *  user took the anchoring back from this chip. */
+  | { id: string; state: 'anchored'; origin: 'explicit' | 'auto'; value: string; summary?: string; undone?: boolean }
+  /** memory-tiers R19: the new memory disagreed with an anchored one, which
+   *  wins. `replaced` = the user pressed "새 내용으로 바꾸기". */
+  | {
+      id: string;
+      state: 'anchored-conflict';
+      value: string;
+      anchoredValue: string;
+      anchoredSummary?: string;
+      replaced?: boolean;
+    };
+
+/**
+ * memory-tiers R6: the anchored overlay of a chip. The row that now holds the
+ * chip's claim (`holderId`) was anchored by naby AFTER the chip's write (`since`)
+ * — so the chip is where the user learns of it, with the undo beside it. An
+ * anchoring the user undid from a chip reads as `undone` on the chips after it.
+ */
+function anchoredOverlay(
+  store: MemoryReviewStore,
+  id: string,
+  holderId: string,
+  since: number,
+): MemoryReviewStatus | undefined {
+  const holder = store.getMemoryById(holderId);
+  if (!holder) return undefined;
+  const at = holder.tierSince ?? 0;
+  if (at < since) return undefined;
+  if (holder.tier === 'anchored' && (holder.anchorOrigin === 'explicit' || holder.anchorOrigin === 'auto')) {
+    return {
+      id,
+      state: 'anchored',
+      origin: holder.anchorOrigin,
+      value: holder.value,
+      ...(holder.summary ? { summary: holder.summary } : {}),
+    };
+  }
+  if (holder.tier === 'long' && holder.anchorBlocked) {
+    return { id, state: 'anchored', origin: 'auto', value: holder.value, undone: true };
+  }
+  return undefined;
+}
 
 /** The state of each memory a `naby_remember` call wrote, for its chip. */
 export function memoryReviewStatus(store: MemoryReviewStore, ids: readonly string[]): MemoryReviewStatus[] {
@@ -803,8 +879,30 @@ export function memoryReviewStatus(store: MemoryReviewStore, ids: readonly strin
   };
   return ids.slice(0, 50).map((id): MemoryReviewStatus => {
     const receipt = receipts.get(id);
+    // memory-tiers R6: an anchoring after this chip's write is what it shows.
+    if (receipt && !receipt.undone && receipt.kind !== 'anchored-conflict' && receipt.kind !== 'held') {
+      const overlay = anchoredOverlay(store, id, receipt.memoryId, receipt.at);
+      if (overlay) return overlay;
+    } else if (!receipt) {
+      const row = store.getMemoryById(id);
+      if (row && row.reviewState === undefined && row.status === 'confirmed') {
+        const overlay = anchoredOverlay(store, id, id, row.createdAt);
+        if (overlay) return overlay;
+      }
+    }
     if (receipt) {
       switch (receipt.kind) {
+        case 'anchored-conflict': {
+          const anchored = receipt.otherId ? store.getMemoryById(receipt.otherId) : undefined;
+          return {
+            id,
+            state: 'anchored-conflict',
+            value: receipt.value,
+            anchoredValue: anchored && !receipt.replaced ? anchored.value : (receipt.oldValue ?? ''),
+            ...(anchored?.summary && !receipt.replaced ? { anchoredSummary: anchored.summary } : {}),
+            ...(receipt.replaced ? { replaced: true } : {}),
+          };
+        }
         case 'known':
           return { id, state: 'known', value: receipt.value };
         case 'refined':
@@ -907,6 +1005,49 @@ export function cancelLearnedMemory(store: MemoryReviewStore, id: string, now: n
   return done;
 }
 
+/**
+ * memory-tiers R6: undo an anchoring from the chip — the row the chip's claim
+ * now lives in goes back to long-term and is never anchored automatically
+ * again. Returns false when it is not anchored (nothing to undo).
+ */
+export function undoMemoryAnchor(store: MemoryReviewStore, id: string, now: number = Date.now()): boolean {
+  if (!id) return false;
+  const receipt = readReceipts(store).find((r) => r.id === id);
+  const holderId = receipt?.memoryId ?? id;
+  return unanchorMemory(store, holderId, now);
+}
+
+/**
+ * memory-tiers R19: "새 내용으로 바꾸기". The anchored row takes the new
+ * memory's value (it stays anchored — the user just chose its new words), and
+ * the new row, which was only ever kept beside it, goes. Returns false when the
+ * conflict is gone or already settled.
+ */
+export function replaceAnchoredMemory(store: MemoryReviewStore, id: string, now: number = Date.now()): boolean {
+  const receipts = readReceipts(store);
+  const receipt = receipts.find((r) => r.id === id && r.kind === 'anchored-conflict');
+  if (!receipt || receipt.replaced || !receipt.otherId) return false;
+  const anchored = store.getMemoryById(receipt.otherId);
+  const fresh = store.getMemoryById(receipt.memoryId);
+  if (!anchored) return false;
+  const value = fresh?.value ?? receipt.value;
+  // A person's choice, so the anchored row is on the user tier now (the same
+  // promotion an edit makes); the evidence of the new memory comes with it.
+  store.reviseMemoryValue(
+    anchored.id,
+    value,
+    { ...(fresh?.provenance ?? anchored.provenance), source: 'user' },
+    now,
+  );
+  if (fresh) store.deleteMemory({ id: fresh.id });
+  writeReceipts(
+    store,
+    receipts.map((r) => (r.id === id ? { ...r, replaced: true, oldValue: anchored.value } : r)),
+    now,
+  );
+  return true;
+}
+
 /** "Recently learned" (R29): the last week's receipts, newest first, minus the
  *  undone ones and the holds/questions (those live in "needs checking"). */
 export function recentLearned(store: MemoryReviewStore, now: number = Date.now()): MemoryReceipt[] {
@@ -917,7 +1058,10 @@ export function recentLearned(store: MemoryReviewStore, now: number = Date.now()
         now - r.at <= RECENT_LEARNED_MS &&
         r.kind !== 'held' &&
         r.kind !== 'question' &&
-        r.kind !== 'known',
+        r.kind !== 'known' &&
+        // memory-tiers R19: the chip carries the choice; "recently learned" is
+        // for what naby started using, and this memory is not in use.
+        r.kind !== 'anchored-conflict',
     )
     .sort((a, b) => b.at - a.at);
 }

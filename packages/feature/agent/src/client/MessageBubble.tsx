@@ -647,8 +647,16 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
   // render of the list is exactly the O(list) per-render work those conventions
   // are about. `i18n.language` is a dep because both halves are localised.
   const turnMeta = useMemo(() => {
-    if (isUser || message.isStreaming) return null;
-    const text = formatTurnMeta(message.durationMs, message.completedAt);
+    if (message.isStreaming) return null;
+    // The user's bubble carries when it was sent; a turn recorded before
+    // durations existed still carries when it ended.
+    if (isUser) {
+      const sent = formatTurnEndTime(message.timestamp);
+      return sent ? { text: sent, title: undefined } : null;
+    }
+    const text =
+      formatTurnMeta(message.durationMs, message.completedAt) ||
+      formatTurnEndTime(message.completedAt ?? message.timestamp);
     if (!text) return null;
     const endTime = formatTurnEndTime(message.completedAt);
     return {
@@ -657,7 +665,7 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
         ? t('chat.turnFinishedAt', { defaultValue: 'Finished at {{time}}', time: endTime })
         : undefined,
     };
-  }, [isUser, message.isStreaming, message.durationMs, message.completedAt, i18n.language, t]);
+  }, [isUser, message.isStreaming, message.durationMs, message.completedAt, message.timestamp, i18n.language, t]);
 
   // Attachments. Drawn at the TOP of the turn's first balloon, where they always
   // were — they came with the message, not with whatever it ended on.
