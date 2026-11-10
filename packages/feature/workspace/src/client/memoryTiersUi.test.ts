@@ -93,14 +93,17 @@ describe('the browser (§6)', () => {
 });
 
 describe('the memory tab (§6)', () => {
-  it('puts the anchored group above the summary, each row with edit and unpin', () => {
-    const anchoredAt = TAB.indexOf('data-testid="memory-anchored"');
-    const summaryAt = TAB.indexOf('data-testid="memory-summary"');
-    expect(anchoredAt).toBeGreaterThan(0);
-    expect(anchoredAt).toBeLessThan(summaryAt);
+  it('opens anchored memory from a button beside 전체 보기, each row with edit and unpin', () => {
+    // Inline, the list grew with every pin; behind a button it is one row.
+    const buttonAt = TAB.indexOf('data-testid="memory-open-anchored"');
+    expect(buttonAt).toBeGreaterThan(0);
+    expect(buttonAt).toBeLessThan(TAB.indexOf('data-testid="memory-open-browser"'));
+    expect(TAB).toContain('testId="memory-anchored"');
+    expect(TAB).not.toMatch(/anchored\.map\([^]*data-testid="memory-summary"/);
     expect(TAB).toContain("t('memoryReview.anchoredEdit')");
     expect(TAB).toContain("t('memoryReview.anchoredUnpin')");
     expect(TAB).toContain('data-testid="memory-anchor-full"');
+    expect(ko('memoryReview.openAnchored', { count: 4 })).toBe('고정 기억 보기 (4)');
   });
 
   it('every new key exists in both locales', () => {

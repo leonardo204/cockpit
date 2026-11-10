@@ -291,7 +291,7 @@ describe('the memory tab opens with what needs deciding', () => {
     ]) {
       expect(CARD, `${key} missing from the memory tab`).toContain(key);
     }
-    expect(CARD).toContain('data-testid="memory-recent"');
+    expect(CARD).toContain('testId="memory-recent"');
     expect(CARD).toMatch(/\{recent\.length > 0 \? \(/);
     // Both groups read the SERVER's split — a proposal still inside its review
     // is not the user's business yet, and only the API knows the 24 h rule.

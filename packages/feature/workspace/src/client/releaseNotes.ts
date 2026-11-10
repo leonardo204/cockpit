@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.20 — 2026-11-11
+
+### en
+
+Pinned memories no longer fill up the memory settings.
+
+**Improved**
+
+- **Pinned memories open in their own window.** Settings → Memory now shows a "Pinned memory (N)" button next to "View all" instead of listing every pinned memory on the page. You can still edit or unpin each one there.
+
+### ko
+
+고정 기억이 기억 설정 화면을 가득 채우지 않아요.
+
+**나아진 것**
+
+- **고정 기억은 따로 열어 봐요.** 설정 → 기억에서 고정 기억을 화면에 모두 늘어놓지 않고, "전체보기" 옆 "고정 기억 보기 (N)" 버튼으로 열어요. 열린 창에서 기억마다 편집하거나 고정을 풀 수 있어요.
+
 ## 1.48.19 — 2026-11-10
 
 ### en

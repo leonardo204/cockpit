@@ -46,7 +46,7 @@
  * their borders because a repeated list item is what a border is still for.
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@cockpit/shared-ui';
 import { ScopeBadge, type NabyScopeId } from './nabyScope';
@@ -606,9 +606,52 @@ const LEARNING_CHANNEL_KEYS = [
 ] as const;
 
 /**
+ * The shell both list popups share: a titled panel above Settings (for the
+ * reason MemoryBrowserModal is), closed by Escape, the backdrop or the button.
+ * The body scrolls inside the panel, so a list of any length never stretches the
+ * settings page.
+ */
+function MemoryListModal({
+  title,
+  testId,
+  onClose,
+  children,
+}: {
+  title: string;
+  testId: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center" data-testid={testId}>
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-card rounded-lg shadow-xl w-[min(86vw,800px)] max-h-[85vh] mx-4 flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <button
+            onClick={onClose}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-muted-foreground"
+          >
+            {t('memoryReview.browserClose')}
+          </button>
+        </div>
+        <div className="px-4 py-3 space-y-1.5 overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * "Recently learned" (R29), opened on request. naby did these on its own and they
- * need no attention, so they do not take up the settings page. Above Settings for
- * the reason MemoryBrowserModal is.
+ * need no attention, so they do not take up the settings page.
  */
 function RecentLearnedModal({
   rows,
@@ -624,38 +667,47 @@ function RecentLearnedModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center" data-testid="memory-recent">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-card rounded-lg shadow-xl w-[min(86vw,800px)] max-h-[85vh] mx-4 flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-foreground">{t('memoryReview.recentTitle')}</h2>
-          <button
-            onClick={onClose}
-            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-muted-foreground"
-          >
-            {t('memoryReview.browserClose')}
-          </button>
+    <MemoryListModal title={t('memoryReview.recentTitle')} testId="memory-recent" onClose={onClose}>
+      {migratedCount > 0 ? (
+        <div className="text-[0.714rem] text-muted-foreground" data-testid="memory-recent-migrated">
+          {t('memoryReview.recentMigrated', { count: migratedCount })}
         </div>
-        <div className="px-4 py-3 space-y-1 overflow-y-auto">
-          {migratedCount > 0 ? (
-            <div className="text-[0.714rem] text-muted-foreground" data-testid="memory-recent-migrated">
-              {t('memoryReview.recentMigrated', { count: migratedCount })}
-            </div>
-          ) : null}
-          {rows.map((row) => (
-            <RecentLearnedRow key={`${row.undo}:${row.id}`} row={row} busy={busy} onUndo={onUndo} />
-          ))}
-        </div>
-      </div>
-    </div>
+      ) : null}
+      {rows.map((row) => (
+        <RecentLearnedRow key={`${row.undo}:${row.id}`} row={row} busy={busy} onUndo={onUndo} />
+      ))}
+    </MemoryListModal>
+  );
+}
+
+/**
+ * Anchored memory (memory-tiers §6), opened on request. Inline, the list grew
+ * with every pin and pushed the rest of the tab down without limit; behind a
+ * button it costs one row however many there are. Each row keeps its edit and
+ * unpin (R20).
+ */
+function AnchoredModal({
+  pinned,
+  busy,
+  onEdit,
+  onUnpin,
+  onClose,
+}: {
+  pinned: MemoryItem[];
+  busy: boolean;
+  onEdit: (id: string, value: string) => void;
+  onUnpin: (id: string) => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <MemoryListModal title={t('memoryReview.anchoredTitle')} testId="memory-anchored" onClose={onClose}>
+      <p className="text-[0.714rem] text-muted-foreground">{t('memoryReview.anchoredHint')}</p>
+      {pinned.map((item) => (
+        <AnchoredRow key={item.id} item={item} busy={busy} onEdit={onEdit} onUnpin={onUnpin} />
+      ))}
+    </MemoryListModal>
   );
 }
 
@@ -701,6 +753,7 @@ export function NabyMemoryReview({
   // deep link, so what it opens onto is part of the open itself.
   const [browserOpen, setBrowserOpen] = useState<false | 'all' | 'style'>(false);
   const [recentOpen, setRecentOpen] = useState(false);
+  const [anchoredOpen, setAnchoredOpen] = useState(false);
 
   // REF INDIRECTION, not a dependency (shell/CLAUDE.md's referential-stability
   // rule). `reload` is the effect that fetches on open; taking an inline callback
@@ -973,21 +1026,6 @@ export function NabyMemoryReview({
         </p>
       ) : null}
 
-      {/* memory-tiers §6: ANCHORED MEMORY — always used, never changed by naby.
-          Its own group at the top of what is true, each row editable and
-          unpinnable (R20). Absent when there is none. */}
-      {anchored.length > 0 ? (
-        <div className="space-y-1.5" data-testid="memory-anchored">
-          <div className="text-[0.714rem] uppercase tracking-wide text-muted-foreground">
-            {t('memoryReview.anchoredTitle')}
-          </div>
-          <p className="text-[0.714rem] text-muted-foreground">{t('memoryReview.anchoredHint')}</p>
-          {anchored.map((item) => (
-            <AnchoredRow key={item.id} item={item} busy={busy} onEdit={handleAnchoredEdit} onUnpin={handleUnpin} />
-          ))}
-        </div>
-      ) : null}
-
       {/* ------------------------------------------------------------------
           2. THE SUMMARY LINE — what is true right now, plus the evidence that
           the automatic half is running.
@@ -1158,6 +1196,18 @@ export function NabyMemoryReview({
           actually holds, and they are ordinary memory — so they are read in the
           ordinary browser, narrowed. */}
       <div className="flex flex-wrap items-center gap-1.5">
+        {/* memory-tiers §6: anchored memory behind a button, first because it is
+            what every conversation uses. Absent when there is none. */}
+        {anchored.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setAnchoredOpen(true)}
+            className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground"
+            data-testid="memory-open-anchored"
+          >
+            {t('memoryReview.openAnchored', { count: anchored.length })}
+          </button>
+        ) : null}
         <button
           onClick={() => setBrowserOpen('all')}
           className="text-xs px-2 py-1 rounded border border-border hover:bg-accent text-foreground"
@@ -1221,6 +1271,16 @@ export function NabyMemoryReview({
           </div>
         </div>
       </SettingsDetails>
+
+      {anchoredOpen && anchored.length > 0 ? (
+        <AnchoredModal
+          pinned={anchored}
+          busy={busy}
+          onEdit={handleAnchoredEdit}
+          onUnpin={handleUnpin}
+          onClose={() => setAnchoredOpen(false)}
+        />
+      ) : null}
 
       {recentOpen && recent.length > 0 ? (
         <RecentLearnedModal
