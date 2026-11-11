@@ -2605,7 +2605,7 @@
       "grace": "Sign in within {{days}} day(s); after that new conversations are blocked until you do.",
       "migrated": "Switched from the API token to the browser sign-in. The stored API token was removed.",
       "confluenceUploadKept": "confluence-upload is no longer built in. You changed it, so it stays as yours — to publish to Confluence, use pdoc.",
-      "legacyRefs": "{{count}} of your rules or harness items still name the old Atlassian tools (for example atlassian__confluence_get_page). The new tools are named like atlassian__getConfluencePage. Nothing was changed automatically."
+      "legacyRefs": "{{count}} of your rules or harness items name Atlassian tools the current server does not have. Change them to the new names listed below (for example getConfluencePage → getConfluenceContent); naming the old and new tools side by side is fine too. Nothing was changed automatically."
     },
     "deps": {
       "title": "Some tools the org skills need are missing on this computer. The skills that use them are skipped until you install them.",

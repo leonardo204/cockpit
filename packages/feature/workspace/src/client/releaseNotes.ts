@@ -89,19 +89,21 @@ export const RELEASE_NOTES_MARKDOWN = `
 
 ### en
 
-Atlassian sign-in no longer gets stuck on "failed to retrieve client".
+Atlassian sign-in no longer gets stuck on "failed to retrieve client", and the old tool name warning knows about v2.
 
 **Fixed**
 
 - **Atlassian sign-in page error.** For some people, the Atlassian sign-in page said it could not identify the app ("failed to retrieve client"), and signing in again showed the same page. naby now registers itself again on every sign-in instead of reusing a registration Atlassian may have dropped.
+- **Old Atlassian tool name warning.** After the move to v2, rules and skills that still named v1 tools (such as getConfluencePage) got no warning, and the warning gave a v1 name as the new example. It now checks against the server you are connected to and shows the v2 name where there is a direct one (getConfluencePage → getConfluenceContent).
 
 ### ko
 
-Atlassian 로그인이 "failed to retrieve client"에서 막히지 않아요.
+Atlassian 로그인이 "failed to retrieve client"에서 막히지 않고, 이전 도구 이름 경고도 v2에 맞춰졌어요.
 
 **고친 것**
 
 - **Atlassian 로그인 화면 오류.** 일부 사용자에게 Atlassian 로그인 화면이 "액세스를 요청하는 앱을 식별할 수 없습니다(failed to retrieve client)"라고 나왔고, 다시 로그인해도 같은 화면이었어요. 이제 로그인할 때마다 나비를 새로 등록해서, Atlassian이 지운 예전 등록을 다시 쓰지 않아요.
+- **Atlassian 이전 도구 이름 경고.** v2로 옮긴 뒤 규칙이나 스킬에 v1 도구 이름(getConfluencePage 등)이 남아 있어도 경고가 없었고, 경고 문구는 오히려 v1 이름을 새 이름 예로 들었어요. 이제 연결된 서버 기준으로 확인하고, 바로 바뀐 이름이 있으면 v2 이름을 함께 보여 줘요(getConfluencePage → getConfluenceContent).
 
 ## 1.48.21 — 2026-11-11
 

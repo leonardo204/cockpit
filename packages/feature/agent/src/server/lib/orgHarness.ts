@@ -47,6 +47,8 @@ import {
   pendingOrgUpdateNotice,
   pinOrgHarnessTurn,
   readAtlassianMigrationReport,
+  currentLegacyAtlassianToolRefs,
+  type AtlassianLegacyRef,
   readCurrentOrgPackage,
   readMcpOAuthRecord,
   readOrgDeps,
@@ -500,6 +502,9 @@ export type AtlassianView = {
   /** epoch ms of the last browser sign-in. */
   loggedInAt?: number;
   migration?: AtlassianMigrationReport;
+  /** Rules and harness rows naming a tool the current Atlassian server does not
+   *  have, counted now (org-harness-sync §3.10) — not the swap's one-time count. */
+  legacyRefs: AtlassianLegacyRef[];
   /** Days until new sessions are blocked, while the gate is in its grace. */
   graceDaysLeft?: number;
   /** The gate is blocking new sessions now. */
@@ -513,6 +518,12 @@ export function readAtlassianView(store: Store, now = Date.now()): AtlassianView
   const notReady = status !== 'connected';
   const migration = readAtlassianMigrationReport(store);
   const lastLoginError = serverOAuthLastError(ATLASSIAN_MCP_SERVER_NAME);
+  let legacyRefs: AtlassianLegacyRef[] = [];
+  try {
+    legacyRefs = currentLegacyAtlassianToolRefs(store);
+  } catch (e) {
+    console.warn(`[atlassian] legacy tool scan skipped: ${e instanceof Error ? e.message : String(e)}`);
+  }
   return {
     status,
     row: atlassianRowShape(store),
@@ -520,6 +531,7 @@ export function readAtlassianView(store: Store, now = Date.now()): AtlassianView
     ...(lastLoginError ? { lastLoginError } : {}),
     ...(rec?.loggedInAt !== undefined ? { loggedInAt: rec.loggedInAt } : {}),
     ...(migration ? { migration } : {}),
+    legacyRefs,
     ...(notReady && blockFrom !== undefined && now < blockFrom
       ? { graceDaysLeft: Math.max(1, Math.ceil((blockFrom - now) / DAY_MS)) }
       : {}),

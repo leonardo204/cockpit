@@ -2605,7 +2605,7 @@
       "grace": "{{days}}일 안에 로그인해 주세요. 그 뒤로는 로그인할 때까지 새 대화가 막힙니다.",
       "migrated": "API 토큰에서 브라우저 로그인으로 바꿨습니다. 저장해 둔 API 토큰은 지웠습니다.",
       "confluenceUploadKept": "confluence-upload는 더 이상 기본 제공되지 않습니다. 직접 손댄 스킬이라 그대로 남겨 두었습니다. Confluence 발행은 pdoc을 쓰세요.",
-      "legacyRefs": "규칙이나 하네스 항목 {{count}}개가 아직 이전 Atlassian 도구 이름(예: atlassian__confluence_get_page)을 가리킵니다. 새 도구 이름은 atlassian__getConfluencePage 꼴입니다. 자동으로 고치지는 않았습니다."
+      "legacyRefs": "규칙이나 하네스 항목 {{count}}개가 지금 Atlassian 서버에 없는 이전 도구 이름을 가리킵니다. 아래 목록의 새 이름으로 고쳐 주세요(예: getConfluencePage → getConfluenceContent). 이전 이름과 새 이름을 함께 적어 두어도 됩니다. 자동으로 고치지는 않았습니다."
     },
     "deps": {
       "title": "조직 스킬이 쓰는 도구 중 이 컴퓨터에 없는 것이 있습니다. 설치하기 전까지 그 도구를 쓰는 스킬은 건너뜁니다.",

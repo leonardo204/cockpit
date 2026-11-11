@@ -92,6 +92,7 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
   const gateLine = atlassian ? atlassianGateLine(atlassian) : undefined;
   const missingDeps = orgDepsMissing(view.deps, typeof navigator !== 'undefined' ? navigator.platform : '');
   const migration = atlassian?.migration;
+  const legacyRefs = atlassian?.legacyRefs ?? migration?.legacyRefs ?? [];
   const skills = orgSkillRows(view);
   const choices = orgChoiceRows(view);
   const updateRows = orgUpdateLogRows(view);
@@ -177,24 +178,30 @@ export function NabyOrgHarnessSettings({ isOpen }: { isOpen: boolean }) {
                   })}
                 </p>
               ) : null}
-              {migration.legacyRefs.length > 0 ? (
-                <div className="space-y-0.5">
-                  <p className="text-xs text-warning">
-                    {t('orgHarness.atlassian.legacyRefs', {
-                      count: migration.legacyRefs.length,
-                      defaultValue:
-                        '{{count}} of your rules or harness items still name the old Atlassian tools (for example atlassian__confluence_get_page). The new tools are named like atlassian__getConfluencePage. Nothing was changed automatically.',
-                    })}
-                  </p>
-                  <ul className="text-[0.714rem] text-muted-foreground list-disc pl-4">
-                    {migration.legacyRefs.map((r) => (
-                      <li key={`${r.kind}:${r.id}`}>
-                        <code>{r.name}</code> ({r.kind}, {r.scope}) — <code>{r.ref}</code>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
+            </div>
+          ) : null}
+          {legacyRefs.length > 0 ? (
+            <div className="space-y-0.5" data-testid="org-atlassian-legacy-refs">
+              <p className="text-xs text-warning">
+                {t('orgHarness.atlassian.legacyRefs', {
+                  count: legacyRefs.length,
+                  defaultValue:
+                    '{{count}} of your rules or harness items name Atlassian tools the current server does not have. Change them to the new names listed below (for example getConfluencePage → getConfluenceContent); naming the old and new tools side by side is fine too. Nothing was changed automatically.',
+                })}
+              </p>
+              <ul className="text-[0.714rem] text-muted-foreground list-disc pl-4">
+                {legacyRefs.map((r) => (
+                  <li key={`${r.kind}:${r.id}`}>
+                    <code>{r.name}</code> ({r.kind}, {r.scope}) — <code>{r.ref}</code>
+                    {r.suggest ? (
+                      <>
+                        {' → '}
+                        <code>{r.suggest}</code>
+                      </>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
         </div>

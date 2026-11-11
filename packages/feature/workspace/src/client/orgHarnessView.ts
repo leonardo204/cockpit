@@ -67,10 +67,22 @@ export type AtlassianView = {
     at: number;
     from: string;
     confluenceUpload: 'withdrawn' | 'kept' | 'absent' | 'already';
-    legacyRefs: { kind: string; scope: string; scopeKey: string; id: string; name: string; ref: string }[];
+    legacyRefs: LegacyToolRefView[];
   };
+  /** Counted now against the current server (§3.10). Absent from an older server. */
+  legacyRefs?: LegacyToolRefView[];
   graceDaysLeft?: number;
   blocking: boolean;
+};
+
+export type LegacyToolRefView = {
+  kind: string;
+  scope: string;
+  scopeKey: string;
+  id: string;
+  name: string;
+  ref: string;
+  suggest?: string;
 };
 
 export type OrgDepsView = { at: number; python: string | null; pythonCommand?: string; pyyaml: boolean };
