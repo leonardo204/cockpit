@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.22 — 2026-11-11
+
+### en
+
+Atlassian sign-in no longer gets stuck on "failed to retrieve client".
+
+**Fixed**
+
+- **Atlassian sign-in page error.** For some people, the Atlassian sign-in page said it could not identify the app ("failed to retrieve client"), and signing in again showed the same page. naby now registers itself again on every sign-in instead of reusing a registration Atlassian may have dropped.
+
+### ko
+
+Atlassian 로그인이 "failed to retrieve client"에서 막히지 않아요.
+
+**고친 것**
+
+- **Atlassian 로그인 화면 오류.** 일부 사용자에게 Atlassian 로그인 화면이 "액세스를 요청하는 앱을 식별할 수 없습니다(failed to retrieve client)"라고 나왔고, 다시 로그인해도 같은 화면이었어요. 이제 로그인할 때마다 나비를 새로 등록해서, Atlassian이 지운 예전 등록을 다시 쓰지 않아요.
+
 ## 1.48.21 — 2026-11-11
 
 ### en

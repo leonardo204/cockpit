@@ -154,8 +154,9 @@ describe('quick connect — the row exists only after the sign-in (§3.1)', () =
     await until(() => f.stats.codeExchanges === 2);
     await until(() => mcpOAuthStatus(getStore(), 'sentry') === 'connected');
     expect(row('sentry')?.status).toBe('enabled');
-    // The stored registration is reused (same loopback port when free).
-    expect(f.stats.registrations).toBeLessThanOrEqual(regs + 1);
+    // Every browser login registers a fresh client (a stored one may be dead at
+    // the server, which says so only on its own authorize page).
+    expect(f.stats.registrations).toBe(regs + 1);
   });
 });
 
