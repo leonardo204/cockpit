@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.21 — 2026-11-11
+
+### en
+
+Atlassian v2 sign-in now works.
+
+**Fixed**
+
+- **Atlassian v2 connection test.** After signing in, the test said to sign in again. naby now recognizes the v2 tool names and reads the full tool list, which v2 sends in pages.
+- **Sign-in tokens kept out of the activity log.** The Atlassian sign-in record was written to the activity log as-is. It is now hidden, and lines already written are cleaned up once when naby starts.
+
+### ko
+
+Atlassian v2 로그인이 제대로 돼요.
+
+**고친 것**
+
+- **Atlassian v2 연결 테스트.** 로그인한 뒤 테스트하면 다시 로그인하라고 나왔어요. 이제 v2의 도구 이름을 알아보고, v2가 여러 번에 나눠 보내는 도구 목록을 끝까지 읽어요.
+- **활동 로그에 로그인 토큰이 남지 않아요.** Atlassian 로그인 정보가 활동 로그에 그대로 적히고 있었어요. 이제 가려서 적고, 이미 적힌 줄은 나비를 시작할 때 한 번 지워요.
+
 ## 1.48.20 — 2026-11-11
 
 ### en
