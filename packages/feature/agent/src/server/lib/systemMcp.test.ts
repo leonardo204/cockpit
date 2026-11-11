@@ -361,7 +361,24 @@ describe('readPresetUrl', () => {
       [ATLASSIAN_URL_KEY]: 'https://other.atlassian.net/wiki',
     });
     expect(readPresetUrl(store, skillHub)).toBe('https://staging.internal/mcp');
-    expect(readPresetUrl(store, atlassian)).toBe('https://other.atlassian.net/wiki');
+    // Atlassian's legacy key held a Confluence site, never the MCP address.
+    expect(readPresetUrl(store, atlassian)).toBe(ATLASSIAN_MCP_URL);
+  });
+
+  it('answers the org package address between the override and the constant (org-harness-sync §3.10)', () => {
+    const v2 = 'https://mcp.atlassian.com/v2/mcp?tools=all';
+    const store = fakeStore([], {
+      'harness.org.mcp.atlassian.url': v2,
+      'harness.org.mcp.cic.url': 'https://cic2.altimedia.com/mcp',
+    });
+    expect(readPresetUrl(store, atlassian)).toBe(v2);
+    expect(readPresetUrl(store, cic)).toBe('https://cic2.altimedia.com/mcp');
+    expect(readPresetUrl(store, skillHub)).toBe(DEFAULT_SKILL_HUB_URL);
+    // The user's own override still wins.
+    const mine = fakeStore([], { 'harness.org.mcp.cic.url': 'https://cic2.altimedia.com/mcp', [CIC_URL_KEY]: 'https://mine/mcp' });
+    expect(readPresetUrl(mine, cic)).toBe('https://mine/mcp');
+    // The Atlassian preset builds the row with the address it is handed.
+    expect(atlassian.build({}, { url: v2 })).toMatchObject({ ok: true, entry: { url: v2, auth: 'oauth' } });
   });
 
   it('treats a blank override as absent', () => {

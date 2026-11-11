@@ -89,19 +89,27 @@ export const RELEASE_NOTES_MARKDOWN = `
 
 ### en
 
-Pinned memories no longer fill up the memory settings.
+naby now follows the MCP addresses the org harness sets, and pinned memories no longer fill up the memory settings.
 
 **Improved**
 
 - **Pinned memories open in their own window.** Settings → Memory now shows a "Pinned memory (N)" button next to "View all" instead of listing every pinned memory on the page. You can still edit or unpin each one there.
 
+**Fixed**
+
+- **Atlassian follows the org harness.** When the org harness changes a server address (harness 0.11.1 moved Atlassian to v2), naby now switches to it too. Atlassian asks you to sign in once more after the switch.
+
 ### ko
 
-고정 기억이 기억 설정 화면을 가득 채우지 않아요.
+조직 하네스가 정한 MCP 주소를 나비가 따라가요. 고정 기억도 기억 설정 화면을 가득 채우지 않아요.
 
 **나아진 것**
 
 - **고정 기억은 따로 열어 봐요.** 설정 → 기억에서 고정 기억을 화면에 모두 늘어놓지 않고, "전체보기" 옆 "고정 기억 보기 (N)" 버튼으로 열어요. 열린 창에서 기억마다 편집하거나 고정을 풀 수 있어요.
+
+**고친 것**
+
+- **Atlassian이 조직 하네스 주소를 따라가요.** 조직 하네스에서 서버 주소가 바뀌면(하네스 0.11.1에서 Atlassian이 v2로 바뀌었어요) 나비도 같은 주소로 바꿔요. 바뀐 뒤 Atlassian 로그인을 한 번 다시 해야 해요.
 
 ## 1.48.19 — 2026-11-10
 

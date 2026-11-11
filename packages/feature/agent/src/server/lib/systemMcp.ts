@@ -38,6 +38,7 @@ import {
   ATLASSIAN_MCP_SERVER_NAME,
   ATLASSIAN_MCP_URL,
   atlassianOAuthEntry,
+  orgHarnessMcpUrl,
   atlassianRowShape,
   CIC_HARNESS_BUNDLE_ID,
   mcpOAuthStatus,
@@ -267,11 +268,11 @@ const ATLASSIAN_PRESET: SystemMcpPreset = {
   urlSettingKey: ATLASSIAN_URL_KEY,
   oauth: true,
   fields: [],
-  build() {
+  build(_fields, opts) {
     // The row of a signed-in user. Saving it does not sign anyone in — the
     // tokens come from `atlassian.login` — and a turn refuses to connect it
     // until they exist (mcp.ts fast path), so building it early is harmless.
-    return { ok: true, entry: atlassianOAuthEntry() };
+    return { ok: true, entry: atlassianOAuthEntry((opts?.url ?? '').trim() || ATLASSIAN_MCP_URL) };
   },
   readStoredFields() {
     // No field reads back from either shape: the OAuth row has none, and the
@@ -468,10 +469,14 @@ export function orgHarnessKeyPreset(): SystemMcpPreset | undefined {
 }
 
 /** The endpoint this install should use for a preset: the settings override when
- *  set, otherwise the built-in constant. One reader for the setting key. */
+ *  set, then the address the org package names (org-harness-sync §3.10), then the
+ *  built-in constant. One reader for the setting key.
+ *
+ *  The OAuth preset (Atlassian) has no override: its legacy key held a Confluence
+ *  site URL, never the MCP address. */
 export function readPresetUrl(store: Pick<Store, 'getSetting'>, preset: SystemMcpPreset): string {
-  const override = preset.urlSettingKey ? store.getSetting(preset.urlSettingKey)?.trim() : '';
-  return override || preset.defaultUrl || '';
+  const override = preset.urlSettingKey && !preset.oauth ? store.getSetting(preset.urlSettingKey)?.trim() : '';
+  return override || orgHarnessMcpUrl(store, preset.name) || preset.defaultUrl || '';
 }
 
 /** The presets that spawn a local CLI — the ones whose status can carry `cli`. */

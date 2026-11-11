@@ -31,8 +31,9 @@ import {
   ackOrgUpdateNotice,
   applyAtlassianOAuthSwapIfDue,
   applyOrgHarnessIfDue,
+  applyOrgHarnessMcpIfDue,
+  atlassianMcpUrl,
   ATLASSIAN_MCP_SERVER_NAME,
-  ATLASSIAN_MCP_URL,
   atlassianRowShape,
   checkOrgHarnessDeps,
   DAY_MS,
@@ -160,12 +161,18 @@ export function syncOrgHarnessNow(
   const ctx = orgHarnessContext(store);
   if (!fetch) {
     // No fetch at all (very old embedded Node): still reconcile what is on disk.
-    return Promise.resolve({ apply: applyOrgHarnessIfDue(store, ctx) });
+    const apply = applyOrgHarnessIfDue(store, ctx);
+    applyOrgHarnessMcp(store, ctx);
+    return Promise.resolve({ apply });
   }
   const p = runOrgHarnessSync(store, {
     ...ctx,
     fetch,
     applyNow: opts.applyNow ?? !anyRunActive(),
+  }).then((r) => {
+    // The rows were applied in this pass, so the addresses go with them.
+    if (r.apply) applyOrgHarnessMcp(store, ctx);
+    return r;
   });
   inflight = p.finally(() => {
     inflight = undefined;
@@ -265,13 +272,30 @@ export function orgHarnessRecheckClock(): OrgHarnessRecheck | undefined {
 }
 
 /**
+ * The package's MCP addresses (§3.10) — applied wherever the rows are. Never
+ * throws: a turn must not fail because an address could not be reconciled.
+ */
+function applyOrgHarnessMcp(store: Store, ctx: OrgHarnessContext): void {
+  try {
+    const r = applyOrgHarnessMcpIfDue(store, ctx);
+    for (const c of r.changed) {
+      console.log(`[org-harness] mcp ${c.name}: ${c.from} -> ${c.to}${c.relogin ? ' (sign in again)' : ''}`);
+    }
+  } catch (e) {
+    console.warn(`[org-harness] mcp apply skipped: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/**
  * The turn-boundary apply (§4.2 step 3, §4.7). Cheap when nothing changed (one
  * small file read and a few settings reads); never throws — a turn must not fail
  * because the org harness could not reconcile.
  */
 export function applyOrgHarnessAtTurnBoundary(store: Store): OrgHarnessApplyResult | undefined {
   try {
-    const result = applyOrgHarnessIfDue(store, orgHarnessContext(store));
+    const ctx = orgHarnessContext(store);
+    const result = applyOrgHarnessIfDue(store, ctx);
+    applyOrgHarnessMcp(store, ctx);
     if (result.ran === 'full') {
       console.log(
         `[org-harness] applied ${result.on ? `v${result.version ?? '-'}` : `off (${result.offReason})`}` +
@@ -438,7 +462,7 @@ export async function startAtlassianLogin(
 ): Promise<{ ok: true; authorizationUrl: string } | { ok: false; error: string }> {
   return startServerOAuthLogin(store, {
     server: ATLASSIAN_MCP_SERVER_NAME,
-    serverUrl: atlassianServerUrl ?? ATLASSIAN_MCP_URL,
+    serverUrl: atlassianServerUrl ?? atlassianMcpUrl(store),
     ...(atlassianFetch ? { fetch: atlassianFetch } : {}),
     onSuccess: () => {
       if (!anyRunActive()) applyAtlassianAtTurnBoundary(store);
@@ -531,7 +555,7 @@ export function orgHarnessState(store: Store): OrgHarnessStateView {
   };
 }
 
-// -- the chat status bar and the update popup (§3.1, §3.9 of the spec) --------
+// -- the chat status bar and the update popup (§3.1, §3.10 of the spec) --------
 
 /**
  * What the status bar under the chat composer needs, and nothing else — the
