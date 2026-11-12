@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.23 — 2026-11-12
+
+### en
+
+Instructions you write once now apply to every session, and every bubble in a reply shows its time. A new chat can also be renamed and given participants before the first message.
+
+**New**
+
+- **Instructions for every session.** Settings → Naby has a new box at the top. What you write there is read on every turn, in every project and every session — language, tone, how to report, what to check first. It does not lift permissions or switches you turned off.
+- **A time under every bubble.** The bubbles in the middle of a reply now show the time they were written. The last bubble keeps the total time and the finish time as before. Replies from before this update have no saved time, so their middle bubbles show none.
+
+**Fixed**
+
+- **Renaming a new chat.** Renaming a tab that had no messages yet snapped back to the generated name. The name now sticks and is saved once the conversation starts.
+- **Adding participants to a new chat.** The participant menu said to send a first message first. You can now add participants right away, and they take part from the first message.
+
+### ko
+
+한 번 적어 둔 지침이 모든 세션에 적용되고, 답변 중간 말풍선에도 시간이 붙어요. 새 대화에서도 첫 메시지 전에 이름을 바꾸고 참가자를 추가할 수 있어요.
+
+**새로 생긴 것**
+
+- **모든 세션에 적용할 지침.** 설정 → 나비 탭 맨 위에 입력 칸이 생겼어요. 여기 적은 내용은 모든 프로젝트, 모든 세션에서 나비가 매번 읽어요. 언어, 말투, 보고 방식, 먼저 확인할 것처럼 매번 반복하던 말을 적어 두면 돼요. 권한이나 꺼 둔 스위치를 풀지는 않아요.
+- **말풍선마다 시간 표시.** 답변 중간의 말풍선에도 그 말풍선을 쓴 시각이 붙어요. 마지막 말풍선의 총 걸린 시간과 끝난 시각은 그대로예요. 이번 업데이트 전의 답변은 시각이 저장돼 있지 않아서 중간 말풍선에 시간이 나오지 않아요.
+
+**고친 것**
+
+- **새 대화 이름 바꾸기.** 아직 대화가 없는 탭의 이름을 바꾸면 원래 이름으로 돌아갔어요. 이제 바꾼 이름이 그대로 남고, 대화를 시작하면 저장돼요.
+- **새 대화에 참가자 추가.** 참가자 메뉴가 "첫 메시지를 보낸 뒤에 참가자를 추가할 수 있어요"라며 막았어요. 이제 바로 추가할 수 있고, 첫 메시지부터 참가자가 함께해요.
+
 ## 1.48.22 — 2026-11-11
 
 ### en

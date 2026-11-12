@@ -22,7 +22,7 @@ export function withAssistantText(m: ChatMessage, text: string): ChatMessage {
   return {
     ...m,
     content: (m.content || '') + text,
-    segments: appendTextSegment(m.segments, text),
+    segments: appendTextSegment(m.segments, text, Date.now()),
   };
 }
 

@@ -596,7 +596,13 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // ---- multi-agent-chat (MAC-M3): the conversation's participants ----------
   // Read once here and shared through context with the roster, the speaker
   // cards, the routing chips and the `@` palette (ParticipantsContext.tsx).
-  const participantsState = useParticipantsState(liveSessionId ?? null);
+  // A participant added before the first message mints the session; the chat
+  // adopts it like the id a first turn reports (same setter), so the first
+  // message goes into the session that already holds the participant.
+  const participantsState = useParticipantsState(liveSessionId ?? null, {
+    ...(initialCwd ? { cwd: initialCwd } : {}),
+    onSessionMinted: setSessionId,
+  });
   const roundRunning = isLoading || liveRunning;
   // A turn just ENDED: re-read the roster (§8.13). naby's recommendation sweep
   // starts after the turn and has no stream event of its own, so a chip it

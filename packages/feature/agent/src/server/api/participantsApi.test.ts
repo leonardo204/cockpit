@@ -341,6 +341,37 @@ describe('session.participants.*', () => {
     expect(store.listSessionParticipants(s)[0]?.status).toBe('active');
   });
 
+  it('add with no session yet mints one, returns it and puts the participant in it', async () => {
+    const p = await createParticipant(uid('first'));
+    const store = getStore();
+    const before = store.listSessions().length;
+    const r = await runNabyAction({ action: 'session.participants.add', agentId: p.id, cwd: '/tmp/naby-test-project' });
+    if (!r.ok) throw new Error(r.error);
+    const sid = (r as { sessionId?: string }).sessionId;
+    expect(typeof sid).toBe('string');
+    expect(store.listSessions().length).toBe(before + 1);
+    expect(store.getSession(sid!)).toBeDefined();
+    expect(store.listSessionParticipants(sid!)[0]).toMatchObject({ agentId: p.id, status: 'active', addedBy: 'user' });
+    expect(r.participants?.map((x) => x.id)).toEqual([p.id]);
+
+    // With a session, nothing new is minted and no sessionId comes back.
+    const q = await createParticipant(uid('second'));
+    const again = await runNabyAction({ action: 'session.participants.add', sessionId: sid!, agentId: q.id });
+    expect(again.ok).toBe(true);
+    expect((again as { sessionId?: string }).sessionId).toBeUndefined();
+    expect(store.listSessions().length).toBe(before + 1);
+  });
+
+  it('a refused add with no session leaves no empty session behind', async () => {
+    const store = getStore();
+    const before = store.listSessions().length;
+    const persona = await runNabyAction({ action: 'session.participants.add', agentId: BUILTIN_PERSONA_ID });
+    expect(persona.ok).toBe(false);
+    const unknown = await runNabyAction({ action: 'session.participants.add', agentId: 'no-such-agent' });
+    expect(unknown.ok).toBe(false);
+    expect(store.listSessions().length).toBe(before);
+  });
+
   it('add rejects the persona, a custom agent and an unknown id', async () => {
     const s = getStore().createSession('fake').sessionId;
     const persona = await runNabyAction({ action: 'session.participants.add', sessionId: s, agentId: BUILTIN_PERSONA_ID });

@@ -68,7 +68,7 @@ describe.each([
     // second copy of it on an earlier row would draw a second closing line.
     const stampedCount = messages.filter((m) => m.role === 'assistant' && m.turn).length;
     expect(stampedCount).toBe(1);
-    expect(messages[0]).toEqual({ role: 'user', content: 'q' });
+    expect(messages[0]).toEqual({ role: 'user', content: 'q', at: expect.any(Number) });
   });
 
   it('leaves the row otherwise intact — content, tool calls and order all survive', () => {
@@ -119,7 +119,7 @@ describe.each([
     const store = make();
     store.appendMessage('s5', { role: 'user', content: 'q' });
     expect(store.stampTurnEnd('s5', TURN)).toBe(false);
-    expect(store.getMessages('s5')).toEqual([{ role: 'user', content: 'q' }]);
+    expect(store.getMessages('s5')).toEqual([{ role: 'user', content: 'q', at: expect.any(Number) }]);
   });
 
   it('is a no-op on a session that does not exist', () => {

@@ -39,6 +39,7 @@ import { NabyPolicyManager } from './NabyPolicyManager';
 // Memory review moves UNDER this section (an agent's learned memory), and the
 // former standalone Commands section folds into Harness.
 import { NabyAgentManager } from './NabyAgentManager';
+import { NabyUserInstructions } from './NabyUserInstructions';
 // Phase 3 (P3-M3). The Telegram escalation channel config — how an agent reaches
 // the user for a critical decision and sends its final report.
 import { NabyTelegramSettings } from './NabyTelegramSettings';
@@ -417,6 +418,13 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSectio
                 tab (it is what the agent LEARNED, not what it IS) and Telegram
                 went to Connections. */}
             {section === 'agents' ? (
+              <>
+              {/* FIRST in the naby tab: the standing instructions are the one
+                  thing here the user writes rather than reviews, and they shape
+                  every turn (user-instructions §4). */}
+              <SettingsSection title={t('userInstructions.title')}>
+                <NabyUserInstructions isOpen={isOpen} />
+              </SettingsSection>
               <SettingsSection title={t('agentManager.title', { defaultValue: 'Naby' })}>
                 {/* `onLeaveSettings` is this modal's own close, handed down for
                     ONE caller: the fast-growth button, which opens a session in
@@ -426,6 +434,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, cwd, requestedSectio
                     somewhere they cannot see. */}
                 <NabyAgentManager isOpen={isOpen} cwd={cwd} onLeaveSettings={onClose} />
               </SettingsSection>
+              </>
             ) : null}
 
             {/* MEMORY — the decisions inbox, the switches, the browser. It

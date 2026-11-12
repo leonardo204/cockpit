@@ -122,6 +122,8 @@ import {
   renderStyleFingerprintLine,
   renderVoiceLanguageLine,
   STYLE_FINGERPRINT_KEY,
+  readUserInstructions,
+  userInstructionsBlock,
   readSettings,
   resolveProviderCredential,
   type NabySettings,
@@ -893,6 +895,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           sessionId = store.createSession('', undefined, projectCwd).sessionId;
         }
         if (projectCwd) store.touchProject(projectCwd);
+        // THIS TURN STARTS THE CONVERSATION — not "this turn minted the row". A
+        // session can exist before its first message (a participant added to a
+        // new chat mints it; so does a fast-growth session), and that first turn
+        // is still the session's start for the org hooks and the start-of-session
+        // notices. Read before this turn appends anything.
+        const startsSession = !ctx.sessionId || store.getMessages(sessionId).length === 0;
 
         /**
          * THE TURN MEASURING ITSELF — one clock reading, spent in two places.
@@ -2409,13 +2417,17 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // fail the turn (a slow hook costs at most its own timeout).
         const orgHookContext: string[] = [];
         if (orgHooks.enabled) {
-          orgHookContext.push(...(await orgHooks.sessionStart(!ctx.sessionId)));
+          orgHookContext.push(...(await orgHooks.sessionStart(startsSession)));
           orgHookContext.push(...(await orgHooks.userPromptSubmit(rawPromptText || turnText)));
         }
         // §3.6 deps-check replacement: Python 3 + PyYAML, once per session, in the
         // background — the Settings card shows the result; nothing waits on it.
         if (orgListed) kickOrgHarnessDepsCheckForSession(store, sessionId);
         const orgHookBlock = orgHookContextBlock(orgHookContext);
+        const userInstructionsText = readUserInstructions(store);
+        if (userInstructionsText) {
+          console.log(`[engine:naby] user instructions: injected (${userInstructionsText.length} chars)`);
+        }
 
         const turnSystem =
           [
@@ -2503,10 +2515,20 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // (§3.5 "additionalContext → that turn's system prompt"). Context, not
             // policy, and placed before style for the same reason as the rest.
             orgHookBlock,
-            // LAST of the instruction blocks. Style is the weakest claim in the
-            // prompt — it says how to phrase whatever the rest of it decided —
-            // so it sits after everything it must not override.
+            // Style is the weakest claim naby makes on its own — it says how to
+            // phrase whatever the rest of the prompt decided — so it sits after
+            // everything it must not override.
             styleLine,
+            // ---- THE USER'S STANDING INSTRUCTIONS (user-instructions §3) ----
+            //
+            // LAST, after style: these are what the user typed in Settings for
+            // every project and every session, so they outrank naby's LEARNED
+            // style and defaults. They sit after the policy blocks too, but they
+            // cannot lift them — the gate enforces permissions in code, and the
+            // block itself says so. Every engine, every persona (a specialist
+            // serves the same user), every turn: the text is read fresh per turn,
+            // so an edit in Settings takes effect on the next message.
+            userInstructionsText ? userInstructionsBlock(userInstructionsText) : undefined,
           ]
             .filter(Boolean)
             .join('\n\n') || undefined;
@@ -3190,9 +3212,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // §3.6: a rejected Skill Hub key is announced at session start too. Both
         // ride the harness pill — the in-session notice channel this engine
         // already uses — as CODES the client renders in the user's language
-        // (`client/harnessPill.ts`). A resumed session (`ctx.sessionId` set) is not
+        // (`client/harnessPill.ts`). A resumed session (one with messages) is not
         // told again. Nothing at all without a skill-hub key.
-        if (!ctx.sessionId) {
+        if (startsSession) {
           for (const detail of orgHarnessSessionStartNotices(store, orgGate)) {
             ctx.emit({
               type: 'system',

@@ -77,6 +77,9 @@ export interface ParticipantsContextValue {
   /** Is there anything participant-shaped to draw? False = today's chat, unchanged. */
   enabled: boolean;
   sessionId: string | null;
+  /** `add` works before the first message: it mints the session (the chat
+   *  adopts it). False = nothing can be added until a session exists. */
+  canAddWithoutSession: boolean;
   hub: HubInfo | null;
   registered: ParticipantInfo[];
   inSession: ParticipantInfo[];
@@ -100,6 +103,7 @@ const noSession = async (): Promise<ActionReply> => ({ ok: false, error: 'no ses
 export const EMPTY_PARTICIPANTS: ParticipantsContextValue = {
   enabled: false,
   sessionId: null,
+  canAddWithoutSession: false,
   hub: null,
   registered: [],
   inSession: [],
@@ -129,6 +133,8 @@ type NabyReply = {
   recommendations?: unknown;
   naby?: { id?: unknown; name?: unknown };
   participantSettings?: unknown;
+  /** `session.participants.add` without a session: the one it minted. */
+  sessionId?: unknown;
 };
 
 async function nabyAction(body: Record<string, unknown>): Promise<NabyReply | null> {
@@ -152,12 +158,27 @@ function hubFrom(raw: NabyReply['naby']): HubInfo | null {
   return { id: raw.id, name: raw.name };
 }
 
+export type ParticipantsStateOptions = {
+  /** The chat's project, for a session minted by `add`. */
+  cwd?: string;
+  /** `add` minted the session (no first message yet): the chat adopts it, so
+   *  its first message goes into the session that already has the participant. */
+  onSessionMinted?: (sessionId: string) => void;
+};
+
 /**
  * The chat's participant state. `sessionId` null = a chat that has not sent its
  * first message yet: the registry is still read (the palette and the `+` menu
- * show it) but nothing can be added until the session exists.
+ * show it). With `onSessionMinted`, adding a participant there mints the session;
+ * without it nothing can be added until the session exists.
  */
-export function useParticipantsState(sessionId: string | null): ParticipantsContextValue {
+export function useParticipantsState(
+  sessionId: string | null,
+  opts: ParticipantsStateOptions = {},
+): ParticipantsContextValue {
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
+  const canAddWithoutSession = !!opts.onSessionMinted;
   const [registered, setRegistered] = useState<ParticipantInfo[]>([]);
   const [inSession, setInSession] = useState<ParticipantInfo[]>([]);
   const [recommendations, setRecommendations] = useState<RecommendationInfo[]>([]);
@@ -238,8 +259,20 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
   const add = useCallback(
     async (agentId: string): Promise<ActionReply> => {
       const sid = sessionRef.current;
-      if (!sid) return { ok: false, error: 'no session' };
-      const reply = applyRoster(await nabyAction({ action: 'session.participants.add', sessionId: sid, agentId }));
+      const { cwd, onSessionMinted } = optsRef.current;
+      if (!sid && !onSessionMinted) return { ok: false, error: 'no session' };
+      const res = await nabyAction({
+        action: 'session.participants.add',
+        agentId,
+        ...(sid ? { sessionId: sid } : cwd ? { cwd } : {}),
+      });
+      const reply = applyRoster(res);
+      if (reply.ok && !sid && typeof res?.sessionId === 'string' && res.sessionId) {
+        // Adopt it before anything re-reads: the roster read below and the chat's
+        // next send both need the session this participant was added to.
+        sessionRef.current = res.sessionId;
+        onSessionMinted?.(res.sessionId);
+      }
       // The registry's per-participant session counts moved too.
       if (reply.ok) void readRegistry();
       return reply;
@@ -304,6 +337,7 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
     () => ({
       enabled: registered.length > 0 || inSession.length > 0,
       sessionId,
+      canAddWithoutSession,
       hub,
       registered,
       inSession,
@@ -319,6 +353,7 @@ export function useParticipantsState(sessionId: string | null): ParticipantsCont
     }),
     [
       sessionId,
+      canAddWithoutSession,
       hub,
       registered,
       inSession,

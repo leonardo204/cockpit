@@ -34,7 +34,10 @@
  */
 
 export type TurnSegment =
-  | { kind: 'text'; id: string; text: string }
+  /** `at`: when this run of prose was last added to (epoch ms) — the time drawn
+   *  under a bubble that is not the turn's last. Live it is the client's clock
+   *  at the last delta; on reload it is the row's own `RuntimeMessage.at`. */
+  | { kind: 'text'; id: string; text: string; at?: number }
   | { kind: 'tools'; id: string; callIds: string[] };
 
 /**
@@ -73,19 +76,21 @@ export function nextSegmentId(segments: readonly TurnSegment[]): string {
  */
 export function appendTextSegment(
   segments: readonly TurnSegment[] | undefined,
-  text: string
+  text: string,
+  at?: number
 ): TurnSegment[] {
   const list = (segments ?? []) as TurnSegment[];
   if (!text) return list;
+  const stamp = typeof at === 'number' && Number.isFinite(at) ? { at } : {};
   const last = list[list.length - 1];
   if (last && last.kind === 'text') {
     const out = list.slice();
-    out[out.length - 1] = { ...last, text: last.text + text };
+    out[out.length - 1] = { ...last, text: last.text + text, ...stamp };
     return out;
   }
   const opening = text.replace(/^\s+/, '');
   if (!opening) return list;
-  return [...list, { kind: 'text', id: nextSegmentId(list), text: opening }];
+  return [...list, { kind: 'text', id: nextSegmentId(list), text: opening, ...stamp }];
 }
 
 /**

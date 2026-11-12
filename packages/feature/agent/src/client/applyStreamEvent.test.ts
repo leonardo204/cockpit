@@ -14,6 +14,14 @@ const delta = (text: string): StreamEvent => ({
   event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
 });
 
+/** Segment times are the client clock (`Date.now()` at the delta); the ORDER is
+ *  what these cases pin, so the time is dropped before comparing. */
+const stripAt = (segs: unknown[] | undefined) =>
+  segs?.map((seg) => {
+    const { at: _at, ...rest } = seg as Record<string, unknown>;
+    return rest;
+  });
+
 describe('applyStreamEvent (#10 engine-agnostic reducer)', () => {
   it('claude deltas accumulate into the assistant bubble', () => {
     const out = reduce(seed(), [delta('Hel'), delta('lo'), delta(' world')]);
@@ -102,7 +110,7 @@ describe('applyStreamEvent — the turn’s order', () => {
       toolUse('t1'),
       delta('Now I will fix it.'),
     ]);
-    expect(out[0].segments).toEqual([
+    expect(stripAt(out[0].segments)).toEqual([
       { kind: 'text', id: 's0', text: 'Let me look.' },
       { kind: 'tools', id: 's1', callIds: ['t1'] },
       { kind: 'text', id: 's2', text: 'Now I will fix it.' },
@@ -113,7 +121,7 @@ describe('applyStreamEvent — the turn’s order', () => {
 
   it('consecutive deltas stay in one bubble', () => {
     const out = reduce(seed(), [delta('Hel'), delta('lo')]);
-    expect(out[0].segments).toEqual([{ kind: 'text', id: 's0', text: 'Hello' }]);
+    expect(stripAt(out[0].segments)).toEqual([{ kind: 'text', id: 's0', text: 'Hello' }]);
   });
 
   it('consecutive calls stay in one batch', () => {
@@ -150,7 +158,7 @@ describe('applyStreamEvent — the turn’s order', () => {
 
   it('the result fallback becomes a segment, so an empty turn still renders', () => {
     const out = reduce(seed(), [{ type: 'result', result: '  error text  ' }]);
-    expect(out[0].segments).toEqual([{ kind: 'text', id: 's0', text: 'error text' }]);
+    expect(stripAt(out[0].segments)).toEqual([{ kind: 'text', id: 's0', text: 'error text' }]);
   });
 
   it('synthetic message text joins the order like any other text', () => {
@@ -158,7 +166,7 @@ describe('applyStreamEvent — the turn’s order', () => {
       toolUse('t1'),
       { type: 'assistant', message: { model: '<synthetic>', content: [{ type: 'text', text: '/x unavailable' }] } },
     ]);
-    expect(out[0].segments).toEqual([
+    expect(stripAt(out[0].segments)).toEqual([
       { kind: 'tools', id: 's0', callIds: ['t1'] },
       { kind: 'text', id: 's1', text: '/x unavailable' },
     ]);

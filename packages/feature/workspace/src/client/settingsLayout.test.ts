@@ -187,11 +187,16 @@ describe('every settings block is a section', () => {
   // not a move: the default project folder (VOC — the folder chooser always
   // opened at home). It is an app-wide preference with a single control, which
   // is what General holds; a nav row of its own is the tab §3.1 removed.
+  //
+  // THE 2026-11-12 ADDITION. `agents` grew by one, new UI rather than a move:
+  // the standing instructions (user-instructions §4). They are what the user
+  // tells naby itself on every turn, so they sit above the agent list on the
+  // naby tab instead of opening a nav row of their own.
   const EXPECTED: Record<string, number> = {
     general: 4, // theme + language (merged) + fonts (2026-08-06) + project folder (2026-10-13)
     provider: 1, // engine choice + API keys; MCP moved to connections
     connections: 2, // MCP servers (system presets + user-added) / telegram
-    agents: 1, // the naby agent list; its memory and telegram moved out
+    agents: 2, // standing instructions (2026-11-12) + the naby agent list
     memory: 1, // the memory tab (decisions inbox, switches, browser)
     // org-harness-sync M2 (2026-10-07): NOT a move — the org harness card is new
     // UI, and it sits on the Harness tab because it is the harness the company

@@ -383,16 +383,9 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
    * hands the tab back to the automatic title, which is the only way back once
    * a title has been fixed.
    */
-  const commitRename = useCallback((tabId: string, raw: string) => {
-    setRenamingTabId(null);
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab?.sessionId) return;
-    const title = raw.trim();
-    // An empty name hands the tab BACK to the automatic title — the only way to
-    // undo a rename — so the lock is released with it.
-    updateTabState(tabId, title ? { title, lockTitle: true } : { titleLocked: false });
+  const persistRename = useCallback((sessionId: string, title: string, cwd: string) => {
     BrowserRuntime.runFork(
-      renameSession(tab.sessionId, title, tab.cwd || initialCwd || '').pipe(
+      renameSession(sessionId, title, cwd).pipe(
         Effect.orElse(() => Effect.void),
       ),
     );
@@ -401,7 +394,49 @@ export function TabManager({ initialCwd, initialSessionId }: TabManagerProps) {
     // (which rebuilds per request) and nowhere else, which looks like it only
     // half-saved.
     publishTopic(Topics.PinnedSessionsChanged, {});
-  }, [tabs, updateTabState, initialCwd]);
+  }, []);
+
+  /**
+   * A NAME GIVEN BEFORE THE FIRST MESSAGE. A new tab has no session yet — the
+   * row is minted by its first turn (or by adding a participant) — so there is
+   * nothing to store the name on. It used to be dropped: the commit returned
+   * early, the label snapped back, and the rename looked broken. Now the tab
+   * takes the name (locked, so the first turn's derived title does not replace
+   * it) and the name is written the moment the tab gets its session.
+   */
+  const pendingRenamesRef = useRef(new Map<string, string>());
+
+  const commitRename = useCallback((tabId: string, raw: string) => {
+    setRenamingTabId(null);
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab || isMarkdownTab(tab)) return;
+    const title = raw.trim();
+    // An empty name hands the tab BACK to the automatic title — the only way to
+    // undo a rename — so the lock is released with it.
+    updateTabState(tabId, title ? { title, lockTitle: true } : { titleLocked: false });
+    if (!tab.sessionId) {
+      if (title) pendingRenamesRef.current.set(tabId, title);
+      else pendingRenamesRef.current.delete(tabId);
+      return;
+    }
+    pendingRenamesRef.current.delete(tabId);
+    persistRename(tab.sessionId, title, tab.cwd || initialCwd || '');
+  }, [tabs, updateTabState, initialCwd, persistRename]);
+
+  useEffect(() => {
+    const pending = pendingRenamesRef.current;
+    if (pending.size === 0) return;
+    for (const [tabId, title] of pending) {
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!tab) {
+        pending.delete(tabId);
+        continue;
+      }
+      if (!tab.sessionId) continue;
+      pending.delete(tabId);
+      persistRename(tab.sessionId, title, tab.cwd || initialCwd || '');
+    }
+  }, [tabs, initialCwd, persistRename]);
 
   // UI state
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);

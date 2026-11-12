@@ -22,7 +22,7 @@ export { appendTextSegment, appendToolCallSegment, nextSegmentId, segmentedCallI
  * the end of the turn.
  */
 export type RenderSegment =
-  | { kind: 'text'; id: string; text: string }
+  | { kind: 'text'; id: string; text: string; at?: number }
   | { kind: 'tools'; id: string; calls: ToolCallInfo[] }
   | { kind: 'subagent'; id: string; group: SubagentGroup }
   | { kind: 'background'; id: string; job: BackgroundJob };
@@ -103,7 +103,7 @@ export function buildRenderSegments(
 
   for (const seg of segments) {
     if (seg.kind === 'text') {
-      if (seg.text) out.push({ kind: 'text', id: seg.id, text: seg.text });
+      if (seg.text) out.push({ kind: 'text', id: seg.id, text: seg.text, ...(typeof seg.at === 'number' ? { at: seg.at } : {}) });
       continue;
     }
     // A tools segment can be interrupted by a subagent block sitting at the

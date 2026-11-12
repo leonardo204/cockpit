@@ -130,3 +130,15 @@ export function formatTurnMeta(
   const endTime = formatTurnEndTime(completedAt);
   return endTime ? `${duration} · ${endTime}` : duration;
 }
+
+/**
+ * The time under a bubble that is NOT the turn's last — `14:15:07`, the moment
+ * that run of prose was last written to. Only a clock time: the duration belongs
+ * to the turn as a whole and stays on its closing line.
+ *
+ * '' for a missing or non-finite value, so the caller can test the string.
+ */
+export function formatSegmentTime(at: number | undefined): string {
+  if (typeof at !== 'number' || !Number.isFinite(at)) return '';
+  return formatTurnEndTime(new Date(at).toISOString());
+}

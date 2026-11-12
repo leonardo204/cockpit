@@ -3043,5 +3043,19 @@
     "dotTitle": "naby has a question about what it remembers",
     "regionLabel": "A question about what naby remembers",
     "answerFailed": "Could not save the answer."
+  },
+  "userInstructions": {
+    "title": "Instructions for every session",
+    "hint": "naby reads this on every turn, in every project and every session. Use it for rules you would otherwise repeat each time — language, tone, how to report, what to check first. It does not lift permissions or switches you turned off.",
+    "placeholder": "e.g. Answer in Korean. Show the command before running it. Keep summaries to three lines.",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved. It applies from the next message.",
+    "clear": "Clear",
+    "failed": "Could not save: {{error}}",
+    "tooLong": "Too long — {{count}} / {{max}} characters. Shorten it to save.",
+    "count": "{{count}} / {{max}}",
+    "unsaved": "Not saved yet",
+    "loading": "Loading…"
   }
 }

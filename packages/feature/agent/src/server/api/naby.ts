@@ -92,6 +92,9 @@ import {
   parseStyleFingerprint,
   readLearningEnabled,
   STYLE_FINGERPRINT_KEY,
+  readUserInstructions,
+  writeUserInstructions,
+  USER_INSTRUCTIONS_MAX_CHARS,
   STYLE_FINGERPRINT_MIN_SAMPLES,
   type StyleFingerprint,
   shouldOfferBootstrap,
@@ -860,7 +863,7 @@ export type NabyAction =
   // `tiers` maps each to its permission tier (§8.14).
   | { action: 'tools.list' }
   | { action: 'session.participants.list'; sessionId: string }
-  | { action: 'session.participants.add'; sessionId: string; agentId: string }
+  | { action: 'session.participants.add'; sessionId?: string; agentId: string; cwd?: string }
   | { action: 'session.participants.remove'; sessionId: string; agentId: string }
   // MAC-M6 (§8.13) — naby's background RECOMMENDATIONS for a session. `list`
   // returns the pending ones (by session, or the one `id` Settings was opened
@@ -974,6 +977,8 @@ export type NabyAction =
   // rides /api/naby rather than /api/memory for the same reason the learning
   // switch does: it is a setting, and /api/memory is the surface for memory ROWS.
   | { action: 'style.get' }
+  | { action: 'instructions.get' }
+  | { action: 'instructions.set'; text: string }
   // The per-session temporary flag, toggled from the tab context menu. `list`
   // exists so the tab bar can mark every affected tab from ONE request rather
   // than asking per tab as tabs open.
@@ -1155,6 +1160,10 @@ export type NabyActionResult =
        *  `corroborationThreshold` is (a hardcoded number in a sentence goes wrong
        *  silently the day the constant is tuned). */
       styleMinSamples?: number;
+      /** `instructions.get` / `set` (user-instructions §4): the standing
+       *  instructions as stored, and the character cap the editor enforces. */
+      instructions?: string;
+      instructionsMaxChars?: number;
       /** `session.noLearn.set`: the flag as it now stands. */
       noLearn?: boolean;
       /** `session.noLearn.list`: every session currently marked temporary, so the
@@ -1466,6 +1475,32 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
         style: fingerprint ?? null,
         styleMinSamples: STYLE_FINGERPRINT_MIN_SAMPLES,
       };
+    }
+
+    // -- the user's standing instructions (specs/user-instructions.md) ------
+
+    case 'instructions.get':
+      return {
+        ok: true,
+        instructions: readUserInstructions(store),
+        instructionsMaxChars: USER_INSTRUCTIONS_MAX_CHARS,
+      };
+
+    case 'instructions.set': {
+      // Refused, never truncated: a rule cut off at the cap would look saved
+      // while not being in force. The turn reads the setting fresh, so the next
+      // message already follows what was saved here.
+      const res = writeUserInstructions(store, body.text);
+      if (!res.ok) {
+        return {
+          ok: false,
+          error:
+            res.error === 'too-long'
+              ? `instructions exceed ${USER_INSTRUCTIONS_MAX_CHARS} characters`
+              : 'text must be a string',
+        };
+      }
+      return { ok: true, instructions: res.text, instructionsMaxChars: USER_INSTRUCTIONS_MAX_CHARS };
     }
 
     case 'learning.set': {
@@ -2034,16 +2069,42 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
     }
 
     case 'session.participants.add': {
-      if (typeof body.sessionId !== 'string' || !body.sessionId) {
-        return { ok: false, error: 'sessionId is required' };
-      }
       if (typeof body.agentId !== 'string' || !body.agentId) {
         return { ok: false, error: 'agentId is required' };
       }
+      // A CHAT THAT HAS NOT SENT ITS FIRST MESSAGE has no session yet (the first
+      // turn mints it). Adding a participant there used to be refused, so the
+      // roster could not be set up before the conversation started. Without a
+      // `sessionId` the session is minted here — the same way the first turn and
+      // `session.fastGrowth.create` mint one — and returned, and the chat sends
+      // its first message into it, so that turn already sees the participant.
+      let sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : undefined;
+      let minted = false;
+      if (!sessionId) {
+        if (body.sessionId !== undefined && body.sessionId !== null && body.sessionId !== '') {
+          return { ok: false, error: 'sessionId must be a string' };
+        }
+        // Checked before minting, so a refused add leaves no empty session behind.
+        if (!isParticipant(store.getAgent(body.agentId))) {
+          return { ok: false, error: 'only a conversation participant can join a session' };
+        }
+        const cwd = typeof body.cwd === 'string' && body.cwd ? body.cwd : undefined;
+        sessionId = store.createSession('', undefined, cwd).sessionId;
+        if (cwd) store.touchProject(cwd);
+        minted = true;
+      }
       // The cap check and the upsert are shared with naby's approved drafts.
-      const added = addParticipantToSession(store, body.sessionId, body.agentId, 'user');
-      if (!added.ok) return { ok: false, error: added.error };
-      return { ok: true, naby: hubOf(store), participants: sessionRoster(store, body.sessionId) };
+      const added = addParticipantToSession(store, sessionId, body.agentId, 'user');
+      if (!added.ok) {
+        if (minted) store.deleteSession(sessionId);
+        return { ok: false, error: added.error };
+      }
+      return {
+        ok: true,
+        naby: hubOf(store),
+        participants: sessionRoster(store, sessionId),
+        ...(minted ? { sessionId } : {}),
+      };
     }
 
     case 'session.participants.remove': {

@@ -570,7 +570,7 @@ export function ParticipantRoster({ speakingId }: { speakingId: SpeakingId }) {
         addable={addableParticipants(ctx.registered, ctx.inSession)}
         speakingId={speakingId}
         maxPerSession={ctx.settings.maxPerSession}
-        hasSession={!!ctx.sessionId}
+        hasSession={!!ctx.sessionId || ctx.canAddWithoutSession}
         menuOpen={menuOpen}
         busy={busy}
         onToggleMenu={onToggleMenu}

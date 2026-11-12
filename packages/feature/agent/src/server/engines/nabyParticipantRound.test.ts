@@ -253,7 +253,7 @@ describe('naby engine — participant round', () => {
     expect(calls.map((c) => c.kind)).toEqual(['route', 'naby']);
     const rows = store.getMessages(sessionId);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ role: 'user', content: '안녕?' });
+    expect(rows[0]).toEqual({ role: 'user', content: '안녕?', at: expect.any(Number) });
     expect(rows[1]).toMatchObject({ role: 'assistant', content: '반가워요' });
     expect(rows[1]).not.toHaveProperty('speaker');
     expect(events.find((e) => e.subtype === 'speaker')).toMatchObject({ agent: { persona: true } });

@@ -227,7 +227,12 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         });
         return;
       }
-      out.push({ id: `user-${i}`, role: 'user', content: m.content });
+      out.push({
+        id: `user-${i}`,
+        role: 'user',
+        content: m.content,
+        ...(typeof m.at === 'number' ? { timestamp: new Date(m.at).toISOString() } : {}),
+      });
     } else if (m.role === 'assistant') {
       const toolCalls = (m.toolCalls ?? []).map((tc) => ({
         id: tc.toolCallId,
@@ -278,12 +283,15 @@ export function toChatMessages(messages: RuntimeMessage[]): ChatMessage[] {
         if (turn) Object.assign(previous, turn);
         return;
       }
-      let segments = appendTextSegment(undefined, m.content);
+      let segments = appendTextSegment(undefined, m.content, m.at);
       for (const tc of toolCalls) segments = appendToolCallSegment(segments, tc.id);
       out.push({
         id: `assistant-${i}`,
         role: 'assistant',
         content: m.content,
+        // When the row was written (`RuntimeMessage.at`). A bubble that is not
+        // the turn's last shows it as its time; the last one shows `turn`.
+        ...(typeof m.at === 'number' ? { timestamp: new Date(m.at).toISOString() } : {}),
         ...(m.speaker ? { speaker: { agentId: m.speaker.agentId, name: m.speaker.name } } : {}),
         ...(m.routing ? { routing: { ...m.routing } } : {}),
         ...(toolCalls.length ? { toolCalls } : {}),

@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Fragment,
   useState,
   useEffect,
   useMemo,
@@ -20,7 +21,7 @@ import { groupSubagentCalls } from './subagentGroups';
 import { getJobsById, subscribeJobs } from './jobStore';
 import { partitionBackgroundJobs } from './backgroundJobs';
 import { buildRenderSegments, lastTextSegmentId } from './turnSegments';
-import { formatTurnEndTime, formatTurnMeta } from './elapsed';
+import { formatSegmentTime, formatTurnEndTime, formatTurnMeta } from './elapsed';
 import { filterDisplayToolCalls, shouldGroupUnderHeader } from './toolCallDisplay';
 import { AskQuestionViewerModal } from './AskQuestionViewerModal';
 import type { ChatMessage, MessageImage, ToolCallInfo } from './types';
@@ -1052,7 +1053,16 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
         {!isUser &&
           renderSegments.map((seg) => {
             if (seg.kind === 'text') {
-              return (
+              // A TIME UNDER EVERY BUBBLE THAT IS NOT THE TURN'S LAST — when that
+              // run of prose was written. The last bubble keeps the turn's own
+              // closing line (duration · end time, below). While the turn runs,
+              // a bubble is finished once anything follows it; the one still
+              // being written gets nothing, since its time would tick.
+              const segTime =
+                (message.isStreaming ? seg.id !== lastSegmentId : seg.id !== lastTextId)
+                  ? formatSegmentTime(seg.at)
+                  : '';
+              const balloon = (
                 <MessageBalloon
                   key={seg.id}
                   text={seg.text}
@@ -1068,6 +1078,18 @@ export const MessageBubble = memo(function MessageBubble({ message, cwd, session
                   extras={seg.id === lastTextId ? bubbleExtras : undefined}
                   onFilePathClick={handleFilePathClick}
                 />
+              );
+              if (!segTime) return balloon;
+              return (
+                <Fragment key={seg.id}>
+                  {balloon}
+                  <span
+                    data-testid="segment-time"
+                    className="text-[0.786rem] text-muted-foreground mt-0.5 px-1"
+                  >
+                    {segTime}
+                  </span>
+                </Fragment>
               );
             }
             if (seg.kind === 'tools') {
