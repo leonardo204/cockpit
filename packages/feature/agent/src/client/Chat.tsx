@@ -1161,7 +1161,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
                 picks WHICH model the selected engine uses (Claude aliases /
                 ChatGPT slugs). Self-hides for a metered API-key provider, which
                 has no per-turn model choice. */}
-            <ModelSwitcher activeEngine={activeEngine} onModelChange={handleModelChange} onUserSelect={handleUserSwitch} liveRoute={liveRoute} />
+            <ModelSwitcher activeEngine={activeEngine} onModelChange={handleModelChange} onUserSelect={handleUserSwitch} liveRoute={liveRoute} sessionId={liveSessionId ?? null} />
             {/* The account chip is ENGINE-AWARE: exactly one sign-in shows,
                 matching the engine that will answer.
                   • ChatGPT subscription  → the ChatGPT chip (dev-seal gated; it

@@ -308,11 +308,11 @@ export const dynamic = 'force-dynamic';
 // the dev ChatGPT subscription, and the Google provider id for Gemini.
 //
 // WHAT A SCOPE MEANS, unchanged by the Google addition: the pick is stored under
-// `model.selected:<scope>` in the settings table, which is APP-WIDE and NOT
-// per-session — there is no session id anywhere in the key. Every session
-// running on that engine gets the same model until the user picks another. The
-// client also threads the pick into each turn's payload; this is the durable
-// copy that survives a reload.
+// `model.selected:<scope>:session:<id>` per session, plus `model.selected:<scope>`
+// as the app-wide DEFAULT a brand-new chat starts from (the last pick made
+// anywhere). A session that has an id reads only its own key, so picking a model
+// in one chat never moves another. The client also threads the pick into each
+// turn's payload; these rows are the durable copies that survive a reload.
 //
 // WHY GOOGLE JOINS THEM AND THE OTHER METERED PROVIDERS DO NOT. The rule was
 // "a metered provider's model is a profile setting, not a per-turn pick", and
@@ -333,6 +333,19 @@ const MODEL_SCOPES: readonly string[] = [
 /** The setting key a scope's picked model lives under. */
 function modelSettingKey(scope: string): string {
   return `model.selected:${scope}`;
+}
+
+/**
+ * PER-SESSION PICKS. The app-wide key above is now only the DEFAULT a new chat
+ * starts from (the last model the user picked anywhere). Once a session has an
+ * id, its own pick lives here and nothing another session does can move it —
+ * users with several chats open on different models saw every chat follow the
+ * last pick. Session ids are opaque; only a conservative charset is accepted so
+ * a crafted id cannot address some other setting row.
+ */
+const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,200}$/;
+function sessionModelSettingKey(scope: string, sessionId: string): string {
+  return `model.selected:${scope}:session:${sessionId}`;
 }
 
 /** Read every persisted model pick (absent scope = no pick). */
@@ -684,7 +697,11 @@ export type NabyAction =
   | { action: 'settings.set'; enginePreference?: string; selectedProvider?: string }
   | { action: 'gate.set'; allowChanges: boolean }
   // The bottom-bar ModelSwitcher's pick for one engine scope. `model` '' clears it.
-  | { action: 'model.set'; providerId: string; model: string }
+  // With `sessionId`, the pick is pinned to that session (and also becomes the
+  // default for new chats); without it, only the new-chat default is written.
+  | { action: 'model.set'; providerId: string; model: string; sessionId?: string }
+  // One session's pick for a scope, or '' when the session has none yet.
+  | { action: 'model.get'; providerId: string; sessionId: string }
   | { action: 'claude.login'; email?: string; console?: boolean }
   | { action: 'claude.logout' }
   // MORE THAN ONE CLAUDE SUBSCRIPTION (claude-multi-account §5), shaped after the
@@ -946,7 +963,7 @@ export type NabyAction =
   // have I got left, right now, in both windows" — before the user has run
   // anything. Both paths are kept; see the case body for how they differ.
   //
-  // SAFE TO CALL ON ANY NATURAL EVENT (a mount, a turn finishing). The 15-minute
+  // SAFE TO CALL ON ANY NATURAL EVENT (a mount, a turn finishing). The one-minute
   // floor is enforced HERE, server-side, against a per-account cache, so a caller
   // that asks more often gets a store read and no source is touched. `refresh`
   // bypasses the cache and is for an explicit user action only — never a timer.
@@ -1012,6 +1029,10 @@ export type NabyActionResult =
   | {
       ok: true;
       message?: string;
+      /** `model.get`: the session's pick ('' = engine default or none). */
+      model?: string;
+      /** `model.get`: whether the session has its own row at all. */
+      pinned?: boolean;
       tools?: string[];
       /** `tools.list` (§8.14): each tool's permission tier, and each level's tools. */
       tiers?: Record<string, 'read' | 'write' | 'elevated'>;
@@ -2620,10 +2641,32 @@ export async function runNabyAction(body: NabyAction): Promise<NabyActionResult>
       if (typeof body.model !== 'string') {
         return { ok: false, error: 'model must be a string' };
       }
+      if (body.sessionId !== undefined) {
+        if (typeof body.sessionId !== 'string' || !SESSION_ID_RE.test(body.sessionId)) {
+          return { ok: false, error: 'invalid sessionId' };
+        }
+        // The session's own copy: this is what makes the pick independent.
+        store.setSetting(sessionModelSettingKey(body.providerId, body.sessionId), body.model);
+      }
       // '' clears the pick (back to the engine default); the store keeps '' and
       // readSelectedModels trims it out, so an absent scope reads as "no pick".
+      // Written on every pick so the NEXT new chat starts from the latest choice;
+      // existing sessions read their own key and are not affected by it.
       store.setSetting(modelSettingKey(body.providerId), body.model);
       return { ok: true };
+    }
+
+    case 'model.get': {
+      if (typeof body.providerId !== 'string' || !MODEL_SCOPES.includes(body.providerId)) {
+        return { ok: false, error: `unknown model scope "${String(body.providerId)}"` };
+      }
+      if (typeof body.sessionId !== 'string' || !SESSION_ID_RE.test(body.sessionId)) {
+        return { ok: false, error: 'invalid sessionId' };
+      }
+      // `pinned` distinguishes "this session chose the engine default ('')" from
+      // "this session has never been pinned" — the client pins the latter.
+      const raw = store.getSetting(sessionModelSettingKey(body.providerId, body.sessionId));
+      return { ok: true, model: raw?.trim() ?? '', pinned: raw !== undefined };
     }
 
     case 'claude.login': {

@@ -342,10 +342,9 @@ describe('parseGoogleModelList', () => {
 
 describe('model.set — which engines expose a per-turn model pick', () => {
   /**
-   * `model.set` IS APP-WIDE PER SCOPE, NOT PER SESSION — the key it writes is
-   * `model.selected:<scope>` in the settings table and carries no session id
-   * (see the block above MODEL_SCOPES). Adding Google keeps that meaning: it adds
-   * a scope, it does not change what a scope is.
+   * Without a session id, `model.set` writes only the scope-wide NEW-CHAT
+   * DEFAULT (`model.selected:<scope>`). With one, it also pins the pick to that
+   * session — see the per-session block below.
    */
   afterEach(async () => {
     await runNabyAction({ action: 'model.set', providerId: 'google', model: '' });
@@ -379,5 +378,39 @@ describe('model.set — which engines expose a per-turn model pick', () => {
       model: 'whatever',
     });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe('model.set / model.get — each session keeps its own model', () => {
+  afterEach(async () => {
+    await runNabyAction({ action: 'model.set', providerId: 'dev-claude', model: '' });
+  });
+
+  it('a pick in one session does not move another session', async () => {
+    await runNabyAction({ action: 'model.set', providerId: 'dev-claude', model: 'opus', sessionId: 'sess-a' });
+    await runNabyAction({ action: 'model.set', providerId: 'dev-claude', model: 'sonnet', sessionId: 'sess-b' });
+
+    const a = await runNabyAction({ action: 'model.get', providerId: 'dev-claude', sessionId: 'sess-a' });
+    const b = await runNabyAction({ action: 'model.get', providerId: 'dev-claude', sessionId: 'sess-b' });
+    expect(a).toMatchObject({ ok: true, model: 'opus', pinned: true });
+    expect(b).toMatchObject({ ok: true, model: 'sonnet', pinned: true });
+  });
+
+  it('the latest pick becomes the default a new chat starts from', async () => {
+    await runNabyAction({ action: 'model.set', providerId: 'dev-claude', model: 'haiku', sessionId: 'sess-c' });
+    const state = await readNabyState(null);
+    expect(state.selectedModels['dev-claude']).toBe('haiku');
+  });
+
+  it('reports an unpinned session as such, so the client can pin it', async () => {
+    const res = await runNabyAction({ action: 'model.get', providerId: 'dev-claude', sessionId: 'never-picked' });
+    expect(res).toMatchObject({ ok: true, model: '', pinned: false });
+  });
+
+  it('refuses a session id that could address another setting row', async () => {
+    const set = await runNabyAction({ action: 'model.set', providerId: 'dev-claude', model: 'opus', sessionId: '../x y' });
+    expect(set.ok).toBe(false);
+    const get = await runNabyAction({ action: 'model.get', providerId: 'dev-claude', sessionId: '' });
+    expect(get.ok).toBe(false);
   });
 });

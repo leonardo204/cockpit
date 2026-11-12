@@ -85,6 +85,34 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.24 — 2026-11-12
+
+### en
+
+The usage bar keeps up with what you actually use, and each chat now keeps its own model.
+
+**Improved**
+
+- **Usage updates within a minute.** The 5-hour and 7-day usage used to refresh only every 15 minutes, so a heavy turn did not show up for a long time. It now refreshes within a minute, and pauses while the window is hidden.
+- **Refresh usage on hover or click.** Hovering over the usage takes a quick look; clicking it fetches a fresh reading right away. The clock icon spins while it works.
+
+**Fixed**
+
+- **Each chat keeps its own model.** Picking a model in one chat used to change it in every chat. A model is now kept per chat. A new chat starts from the last model you picked.
+
+### ko
+
+사용량 표시가 실제 사용을 금방 따라오고, 대화마다 모델을 따로 고를 수 있어요.
+
+**나아진 것**
+
+- **사용량이 1분 안에 반영돼요.** 5시간·7일 사용량은 15분마다만 새로 고쳐져서, 많이 쓴 뒤에도 한참 동안 숫자가 그대로였어요. 이제 1분 안에 반영되고, 창이 가려져 있을 때는 쉬어요.
+- **마우스를 올리거나 클릭하면 바로 갱신돼요.** 사용량에 마우스를 올리면 가볍게 다시 확인하고, 클릭하면 바로 새로 받아 와요. 받아 오는 동안 시계 아이콘이 돌아요.
+
+**고친 것**
+
+- **대화마다 모델이 따로 유지돼요.** 한 대화에서 모델을 바꾸면 모든 대화의 모델이 같이 바뀌었어요. 이제 대화마다 모델이 따로 유지되고, 새 대화는 마지막으로 고른 모델로 시작해요.
+
 ## 1.48.23 — 2026-11-12
 
 ### en

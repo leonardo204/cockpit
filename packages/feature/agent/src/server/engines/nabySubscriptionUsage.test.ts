@@ -339,11 +339,14 @@ describe('the field readers refuse rather than coerce', () => {
 });
 
 describe('the two clocks', () => {
-  it('the poll floor is 15 minutes and the staleness ceiling is twice it', () => {
+  it('the poll floor is 1 minute and the staleness ceiling is 30 minutes', () => {
     // Pinned because both are policy, not implementation detail: the floor is
-    // what keeps naby off a rate-limited endpoint, and the ceiling is what stops
-    // a stale number being shown forever.
-    expect(SUBSCRIPTION_USAGE_TTL_MS).toBe(15 * 60 * 1000);
-    expect(SUBSCRIPTION_USAGE_MAX_STALE_MS).toBe(2 * SUBSCRIPTION_USAGE_TTL_MS);
+    // how quickly the bar follows real usage (users asked for under a minute),
+    // and the ceiling is what stops a stale number being shown forever. They are
+    // independent: a short floor must not shrink the ceiling, or a rate-limited
+    // endpoint would blank the bar within minutes.
+    expect(SUBSCRIPTION_USAGE_TTL_MS).toBe(60 * 1000);
+    expect(SUBSCRIPTION_USAGE_MAX_STALE_MS).toBe(30 * 60 * 1000);
+    expect(SUBSCRIPTION_USAGE_MAX_STALE_MS).toBeGreaterThan(SUBSCRIPTION_USAGE_TTL_MS);
   });
 });

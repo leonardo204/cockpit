@@ -756,6 +756,7 @@
     "planUsageHint": "How much of your Claude subscription this account has used. The 5-hour and 7-day windows are shown; a window is hidden while its current period is unknown.",
     "planUsageSources": "Sources: {{sources}}",
     "planUsageOtherAccount": "Claude Code's own reading was ignored — it is a different account.",
+    "planUsageRefresh": "Click to refresh now.",
     "output": "Output",
     "outputHint": "What the model produced this turn: its answer plus every tool call it made. Output is billed at a higher rate than input.",
     "turnCostHint": "What this turn's tokens are worth at the provider's metered prices, as it reported them. On a Claude subscription run that is what the same tokens would have cost on the API, not a charge to you.",

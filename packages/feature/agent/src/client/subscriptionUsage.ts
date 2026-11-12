@@ -27,7 +27,7 @@
 // THE POLL FLOOR IS NOT ENFORCED HERE, AND MUST NOT BE. Both readings ultimately
 // resolve to server-side accounting that is rate-limited in practice, and the
 // authority on how often it may actually be touched is the API action, which
-// holds a per-account cache with a fifteen-minute TTL. This module's job is to
+// holds a per-account cache with a one-minute TTL. This module's job is to
 // keep the number of HTTP calls sane; the interval below is therefore a comfort
 // value, NOT the floor, and shortening it cannot cause a source to be hit more
 // often. Keeping the floor in one place — server-side, where the cache is — is
@@ -39,9 +39,11 @@ import type { UsageLimitsSnapshot } from './types';
 /**
  * The backstop timer, matched to the server's TTL so an idle app converges on
  * roughly one look per window-refresh rather than on a schedule of its own.
- * See the header: this is not the floor.
+ * See the header: this is not the floor. Ticks are skipped while the window is
+ * hidden (each source look spawns a CLI child), and a look is taken as soon as
+ * it becomes visible again.
  */
-export const USAGE_POLL_INTERVAL_MS = 15 * 60 * 1000;
+export const USAGE_POLL_INTERVAL_MS = 60 * 1000;
 
 /**
  * The shortest gap between two HTTP calls from this module.
@@ -103,9 +105,36 @@ async function fetchUsage(force: boolean): Promise<void> {
 }
 
 /** An explicit, user-initiated refresh: bypasses both this module's gap and the
- *  server's TTL. Wired to nothing automatic — a timer must never call this. */
-export function refreshSubscriptionUsage(): void {
-  void fetchUsage(true);
+ *  server's TTL. Wired to nothing automatic — a timer must never call this.
+ *  Resolves when the look is done, so a button can show it is working. */
+export function refreshSubscriptionUsage(): Promise<void> {
+  return fetchUsage(true);
+}
+
+/** A cheap look on hover: NOT forced, so it is gap-limited here and answered
+ *  from the server's one-minute cache when that is still fresh. Hovering can
+ *  therefore never hammer the source; the click is the explicit refresh. */
+export function peekSubscriptionUsage(): void {
+  void fetchUsage(false);
+}
+
+/** True when nobody can see the bar (window minimised or behind another app).
+ *  Absent `document` (tests, SSR) counts as visible so behaviour is unchanged. */
+function pageHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+}
+
+/** The timer tick: with a one-minute interval, a hidden window would otherwise
+ *  spawn a CLI child every minute for a number nobody is looking at. */
+function onTick(): void {
+  if (pageHidden()) return;
+  void fetchUsage(false);
+}
+
+/** Coming back into view is a natural moment to look: the ticks that were
+ *  skipped while hidden are made up for with one request (still gap-limited). */
+function onVisibilityChange(): void {
+  if (!pageHidden()) void fetchUsage(false);
 }
 
 function subscribe(listener: () => void): () => void {
@@ -115,7 +144,12 @@ function subscribe(listener: () => void): () => void {
   // timer and (via the gap above) one request.
   if (listeners.size === 1) {
     void fetchUsage(false);
-    if (timer === null) timer = setInterval(() => void fetchUsage(false), USAGE_POLL_INTERVAL_MS);
+    if (timer === null) {
+      timer = setInterval(onTick, USAGE_POLL_INTERVAL_MS);
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', onVisibilityChange);
+      }
+    }
   }
   return () => {
     listeners.delete(listener);
@@ -125,6 +159,9 @@ function subscribe(listener: () => void): () => void {
     if (listeners.size === 0 && timer !== null) {
       clearInterval(timer);
       timer = null;
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
     }
   };
 }
@@ -175,6 +212,9 @@ export function __resetSubscriptionUsageForTest(): void {
   if (timer !== null) {
     clearInterval(timer);
     timer = null;
+  }
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', onVisibilityChange);
   }
   listeners.clear();
 }

@@ -28,6 +28,7 @@ import {
   type UsageStatId,
 } from './usageBarView';
 import { loadAgentSettings, saveAgentSettings } from './effect/agentClient';
+import { peekSubscriptionUsage, refreshSubscriptionUsage } from './subscriptionUsage';
 
 // ============================================
 // Token Usage Display
@@ -355,7 +356,17 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
         }),
       );
     }
+    lines.push(t('chat.planUsageRefresh', { defaultValue: 'Click to refresh now.' }));
     return lines.join('\n');
+  };
+
+  // Hover takes a cheap (cached) look; a click forces a fresh one. The spinner
+  // only reflects the click, so a hover never makes the chip flicker.
+  const [usageRefreshing, setUsageRefreshing] = useState(false);
+  const onUsageClick = (): void => {
+    if (usageRefreshing) return;
+    setUsageRefreshing(true);
+    void refreshSubscriptionUsage().finally(() => setUsageRefreshing(false));
   };
 
   // -- THE CACHE TOOLTIP -----------------------------------------------------
@@ -503,12 +514,17 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
             reading past its staleness ceiling, or both windows expired. In none
             of those does a zero or an empty chip appear. */}
         {shows('plan') && (
-          <span
-            className="flex items-center gap-1.5"
+          <button
+            type="button"
+            className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-muted hover:text-foreground transition-colors disabled:cursor-wait"
             data-testid="plan-usage-chip"
             title={usageTitle()}
+            onMouseEnter={peekSubscriptionUsage}
+            onClick={onUsageClick}
+            disabled={usageRefreshing}
+            aria-busy={usageRefreshing}
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className={`w-3.5 h-3.5${usageRefreshing ? ' animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             {fiveHourView.show && (
@@ -528,7 +544,7 @@ export function TokenUsageBar({ tokenUsage, rateLimitInfo, usage }: TokenUsageBa
                 </strong>
               </span>
             )}
-          </span>
+          </button>
         )}
 
         {/* Rate limit warning/rejected indicator */}

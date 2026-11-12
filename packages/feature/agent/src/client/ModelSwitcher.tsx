@@ -16,9 +16,10 @@
  * falls back to its default slug server-side).
  *
  * HOW IT PERSISTS. The pick is saved with the `model.set` action keyed by the
- * engine's SCOPE (the ChatGPT provider id, or a fixed key for Claude), read back
- * from the same /api/naby GET's `selectedModels` map — so a reload restores it
- * and the payload keeps carrying it. Same iframe-safe fetch discipline as every
+ * engine's SCOPE (the ChatGPT provider id, or a fixed key for Claude) AND by the
+ * tab's session id, so each chat keeps its own model. The scope-wide row is only
+ * the default a new chat starts from (the GET's `selectedModels` map); a session
+ * reads its own row through `model.get`. Same iframe-safe fetch discipline as every
  * other bottom-bar control (`window.naby` does not exist in the project iframe).
  *
  * WHERE THE CANDIDATES COME FROM. For Claude, the LIVE list is fetched from
@@ -76,6 +77,13 @@ type ModelSwitcherProps = {
    * reads it; THE MENU DOES NOT — a route is an observation, never a selection.
    */
   liveRoute?: ModelRoute | null;
+  /**
+   * THE SESSION THIS CHIP BELONGS TO. Each chat tab has its own switcher, and a
+   * pick is pinned to this session so other chats keep their own model. Null for
+   * a new chat that has not sent its first message yet; the pick is then held in
+   * memory (and as the new-chat default) and pinned the moment an id arrives.
+   */
+  sessionId?: string | null;
 };
 
 /** What the /api/naby GET adds for this switcher: the persisted pick per scope. */
@@ -83,7 +91,21 @@ type NabyModelState = {
   selectedModels?: Record<string, string>;
 };
 
-export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect, liveRoute }: ModelSwitcherProps) {
+/** Pin a model to one session. Fire-and-forget: a failed write only costs the
+ *  pin, and the in-memory value still drives this tab's turns. */
+async function pinSessionModel(scope: string, sessionId: string, model: string): Promise<void> {
+  try {
+    await fetch('/api/naby', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'model.set', providerId: scope, model, sessionId }),
+    });
+  } catch {
+    /* see above */
+  }
+}
+
+export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect, liveRoute, sessionId = null }: ModelSwitcherProps) {
   const { t } = useTranslation();
   const scope = modelScopeFor(activeEngine?.engineId ?? null, activeEngine?.selectedProvider ?? null);
   // The live Claude catalog. Null until the first answer; the curated fallback
@@ -117,34 +139,73 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect, liveR
   // so a model picked for the previous engine never leaks onto it; a switchable
   // engine reads its persisted pick (falling back to the scope default) and
   // reports it up so the very next payload carries the right model.
+  //
+  // PER SESSION: when this tab has a session id, its own pinned pick wins. A
+  // session with no pin yet (an older session, or one opened from the list) is
+  // pinned to whatever it resolves to now, so later picks in OTHER chats — which
+  // move the new-chat default — can no longer change it.
+  //
+  // A NEW CHAT GETTING ITS ID is not a reason to re-read: the user may already
+  // have picked a model in this tab, and re-reading the app-wide default could
+  // pick up another tab's choice. That transition pins the value in hand.
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const resolvedRef = useRef<{ scope: string | null; sessionId: string | null }>({ scope: null, sessionId: null });
+
   useEffect(() => {
     if (!scope) {
+      resolvedRef.current = { scope: null, sessionId };
       setValue('');
       onModelChangeRef.current?.('');
+      return;
+    }
+    const prev = resolvedRef.current;
+    if (sessionId && prev.scope === scope && prev.sessionId === null && valueRef.current) {
+      resolvedRef.current = { scope, sessionId };
+      void pinSessionModel(scope, sessionId, valueRef.current);
       return;
     }
     let alive = true;
     (async () => {
       let persisted = '';
+      let pinned = false;
       try {
-        const res = await fetch('/api/naby');
-        if (res.ok) {
-          const data = (await res.json()) as NabyModelState;
-          persisted = data.selectedModels?.[scope] ?? '';
+        if (sessionId) {
+          const res = await fetch('/api/naby', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'model.get', providerId: scope, sessionId }),
+          });
+          const json = (await res.json().catch(() => null)) as
+            | { ok?: boolean; model?: string; pinned?: boolean }
+            | null;
+          if (json?.ok && json.pinned) {
+            pinned = true;
+            persisted = json.model ?? '';
+          }
+        }
+        if (!pinned) {
+          const res = await fetch('/api/naby');
+          if (res.ok) {
+            const data = (await res.json()) as NabyModelState;
+            persisted = data.selectedModels?.[scope] ?? '';
+          }
         }
       } catch {
         // Keep the default; the send path surfaces any real failure clearly.
       }
       const eff = persisted || defaultModelForScope(scope);
       if (alive && aliveRef.current) {
+        resolvedRef.current = { scope, sessionId };
         setValue(eff);
         onModelChangeRef.current?.(eff);
+        if (sessionId && !pinned) void pinSessionModel(scope, sessionId, eff);
       }
     })();
     return () => {
       alive = false;
     };
-  }, [scope]);
+  }, [scope, sessionId]);
 
   // -- THE LIVE CATALOGS (Claude, Gemini) ------------------------------------
   //
@@ -259,7 +320,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect, liveR
         await fetch('/api/naby', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'model.set', providerId: scope, model }),
+          body: JSON.stringify({ action: 'model.set', providerId: scope, model, ...(sessionId ? { sessionId } : {}) }),
         });
       } catch {
         // The optimistic value still drives this session's turns; only the
@@ -271,7 +332,7 @@ export function ModelSwitcher({ activeEngine, onModelChange, onUserSelect, liveR
         }
       }
     },
-    [scope],
+    [scope, sessionId],
   );
 
   // No per-turn model choice for this engine (metered API-key provider, or no

@@ -112,8 +112,8 @@ describe('source assertion — when it refetches', () => {
     expect(SRC).toContain('export function refreshSubscriptionUsage');
   });
 
-  it('polls no faster than the 15-minute floor, and coalesces bursts', () => {
-    expect(USAGE_POLL_INTERVAL_MS).toBe(15 * 60 * 1000);
+  it('polls once a minute, and coalesces bursts', () => {
+    expect(USAGE_POLL_INTERVAL_MS).toBe(60 * 1000);
     expect(USAGE_MIN_REQUEST_GAP_MS).toBeLessThan(USAGE_POLL_INTERVAL_MS);
     // One timer for the whole app, started by the FIRST subscriber and stopped by
     // the last: every chat tab stays mounted in this shell, so a per-component
@@ -121,6 +121,15 @@ describe('source assertion — when it refetches', () => {
     expect(SRC).toContain('if (listeners.size === 1)');
     expect(SRC).toContain('if (listeners.size === 0 && timer !== null)');
     expect(SRC.match(/setInterval\(/g)).toHaveLength(1);
+  });
+
+  it('skips timer ticks while the window is hidden, and looks again on return', () => {
+    // Each source look spawns a CLI child; at one minute that must not run for a
+    // minimised window nobody is reading.
+    expect(SRC).toContain("document.visibilityState === 'hidden'");
+    expect(SRC).toContain('setInterval(onTick, USAGE_POLL_INTERVAL_MS)');
+    expect(SRC).toContain("addEventListener('visibilitychange', onVisibilityChange)");
+    expect(SRC).toContain("removeEventListener('visibilitychange', onVisibilityChange)");
   });
 
   it('never lets two requests be in flight at once', () => {

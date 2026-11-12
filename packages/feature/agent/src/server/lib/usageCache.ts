@@ -162,7 +162,7 @@ export type UsageCacheEntry = {
  * so an entry that parses but has `fetchedAt: 0` would read as infinitely stale
  * (harmless), while one with a missing `limits` key would read as a successful
  * lookup that found no windows (not harmless: it would suppress a fresh probe for
- * fifteen minutes). Both are refused as "no cache" instead.
+ * a full TTL). Both are refused as "no cache" instead.
  */
 export function readUsageCache(raw: string | undefined): UsageCacheEntry | null {
   if (!raw) return null;
