@@ -65,6 +65,7 @@ import {
   buildReflectionCases,
   buildReflectionPrompt,
   BUILTIN_PERSONA_ID,
+  BACKGROUND_SDK_MODEL,
   ClaudeAgentSdkEngine,
   collectReflectionUserMessages,
   computeStyleFingerprint,
@@ -1185,13 +1186,15 @@ export async function resolveJudgeBackend(
     // now passes `settingSources: []` on EVERY call (harness-standalone §2.3) —
     // the judge gets the isolation unconditionally, and so does the user's turn.
     //
-    // The model is left unset on purpose: the SDK picks the sign-in's default,
-    // which is the same thing a dev-engine turn does (engines/naby.ts). Inventing
-    // a model id here would be a guess that outlives the sign-in that made it
-    // true.
+    // THE MODEL IS NAMED, AND NO TOOLS RIDE ALONG. Every caller of this (the
+    // naby layer's rewrite, the hand-off summary, the reflection judge, the
+    // participant recommender) wants one text reply. Left to the sign-in's
+    // default it ran on Opus with every built-in tool schema attached, spending
+    // the user's plan window on housekeeping. `BACKGROUND_SDK_MODEL` is an alias,
+    // so it follows whatever Sonnet the sign-in offers.
     return {
-      engine: new ClaudeAgentSdkEngine(),
-      model: { providerId: 'dev-claude' },
+      engine: new ClaudeAgentSdkEngine({ toolless: true }),
+      model: { providerId: 'dev-claude', model: BACKGROUND_SDK_MODEL },
       label: 'claude-agent-sdk (subscription)',
     };
   }

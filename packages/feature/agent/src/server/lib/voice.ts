@@ -169,6 +169,13 @@ type MarkerSplit = { body: string; verified: string[]; done: boolean };
  * The code segments are copied through untouched — literally the same substrings,
  * in the same order.
  */
+
+/**
+ * The longest answer the naby layer restyles WITHOUT a detected deviation.
+ * Above it, the stage's "always restyle" rule is skipped (see `render`).
+ */
+export const VOICE_MAX_UNPROMPTED_CHARS = 3000;
+
 export function splitProtocolMarkers(text: string): MarkerSplit {
   const verified: string[] = [];
   let done = false;
@@ -409,6 +416,14 @@ export function createVoicePort(deps: VoicePortDeps): VoicePort {
             capReached: calls >= VOICE_TURN_REWRITE_CAP,
           })
         ) {
+          return req.text;
+        }
+        // A LONG ANSWER IS ONLY REWRITTEN WHEN SOMETHING IS ACTUALLY OFF. The
+        // pupa/butterfly "always" rule pays the whole answer again as output
+        // tokens — on a proposal-length reply that doubled the turn's output for a
+        // polish nobody asked for. A detected deviation (wrong language, an
+        // ending the user does not use) still gets its rewrite at any length.
+        if (deviation === undefined && stripNonProse(split.body).length > VOICE_MAX_UNPROMPTED_CHARS) {
           return req.text;
         }
 

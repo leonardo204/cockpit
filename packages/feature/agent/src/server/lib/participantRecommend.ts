@@ -715,7 +715,8 @@ export function modelRecommendationJudge(
       opts.claudeEngine ??
       (opts.resolveBackend
         ? undefined
-        : (accountId: string | undefined) => new ClaudeAgentSdkEngine(accountId ? { accountId } : {}));
+        : (accountId: string | undefined) =>
+            new ClaudeAgentSdkEngine({ toolless: true, ...(accountId ? { accountId } : {}) }));
     const engine =
       billing.costBasis === 'subscription' && buildClaude ? buildClaude(activeClaudeAccountId(store)) : backend.engine;
     const model =

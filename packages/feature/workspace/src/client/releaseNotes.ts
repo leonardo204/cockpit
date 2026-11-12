@@ -85,6 +85,30 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.25 — 2026-11-12
+
+### en
+
+Naby uses far fewer tokens on long conversations and on work done in the background.
+
+**Improved**
+
+- **Conversations continue instead of starting over.** Each message used to send the whole conversation again. Naby now continues the same Claude session and sends only your new message, so most of the earlier conversation is read from cache.
+- **Subagent work stays out of the main conversation.** What a subagent read and did along the way is no longer sent again on every later message. Its final result still is. Long tool results from earlier messages are shortened when they are sent again.
+- **Skills are sent once.** When you start a message with a skill such as /report-writer, its full instructions go with that message only. Later messages carry just what you typed.
+- **Lighter background work.** Rewrites, summaries and other background calls now run on Sonnet without tool definitions, which makes each one many times smaller. A long answer is only rewritten when something is actually off, such as the wrong language.
+
+### ko
+
+긴 대화와 백그라운드 작업에서 나비가 쓰는 토큰이 크게 줄었어요.
+
+**나아진 것**
+
+- **대화를 처음부터 다시 보내지 않아요.** 지금까지는 메시지를 보낼 때마다 대화 전체를 다시 보냈어요. 이제 같은 Claude 세션을 이어 쓰면서 새 메시지만 보내고, 앞의 대화는 대부분 캐시에서 읽어요.
+- **서브에이전트 작업이 대화에 다시 실리지 않아요.** 서브에이전트가 중간에 읽고 한 일은 이후 메시지마다 다시 보내지 않아요. 최종 결과는 그대로 보내요. 앞 메시지의 긴 도구 결과도 다시 보낼 때는 줄여서 보내요.
+- **스킬 본문은 한 번만 보내요.** /report-writer처럼 스킬로 시작한 메시지는 그 메시지에만 스킬 전체 지침을 붙여요. 이후 메시지에는 직접 입력한 내용만 실려요.
+- **백그라운드 작업이 가벼워졌어요.** 다시 쓰기, 요약 같은 백그라운드 호출은 이제 도구 정의 없이 Sonnet으로 처리해서 한 번에 드는 양이 훨씬 적어요. 긴 답변은 언어가 다르게 나왔을 때처럼 실제로 어긋난 점이 있을 때만 다시 써요.
+
 ## 1.48.24 — 2026-11-12
 
 ### en

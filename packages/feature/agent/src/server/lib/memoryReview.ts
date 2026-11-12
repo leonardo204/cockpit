@@ -253,7 +253,9 @@ export async function resolveSessionReviewBackend(
   if (turn.engineId === 'dev-claude') {
     if (!isClaudeAgentSdkAvailable()) return undefined;
     return {
-      engine: () => new ClaudeAgentSdkEngine(turn.accountId ? { accountId: turn.accountId } : {}),
+      // Toolless: the review is answered in one text reply (R38 keeps the model).
+      engine: () =>
+        new ClaudeAgentSdkEngine({ toolless: true, ...(turn.accountId ? { accountId: turn.accountId } : {}) }),
       model,
       label: `claude-agent-sdk (subscription${turn.model ? ` ${turn.model}` : ''})`,
     };

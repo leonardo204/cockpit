@@ -121,9 +121,15 @@ export async function resolveMemoryCallRoute(target: MemoryCallTarget): Promise<
   }
   const judge = await resolveJudgeBackend(target.providerId ? { providerId: target.providerId } : {});
   if (!judge) return undefined;
-  // The judge's own subscription fallback names no account and no model: the
-  // sign-in's default, exactly as `resolveJudgeBackend` builds it.
-  if (judge.model.providerId === 'dev-claude') return { where: 'subscription', label: judge.label };
+  // The judge's own subscription fallback names no account, and the background
+  // model `resolveJudgeBackend` builds it with.
+  if (judge.model.providerId === 'dev-claude') {
+    return {
+      where: 'subscription',
+      ...(judge.model.model ? { model: judge.model.model } : {}),
+      label: judge.label,
+    };
+  }
   return { where: 'here', backend: { engine: () => judge.engine, model: judge.model, label: judge.label } };
 }
 
@@ -135,7 +141,9 @@ export function callSubscription(
 ): Promise<string> {
   return engineReviewer(
     {
-      engine: () => new ClaudeAgentSdkEngine(route.accountId ? { accountId: route.accountId } : {}),
+      // Toolless: a memory call is answered in one text reply.
+      engine: () =>
+        new ClaudeAgentSdkEngine({ toolless: true, ...(route.accountId ? { accountId: route.accountId } : {}) }),
       model: { providerId: 'dev-claude', ...(route.model ? { model: route.model } : {}) },
       label: route.label,
     },

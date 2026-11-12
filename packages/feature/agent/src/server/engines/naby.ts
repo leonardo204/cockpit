@@ -2096,6 +2096,12 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // makes the runtime preload the body from the package. A verb nobody
         // registered changes nothing in the runtime, so no kind check is needed.
         const rawPromptText = typeof ctx.params.prompt === 'string' ? ctx.params.prompt : '';
+        // The typed text, when the dispatcher expanded `/command` bodies into
+        // `turnText`. Stored as the user row instead of the expansion (see
+        // runTurn's `storedUserText`). Not for an addressed turn: that text is
+        // already the request with the `@name` stripped.
+        const typedPromptText =
+          !addressedAgent && rawPromptText && rawPromptText !== turnText ? rawPromptText : undefined;
         const namedRows = [...namedHarnessRows(rawPromptText)];
         try {
           for (const verb of unclaimedLineLedVerbs(rawPromptText, ctx.cwd || undefined, store)) {
@@ -4614,6 +4620,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // learner reads it as the user's words (§3.3). Later steps are the
               // harness's own continuation prompts, as on every turn.
               ...(step === 1 && crossSessionTurn ? { crossSession: crossSessionTurn } : {}),
+              // Store what the user TYPED; expanded `/command` bodies are sent to
+              // the model on this turn only, not replayed on every later one.
+              ...(step === 1 && typedPromptText !== undefined ? { storedUserText: typedPromptText } : {}),
               // memory-auto-apply R2: and THOSE are labelled too, as is the first
               // row of a turn the harness itself started (a scheduled task, a job
               // report, a kickoff) — so no memory can cite them as the user's words.
