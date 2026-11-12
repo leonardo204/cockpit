@@ -85,6 +85,32 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.26 — 2026-11-12
+
+### en
+
+A chat no longer gets stuck "thinking" when one connected tool server stops answering.
+
+**Improved**
+
+- **Faster start.** MCP servers now connect at the same time instead of one by one, so a message starts sooner when several are connected.
+
+**Fixed**
+
+- **Stuck before answering.** Before every message, naby connects to your MCP servers (Atlassian, Figma and others) one after another, with no time limit. If one of them accepted the connection and then went quiet, the message waited forever and the answer never started. Each server now has 20 seconds (30 for local ones). A server that does not answer in time is skipped for that message, and the rest continue.
+
+### ko
+
+연결된 도구 서버 하나가 응답하지 않아도 대화가 "생각 중"에서 멈추지 않아요.
+
+**나아진 것**
+
+- **더 빨리 시작해요.** MCP 서버를 하나씩 차례로 연결하던 것을 한꺼번에 연결해요. 여러 개를 연결해 두었을 때 메시지가 더 빨리 시작돼요.
+
+**고친 것**
+
+- **답하기 전에 멈추던 문제.** 나비는 메시지를 보낼 때마다 MCP 서버(Atlassian, Figma 등)에 차례로 연결하는데, 시간 제한이 없었어요. 그래서 한 서버가 연결만 받고 응답하지 않으면 메시지가 끝없이 기다리고 답이 시작되지 않았어요. 이제 서버마다 20초(내 컴퓨터에서 도는 서버는 30초)를 기다리고, 그 안에 응답하지 않는 서버는 그 메시지에서만 빼고 나머지로 진행해요.
+
 ## 1.48.25 — 2026-11-12
 
 ### en
