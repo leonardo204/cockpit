@@ -2518,9 +2518,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               ? harnessHomeInstruction(projectCwd, undefined, readAutoEnableNabyHome(store))
               : undefined,
             // What the org harness's SessionStart / UserPromptSubmit hooks added
-            // (§3.5 "additionalContext → that turn's system prompt"). Context, not
-            // policy, and placed before style for the same reason as the rest.
-            orgHookBlock,
+            // (§3.5) is NOT here any more (v1.48.27): it changes every turn, so it
+            // rides as this turn's context — `turnContext` on the turn options.
+            // In the system prompt it made every turn's prompt different, which
+            // discards the cached conversation behind it on every turn.
             // Style is the weakest claim naby makes on its own — it says how to
             // phrase whatever the rest of the prompt decided — so it sits after
             // everything it must not override.
@@ -4041,6 +4042,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // end, which the contract defines as "say nothing about a
               // directory" rather than "use the ambient one".
               ...(turnSystem ? { system: turnSystem } : {}),
+              // Per-turn instructions, kept out of `system` so the session-long
+              // prompt (and the conversation cached behind it) stays identical
+              // turn to turn. Every engine still receives it (runTurn appends it).
+              ...(orgHookBlock ? { turnContext: orgHookBlock } : {}),
               ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
               onEvent: translateEvent,
           });
@@ -4099,9 +4104,24 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               return e === 'telegram' || e === 'both';
             })();
             // The model a routing call runs on (§8.2, D3): `ROUTE_TIER` through
-            // the catalogue the auto router uses, when this session is on `auto`;
-            // otherwise the session's own model.
-            const routeModel = autoRequested ? modelValueForTier(store, ROUTE_TIER) : effectiveAgentModel(modelForEngine);
+            // the catalogue the auto router uses, when this session is on `auto`
+            // OR on the Claude subscription; otherwise the session's own model.
+            //
+            // ON THE SUBSCRIPTION IT IS ALWAYS SONNET, AND TOOLLESS (v1.48.27).
+            // The call picks a speaker from a short JSON brief; it runs on every
+            // user message and again between speakers. On the session's model it
+            // ran on fable/opus, and through the turn's engine it carried the
+            // CLI's whole built-in tool list (~22k tokens), so each pick cost as
+            // much as a short turn — measured at ~$0.35 a call on fable. The
+            // routing decision does not need either.
+            const routeOnSubscription = engineId === 'dev-claude';
+            const routeModel =
+              autoRequested || routeOnSubscription
+                ? modelValueForTier(store, ROUTE_TIER)
+                : effectiveAgentModel(modelForEngine);
+            const routeEngine: Engine = routeOnSubscription
+              ? new ClaudeAgentSdkEngine({ toolless: true, ...(claudeAccountId ? { accountId: claudeAccountId } : {}) })
+              : engine;
 
             const routeCall = async (system: string) => {
               let text = '';
@@ -4111,7 +4131,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               let served = routeModel ?? '';
               let ok = false;
               const startedRoute = Date.now();
-              for await (const ev of engine.run({
+              for await (const ev of routeEngine.run({
                 model: { providerId, ...(routeModel ? { model: routeModel } : {}) },
                 messages: [{ role: 'user', content: 'Decide who responds now. Reply with the JSON object only.' }],
                 system,
@@ -4516,7 +4536,14 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   // R3.7: naby is told what the labelled participant lines are,
                   // plus the round's progress so far (§8.15 R11.2) and the limit
                   // notice when a proposal limit stopped the round.
-                  system: [base.system, HUB_ROUND_RULES, i.progress, i.note].filter(Boolean).join('\n\n'),
+                  // The rules are the same every step; the round's progress and a
+                  // limit notice are this step's own, so they ride as turn context
+                  // and naby's system prompt stays the same across the round.
+                  system: [base.system, HUB_ROUND_RULES].filter(Boolean).join('\n\n'),
+                  ...(() => {
+                    const t = [base.turnContext, i.progress, i.note].filter(Boolean).join('\n\n');
+                    return t ? { turnContext: t } : {};
+                  })(),
                   hub: hubSpeaker,
                   activity: { ...base.activity, step },
                 });

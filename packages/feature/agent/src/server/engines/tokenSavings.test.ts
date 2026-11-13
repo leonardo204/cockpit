@@ -9,6 +9,11 @@ import {
   parseSdkResumeState,
   sdkResumeStateFor,
   withoutSubagentRows,
+  renderResumePrompt,
+  splitSystem,
+  splitSystemFor,
+  withTurnContext,
+  resumeKeyFor,
   REPLAYED_TOOL_OUTPUT_MAX_CHARS,
   type EngineEvent,
   type EngineRunInput,
@@ -63,12 +68,45 @@ describe('1. resume — only when the saved handle provably continues this trans
     expect(planSdkResume(next, saved, { cwd: CWD, accountId: 'acct-2' })).toBeUndefined();
   });
 
-  it('replays when participants are in the room', () => {
+  it('resumes with participants in the room (v1.48.27)', () => {
     const next: RuntimeMessage[] = [
       ...turn('hello', 1),
-      { role: 'user', content: 'brief', at: 2, speaker: { kind: 'naby', name: 'naby', agentId: 'n' } as never },
+      { role: 'user', content: 'brief', at: 2, speaker: { name: 'naby', agentId: 'n' } as never },
+    ];
+    expect(planSdkResume(next, saved, { cwd: CWD })).toBe(SID);
+  });
+
+  it('resumes across other speakers\u2019 lines, and sends them with the new message', () => {
+    const next: RuntimeMessage[] = [
+      ...turn('hello', 1, 'my own answer'),
+      { role: 'user', content: 'over to aside', at: 2, speaker: { name: 'naby', agentId: 'n' }, routing: { kind: 'delegate', targetAgentId: 'a' } } as never,
+      { role: 'user', content: '[@aside] I opened the six pages', speaker: { name: 'aside', agentId: 'a' } } as never,
+      { role: 'user', content: '@aside has answered the user. Add only what is missing.', at: 3, speaker: { name: 'naby', agentId: 'n' }, routing: { kind: 'delegate', targetAgentId: 'n' } } as never,
+    ];
+    expect(planSdkResume(next, saved, { cwd: CWD })).toBe(SID);
+    const prompt = renderResumePrompt(next, saved!.coveredLen);
+    expect(prompt).toContain('<conversation_update>');
+    expect(prompt).toContain('I opened the six pages');
+    expect(prompt).toContain('over to aside');
+    // Its own answer is already in the backend session: not sent again.
+    expect(prompt).not.toContain('my own answer');
+    expect(prompt).not.toContain('hello');
+    expect(prompt.endsWith('@aside has answered the user. Add only what is missing.')).toBe(true);
+  });
+
+  it('replays when an answer it did not write follows another row', () => {
+    const next: RuntimeMessage[] = [
+      ...turn('hello', 1),
+      { role: 'user', content: 'question for the other engine', at: 2 },
+      { role: 'assistant', content: 'answered elsewhere' },
+      { role: 'user', content: 'and now?', at: 3 },
     ];
     expect(planSdkResume(next, saved, { cwd: CWD })).toBeUndefined();
+  });
+
+  it('keeps one handle per seat', () => {
+    expect(resumeKeyFor('s-1')).toBe('engine.resume.s-1');
+    expect(resumeKeyFor('s-1', 'a-x/y')).toBe('engine.resume.s-1:a-x_y');
   });
 
   it('refuses a malformed or unsafe handle', () => {
@@ -161,6 +199,67 @@ describe('3. the typed /command is stored, its expansion rides one turn', () => 
     expect(seen[0]!.at(-1)).toMatchObject({ role: 'user', content: expanded });
     // Next turn: the history carries the typed form only.
     expect(JSON.stringify(seen[1])).not.toContain('LONG SKILL BODY');
+  });
+});
+
+describe('5. the system prompt stays the same turn to turn (v1.48.27)', () => {
+  it('splits off what was added for this turn', () => {
+    expect(splitSystem('BASE', 'BASE\n\nMEMORY')).toEqual({ stable: 'BASE', turn: 'MEMORY' });
+    expect(splitSystem('BASE', 'BASE')).toBeUndefined();
+    expect(splitSystem(undefined, undefined)).toBeUndefined();
+  });
+
+  it('sends the stable part as the system prompt and the rest in the user message', () => {
+    const input = {
+      model: { providerId: 'dev-claude' },
+      messages: [],
+      toolSchemas: [],
+      system: 'BASE\n\nMEMORY',
+      systemParts: { stable: 'BASE', turn: 'MEMORY' },
+    } as unknown as EngineRunInput;
+    const opts = buildQueryOptions({
+      input,
+      mcpServer: {} as never,
+      preToolUse: (async () => ({})) as never,
+      abortController: new AbortController(),
+      onStderr: () => {},
+    });
+    expect(opts).toMatchObject({ systemPrompt: 'BASE' });
+    expect(splitSystemFor(input)).toBe(true);
+    const prompt = buildAgentPrompt([{ role: 'user', content: 'hi' }], undefined, false, 'MEMORY');
+    expect(prompt).toBe(withTurnContext('hi', 'MEMORY'));
+    expect(prompt).toContain('<system-reminder>\nMEMORY\n</system-reminder>');
+  });
+
+  it('never leaves the SDK without a system prompt', () => {
+    const input = { systemParts: { turn: 'MEMORY' } } as unknown as EngineRunInput;
+    expect(splitSystemFor(input)).toBe(false);
+  });
+
+  it('runTurn hands the engine the split, and the full prompt on `system`', async () => {
+    const store = new MemoryStore();
+    const session = store.createSession('mock');
+    const seen: EngineRunInput[] = [];
+    const engine = {
+      async *run(input: EngineRunInput): AsyncIterable<EngineEvent> {
+        seen.push(input);
+        yield { kind: 'result', ok: true };
+      },
+    };
+    await runTurn({
+      engine,
+      store,
+      sessionId: session.id,
+      model: { providerId: 'mock' },
+      toolSchemas: [],
+      executors: {},
+      gate: async () => ({ decision: 'allow' as const }),
+      userText: 'hi',
+      system: 'PERSONA',
+      turnContext: 'HOOK OUTPUT',
+    });
+    expect(seen[0]!.system).toBe('PERSONA\n\nHOOK OUTPUT');
+    expect(seen[0]!.systemParts).toEqual({ stable: 'PERSONA', turn: 'HOOK OUTPUT' });
   });
 });
 

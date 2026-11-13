@@ -85,6 +85,28 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.27 — 2026-11-13
+
+### en
+
+Long conversations, and conversations with participants, use much less of your Claude plan.
+
+**Improved**
+
+- **Conversations with participants continue instead of starting over.** Once a participant (such as @aside) had spoken in a chat, naby started a fresh backend session for every reply and sent the whole conversation again, at the highest price. Each speaker now continues its own session and receives only what is new: your message and what the others said since its last reply. In our measurements, re-sending the conversation accounted for more than half of all usage.
+- **The instructions stay the same from turn to turn.** Memory, skills, organization hook output and a round's progress are chosen anew each turn. They used to be part of the instructions at the top, so any change there made the saved copy of the whole conversation unusable. They now travel with each message, and the conversation stays saved.
+- **Choosing who answers is cheaper.** Picking the next speaker now always runs on Sonnet without tools, instead of on the chat's model with the full tool list.
+
+### ko
+
+긴 대화와 참가자가 있는 대화에서 Claude 요금제 사용량이 크게 줄어요.
+
+**나아진 것**
+
+- **참가자가 있는 대화도 이어서 진행해요.** 대화에 참가자(@aside 등)가 한 번이라도 말하면, 나비는 답할 때마다 새 세션을 열고 대화 전체를 가장 비싼 방식으로 다시 보냈어요. 이제 말하는 쪽마다 자기 세션을 이어 쓰고, 지난번 답 이후에 생긴 내용(내 메시지와 다른 참가자의 말)만 받아요. 측정해 보니 대화를 다시 보내는 데 전체 사용량의 절반 넘게 쓰이고 있었어요.
+- **지시문이 턴마다 바뀌지 않아요.** 기억, 스킬, 조직 훅 결과, 라운드 진행 상황은 턴마다 새로 골라요. 이것들이 맨 앞의 지시문에 들어 있어서, 조금만 바뀌어도 저장해 둔 대화 전체를 다시 쓸 수 없었어요. 이제 이 내용은 메시지와 함께 보내고, 저장된 대화는 그대로 이어서 써요.
+- **다음에 답할 사람을 고르는 비용이 줄었어요.** 이 판단은 이제 대화에 고른 모델과 전체 도구 목록 대신, 항상 Sonnet으로 도구 없이 해요.
+
 ## 1.48.26 — 2026-11-12
 
 ### en
