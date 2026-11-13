@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.28 — 2026-11-13
+
+### en
+
+Replies keep their formatting.
+
+**Fixed**
+
+- **A whole reply shown as raw text.** When a finished reply contained a single symbol such as ▲ or │ anywhere, the entire reply turned into plain text with its markdown showing (\`##\`, \`**\`). Only a part that really is a drawing — a box diagram or a folder tree — is now shown as plain text, and the rest keeps its formatting.
+- **Ranges struck through.** Writing a range like "12/13~15, 16~18" crossed out the text between the two \`~\` signs. A single \`~\` now stays as written; strikethrough needs two (\`~~like this~~\`).
+
+### ko
+
+답의 서식이 그대로 보여요.
+
+**고친 것**
+
+- **답 전체가 서식 없이 나오던 문제.** 다 끝난 답 어딘가에 ▲나 │ 같은 기호가 하나만 있어도, 답 전체가 \`##\`, \`**\` 같은 기호째 그대로 보였어요. 이제 박스 그림이나 폴더 트리처럼 정말 그림인 부분만 글자 그대로 보여 주고, 나머지는 서식대로 보여요.
+- **범위에 취소선이 그어지던 문제.** "12/13~15, 16~18"처럼 범위를 쓰면 두 \`~\` 사이에 줄이 그어졌어요. 이제 \`~\` 하나는 그대로 두고, 취소선은 \`~~이렇게~~\` 두 개로 감쌌을 때만 그어요.
+
 ## 1.48.27 — 2026-11-13
 
 ### en

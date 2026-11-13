@@ -1,7 +1,7 @@
 'use client';
 
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { REMARK_GFM } from './markdownGfm';
 import { FILE_PATH_ATTR, isDocumentPath, remarkFilePathLinks } from './filePathLinks';
 import remarkMath from 'remark-math';
 import { remarkAlert } from 'remark-github-blockquote-alert';
@@ -21,11 +21,12 @@ import { remarkFrontmatterTable } from './markdownFrontmatter';
 // imports the 2.5 MB engine dynamically from inside its effect, so nothing of it
 // reaches a bundle that merely renders markdown — see its header.
 import { MermaidDiagram } from './MermaidDiagram';
+import { fenceAsciiArt } from './asciiArt';
 import { MERMAID_LANGUAGE } from './mermaidSource';
 
 // Stable reference — avoid recreating on every render
-const REMARK_PLUGINS = [...remarkFrontmatterTable, remarkGfm, remarkMath, remarkAlert];
-const REMARK_PLUGINS_NO_MATH = [...remarkFrontmatterTable, remarkGfm, remarkAlert];
+const REMARK_PLUGINS = [...remarkFrontmatterTable, REMARK_GFM, remarkMath, remarkAlert];
+const REMARK_PLUGINS_NO_MATH = [...remarkFrontmatterTable, REMARK_GFM, remarkAlert];
 const REHYPE_PLUGINS_BASE = [rehypeRaw, rehypeKatex];
 const REHYPE_PLUGINS_NO_MATH = [rehypeRaw];
 
@@ -84,54 +85,7 @@ interface MarkdownRendererProps {
   onFilePathClick?: (path: string) => boolean;
 }
 
-/**
- * Detect whether text is a Markdown table.
- * Characteristic: contains separator lines like |---|, |:--|, |--:|, etc.
- */
-function isMarkdownTable(text: string): boolean {
-  // Markdown table separator row: | --- | or |:---| or |---:| etc.
-  return /^\|[\s:|-]+\|$/m.test(text);
-}
 
-/**
- * Detect whether text contains ASCII art.
- * Detection criteria:
- * 1. Unicode box-drawing characters (┌┐└┘│─ etc.)
- * 2. ASCII border patterns (+---+ etc.)
- * 3. Multi-line pipe patterns (at least 3 lines starting or ending with |, excluding Markdown tables)
- */
-function hasAsciiArt(text: string): boolean {
-  // Exclude Markdown tables
-  if (isMarkdownTable(text)) {
-    return false;
-  }
-
-  // Unicode box-drawing characters
-  if (/[┌┐└┘│─├┤┬┴┼╔╗╚╝║═╭╮╯╰▲▼◀▶△▽◁▷]/.test(text)) {
-    return true;
-  }
-
-  // ASCII border pattern: +---+ or +===+
-  if (/\+[-=]{2,}\+/.test(text)) {
-    return true;
-  }
-
-  // Multi-line pipe pattern: at least 3 lines starting or ending with |
-  const lines = text.split('\n');
-  const pipeLines = lines.filter(line => /^\s*\||\|\s*$/.test(line));
-  if (pipeLines.length >= 3) {
-    // Exclude table pattern: table rows have a consistent | count (same column count) with at least 2 columns (3 pipes)
-    // e.g. | col1 | col2 | has 3 |, ASCII art like |  box  | only has 2
-    const pipeCounts = pipeLines.map(line => (line.match(/\|/g) || []).length);
-    const allSame = pipeCounts.every(c => c === pipeCounts[0]);
-    if (allSame && pipeCounts[0] >= 3) {
-      return false;
-    }
-    return true;
-  }
-
-  return false;
-}
 
 /**
  * Pre-process table rows: escape | characters inside backticks.
@@ -257,23 +211,6 @@ function escapeUnknownHtmlTags(content: string): string {
   return escaped.replace(/\u0000MASK(\d+)\u0000/g, (_, idx) => masks[+idx])
 }
 
-/**
- * Pre-process content: wrap ASCII-art-containing content in a code block.
- * Simplified strategy: if ASCII art is detected, render the entire content as <pre>.
- */
-function preprocessAsciiArt(content: string): string {
-  if (!hasAsciiArt(content)) {
-    return content;
-  }
-
-  // If content is already a code block, don't wrap again
-  if (/^```[\s\S]*```$/m.test(content.trim())) {
-    return content;
-  }
-
-  // Wrap the entire content in a code block
-  return '```text\n' + content.trim() + '\n```';
-}
 
 /**
  * EVERY TYPE SIZE IN HERE IS `em`, NEVER `rem`.
@@ -559,7 +496,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, isUser
       return escapeUnknownHtmlTags(content);
     }
     const processed = escapeUnknownHtmlTags(
-      escapeTablePipes(preprocessAsciiArt(content))
+      escapeTablePipes(fenceAsciiArt(content))
     );
     return enableMath ? escapeCurrencyDollars(processed) : processed;
   }, [content, isUser, isStreaming, enableMath]);
