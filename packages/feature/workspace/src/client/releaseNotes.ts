@@ -85,6 +85,34 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.29 — 2026-11-16
+
+### en
+
+Reviewing and fixing several documents now runs as a background loop that knows when to stop, and replies after a participant are shorter.
+
+**New**
+
+- **Review loop.** When several files need checking against decisions or a standard, naby now hands the work to a review loop instead of running review, fix and review rounds itself. Reviewers only read; each fixer edits only its own file. If naby or you already have the findings or decisions, the loop starts by fixing them. It stops after two fix rounds. A problem that comes back after it was fixed is not fixed again: it comes to you as a decision. When the loop ends, naby reports in the same chat: what was fixed, what each fixer changed, the decisions for you and what is still open. In a test on real design documents, a loop finished in 12 minutes with its findings going down each round (37, 16, 5).
+
+**Improved**
+
+- **Shorter replies after a participant.** After @aside or another participant answers, naby no longer retells what you just read. It adds only what changes for you, a decision or the next step.
+- **No extra round for a thank-you.** naby used to start some replies with "@aside, thank you…", which handed the turn back to @aside and made it run again just to say "OK". naby no longer opens a line with a participant's name unless it has a new task for them.
+
+### ko
+
+여러 문서를 검토하고 고치는 일이 언제 멈출지 아는 백그라운드 작업으로 돌고, 참가자 다음의 답이 짧아졌어요.
+
+**새로 생긴 것**
+
+- **검토·수정 반복 실행.** 여러 파일을 결정이나 기준에 맞춰 확인해야 할 때, 나비가 검토와 수정을 직접 되풀이하지 않고 검토·수정 반복 작업에 맡겨요. 검토하는 쪽은 읽기만 하고, 고치는 쪽은 맡은 파일 하나만 고쳐요. 나비나 사용자가 이미 찾은 문제나 결정이 있으면 고치는 일부터 시작해요. 고치기는 두 번까지만 하고, 고친 뒤 다시 나온 문제는 또 고치지 않고 사용자가 정할 일로 넘겨요. 끝나면 나비가 같은 대화에서 고친 것, 고치면서 바꾼 내용, 정하실 것, 남은 것을 알려 드려요. 실제 설계 문서로 시험했을 때 12분 만에 끝났고, 라운드마다 찾은 문제가 37건, 16건, 5건으로 줄었어요.
+
+**나아진 것**
+
+- **참가자 다음의 답이 짧아졌어요.** @aside 같은 참가자가 답한 뒤 나비가 방금 읽으신 내용을 다시 정리하지 않아요. 사용자에게 바뀌는 점, 정할 것, 다음 단계만 덧붙여요.
+- **인사 때문에 한 번 더 돌지 않아요.** 나비가 "@aside 감사합니다…"로 답을 시작하면, 그 줄이 @aside에게 일을 다시 넘기는 것으로 처리되어 @aside가 "알겠습니다"라고 답하려고 한 번 더 돌았어요. 이제 나비는 새로 맡길 일이 있을 때만 참가자 이름으로 줄을 시작해요.
+
 ## 1.48.28 — 2026-11-13
 
 ### en

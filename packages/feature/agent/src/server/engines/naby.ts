@@ -283,6 +283,7 @@ import { stageInstruction } from '../lib/stageTurn';
 import { fastGrowthInstruction } from '../lib/fastGrowth';
 import { handoffInstruction } from '../lib/sessionHandoff';
 import { JOB_REPORT_SOURCE, makeJobSink } from '../lib/backgroundJobReport';
+import { makeReviewLoopTool, REVIEW_LOOP_TOOL_NAME, REVIEW_LOOP_RULE } from '../lib/reviewLoopRun';
 import { makeCrossSessionTools, readCrossSessionEnabled, type CrossSessionDeps } from '../lib/crossSession';
 import {
   makeCrossProjectGuard,
@@ -1645,13 +1646,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                     // §3.1): handing work to another tab is naby's, on its own turn.
                     // Nor does it look into other projects (cross-project-context
                     // R16): the access card needs naby's own turn in front of it.
-                    toolSchemas: toolSchemas.filter(
-                      (t) => t.name !== PARTICIPANT_DRAFT_TOOL && !NABY_TURN_ONLY_TOOLS.includes(t.name),
-                    ),
+                    // Nor does it start a review loop: that is naby's own, and a
+                    // loop started from inside a delegated run would outlive it.
+                    toolSchemas: toolSchemas
+                      .filter(
+                        (t) => t.name !== PARTICIPANT_DRAFT_TOOL && !NABY_TURN_ONLY_TOOLS.includes(t.name),
+                      )
+                      .filter((t) => t.name !== REVIEW_LOOP_TOOL_NAME),
                     executors: Object.fromEntries(
-                      Object.entries(executors).filter(
-                        ([name]) => name !== PARTICIPANT_DRAFT_TOOL && !NABY_TURN_ONLY_TOOLS.includes(name),
-                      ),
+                      Object.entries(executors)
+                        .filter(
+                          ([name]) => name !== PARTICIPANT_DRAFT_TOOL && !NABY_TURN_ONLY_TOOLS.includes(name),
+                        )
+                        .filter(([name]) => name !== REVIEW_LOOP_TOOL_NAME),
                     ),
                     signal: ctx.signal,
                     ...(projectCwd ? { cwd: projectCwd } : {}),
@@ -2009,6 +2016,33 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
           ...(orgLoad ? { [orgLoad.schema.name]: orgLoad.executor } : {}),
           ...(mcp?.executors ?? {}),
         };
+
+        // naby_review_loop — REVIEW AND FIX AS A LOOP RUN BY CODE (field case
+        // 2026-11-16: an hour of fix → review → fix decided turn by turn, the
+        // same problem "fixed" twice, reading growing every round). naby's own
+        // turn only, with a project open: reviewers and fixers are nested turns
+        // over that project. On a read-only turn the loop only reviews.
+        const reviewLoopOffered = nabyOwnsTurn && !!projectCwd && !crossSessionTurn;
+        if (reviewLoopOffered && projectCwd) {
+          const reviewLoop = makeReviewLoopTool({
+            sessionId,
+            cwd: projectCwd,
+            canMutate: allowChanges && !planMode,
+            nested: () => {
+              const m = effectiveAgentModel(modelForEngine);
+              // `reviewLoop.model` runs the reviewers and fixers on another model
+              // than the chat's (e.g. opus under a fable chat); unset = the chat's.
+              const loopModel = store.getSetting('reviewLoop.model')?.trim() || m;
+              return { store, engine, model: { providerId, ...(loopModel ? { model: loopModel } : {}) } };
+            },
+            // Read when a nested run makes a call — long after `gate` exists.
+            gate: (call) => gate(call),
+            toolSchemas: workspace?.toolSchemas ?? [],
+            executors: workspace?.executors ?? {},
+          });
+          toolSchemas.push(reviewLoop.schema);
+          executors[reviewLoop.schema.name] = reviewLoop.executor;
+        }
 
         // ---- the org harness HOOKS for this turn (org-harness-sync §3.5, M3) --
         //
@@ -2485,6 +2519,11 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   { canMutate: allowChanges && !planMode },
                 )
               : undefined,
+            // ---- REVIEW-AND-FIX GOES TO THE LOOP (review-loop-run.ts) ----------
+            // Present exactly when `naby_review_loop` is. After the delegation
+            // block on purpose: the isolated replay (2026-11-16) showed the
+            // delegate habit winning over a tool description alone.
+            reviewLoopOffered ? REVIEW_LOOP_RULE : undefined,
             // ---- WHAT A PARTICIPANT'S LINE IS (multi-agent-chat R3.4, R3.7) ----
             //
             // A round appends HUB_ROUND_RULES to each of naby's speeches itself.

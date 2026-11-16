@@ -123,7 +123,10 @@ describe('the router runs after the signals are bound and before the init event'
       .filter((l) => !/^(\/\/|\*|\/\*)/.test(l))
       .filter((l) => !/^modelForEngine\s*=/.test(l))
       .filter((l) => !/^:\s*modelForEngine\s*\?\?/.test(l));
+    // Both are inside getters read at call time: the `naby_delegate` sink's
+    // model and the `naby_review_loop` tool's `nested` (asserted below).
     expect(reads, `unexpected eager read(s) of modelForEngine:\n${reads.join('\n')}`).toEqual([
+      'const m = effectiveAgentModel(modelForEngine);',
       'const m = effectiveAgentModel(modelForEngine);',
     ]);
   });
@@ -222,7 +225,7 @@ describe('no stored `auto` reaches a provider (§4.5)', () => {
     expect(SRC).toContain(': effectiveAgentModel(modelForEngine);');
   });
 
-  it('every model field that can hold a stored value is guarded — ten sites', () => {
+  it('every model field that can hold a stored value is guarded — eleven sites', () => {
     // An eighth site added later without the guard is exactly the regression this
     // count exists to catch. Raise it deliberately, with its own assertion above.
     //
@@ -235,7 +238,11 @@ describe('no stored `auto` reaches a provider (§4.5)', () => {
     //
     // MAC-M2 ADDED THREE (asserted above): the round's participant model, its
     // session-model fallback and the routing call's model.
-    expect(SRC.match(/effectiveAgentModel\(/g)).toHaveLength(10);
+    //
+    // THE REVIEW LOOP ADDED ONE: its nested reviewers and fixers run on the
+    // turn's model, read lazily inside `nested: () => { ... }`.
+    expect(SRC).toMatch(/nested: \(\) => \{\n\s+const m = effectiveAgentModel\(modelForEngine\);/);
+    expect(SRC.match(/effectiveAgentModel\(/g)).toHaveLength(11);
   });
 });
 

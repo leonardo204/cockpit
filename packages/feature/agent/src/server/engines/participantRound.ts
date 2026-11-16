@@ -286,9 +286,9 @@ export function wrapupInstruction(after: RoundAgent | undefined, stopped?: strin
       : 'The round is ending. ';
   return (
     why +
-    'Close it for the user in your own words, briefly: where things stand, what is still open, ' +
-    'and what the user can do next. Do not repeat what was already said, and do not hand the ' +
-    'conversation to anyone.'
+    'Close it for the user in two or three short sentences: where things stand and what the user can do next. ' +
+    'Do not restate what was already said (the user has read it), do not thank or address any participant, ' +
+    'and do not hand the conversation to anyone.'
   );
 }
 
@@ -297,7 +297,8 @@ export function followupInstruction(after: RoundAgent | undefined, asked: boolea
   if (!after) return "Answer the user's latest message yourself.";
   return asked
     ? `@${after.name} addressed you in its last message. Answer it, and the user if anything is still open.`
-    : `@${after.name} has answered the user. Add only what is still missing; do not repeat it.`;
+    : `@${after.name} has answered the user, who has just read it. Do not restate or summarise it, and do not thank or address @${after.name}. ` +
+      'Add only what it changes for the user, a decision they need to make, or the next step, in a few short lines; if nothing is missing, say so in one sentence.';
 }
 
 // ---------------------------------------------------------------------------

@@ -93,8 +93,9 @@ describe('the delegation policy block in the dev-claude system prompt', () => {
   it('is built from the turn mutation allowance, the same expression the sink uses', () => {
     // Two occurrences, deliberately: the sink (every other engine, via the
     // `naby_delegate` description) and this block (dev-claude, via the prompt).
-    // Written out in full in both so a reader can see they agree.
-    expect([...SRC.matchAll(/canMutate: allowChanges && !planMode/g)]).toHaveLength(2);
+    // Written out in full in both so a reader can see they agree. The third is
+    // `naby_review_loop`, whose fixers edit only on a turn that may change files.
+    expect([...SRC.matchAll(/canMutate: allowChanges && !planMode/g)]).toHaveLength(3);
     // Both are bound before either is read.
     const allowChanges = only(SRC, 'const allowChanges =');
     const planMode = only(SRC, 'const planMode = ctx.params.permissionMode');
