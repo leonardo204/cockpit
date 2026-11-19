@@ -118,8 +118,9 @@ describe('Chat — the queue is settled on run end', () => {
     // The auto-send marks the new turn before it sends…
     const send = src.slice(src.indexOf("if (action.kind === 'send') {"));
     expect(send.indexOf('turnGenRef.current += 1;')).toBeLessThan(send.indexOf('autoSendRef.current('));
-    // …and both run-end reconciles carry the same-turn guard.
-    const guarded = src.match(/loadHistoryByCwdAndSessionId\(initialCwd, liveSessionId, true, undefined, undefined, false, stillSameTurn\(\)\)/g) ?? [];
+    // …and both run-end reconciles carry the same-turn guard. (Their window is
+    // the rendered turns since the 2026-11-19 scroll fix — reconcileWindow.ts.)
+    const guarded = src.match(/loadHistoryByCwdAndSessionId\(initialCwd, liveSessionId, true, reconcileTurnLimit\(messagesRef\.current\), undefined, false, stillSameTurn\(\)\)/g) ?? [];
     expect(guarded).toHaveLength(2);
     expect(src).not.toMatch(/loadHistoryByCwdAndSessionId\(initialCwd, liveSessionId, true\);/);
     const hist = read('useChatHistory.ts');

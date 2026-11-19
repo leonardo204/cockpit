@@ -85,6 +85,26 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.30 — 2026-11-19
+
+### en
+
+Reading earlier in a long chat no longer jumps when naby answers.
+
+**Fixed**
+
+- **The view jumped to old history.** If you had scrolled up a little to read while naby was answering, the moment the answer finished the view could jump far back, near the start of the conversation. When an answer ended, the app reloaded the whole conversation and put all of its older messages above what you were reading. It now reloads only what is already on screen, and if older messages are added above, you stay at the same place.
+- **Less work when an answer ends.** In long conversations the whole history was fetched again after every answer. Now only the visible part is.
+
+### ko
+
+긴 대화에서 위쪽을 읽는 중에 나비가 답해도 화면이 튀지 않아요.
+
+**고친 것**
+
+- **화면이 옛 대화로 튀던 문제.** 나비가 답하는 동안 스크롤을 살짝 올려 읽고 있으면, 답이 끝나는 순간 화면이 대화 앞부분으로 크게 올라갈 수 있었어요. 답이 끝날 때 앱이 대화 전체를 다시 불러와 예전 메시지를 읽던 곳 위에 한꺼번에 넣었기 때문이에요. 이제는 화면에 있는 부분만 다시 불러오고, 위쪽에 메시지가 더해져도 읽던 자리를 그대로 지켜요.
+- **답이 끝날 때 하는 일이 줄었어요.** 긴 대화에서는 답이 끝날 때마다 대화 전체를 다시 받아 왔어요. 이제는 화면에 보이는 부분만 받아 와요.
+
 ## 1.48.29 — 2026-11-16
 
 ### en

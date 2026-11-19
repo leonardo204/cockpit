@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { reconcileTurnLimit } from './reconcileWindow';
 import { ClipboardList } from 'lucide-react';
 import { toast } from '@cockpit/shared-ui';
 import { refreshJobs } from './jobStore';
@@ -173,6 +174,10 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   const { t } = useTranslation();
   const chatContext = useChatContextOptional();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Read by the turn-end reconcile, which runs from callbacks made long before
+  // the render it needs (reconcileWindow.ts).
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [isProjectSessionsOpen, setIsProjectSessionsOpen] = useState(false);
@@ -702,7 +707,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
     onComplete: () => {
       // Turn finished → reconcile from disk (replaces temp `live-…` bubbles with canonical
       // real-uuid messages).
-      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true, undefined, undefined, false, stillSameTurn());
+      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true, reconcileTurnLimit(messagesRef.current), undefined, false, stillSameTurn());
       // …and that reconcile does NOT clear the failure notice. Stated as an
       // event rather than left implicit, so the invariant is executable.
       dispatchRunFailure({ type: 'history-reconciled' });
@@ -753,7 +758,7 @@ export function Chat({ tabId, initialCwd, initialSessionId, engine, planMode: pl
   // converges its live bubbles to canonical UUIDs.
   useEffect(() => {
     reconcileFromDiskRef.current = () => {
-      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true, undefined, undefined, false, stillSameTurn());
+      if (initialCwd && liveSessionId) loadHistoryByCwdAndSessionId(initialCwd, liveSessionId, true, reconcileTurnLimit(messagesRef.current), undefined, false, stillSameTurn());
       // THE LINE THIS WHOLE FIX IS ABOUT. This reconcile is what used to erase
       // the failed turn's error — it rewrites `messages` from disk, and the
       // error is not on disk. The notice lives outside `messages`, and passing

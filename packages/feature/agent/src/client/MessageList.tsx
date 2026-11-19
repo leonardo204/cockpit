@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle, useMemo } from 'react';
 import { formatElapsed } from './elapsed';
+import { takeSnapshot, readingPositionAfter, type ReadingSnapshot } from './readingPosition';
 import type { ChatMessage, ApiRetryInfo, ChatEngine, ToolCallInfo } from './types';
 import { MessageBubble } from './MessageBubble';
 import { GENERIC_ENGINE_NAME } from './engineName';
@@ -253,6 +254,10 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
   // The decisions — pinned or not, chip or not — are pinned by unit tests there;
   // everything below is measure, obey, and never fight the user's wheel.
   const stickRef = useRef(initialStickState);
+  /** Where a detached reader is, for readingPosition.ts (taken after every
+   *  commit and every scroll). */
+  const readingRef = useRef<ReadingSnapshot | null>(null);
+  const firstRenderedIdRef = useRef<string | undefined>(undefined);
   const rafRef = useRef<number | null>(null);
   const isActiveRef = useRef(isActive);
   isActiveRef.current = isActive;
@@ -378,6 +383,7 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
     if (!container) return;
     const metrics = readMetrics();
     if (metrics) dispatchStick({ kind: 'scroll', metrics });
+    if (metrics) readingRef.current = takeSnapshot(firstRenderedIdRef.current, metrics);
 
     // Show the scroll-to-top button when not at the top (unchanged, 50px).
     const atTop = container.scrollTop < 50;
@@ -548,6 +554,32 @@ export const MessageList = forwardRef<MessageListHandle, MessageListProps>(funct
       }
     }
   }, [messages, isLoadingMore]);
+
+  // A DETACHED READER STAYS PUT WHEN THE TOP OF THE LIST CHANGES
+  // (readingPosition.ts). Runs after the DOM commit and before paint; reading
+  // scrollHeight here also settles any adjustment the browser's own anchoring
+  // made, and the write below is absolute, so the two cannot add up.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    const firstId = uniqueMessages[0]?.id;
+    firstRenderedIdRef.current = firstId;
+    if (!el || !isActiveRef.current || el.clientHeight === 0) return;
+    // The "load older history" restore owns this commit.
+    if (!shouldRestoreScrollRef.current) {
+      const top = readingPositionAfter(
+        readingRef.current,
+        { firstId, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight },
+        stickRef.current.stuck,
+      );
+      if (top !== null && Math.abs(top - el.scrollTop) > 1) {
+        el.scrollTop = top;
+        // Same re-baseline as the load-more restore: the growth above is not
+        // new content below, and this write is not the user scrolling.
+        stickRef.current = { ...stickRef.current, height: el.scrollHeight, scrollTop: el.scrollTop };
+      }
+    }
+    readingRef.current = takeSnapshot(firstId, el);
+  }, [uniqueMessages]);
 
   // When the tab activates, pay any scroll that fell due while it was hidden.
   // A hidden tab is `display:none`: nothing could be measured, no observer
