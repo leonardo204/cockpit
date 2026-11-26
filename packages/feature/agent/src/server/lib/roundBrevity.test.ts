@@ -39,6 +39,7 @@ describe('naby after a participant', () => {
     const t = wrapupInstruction(aside);
     expect(t).toContain('two or three short sentences');
     expect(t).toContain('do not thank or address any participant');
-    expect(t).toContain('do not hand the conversation to anyone');
+    // 2026-11-26: a wrap-up may hand remaining work on (it then runs).
+    expect(t).toContain('a line starting with @name is a request it will carry out');
   });
 });

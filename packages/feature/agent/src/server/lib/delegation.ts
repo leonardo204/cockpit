@@ -43,6 +43,8 @@ import {
   type Store,
   type SubagentSpec,
   type ToolSchema,
+  readUserInstructions,
+  withDelegatedInstructions,
 } from '../../../../../../../dist/naby-runtime.mjs';
 
 /** Title given to a delegated child session, so it is recognisable in the session
@@ -177,7 +179,9 @@ export async function runNestedTurn(
       // The subagent's own model when it has one; otherwise the parent's.
       model: spec.model ? { ...deps.model, model: spec.model } : deps.model,
       userText: task,
-      system: spec.systemPrompt,
+      // The user's standing instructions reach a delegated run too — the
+      // subagent, a reviewer or a fixer works for the same user (2026-11-26).
+      system: withDelegatedInstructions(spec.systemPrompt, readUserInstructions(deps.store)),
       toolSchemas: restricted.toolSchemas,
       executors: restricted.executors,
       gate: deps.gate,

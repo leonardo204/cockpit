@@ -89,11 +89,13 @@ function harness(opts: {
   const events: Record<string, unknown>[] = [];
   const logs: { kind: RoundLogKind; fields: Record<string, unknown> }[] = [];
   const routes = [...(opts.routes ?? [])];
-  const stopped: { blocked: Record<string, unknown>; note: string }[] = [];
   const spoken = new Map<string, number>();
   let speechesSoFar = 0;
   const tick = () => {
     speechesSoFar += 1;
+    // No turn limit in the loop any more: a script that never ends must fail
+    // the test, not hang it.
+    if (speechesSoFar > 300) throw new Error('runaway round in test script');
     if (opts.abortAfterSpeeches !== undefined && speechesSoFar >= opts.abortAfterSpeeches) controller.abort();
   };
   const input: RoundInput = {
@@ -153,7 +155,6 @@ function harness(opts: {
     },
     emit: (e) => events.push(e),
     log: (kind, fields) => logs.push({ kind, fields }),
-    onRoundStopped: (blocked, note) => stopped.push({ blocked: blocked as unknown as Record<string, unknown>, note }),
     signal: controller.signal,
   };
   const routing = () =>
@@ -161,7 +162,7 @@ function harness(opts: {
   const speakers = () =>
     events.filter((e) => e.subtype === 'speaker').map((e) => (e.agent as { name: string }).name);
   const logged = (kind: RoundLogKind) => logs.filter((l) => l.kind === kind);
-  return { input, calls, events, logs, rows, routing, speakers, logged, controller, stopped };
+  return { input, calls, events, logs, rows, routing, speakers, logged, controller };
 }
 
 const active = (a: RoundAgent): Row => ({ agentId: a.id, status: 'active', addedBy: 'user' });
@@ -394,11 +395,14 @@ describe('participantRound — propose path (R3.9)', () => {
   });
 });
 
-describe('participantRound — no fixed limits: the ledger and loop detection (§8.15, MAC-M8)', () => {
+describe('participantRound — no turn limit; the repetition check only advises naby (§8.15, 2026-11-26)', () => {
   const delegate = (target: string, brief: string) =>
     JSON.stringify({ action: 'delegate', target, brief, reason: 'work' });
+  const HINT = '## Possible repetition in this round';
+  const hintKinds = (h: ReturnType<typeof harness>) =>
+    h.logged('round_loop_hint').map((l) => (l.fields.loopHint as { kind: string }).kind);
 
-  it('a working round (9 hand-offs, tools every time, new content) runs to its end', async () => {
+  it('a working round (9 hand-offs, tools every time, new content) runs to its end with no hint', async () => {
     const routes = Array.from({ length: 9 }, (_, i) =>
       delegate('번역가', `Translate section ${i + 1} (paragraphs ${i * 3 + 1}-${i * 3 + 3}) into English.`),
     );
@@ -419,12 +423,26 @@ describe('participantRound — no fixed limits: the ledger and loop detection (�
     expect(r).toMatchObject({ speeches: 10, endedBy: 'end' });
     expect(h.calls.naby.map((n) => n.reason)).toEqual(['wrapup']);
     expect(r.loop).toBeUndefined();
-    expect(h.routing().some((x) => x.decision === 'loop' || x.decision === 'backstop')).toBe(false);
-    expect(h.stopped).toHaveLength(0);
+    expect(hintKinds(h)).toEqual([]);
+    expect(h.calls.route.some((x) => x.includes(HINT))).toBe(false);
     expect(h.logged('participant_cap')).toHaveLength(0);
   });
 
-  it('the same brief to the same participant twice is stopped BEFORE the hand-off; naby closes the round', async () => {
+  it('70 speeches in a row run: there is no backstop', async () => {
+    const routes = Array.from({ length: 70 }, (_, i) => delegate('번역가', `Translate unit ${i + 1}, file part-${i + 1}.`));
+    const h = harness({
+      rows: [active(TRANSLATOR)],
+      routes,
+      speech: { 번역가: Array.from({ length: 70 }, (_, i) => `Unit ${i + 1} done: wrote out-${i + 1}.txt with checksum c${i * 7919}.`) },
+      toolsFor: () => ['write_file'],
+    });
+    const r = await runParticipantRound(h.input);
+    expect(h.calls.participant).toHaveLength(70);
+    expect(r).toMatchObject({ speeches: 71, endedBy: 'end' });
+    expect(h.routing().some((x) => x.decision === 'backstop' || x.decision === 'loop')).toBe(false);
+  });
+
+  it('the same brief to the same participant twice still goes out; naby reads the hint next', async () => {
     const brief = 'Please fix the header alignment on the landing page.';
     const h = harness({
       rows: [active(TRANSLATOR)],
@@ -432,28 +450,17 @@ describe('participantRound — no fixed limits: the ledger and loop detection (�
       speech: { 번역가: 'I looked; it seems fine to me.' },
     });
     const r = await runParticipantRound(h.input);
-    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby']);
-    expect(h.calls.naby.map((n) => n.reason)).toEqual(['wrapup']);
-    const want = { by: 'loop', loop: 'repeated-brief', agentId: TRANSLATOR.id, name: '번역가' };
-    expect(h.routing().filter((x) => x.decision === 'loop')).toEqual([
-      { kind: 'end', decision: 'loop', reason: 'repeated-brief', targetAgentId: TRANSLATOR.id, targetName: '번역가', blocked: want },
-    ]);
-    // The caller is asked to store the line (it survives a reload) with naby's note.
-    expect(h.stopped).toHaveLength(1);
-    expect(h.stopped[0]!.blocked).toEqual(want);
-    expect(h.stopped[0]!.note).toContain('loop detection');
-    expect(h.stopped[0]!.note).toContain('@번역가');
-    expect(r).toMatchObject({ speeches: 2, endedBy: 'loop' });
-    expect(r.loop?.kind).toBe('repeated-brief');
-    expect(h.logged('round_completed')[0]!.fields).toMatchObject({
-      endedBy: 'loop',
-      speeches: 2,
-      handoffs: 1,
-      loop: { kind: 'repeated-brief' },
-    });
+    expect(h.calls.order).toEqual(['user-row', '번역가', '번역가', 'naby']);
+    expect(h.calls.route[2]).toContain(HINT);
+    expect(h.calls.route[2]).toContain('the same request again');
+    expect(h.calls.naby[0]!.progress).toContain(HINT);
+    expect(hintKinds(h)).toContain('repeated-brief');
+    expect(h.routing().some((x) => x.decision === 'loop')).toBe(false);
+    expect(r).toMatchObject({ speeches: 3, endedBy: 'end' });
+    expect(r.loop).toBeDefined();
   });
 
-  it('a repeated "continue" after real work is not a loop', async () => {
+  it('a repeated "continue" after real work gives no hint', async () => {
     const h = harness({
       rows: [active(TRANSLATOR)],
       routes: [delegate('번역가', 'Continue with the next batch.'), delegate('번역가', 'Continue with the next batch.'), '{"action":"end","reason":"done"}'],
@@ -463,26 +470,25 @@ describe('participantRound — no fixed limits: the ledger and loop detection (�
     const r = await runParticipantRound(h.input);
     expect(h.calls.participant).toHaveLength(2);
     expect(r.endedBy).toBe('end');
+    expect(hintKinds(h)).toEqual([]);
   });
 
-  it('thank-yous only: six tool-less speeches with nothing new stop the round', async () => {
+  it('thank-yous: the round goes on past six empty speeches, naby is told, and naby ends it', async () => {
     const h = harness({
       rows: [active(TRANSLATOR)],
       mentions: ['번역가'],
       speech: { 번역가: ['@naby 감사합니다!', '@naby 정말 감사합니다!', '@naby 고맙습니다!'] },
-      nabySpeech: ['@번역가 천만에요!', '@번역가 별말씀을요!', '@번역가 언제든지요!'],
+      nabySpeech: ['@번역가 천만에요!', '@번역가 별말씀을요!', '@번역가 언제든지요!', '이 대화는 여기서 마칠게요.'],
     });
     const r = await runParticipantRound(h.input);
-    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby', '번역가', 'naby', '번역가', 'naby']);
-    expect(r).toMatchObject({ speeches: 6, endedBy: 'loop' });
-    expect(r.loop?.kind).toBe('no-progress');
-    expect(h.routing().find((x) => x.decision === 'loop')).toMatchObject({
-      reason: 'no-progress',
-      blocked: { by: 'loop', loop: 'no-progress' },
-    });
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby', '번역가', 'naby', '번역가', 'naby', '번역가', 'naby']);
+    expect(h.calls.naby[3]!.progress).toContain(HINT);
+    expect(h.calls.naby[3]!.progress).toContain('no tool call and nothing new said');
+    expect(r).toMatchObject({ speeches: 8, endedBy: 'answer' });
+    expect(hintKinds(h)).toContain('no-progress');
   });
 
-  it('an A→B→A→B cycle of the same exchange stops the round', async () => {
+  it('an A→B→A→B cycle is a hint in the next routing call, not a stop', async () => {
     const h = harness({
       rows: [active(TRANSLATOR), active(CRITIC)],
       routes: [
@@ -490,18 +496,19 @@ describe('participantRound — no fixed limits: the ledger and loop detection (�
         delegate('critic', 'Check the sync.'),
         delegate('번역가', 'Sync doc A with doc B again, the critic objected.'),
         delegate('critic', 'Check the sync once more.'),
-        delegate('번역가', 'One more pass.'),
+        '{"action":"end","reason":"going in circles, ask the user"}',
       ],
       speech: { 번역가: 'ok', critic: 'fine' },
       toolsFor: () => ['read_file'],
     });
     const r = await runParticipantRound(h.input);
     expect(h.calls.order).toEqual(['user-row', '번역가', 'critic', '번역가', 'critic', 'naby']);
-    expect(r).toMatchObject({ speeches: 5, endedBy: 'loop' });
-    expect(r.loop).toMatchObject({ kind: 'cycle', measure: 2 });
+    expect(h.calls.route[4]).toContain(HINT);
+    expect(r).toMatchObject({ speeches: 5, endedBy: 'end' });
+    expect(hintKinds(h)).toContain('cycle');
   });
 
-  it('a participant saying nearly the same long thing again stops the round', async () => {
+  it('a participant saying nearly the same long thing again: hint, the round goes on', async () => {
     const same = 'The header looks correct to me; alignment matches the design file and nothing else changed.';
     const h = harness({
       rows: [active(TRANSLATOR)],
@@ -509,43 +516,10 @@ describe('participantRound — no fixed limits: the ledger and loop detection (�
       speech: { 번역가: [same, `${same} Really.`] },
     });
     const r = await runParticipantRound(h.input);
-    expect(h.calls.participant).toHaveLength(2);
-    expect(r.endedBy).toBe('loop');
-    expect(h.stopped[0]!.blocked).toEqual({ by: 'loop', loop: 'repeated-speech', agentId: TRANSLATOR.id, name: '번역가' });
-  });
-
-  it('the emergency backstop (60 speeches by default) stops a round the judge did not', async () => {
-    const routes = Array.from({ length: 70 }, (_, i) => delegate('번역가', `Translate unit ${i + 1}, file part-${i + 1}.`));
-    const h = harness({
-      rows: [active(TRANSLATOR)],
-      routes,
-      speech: { 번역가: Array.from({ length: 70 }, (_, i) => `Unit ${i + 1} done: wrote out-${i + 1}.txt with checksum c${i * 7919}.`) },
-      toolsFor: () => ['write_file'],
-    });
-    const r = await runParticipantRound(h.input);
-    expect(h.calls.participant).toHaveLength(60);
-    // The wrap-up is the one speech allowed past the backstop (R3.11).
-    expect(r).toMatchObject({ speeches: 61, endedBy: 'backstop' });
-    const want = { by: 'backstop', limit: 60, agentId: TRANSLATOR.id, name: '번역가' };
-    expect(h.routing().find((x) => x.decision === 'backstop')).toMatchObject({ kind: 'end', limit: 60, blocked: want });
-    expect(h.stopped[0]!.blocked).toEqual(want);
-    expect(h.stopped[0]!.note).toContain('60 speeches');
-    expect(h.calls.naby.map((n) => n.reason)).toEqual(['wrapup']);
-    expect(h.logged('round_completed')[0]!.fields).toMatchObject({ endedBy: 'backstop', backstop: 60, speeches: 61 });
-  });
-
-  it('the backstop also stops naby itself from opening a speech past it', async () => {
-    const h = harness({
-      rows: [active(TRANSLATOR)],
-      settings: { backstopSpeeches: 2 },
-      mentions: ['번역가'],
-      speech: { 번역가: ['@naby 질문 하나 있어요: 존댓말로 할까요 반말로 할까요?'] },
-      nabySpeech: ['@번역가 존댓말로 해 주세요, 그리고 용어집을 같이 봐 주세요.'],
-    });
-    const r = await runParticipantRound(h.input);
-    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby']);
-    expect(r.endedBy).toBe('backstop');
-    expect(h.routing().find((x) => x.decision === 'backstop')).toMatchObject({ limit: 2 });
+    expect(h.calls.order).toEqual(['user-row', '번역가', '번역가', 'naby']);
+    expect(r.endedBy).toBe('end');
+    expect(hintKinds(h)).toContain('repeated-speech');
+    expect(h.calls.naby[0]!.progress).toContain(HINT);
   });
 
   it("naby's speech and the routing call both read the round's progress summary", async () => {
@@ -738,13 +712,12 @@ describe('participantRound — what the routing events carry (MAC-M4, R6.6)', ()
     expect(h.routing().find((x) => x.kind === 'propose')).toMatchObject({ tokens: { input: 100, output: 10 } });
   });
 
-  it('a loop stop is a routing event (the chip draws it), and no harness pill goes out', async () => {
+  it('no harness pill goes out for a round', async () => {
     const h = harness({
       rows: [active(TRANSLATOR)],
-      routes: Array(3).fill('{"action":"delegate","target":"번역가","brief":"again","reason":"again"}'),
+      routes: ['{"action":"delegate","target":"번역가","brief":"again","reason":"again"}'],
     });
     await runParticipantRound(h.input);
-    expect(h.routing().find((x) => x.decision === 'loop')).toMatchObject({ reason: 'repeated-brief' });
     expect(h.events.some((e) => e.subtype === 'harness')).toBe(false);
   });
 });
@@ -756,7 +729,7 @@ describe('participantRound — naby addresses a participant at a line start (R3.
     const h = harness({
       rows: [active(TRANSLATOR)],
       routes: [answer],
-      nabySpeech: ['요약은 이렇다.\n\n@번역가, 이 문단을 영어로 옮겨 주세요.\n존댓말은 빼고요.\n\n고마워요.'],
+      nabySpeech: ['요약은 이렇다.\n\n@번역가, 이 문단을 영어로 옮겨 주세요.\n존댓말은 빼고요.\n\n고마워요.', '번역이 끝났어요.'],
     });
     const r = await runParticipantRound(h.input);
     expect(h.calls.order).toEqual(['naby', '번역가', 'naby']);
@@ -813,7 +786,7 @@ describe('participantRound — naby addresses a participant at a line start (R3.
     const h = harness({
       rows: [active(TRANSLATOR), active(CRITIC)],
       routes: [answer],
-      nabySpeech: ['**@critic** 초안을 검토해 주세요.\n\n- @번역가 검토가 끝나면 번역해 주세요.\n\n@critic 한 번 더'],
+      nabySpeech: ['**@critic** 초안을 검토해 주세요.\n\n- @번역가 검토가 끝나면 번역해 주세요.\n\n@critic 한 번 더', '둘 다 끝났어요.'],
     });
     await runParticipantRound(h.input);
     expect(h.calls.order).toEqual(['naby', 'critic', '번역가', 'naby']);
@@ -826,24 +799,18 @@ describe('participantRound — naby addresses a participant at a line start (R3.
     expect(h.calls.route[1]).toContain('@번역가 has just answered');
   });
 
-  it('a line-start hand-off repeating a brief already sent is stopped before the participant turn opens', async () => {
+  it('a line-start hand-off repeating a brief already sent still goes out (naby judges repetition)', async () => {
     const h = harness({
       rows: [active(TRANSLATOR)],
-      routes: [answer, '{"action":"answer","reason":"more"}'],
-      nabySpeech: ['@번역가 이 문단을 영어로 옮겨 주세요.', '@번역가 이 문단을 영어로 옮겨 주세요!'],
+      routes: [answer, '{"action":"answer","reason":"more"}', '{"action":"answer","reason":"stop"}'],
+      nabySpeech: ['@번역가 이 문단을 영어로 옮겨 주세요.', '@번역가 이 문단을 영어로 옮겨 주세요!', '설명을 더 받아야 해서 여기서 멈출게요.'],
       speech: { 번역가: '조금 더 설명이 필요해요.' },
     });
     const r = await runParticipantRound(h.input);
-    expect(h.calls.order).toEqual(['naby', '번역가', 'naby']);
-    expect(h.calls.participant).toHaveLength(1);
-    const want = { by: 'loop', loop: 'repeated-brief', agentId: TRANSLATOR.id, name: '번역가' };
-    expect(h.routing().find((x) => x.decision === 'loop')).toMatchObject({
-      kind: 'end',
-      targetAgentId: TRANSLATOR.id,
-      blocked: want,
-    });
-    expect(h.stopped.map((x) => x.blocked)).toEqual([want]);
-    expect(r).toMatchObject({ speeches: 3, endedBy: 'loop' });
+    expect(h.calls.order).toEqual(['naby', '번역가', 'naby', '번역가', 'naby']);
+    expect(h.calls.naby[2]!.progress).toContain('Possible repetition');
+    expect(h.routing().some((x) => x.decision === 'loop')).toBe(false);
+    expect(r).toMatchObject({ speeches: 5, endedBy: 'answer' });
   });
 
   it('naby may hand the same participant many different steps in its own words (no round-trip limit)', async () => {
@@ -874,10 +841,10 @@ describe('participantRound — naby addresses a participant at a line start (R3.
     expect(r).toMatchObject({ speeches: 3, endedBy: 'answer' });
   });
 
-  it('the proposal-limit wrap-up instruction (the only limit left in the loop) hands nothing on', () => {
+  it('the proposal-limit instruction lets naby hand the rest to a participant already here', () => {
     expect(capInstruction('proposals', 1)).toContain('the one proposal allowed per message');
     expect(capInstruction('participants', 5)).toContain('the participant limit for this conversation (5)');
-    expect(capInstruction('proposals', 1)).toContain('do not hand the conversation to anyone else');
+    expect(capInstruction('proposals', 1)).toContain('hand it over with @name at the start of a line');
   });
 });
 
@@ -939,71 +906,46 @@ describe('participantRound — naby has the last word (R3.11)', () => {
   const delegate = (target: string, brief: string) =>
     JSON.stringify({ action: 'delegate', target, brief, reason: 'work' });
 
-  it('route end after a participant: naby wraps up, names the participant, and a line-start @mention hands nothing on', async () => {
+  it('route end after a participant: naby wraps up, names the participant, and nothing is handed on without an @', async () => {
     const h = harness({
       rows: [active(TRANSLATOR), active(CRITIC)],
       routes: [delegate('번역가', 'Translate it.'), '{"action":"end","reason":"done"}'],
       speech: { 번역가: 'Here is the English version.' },
-      nabySpeech: ['번역이 끝났어요.\n\n@critic 한 번 검토해 주세요.'],
+      nabySpeech: ['번역이 끝났어요. critic 검토가 필요하면 말씀해 주세요.'],
     });
     const r = await runParticipantRound(h.input);
     expect(h.calls.order).toEqual(['user-row', '번역가', 'naby']);
-    expect(h.calls.naby).toHaveLength(1);
     const wrap = h.calls.naby[0]!;
     expect(wrap.reason).toBe('wrapup');
     expect(wrap.handoff?.reason).toBe('wrapup');
     expect(wrap.handoff?.content).toContain('@번역가');
-    expect(wrap.handoff?.content).toContain('do not hand the conversation to anyone');
+    expect(wrap.handoff?.content).toContain('hand it over instead');
     expect(wrap.handoff?.content).toBe(wrapupInstruction(TRANSLATOR));
-    // The @critic at a line start opened nothing.
-    expect(h.calls.participant.map((p) => p.agent.name)).toEqual(['번역가']);
-    expect(h.calls.route).toHaveLength(2);
-    expect(h.logged('participant_route').some((l) => l.fields.decision === 'hub-mention')).toBe(false);
     expect(r).toMatchObject({ speeches: 2, endedBy: 'end', lastOk: true });
     const steps = h.logged('participant_round_step').map((l) => l.fields);
     expect(steps.at(-1)).toMatchObject({ speakerName: 'naby', hub: true });
     expect(steps.at(-1)!.targets ?? []).toEqual([]);
   });
 
-  it('a loop stop after a participant: the wrap-up note carries the stop note, endedBy stays loop', async () => {
-    const same = 'The header looks correct to me; alignment matches the design file and nothing else changed.';
+  // 2026-11-26 field case: the router said end after @aside, naby's wrap-up did
+  // the work itself and ended with "@aside … 고쳐 주세요" — which went nowhere.
+  it('a wrap-up that hands work on at a line start: that participant runs next', async () => {
     const h = harness({
-      rows: [active(TRANSLATOR)],
-      routes: [delegate('번역가', 'Check the header.'), delegate('번역가', 'Look at the footer as well.')],
-      speech: { 번역가: [same, `${same} Really.`] },
+      rows: [active(TRANSLATOR), active(CRITIC)],
+      routes: [delegate('번역가', 'Translate it.'), '{"action":"end","reason":"done"}', '{"action":"end","reason":"reviewed"}'],
+      speech: { 번역가: 'Here is the English version.', critic: 'Two fixes applied to the draft.' },
+      nabySpeech: ['번역이 끝났어요.\n\n@critic 한 번 검토해 주세요.', '검토까지 끝났습니다.'],
     });
     const r = await runParticipantRound(h.input);
-    expect(h.calls.order).toEqual(['user-row', '번역가', '번역가', 'naby']);
-    expect(h.stopped).toHaveLength(1);
-    const wrap = h.calls.naby[0]!;
-    expect(wrap.reason).toBe('wrapup');
-    expect(wrap.handoff?.content).toContain(h.stopped[0]!.note);
-    expect(wrap.handoff?.content).toBe(wrapupInstruction(TRANSLATOR, h.stopped[0]!.note));
-    expect(r).toMatchObject({ speeches: 3, endedBy: 'loop' });
-    expect(r.loop?.kind).toBe('repeated-speech');
-    // The stop line goes out before naby's closing speech.
-    const stopAt = h.events.findIndex((e) => e.subtype === 'routing' && (e.routing as { decision?: string }).decision === 'loop');
-    const nabyAt = h.events.findIndex((e) => e.subtype === 'speaker' && (e.agent as { persona: boolean }).persona);
-    expect(stopAt).toBeGreaterThan(-1);
-    expect(nabyAt).toBeGreaterThan(stopAt);
-  });
-
-  it('the backstop: the wrap-up is the one speech past the limit, endedBy stays backstop', async () => {
-    const h = harness({
-      rows: [active(TRANSLATOR)],
-      settings: { backstopSpeeches: 3 },
-      routes: Array.from({ length: 6 }, (_, i) => delegate('번역가', `Translate unit ${i + 1}, file part-${i + 1}.`)),
-      speech: { 번역가: Array.from({ length: 6 }, (_, i) => `Unit ${i + 1} done: wrote out-${i + 1}.txt.`) },
-      toolsFor: () => ['write_file'],
-      nabySpeech: ['@번역가 남은 유닛도 해 주세요.'],
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby', 'critic', 'naby']);
+    expect(h.calls.participant[1]).toMatchObject({ decision: 'hub-mention' });
+    expect(h.calls.participant[1]!.brief).toContain('한 번 검토해 주세요.');
+    expect(h.logged('participant_route').find((l) => l.fields.decision === 'hub-mention')!.fields).toMatchObject({
+      targets: ['critic'],
+      from: 'wrapup',
     });
-    const r = await runParticipantRound(h.input);
-    expect(h.calls.participant).toHaveLength(3);
-    expect(h.calls.order).toEqual(['user-row', '번역가', '번역가', '번역가', 'naby']);
-    expect(h.calls.naby.map((n) => n.reason)).toEqual(['wrapup']);
-    expect(h.calls.naby[0]!.handoff?.content).toContain('3 speeches');
-    expect(r).toMatchObject({ speeches: 4, endedBy: 'backstop' });
-    expect(h.logged('round_completed')[0]!.fields).toMatchObject({ endedBy: 'backstop', backstop: 3, speeches: 4 });
+    expect(h.calls.naby.map((n) => n.reason)).toEqual(['wrapup', 'wrapup']);
+    expect(r).toMatchObject({ speeches: 4, endedBy: 'end' });
   });
 
   it("a participant's turn fails: naby wraps up knowing it failed, endedBy stays error", async () => {
@@ -1034,18 +976,20 @@ describe('participantRound — naby has the last word (R3.11)', () => {
     expect(r).toMatchObject({ speeches: 1, endedBy: 'abort' });
   });
 
-  it("a repeated-brief stop right after naby's own hand-off: naby already spoke last, no extra speech", async () => {
+  it("a participant's turn fails and naby's wrap-up hands it to someone else: that one runs", async () => {
     const h = harness({
-      rows: [active(TRANSLATOR)],
-      routes: ['{"action":"answer","reason":"simple"}', '{"action":"answer","reason":"more"}'],
-      nabySpeech: ['@번역가 이 문단을 영어로 옮겨 주세요.', '@번역가 이 문단을 영어로 옮겨 주세요!'],
-      speech: { 번역가: '조금 더 설명이 필요해요.' },
+      rows: [active(TRANSLATOR), active(CRITIC)],
+      mentions: ['번역가'],
+      speech: { 번역가: '', critic: 'Translated it myself.' },
+      nabySpeech: ['@critic 번역가가 실패했으니 대신 옮겨 주세요.', '끝났습니다.'],
+      routes: ['{"action":"end","reason":"done"}'],
     });
+    // Only the translator fails.
+    const run = h.input.runParticipantTurn;
+    h.input.runParticipantTurn = async (i) => ({ ...(await run(i)), ok: i.agent.name !== '번역가' });
     const r = await runParticipantRound(h.input);
-    expect(h.calls.order).toEqual(['naby', '번역가', 'naby']);
-    expect(h.calls.naby.map((n) => n.reason)).toEqual(['answer', 'followup']);
-    expect(h.stopped).toHaveLength(1);
-    expect(r).toMatchObject({ speeches: 3, endedBy: 'loop' });
+    expect(h.calls.order).toEqual(['user-row', '번역가', 'naby', 'critic', 'naby']);
+    expect(r.endedBy).toBe('end');
   });
 
   it('naby answering last needs no wrap-up', async () => {

@@ -19,8 +19,10 @@ import type { RunCtx, RunEvent } from './types';
 
 type Call = { system: string; tools: string[]; kind: 'route' | 'participant' | 'naby'; prompt?: string };
 
-function scriptedModel(script: { routes?: string[]; participant?: string; naby?: string }, calls: Call[]) {
+function scriptedModel(script: { routes?: string[]; participant?: string; naby?: string | string[] }, calls: Call[]) {
   const routes = [...(script.routes ?? [])];
+  // naby's speeches in order; the last one repeats.
+  const nabyTexts = typeof script.naby === 'string' ? [script.naby] : [...(script.naby ?? [])];
   return {
     specificationVersion: 'v4' as const,
     provider: 'mock',
@@ -41,7 +43,7 @@ function scriptedModel(script: { routes?: string[]; participant?: string; naby?:
         text = script.participant ?? 'Hello from the participant.';
       } else {
         kind = 'naby';
-        text = script.naby ?? 'naby here.';
+        text = (nabyTexts.length > 1 ? nabyTexts.shift() : nabyTexts[0]) ?? 'naby here.';
       }
       calls.push({ system, tools, kind, prompt: JSON.stringify(prompt) });
       return {
@@ -273,7 +275,7 @@ describe('naby engine — participant round', () => {
       resolveModel: once(scriptedModel(
         {
           routes: ['{"action":"answer","reason":"mine"}'],
-          naby: `정리했어요.\n\n@${tr.name}, DNS 신청은 이 양식으로 해 주세요.\n\n끝.`,
+          naby: [`정리했어요.\n\n@${tr.name}, DNS 신청은 이 양식으로 해 주세요.\n\n끝.`, '신청까지 끝났어요.'],
           participant: '신청했어요.',
         },
         calls,
@@ -296,7 +298,7 @@ describe('naby engine — participant round', () => {
     expect(delegate).toMatchObject({ routing: { decision: 'hub-mention', targetName: tr.name } });
   });
 
-  it('§8.15: a repeated hand-off stops the round, is stored as naby\'s note, reloads as the stop line, and naby reads it next turn', async () => {
+  it('§8.15 (2026-11-26): a repeated hand-off still goes out; naby reads the repetition hint and decides', async () => {
     const store = getStore();
     const tr = participant();
     const { sessionId } = store.createSession('', 'round');
@@ -305,10 +307,9 @@ describe('naby engine — participant round', () => {
     const spec = createNabySpec({
       resolveModel: once(scriptedModel(
         {
-          // First decision: naby answers; the follow-up after the participant: naby again.
-          routes: ['{"action":"answer","reason":"mine"}', '{"action":"answer","reason":"more"}'],
-          // naby hands the SAME paragraph over twice.
-          naby: `@${tr.name} 이것 좀 옮겨 주세요`,
+          routes: ['{"action":"answer","reason":"mine"}', '{"action":"answer","reason":"more"}', '{"action":"answer","reason":"again"}'],
+          // naby hands the SAME paragraph over twice, then stops on its own.
+          naby: [`@${tr.name} 이것 좀 옮겨 주세요`, `@${tr.name} 이것 좀 옮겨 주세요`, '어떤 문장인지 정해 주시면 이어서 맡길게요.'],
           participant: '어떤 문장인가요?',
         },
         calls,
@@ -316,41 +317,20 @@ describe('naby engine — participant round', () => {
     });
     const { ctx, events } = harness(sessionId, '번역 부탁');
     await spec.runner.run(ctx);
-    expect(calls.map((c) => c.kind)).toEqual(['route', 'naby', 'participant', 'route', 'naby']);
+    expect(calls.map((c) => c.kind)).toEqual(['route', 'naby', 'participant', 'route', 'naby', 'participant', 'route', 'naby']);
     // naby's second speech and the follow-up routing call read the round's progress (R11.2).
+    expect(calls[1]!.system).not.toContain('## This round so far');
     expect(calls[3]!.system).toContain('## This round so far');
-    expect(calls[4]!.system).toContain('## This round so far');
     expect(calls[4]!.system).toContain(`1) @naby → @${tr.name}: @${tr.name} 이것 좀 옮겨 주세요`);
     expect(calls[4]!.system).toContain(`2) @${tr.name}: 어떤 문장인가요?`);
-    expect(calls[1]!.system).not.toContain('## This round so far');
-    // The live stop line.
-    const want = { by: 'loop', loop: 'repeated-brief', agentId: tr.id, name: tr.name };
-    const live = events.find((e) => e.subtype === 'routing' && (e.routing as { decision?: string }).decision === 'loop');
-    expect(live).toMatchObject({ routing: { kind: 'end', reason: 'repeated-brief', blocked: want } });
-    // Stored as naby's note to itself (R11.4) — the last row.
+    // The repetition is a hint naby reads, not a stop.
+    expect(calls[6]!.system).toContain('## Possible repetition in this round');
+    expect(calls[7]!.system).toContain('## Possible repetition in this round');
+    expect(events.some((e) => e.subtype === 'routing' && (e.routing as { decision?: string }).decision === 'loop')).toBe(false);
     const rows = store.getMessages(sessionId);
-    const last = rows[rows.length - 1]!;
-    expect(last).toMatchObject({
-      role: 'user',
-      speaker: { name: 'naby' },
-      routing: { kind: 'end', reason: 'repeated-brief', blocked: want },
-    });
-    expect(last.role === 'user' && last.content).toContain('loop detection');
-    // The participant was handed the turn ONCE.
-    expect(rows.filter((r) => r.role === 'assistant' && r.speaker?.agentId === tr.id)).toHaveLength(1);
-    // Reload: a system marker row carrying `blocked` (the chip draws it as the stop line).
-    const chat = toChatMessages(rows);
-    const marker = chat.filter((m) => m.role === 'system' && m.routing?.blocked);
-    expect(marker).toHaveLength(1);
-    expect(marker[0]!.routing).toMatchObject({ kind: 'end', blocked: want });
-    expect(chat.filter((m) => m.role === 'user')).toHaveLength(1);
-
-    // naby's NEXT turn reads the note in its history.
-    const next: Call[] = [];
-    const spec2 = createNabySpec({ resolveModel: once(scriptedModel({ naby: '알겠어요.' }, next) as never) });
-    await spec2.runner.run(harness(sessionId, '@naby 왜 멈췄어?').ctx);
-    expect(next.map((c) => c.kind)).toEqual(['naby']);
-    expect(next[0]!.prompt).toContain('Round stopped automatically by loop detection');
+    expect(rows.filter((r) => r.role === 'assistant' && r.speaker?.agentId === tr.id)).toHaveLength(2);
+    expect(rows.some((r) => r.role === 'user' && r.routing?.blocked)).toBe(false);
+    expect(toChatMessages(rows).filter((m) => m.role === 'system' && m.routing?.blocked)).toHaveLength(0);
   });
 
   it('outside a round (@naby), naby gets the reading rules but no hand-off promise', async () => {

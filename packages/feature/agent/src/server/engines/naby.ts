@@ -124,6 +124,9 @@ import {
   STYLE_FINGERPRINT_KEY,
   readUserInstructions,
   userInstructionsBlock,
+  userInstructionsReminder,
+  withDelegatedInstructions,
+  isUserAuthored,
   readSettings,
   resolveProviderCredential,
   type NabySettings,
@@ -1583,7 +1586,13 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // prompt that names `explorer` while the engine was given a roster without
         // it. `engineId` is settled by here (the engine selection above), which is
         // what makes the engine filter possible at all.
-        const turnSubagents = gatherSubagents(store, projectCwd, engineId);
+        // Each subagent's prompt carries the user's standing instructions — on
+        // dev-claude it runs as a native SDK agent that never sees naby's own
+        // system prompt (2026-11-26).
+        const subagentInstructions = readUserInstructions(store);
+        const turnSubagents = gatherSubagents(store, projectCwd, engineId).map((s) =>
+          subagentInstructions ? { ...s, systemPrompt: withDelegatedInstructions(s.systemPrompt, subagentInstructions) ?? s.systemPrompt } : s,
+        );
 
         // Phase 2.5 M4b: SUBAGENTS ON AN ENGINE WITH NO NATIVE ONES. dev-claude
         // maps SubagentSpec onto the Agent SDK's own `agents` (delegated through
@@ -2465,8 +2474,27 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         if (orgListed) kickOrgHarnessDepsCheckForSession(store, sessionId);
         const orgHookBlock = orgHookContextBlock(orgHookContext);
         const userInstructionsText = readUserInstructions(store);
+        // A LONG session pushes the system prompt far from the newest message,
+        // and the instructions faded there (2026-11-26). They are also reminded
+        // next to the newest message: a one-line pointer, and the full text every
+        // few of the user's turns (user-instructions.ts).
+        const instructionsReminder = userInstructionsText
+          ? userInstructionsReminder(
+              userInstructionsText,
+              (() => {
+                try {
+                  // This turn's own message is stored by runTurn, after this point.
+                  return store.getMessages(sessionId).filter((m) => isUserAuthored(m)).length + 1;
+                } catch {
+                  return 1;
+                }
+              })(),
+            )
+          : undefined;
         if (userInstructionsText) {
-          console.log(`[engine:naby] user instructions: injected (${userInstructionsText.length} chars)`);
+          console.log(
+            `[engine:naby] user instructions: injected (${userInstructionsText.length} chars${instructionsReminder ? `, reminder ${instructionsReminder.length > 300 ? 'full' : 'line'}` : ''})`,
+          );
         }
 
         const turnSystem =
@@ -4084,7 +4112,10 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               // Per-turn instructions, kept out of `system` so the session-long
               // prompt (and the conversation cached behind it) stays identical
               // turn to turn. Every engine still receives it (runTurn appends it).
-              ...(orgHookBlock ? { turnContext: orgHookBlock } : {}),
+              ...(() => {
+                const t = [orgHookBlock, instructionsReminder].filter(Boolean).join('\n\n');
+                return t ? { turnContext: t } : {};
+              })(),
               ...(ctx.cwd ? { cwd: ctx.cwd } : {}),
               onEvent: translateEvent,
           });
@@ -4453,6 +4484,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                   { names: [hubAgent.name, ...inSessionNames], hubName: hubAgent.name },
                   matched,
                 ),
+                // The user's standing instructions — a participant works for the
+                // same user (2026-11-26). Last, like naby's own block.
+                withDelegatedInstructions(undefined, userInstructionsText),
               ]
                 .filter(Boolean)
                 .join('\n\n');
@@ -4617,23 +4651,6 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
               onDeclined: (agentId) => {
                 closeRecommendationsOnDecline(store, sessionId, agentId);
               },
-              // §8.15 R11.4: the round stopped itself (a loop, or the backstop).
-              // Stored as naby's note to itself so the system line survives a
-              // reload and naby reads on its next turn why the round stopped.
-              onRoundStopped: (blocked, note) => {
-                store.appendMessage(sessionId, {
-                  role: 'user',
-                  content: note,
-                  speaker: hubSpeaker,
-                  routing: {
-                    kind: 'end',
-                    targetAgentId: hubAgent.id,
-                    targetName: hubAgent.name,
-                    reason: blocked.by === 'loop' ? blocked.loop : blocked.by,
-                    blocked,
-                  },
-                });
-              },
               ...(typeof ctx.params.runId === 'string' ? { roundId: ctx.params.runId } : {}),
               emit: (e) => ctx.emit({ ...e, session_id: sessionId } as unknown as RunEvent),
               log: (kind, fields) =>
@@ -4642,7 +4659,7 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             });
             console.log(
               `[engine:naby] participants: round ended (${result.endedBy}, ${result.speeches} speech(es), ` +
-                `${result.proposals} proposal(s)${result.loop ? `, loop: ${result.loop.kind}` : ''})`,
+                `${result.proposals} proposal(s)${result.loop ? `, repetition hint: ${result.loop.kind}` : ''})`,
             );
             // THE ROUND'S ONE `result` (the client ends its turn on it). Skipped on a
             // stop: the fallback below reports a stopped run the way it always has.

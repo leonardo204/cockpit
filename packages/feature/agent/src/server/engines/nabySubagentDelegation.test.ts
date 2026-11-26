@@ -60,7 +60,7 @@ describe('the roster is filtered by the engine that will run the turn', () => {
   it('gathers it ONCE and gives the same list to the sink, the prompt and the engine', () => {
     // Three consumers, one computation: a prompt that names a subagent the engine
     // input leaves out is the failure this prevents.
-    const bound = only(SRC, 'const turnSubagents = gatherSubagents(store, projectCwd, engineId);');
+    const bound = only(SRC, 'const turnSubagents = gatherSubagents(store, projectCwd, engineId).map(');
     // The two consumers that pass the roster on — the delegation sink and the
     // engine input — anchored by the ARGUMENT, not by the comment that happens to
     // follow it or the indentation it happens to sit at.

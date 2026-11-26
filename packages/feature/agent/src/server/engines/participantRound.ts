@@ -11,26 +11,27 @@
  * `@name` at the start of a line speaks next (R3.10). A participant that asks
  * naby (`@naby`) is always answered — `end` is not a choice then (R3.4).
  * naby always has the LAST word: a round never ends on a participant's speech.
- * Where it would have — the routing call says `end`, the loop judge or the
- * backstop stops the round, a participant's turn fails — naby closes it with a
- * short wrap-up that hands nothing on (R3.11).
+ * Where it would have — the routing call says `end`, a participant's turn
+ * fails — naby closes it with a short wrap-up (R3.11).
  *
- * LIMITS (0.7.0, §8.15). There is no fixed speech or round-trip limit any more:
- * a round may run as long as the work goes on. What bounds it is a LEDGER of the
- * round (one step per speech, `RoundLedger` in the runtime) and a judge that
- * reads it after every speech and before every hand-off — the same speech again,
- * the same brief to the same participant, a run of speeches with nothing new, the
- * same sequence twice. A loop stops the round where it stands, with a system line
- * that survives a reload; an emergency backstop (60 speeches) catches anything
- * the judge misses. naby reads the ledger's progress summary in each speech and
- * each routing call, so it does not hand out a step already done.
+ * A HAND-OFF ALWAYS RUNS (2026-11-26 user decision). Whatever naby is saying —
+ * an answer, a follow-up, a wrap-up, a limit notice — a participant it
+ * addresses at a line start takes the next turn. A wrap-up that handed work on
+ * used to be read as closing words and the request went nowhere, silently.
+ *
+ * NO TURN LIMIT; NABY JUDGES REPETITION (2026-11-26 user decision). A round runs
+ * as long as the work goes on. The round LEDGER (one step per speech,
+ * `RoundLedger`) and its repetition check still run after every speech and
+ * before every hand-off, but a verdict only becomes a HINT in naby's next
+ * routing call and speech: deciding whether the round is going in circles is
+ * the orchestrator's job. The user's stop button ends a round at any time.
  *
  * WHAT THIS MODULE IS. The state machine of §8.2 and its limits — and NOTHING that
  * runs a model. Every effect is a dependency: a speech is `runNabyTurn` /
  * `runParticipantTurn` (the engine adapter builds those from its own turn
  * assembly, `naby.ts`), naby's routing decision is `routeCall` (one tool-less
  * model call), a proposal is `propose` (the approval bridge). That is what lets a
- * test drive every path — answer, delegate, propose, loops, the backstop, a stop, and
+ * test drive every path — answer, delegate, propose, repetition hints, a stop, and
  * the adversarial cases — with a fake engine and no store on disk.
  *
  * TRUST. Nothing a participant SAYS moves the round except two things, both
@@ -51,8 +52,7 @@ import {
   RoundLedger,
   roundProgressBlock,
   roundStepLogFields,
-  roundStopNote,
-  ROUND_BACKSTOP_SPEECHES,
+  roundLoopHintBlock,
   type MessageRoutingBlocked,
   type ParticipantRouteDecision,
   type RoundLoopVerdict,
@@ -135,9 +135,8 @@ export type RoundRoutingEvent = {
   blocked?: BlockedHandoff;
 };
 
-/** Why the round stopped short — the runtime's `MessageRoutingBlocked`. This
- *  module writes only the `loop` and `backstop` shapes; `hub-mention` is the
- *  0.6.2 shape old rows still carry. */
+/** Why a round stopped short — the runtime's `MessageRoutingBlocked`. Rounds no
+ *  longer stop themselves (2026-11-26); only rows stored before carry it. */
 export type BlockedHandoff = MessageRoutingBlocked;
 
 export type RouteCallResult = {
@@ -152,9 +151,6 @@ export type ProposalOutcome = 'allow' | 'deny' | 'timeout' | 'abort';
 export type RoundSettings = {
   proposalsEnabled: boolean;
   maxPerSession: number;
-  /** The emergency backstop (R3.5 d). Defaults to `ROUND_BACKSTOP_SPEECHES`
-   *  (60); not a user setting — a test may lower it. */
-  backstopSpeeches?: number;
 };
 
 export type RoundStore = {
@@ -203,11 +199,6 @@ export type RoundInput = {
    *  dismisses a matching pending recommendation (§8.13). Must not throw; a
    *  throw is swallowed. */
   onDeclined?: (agentId: string) => void;
-  /** The round stopped itself — a loop, or the backstop (§8.15 R11.4). The
-   *  caller stores `note` as naby's note to itself carrying `blocked`, so the
-   *  system line survives a reload and naby reads why on its next turn. Must not
-   *  throw; a throw is swallowed. */
-  onRoundStopped?: (blocked: BlockedHandoff, note: string) => void;
   /** Names the round's ledger rows (`participant_round_step.round`). Defaults
    *  to a value derived from the session and the clock. */
   roundId?: string;
@@ -225,6 +216,7 @@ export type RoundLogKind =
   | 'participant_mention_ignored'
   | 'participant_cap'
   | 'participant_round_step'
+  | 'round_loop_hint'
   | 'round_completed';
 
 export type RoundEndReason = 'answer' | 'end' | 'cap' | 'loop' | 'backstop' | 'abort' | 'error';
@@ -238,7 +230,8 @@ export type RoundResult = {
   /** Whether the last speech finished cleanly. */
   lastOk: boolean;
   proposals: number;
-  /** Set when the judge stopped the round (§8.15 R11.3). */
+  /** The repetition check's last hint this round, if it gave one. Advice
+   *  naby read; it never stops a round. */
   loop?: RoundLoopVerdict;
 };
 
@@ -267,8 +260,8 @@ export function capInstruction(cap: RoundCap, limit: number): string {
       ? 'the one proposal allowed per message'
       : `the participant limit for this conversation (${limit})`;
   return (
-    `This round has reached ${what}. Wrap up for the user now, in your own words: ` +
-    'answer what is still open and do not hand the conversation to anyone else.'
+    `This round has reached ${what}. Answer what is still open for the user in your own words. ` +
+    'If a participant already in this conversation should do the remaining work, hand it over with @name at the start of a line.'
   );
 }
 
@@ -287,8 +280,8 @@ export function wrapupInstruction(after: RoundAgent | undefined, stopped?: strin
   return (
     why +
     'Close it for the user in two or three short sentences: where things stand and what the user can do next. ' +
-    'Do not restate what was already said (the user has read it), do not thank or address any participant, ' +
-    'and do not hand the conversation to anyone.'
+    'Do not restate what was already said (the user has read it), and do not thank or address any participant. ' +
+    'If work is still open that a participant should do, hand it over instead: a line starting with @name is a request it will carry out.'
   );
 }
 
@@ -331,9 +324,9 @@ type State =
     }
   | { at: 'END'; by: RoundEndReason };
 
-/** Hard ceiling on state transitions — a bug in the machine must not loop. Far
- *  above what the backstop allows (each speech is at most ~3 transitions). */
-const MAX_TRANSITIONS = 400;
+/** State transitions allowed WITHOUT a speech in between — a bug in the machine
+ *  must not spin. Not a turn limit: every speech resets the count. */
+const MAX_IDLE_TRANSITIONS = 40;
 
 /**
  * Run one round. Never throws for a model or parsing failure — a broken routing
@@ -376,13 +369,25 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
   let lastOk = true;
   /** Who made the round's latest speech — naby must be the last (R3.11). */
   let lastSpeaker: RoundAgent | undefined;
-  const backstop = Math.max(1, settings.backstopSpeeches ?? ROUND_BACKSTOP_SPEECHES);
 
   // THE ROUND LEDGER (§8.15 R11.2): one step per speech, read by the loop judge
   // and summarised for naby. It starts empty every round (R11.4).
   const ledger = new RoundLedger(input.userText);
   const roundId = input.roundId ?? `${input.sessionId}:${Date.now().toString(36)}`;
+  /** The repetition check's latest verdict, shown to naby until the next
+   *  speech the check passes. Advice only. */
+  let loopHint: RoundLoopVerdict | undefined;
+  /** The last verdict of the round, for `round_completed` and the result. */
   let loopVerdict: RoundLoopVerdict | undefined;
+  const noteLoop = (verdict: RoundLoopVerdict | undefined) => {
+    loopHint = verdict;
+    if (!verdict) return;
+    loopVerdict = verdict;
+    input.log('round_loop_hint', {
+      round: roundId,
+      loopHint: { kind: verdict.kind, steps: verdict.steps, detail: verdict.detail },
+    });
+  };
   const party = (a: RoundAgent) => ({ id: a.id, name: a.name });
 
   // `seq` numbers the round's routing events so a client that replays the
@@ -423,48 +428,6 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
       ...(extra.outBriefs ? { outBriefs: extra.outBriefs } : {}),
     });
     input.log('participant_round_step', roundStepLogFields(roundId, step));
-  };
-
-  /**
-   * R11.4: the round stops itself — a loop the judge found, or the backstop.
-   * The user gets a system line (the same render path as 0.6.2's "couldn't hand
-   * this over") that is also stored on naby's note row, so it survives a reload
-   * and naby reads it on its next turn. If a participant spoke last, naby then
-   * closes the round (R3.11) — one speech that hands nothing on, allowed past
-   * the backstop.
-   */
-  const stopRound = (
-    stop: { by: 'loop'; verdict: RoundLoopVerdict } | { by: 'backstop'; target?: RoundAgent },
-  ): State => {
-    let blocked: BlockedHandoff;
-    if (stop.by === 'loop') {
-      loopVerdict = stop.verdict;
-      const p = stop.verdict.party;
-      blocked = { by: 'loop', loop: stop.verdict.kind, ...(p ? { agentId: p.id, name: p.name } : {}) };
-    } else {
-      blocked = {
-        by: 'backstop',
-        limit: backstop,
-        ...(stop.target ? { agentId: stop.target.id, name: stop.target.name } : {}),
-      };
-    }
-    const about = blocked.agentId && blocked.name ? { targetAgentId: blocked.agentId, targetName: blocked.name } : {};
-    emitRouting({
-      kind: 'end',
-      decision: stop.by,
-      reason: stop.by === 'loop' ? stop.verdict.kind : 'backstop',
-      ...(stop.by === 'backstop' ? { limit: backstop } : {}),
-      ...about,
-      blocked,
-    });
-    const note =
-      stop.by === 'loop' ? roundStopNote({ by: 'loop', verdict: stop.verdict }) : roundStopNote({ by: 'backstop', limit: backstop });
-    try {
-      input.onRoundStopped?.(blocked, note);
-    } catch {
-      /* bookkeeping only — never the round's problem */
-    }
-    return closeOrEnd(stop.by, note);
   };
 
   /**
@@ -522,6 +485,7 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
       inSession: here.map((a) => ({ name: a.name, description: a.description })),
       registeredOutside: out.map((a) => ({ name: a.name, description: a.description })),
       ...(progress.length > 0 ? { progress } : {}),
+      ...(loopHint ? { loopHint: roundLoopHintBlock(loopHint) } : {}),
       proposalsEnabled: settings.proposalsEnabled && proposals < 1,
       declined: input.registered.filter((a) => declined.has(a.id)).map((a) => a.name),
       ...(followup ? { followup: { speaker: followup.after.name, asked: followup.asked } } : {}),
@@ -633,7 +597,9 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
   /** NABY_SPEAK. Returns the participants naby's speech addressed (R3.10). */
   const nabySpeak = async (state: Extract<State, { at: 'NABY' }>): Promise<DelegateItem[]> => {
     const note = state.wrapup?.note ?? (state.cap ? capInstruction(state.cap.cap, state.cap.limit) : undefined);
-    const progress = roundProgressBlock(ledger.summaryLines());
+    const progress = [roundProgressBlock(ledger.summaryLines()), roundLoopHintBlock(loopHint)]
+      .filter(Boolean)
+      .join('\n\n');
     let speakInput: NabySpeakInput;
     if (!userRowWritten) {
       speakInput = { reason: state.reason, ...(note ? { note } : {}) };
@@ -649,9 +615,9 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     lastText = res.text;
     lastOk = res.ok;
     lastSpeaker = hub;
-    // A wrap-up — at a limit, or closing the round — hands nothing on (its
-    // instruction says so).
-    const addressed = res.ok && state.reason !== 'cap' && state.reason !== 'wrapup' ? addressedBy(res.text) : [];
+    // Every speech's line-start hand-off runs — a wrap-up's and a limit
+    // notice's too (2026-11-26: a wrap-up that handed work on went nowhere).
+    const addressed = res.ok ? addressedBy(res.text) : [];
     recordStep(hub, res, {
       ...(addressed.length > 0
         ? { targets: addressed.map((m) => m.agent), outBriefs: addressed.map((m) => m.brief) }
@@ -713,11 +679,13 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     state = { at: 'ROUTE' };
   }
 
-  let transitions = 0;
+  let idle = 0;
+  let spokenAt = 0;
   let lastSpoke: RoundAgent | undefined;
   while (state.at !== 'END') {
-    transitions += 1;
-    if (transitions > MAX_TRANSITIONS) {
+    idle = speeches === spokenAt ? idle + 1 : 1;
+    spokenAt = speeches;
+    if (idle > MAX_IDLE_TRANSITIONS) {
       state = { at: 'END', by: 'error' };
       break;
     }
@@ -833,18 +801,9 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
             next = { at: 'END', by: 'abort' };
             break;
           }
-          // R3.5 d: the emergency backstop — nobody opens the speech past it.
-          if (speeches >= backstop) {
-            next = stopRound({ by: 'backstop', target: item.agent });
-            break;
-          }
-          // R11.3 (2): the same brief to the same participant again — stopped
-          // BEFORE the hand-off, so the participant is never asked twice.
+          // R11.3 (2): the same brief to the same participant again. naby chose
+          // to send it, so it goes; naby reads the hint on its next decision.
           const repeated = ledger.checkHandoff(party(item.agent), item.brief);
-          if (repeated) {
-            next = stopRound({ by: 'loop', verdict: repeated });
-            break;
-          }
           ledger.recordHandoff(party(item.agent), item.brief);
           const r = await participantSpeak(item);
           lastSpoke = item.agent;
@@ -857,47 +816,35 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
             break;
           }
           if (r.asked) asked = true;
-          // R11.3 (1)(3)(4): judged after every speech.
-          const verdict = ledger.checkSpeech();
-          if (verdict) {
-            next = stopRound({ by: 'loop', verdict });
-            break;
-          }
+          // R11.3 (1)(3)(4): judged after every speech — a hint, not a stop.
+          noteLoop(ledger.checkSpeech() ?? repeated);
         }
         state = next ?? (lastSpoke ? { at: 'ROUTE', followup: { after: lastSpoke, asked } } : { at: 'NABY', reason: 'answer' });
         break;
       }
 
       case 'NABY': {
-        // The closing speech is the one allowed past the backstop (R3.11).
-        if (!state.wrapup && speeches >= backstop) {
-          state = stopRound({ by: 'backstop' });
+        const addressed = await nabySpeak(state);
+        // R3.10: naby addressed participants at a line start — they answer
+        // next, whatever kind of speech it was.
+        if (addressed.length > 0 && !signal.aborted && lastOk) {
+          noteLoop(ledger.checkSpeech());
+          input.log('participant_route', {
+            decision: 'hub-mention',
+            targets: addressed.map((m) => m.agent.name),
+            ...(state.wrapup ? { from: 'wrapup' } : state.reason === 'cap' ? { from: 'cap' } : {}),
+            inputTokens: 0,
+            outputTokens: 0,
+          });
+          state = { at: 'DELEGATE', queue: addressed };
           break;
         }
-        const addressed = await nabySpeak(state);
         if (state.wrapup) {
           state = { at: 'END', by: signal.aborted ? 'abort' : lastOk ? state.wrapup.endAs : 'error' };
           break;
         }
         if (signal.aborted || !lastOk || state.reason === 'cap') {
           state = { at: 'END', by: signal.aborted ? 'abort' : !lastOk ? 'error' : 'cap' };
-          break;
-        }
-        // R3.10: naby addressed participants at a line start — they answer next.
-        if (addressed.length > 0) {
-          // The round goes on, so the judge reads naby's speech too.
-          const verdict = ledger.checkSpeech();
-          if (verdict) {
-            state = stopRound({ by: 'loop', verdict });
-            break;
-          }
-          input.log('participant_route', {
-            decision: 'hub-mention',
-            targets: addressed.map((m) => m.agent.name),
-            inputTokens: 0,
-            outputTokens: 0,
-          });
-          state = { at: 'DELEGATE', queue: addressed };
           break;
         }
         state = { at: 'END', by: 'answer' };
@@ -918,7 +865,6 @@ export async function runParticipantRound(input: RoundInput): Promise<RoundResul
     ...(loopVerdict
       ? { loop: { kind: loopVerdict.kind, steps: loopVerdict.steps, detail: loopVerdict.detail, ...(loopVerdict.measure !== undefined ? { measure: loopVerdict.measure } : {}) } }
       : {}),
-    ...(endedBy === 'backstop' ? { backstop } : {}),
   });
   return { speeches, endedBy, lastText, lastOk, proposals, ...(loopVerdict ? { loop: loopVerdict } : {}) };
 }

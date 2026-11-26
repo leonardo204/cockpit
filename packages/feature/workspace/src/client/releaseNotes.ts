@@ -85,6 +85,36 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.31 — 2026-11-26
+
+### en
+
+Work naby hands to a participant now always gets done, and your standing instructions hold in long chats.
+
+**Improved**
+
+- **No turn limit in a round.** A round no longer stops at 60 speeches or when the repetition check fires. The check now tells naby what looks repetitive, and naby decides whether to carry on or stop. You can still stop a round at any time with the stop button.
+
+**Fixed**
+
+- **A hand-off in naby's closing message went nowhere.** When a round was about to end and naby handed work to a participant in its closing message (for example "@aside please update the two pages"), nobody received it. Now a participant that naby addresses at the start of a line always takes the next turn, whatever kind of message naby was writing.
+- **Your standing instructions faded in long chats.** The instructions you set in Settings sat only at the very start of a very long context. naby now gets a one-line reminder with each message, and the full text again every eight messages.
+- **Participants and subagents did not get your standing instructions.** Participants such as @aside, delegated subagents, and the review loop's reviewers and fixers now receive the same instructions.
+
+### ko
+
+참가자에게 넘긴 일이 이제 실제로 이어지고, 긴 대화에서도 공통 지침을 지켜요.
+
+**나아진 것**
+
+- **라운드에 턴 제한이 없어요.** 발언이 60번이 되거나 반복 검사에 걸려도 라운드가 멈추지 않아요. 반복으로 보이는 점은 나비에게 알려 주고, 계속할지 멈출지는 나비가 정해요. 멈춤 버튼으로는 언제든 끝낼 수 있어요.
+
+**고친 것**
+
+- **나비의 마무리 발언에 적은 넘김이 사라졌어요.** 라운드가 끝나려 할 때 나비가 마무리 발언에서 참가자에게 일을 넘기면("@aside 두 페이지를 고쳐 주세요" 등) 아무도 받지 않았어요. 이제는 나비가 어떤 발언을 하든 줄 맨 앞에서 부른 참가자가 다음 차례를 받아요.
+- **긴 대화에서 공통 지침을 잊었어요.** 설정에 적은 지침이 아주 긴 맥락의 맨 앞에만 있었어요. 이제 메시지마다 한 줄 알림을 붙이고, 8번째 메시지마다 지침 전문을 다시 붙여요.
+- **참가자와 서브에이전트는 공통 지침을 받지 못했어요.** 이제 @aside 같은 참가자, 맡긴 서브에이전트, 리뷰 루프의 검토자와 수정자도 같은 지침을 받아요.
+
 ## 1.48.30 — 2026-11-19
 
 ### en
