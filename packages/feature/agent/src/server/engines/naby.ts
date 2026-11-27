@@ -231,7 +231,8 @@ import {
 import { canLearn, learningInstruction } from '../lib/learning';
 import { canSteerInstalls, harnessHomeInstruction } from '../lib/harnessHome';
 import { readAutoEnableNabyHome } from '../lib/harnessImporter';
-import { configuredHarnessBundles } from '../lib/systemMcp';
+import { ASIDE_SERVER_NAME, configuredHarnessBundles } from '../lib/systemMcp';
+import { asideUsageNote, withAsideUsage } from '../lib/asideUsage';
 import {
   applyAtlassianAtTurnBoundary,
   applyOrgHarnessAtTurnBoundary,
@@ -1590,9 +1591,19 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
         // dev-claude it runs as a native SDK agent that never sees naby's own
         // system prompt (2026-11-26).
         const subagentInstructions = readUserInstructions(store);
-        const turnSubagents = gatherSubagents(store, projectCwd, engineId).map((s) =>
-          subagentInstructions ? { ...s, systemPrompt: withDelegatedInstructions(s.systemPrompt, subagentInstructions) ?? s.systemPrompt } : s,
-        );
+        // And how to use the Aside browser tools when that server is connected
+        // (lib/asideUsage.ts) — the MCP toolset is loaded later, so the entry
+        // list is what says so here.
+        const subagentAside = store
+          .listMcpEntries()
+          .some((e) => e.name === ASIDE_SERVER_NAME && isMcpEntryActive(e));
+        const turnSubagents = gatherSubagents(store, projectCwd, engineId).map((s) => {
+          const withRules = subagentInstructions
+            ? withDelegatedInstructions(s.systemPrompt, subagentInstructions) ?? s.systemPrompt
+            : s.systemPrompt;
+          const prompt = withAsideUsage(withRules, subagentAside) ?? withRules;
+          return prompt === s.systemPrompt ? s : { ...s, systemPrompt: prompt };
+        });
 
         // Phase 2.5 M4b: SUBAGENTS ON AN ENGINE WITH NO NATIVE ONES. dev-claude
         // maps SubagentSpec onto the Agent SDK's own `agents` (delegated through
@@ -2566,6 +2577,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
             // without (the first participant is made this way), in a round and on
             // the plain path (a round's naby speech starts from this same system).
             draftTool ? PARTICIPANT_DRAFT_RULE : undefined,
+            // Exec first, repl only for the DOM — present exactly when the Aside
+            // tools are (lib/asideUsage.ts, 2026-11-27).
+            asideUsageNote(toolSchemas.map((t) => t.name)),
             // cross-project-context R26: which projects share this one's group.
             // Context, not policy; present exactly when the cross-project tools are.
             crossProjectGroupNote,
@@ -4487,6 +4501,9 @@ export function createNabySpec(deps: NabyEngineDeps = {}): EngineSpec {
                 // The user's standing instructions — a participant works for the
                 // same user (2026-11-26). Last, like naby's own block.
                 withDelegatedInstructions(undefined, userInstructionsText),
+                // How to use the Aside tools, when this speech is offered them
+                // (lib/asideUsage.ts, 2026-11-27).
+                asideUsageNote(pSchemas.map((t) => t.name)),
               ]
                 .filter(Boolean)
                 .join('\n\n');

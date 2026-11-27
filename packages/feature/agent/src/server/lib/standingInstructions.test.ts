@@ -127,6 +127,7 @@ describe('the turn wires them (source facts)', () => {
   });
 
   it("every subagent given to the engine (native SDK agents too) carries them", () => {
-    expect(src).toMatch(/systemPrompt: withDelegatedInstructions\(s\.systemPrompt, subagentInstructions\)/);
+    expect(src).toMatch(/withDelegatedInstructions\(s\.systemPrompt, subagentInstructions\)/);
+    expect(src).toContain('const turnSubagents = gatherSubagents(store, projectCwd, engineId).map(');
   });
 });

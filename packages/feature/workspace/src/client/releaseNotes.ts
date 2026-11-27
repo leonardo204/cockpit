@@ -85,6 +85,24 @@
  * the list is as long as this file lets it be.
  */
 export const RELEASE_NOTES_MARKDOWN = `
+## 1.48.32 — 2026-11-27
+
+### en
+
+Browser work given to @aside through naby now goes to Aside's own agent, as it does when you ask in the Aside browser.
+
+**Improved**
+
+- **Aside does the work with its own agent.** Work handed to @aside often came out worse than the same request made in the Aside browser. The model was driving pages itself with code instead of passing the task to Aside's agent, which knows your sites and remembers your context. naby, participants and subagents are now told to hand browser work to Aside's agent by default, with a full description of the request. They control pages directly only when they need to inspect the screen.
+
+### ko
+
+나비를 통해 @aside에게 맡긴 브라우저 일도 이제 Aside 브라우저에서 직접 시킬 때처럼 Aside 자체 에이전트가 처리해요.
+
+**나아진 것**
+
+- **Aside가 자체 에이전트로 일해요.** @aside에게 맡긴 일이 Aside 브라우저에서 직접 시킨 것보다 결과가 못한 경우가 많았어요. 모델이 Aside 에이전트에게 일을 넘기지 않고 코드로 화면을 직접 조작했기 때문이에요. Aside 에이전트는 사용자의 사이트와 맥락을 기억하고 있어요. 이제 나비, 참가자, 서브에이전트는 브라우저 일을 요청 내용을 다 담아 Aside 에이전트에게 넘기는 것을 기본으로 하고, 화면을 직접 살펴야 할 때만 직접 조작해요.
+
 ## 1.48.31 — 2026-11-26
 
 ### en

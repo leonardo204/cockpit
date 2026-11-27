@@ -46,6 +46,7 @@ import {
   readUserInstructions,
   withDelegatedInstructions,
 } from '../../../../../../../dist/naby-runtime.mjs';
+import { hasAsideTools, withAsideUsage } from './asideUsage';
 
 /** Title given to a delegated child session, so it is recognisable in the session
  *  list rather than looking like a conversation the user forgot having. */
@@ -181,7 +182,12 @@ export async function runNestedTurn(
       userText: task,
       // The user's standing instructions reach a delegated run too — the
       // subagent, a reviewer or a fixer works for the same user (2026-11-26).
-      system: withDelegatedInstructions(spec.systemPrompt, readUserInstructions(deps.store)),
+      // And how to use the Aside browser tools when it is given them
+      // (lib/asideUsage.ts, 2026-11-27).
+      system: withAsideUsage(
+        withDelegatedInstructions(spec.systemPrompt, readUserInstructions(deps.store)),
+        hasAsideTools(restricted.toolSchemas.map((t) => t.name)),
+      ),
       toolSchemas: restricted.toolSchemas,
       executors: restricted.executors,
       gate: deps.gate,
